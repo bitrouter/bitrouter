@@ -431,6 +431,79 @@ async fn drive(
     }
 }
 
+/// How long `health_check` waits for `initialize` before declaring the agent
+/// unhealthy. Generous enough for a cold npm start; tight enough to keep
+/// `bitrouter agents check` snappy when an agent hangs.
+const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Spawn the agent, run ACP `initialize` only (no session), return elapsed on
+/// success or an error string. Used by `bitrouter agents check`.
+///
+/// Tears the connection down (drops) immediately after `initialize` succeeds
+/// or after [`HEALTH_CHECK_TIMEOUT`] elapses.
+pub async fn health_check(command: &str, args: &[String]) -> Result<std::time::Duration, String> {
+    tokio::time::timeout(HEALTH_CHECK_TIMEOUT, health_check_inner(command, args))
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "initialize timed out after {HEALTH_CHECK_TIMEOUT:?}"
+            ))
+        })
+}
+
+async fn health_check_inner(command: &str, args: &[String]) -> Result<std::time::Duration, String> {
+    let name = std::path::Path::new(command)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("agent")
+        .to_string();
+    let server = McpServerStdio::new(name, command).args(args.to_vec());
+    let agent = AcpAgent::new(McpServer::Stdio(server));
+
+    let (result_tx, result_rx) =
+        futures::channel::oneshot::channel::<Result<std::time::Duration, String>>();
+    let result_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(result_tx)));
+    let closure_result_tx = result_tx.clone();
+
+    let connect_result = agent_client_protocol::Client
+        .builder()
+        .name("bitrouter-health-check")
+        .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+            let started = std::time::Instant::now();
+            let init_result = connection
+                .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                .block_task()
+                .await;
+            let outcome = match init_result {
+                Ok(_) => Ok(started.elapsed()),
+                Err(e) => Err(format!("initialize failed: {e}")),
+            };
+            let tx = closure_result_tx
+                .lock()
+                .ok()
+                .and_then(|mut guard| guard.take());
+            if let Some(tx) = tx {
+                let _ = tx.send(outcome);
+            }
+            // Return Ok so the connection closes cleanly (no command loop needed).
+            Ok(())
+        })
+        .await;
+
+    // If the result was already sent via the closure, use it. Otherwise surface
+    // the connect-level error (spawn failed, process exited before initialize, etc.).
+    match result_rx.await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            // Closure never ran or never sent — surface the connect error.
+            match connect_result {
+                Ok(()) => Err("agent exited before initialize".to_string()),
+                Err(e) => Err(format!("connect failed: {e}")),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +598,40 @@ mod tests {
 
         let resp = prompt.await.expect("join").expect("prompt");
         assert!(format!("{resp:?}").contains("EndTurn"));
+    }
+
+    /// health_check: a stub that answers `initialize` → returns Ok with an
+    /// elapsed duration.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn health_check_succeeds_when_agent_answers_initialize() {
+        let script = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+              esac
+            done
+        "#;
+        let result = health_check("bash", &["-c".into(), script.into()]).await;
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
+    }
+
+    /// health_check: a stub that returns a JSON-RPC error for `initialize` →
+    /// `Err(_)`. Uses a bash script that replies with an error immediately so
+    /// the test does not hit the timeout.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn health_check_fails_when_agent_returns_error() {
+        let script = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*) printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32600,"message":"not supported"}}\n' "$id";;
+              esac
+            done
+        "#;
+        let result = health_check("bash", &["-c".into(), script.into()]).await;
+        assert!(result.is_err(), "expected Err, got: {result:?}");
     }
 }

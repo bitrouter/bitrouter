@@ -15,14 +15,14 @@
 //! - Initialization + capability negotiation:
 //!   <https://agentclientprotocol.com/protocol/initialization>
 //!
-//! ## Where the concrete executor lives
+//! ## Feature-gated components
 //!
 //! The `Pipeline`, `Builder`, hook traits, and request/response types are
-//! always available — they have no external dependencies. The bundled
-//! [`AcpStdioExecutor`] (and its persistent subprocess pool) live behind
-//! the `acp` feature; see [`stdio_executor`] for the wire layer and
-//! [`config_routing::ConfigAcpRoutingTable`] for the config-driven routing
-//! table the binary registers at startup.
+//! always available — they have no external dependencies. The
+//! [`config_routing::ConfigAcpRoutingTable`] lives behind the `acp` feature
+//! and provides the config-driven routing table the binary registers at
+//! startup. Typed health-checking (initialize-only) is provided by
+//! `bitrouter-substrate::up::health_check`.
 
 use std::sync::Arc;
 
@@ -36,15 +36,11 @@ pub mod transport;
 
 #[cfg(feature = "acp")]
 pub mod config_routing;
-#[cfg(feature = "acp")]
-pub mod stdio_executor;
 
 pub use transport::{AcpAgentConfig, AcpTransport};
 
 #[cfg(feature = "acp")]
 pub use config_routing::ConfigAcpRoutingTable;
-#[cfg(feature = "acp")]
-pub use stdio_executor::AcpStdioExecutor;
 
 /// An inbound ACP request — a JSON-RPC call against a named agent.
 #[derive(Debug, Clone)]

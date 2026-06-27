@@ -950,6 +950,7 @@ dependencies = [
  "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-skills",
+ "bitrouter-substrate",
  "chrono",
  "clap",
  "futures",
