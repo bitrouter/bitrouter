@@ -29,6 +29,19 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 | `bitrouter agents install <id>` | Print a paste-ready YAML stub for catalog entry `<id>`. |
 | `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: wired / endpoint / sampler / cardinality usage / in-flight spans. JSON output for tooling. |
 
+## ACP sessions
+
+Per-session ACP substrate — one process = one session = one agent. Managers (GUI, AI agents, editors) spawn one process per session and drive it; orchestration is external to the substrate.
+
+| Command | Effect |
+|---|---|
+| `bitrouter acp serve --agent <id> [--worktree <name>] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel`). Logs go to stderr; stdout carries ACP JSON-RPC. |
+| `bitrouter acp prompt --agent <id> [--worktree <name>] [--no-wait] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. |
+
+**NDJSON format** (for `acp prompt`): each update line is a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`. The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` is emitted.
+
+See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
+
 ## Setup helpers
 
 | Command | Effect |
