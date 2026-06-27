@@ -18,8 +18,11 @@
 //! `tool_call`, `tool_call_update`). The terminal result line is:
 //!
 //! ```json
-//! {"type":"result","stop_reason":"EndTurn"}
+//! {"type":"result","stop_reason":"end_turn"}
 //! ```
+//!
+//! The `stop_reason` value is the ACP wire form (snake_case, via serde) so a
+//! downstream parser sees the same spelling the protocol uses.
 //!
 //! In `--no-wait` mode the only line emitted is:
 //!
@@ -45,11 +48,17 @@ use bitrouter_substrate::translate::SessionUpdateKind;
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
 
 /// Terminal result line emitted after the prompt resolves.
+///
+/// Generic over the stop-reason type so the ACP `StopReason` (which derives
+/// `serde::Serialize` with snake_case rename) renders its wire form directly —
+/// `"end_turn"`, not the Rust `Debug` spelling `"EndTurn"`. Keeping it generic
+/// also avoids naming `agent_client_protocol_schema` here (it isn't a direct
+/// dependency of this crate).
 #[derive(Serialize)]
-struct ResultLine<'a> {
+struct ResultLine<S: Serialize> {
     #[serde(rename = "type")]
-    kind: &'a str,
-    stop_reason: &'a str,
+    kind: &'static str,
+    stop_reason: S,
 }
 
 /// Write one NDJSON line (JSON + `\n`) to `out`.
@@ -144,25 +153,24 @@ where
     // Subscribe to updates BEFORE prompting so no streamed update is missed.
     let mut updates = session.updates();
 
-    // Drive updates and the prompt concurrently.
-    let stop_reason = {
+    // Drive updates and the prompt concurrently. The loop returns the resolved
+    // `PromptResponse` directly, so there is no `Option` to unwrap afterward.
+    let response = {
         let prompt_future = session.prompt(text);
         tokio::pin!(prompt_future);
-
-        let mut resolved = None::<anyhow::Result<_>>;
 
         loop {
             tokio::select! {
                 biased;
 
-                result = &mut prompt_future, if resolved.is_none() => {
-                    resolved = Some(result);
+                result = &mut prompt_future => {
+                    let response = result.context("acp prompt failed")?;
                     // Non-blocking drain of any already-buffered updates.
                     drain_pending_updates(&mut updates, out).await?;
-                    break;
+                    break response;
                 }
 
-                maybe_update = updates.next(), if resolved.is_none() => {
+                maybe_update = updates.next() => {
                     if let Some(update) = maybe_update {
                         // Emit the SessionUpdateKind directly; its own `type`
                         // tag (e.g. "message_chunk") makes it self-describing.
@@ -171,19 +179,16 @@ where
                 }
             }
         }
-
-        let response = resolved
-            .expect("loop exits only after resolved is set")
-            .context("acp prompt failed")?;
-        format!("{:?}", response.stop_reason)
     };
 
-    // Emit the terminal result line.
+    // Emit the terminal result line. `response.stop_reason` is an ACP
+    // `StopReason` that serializes to its snake_case wire form (e.g.
+    // `"end_turn"`).
     write_ndjson_line(
         out,
         &ResultLine {
             kind: "result",
-            stop_reason: &stop_reason,
+            stop_reason: response.stop_reason,
         },
     )
     .await?;

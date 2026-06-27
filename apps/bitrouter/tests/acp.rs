@@ -61,7 +61,9 @@ fn stub_config() -> Config {
 async fn prompt_ndjson() {
     let base = tempfile::tempdir().expect("tempdir");
 
-    // Change cwd to the temp dir; restore on exit.
+    // Change cwd to the temp dir; restore on exit. `set_current_dir` is
+    // process-global, but each nextest test runs in its own process, so this
+    // does not race other tests under the default `cargo nextest` runner.
     let orig_dir = std::env::current_dir().expect("cwd");
     std::env::set_current_dir(base.path()).expect("set_current_dir");
 
@@ -97,7 +99,8 @@ async fn prompt_ndjson() {
         "expected a message_chunk NDJSON line with text 'hi'; output:\n{output}"
     );
 
-    // The last line must be the result line with EndTurn.
+    // The last line must be the result line with the ACP wire `stop_reason`.
+    // The format uses serde's snake_case spelling, so EndTurn → "end_turn".
     let last_line = lines.last().expect("at least one line");
     let last: serde_json::Value =
         serde_json::from_str(last_line).expect("last line must be valid JSON");
@@ -110,9 +113,9 @@ async fn prompt_ndjson() {
         .get("stop_reason")
         .and_then(|s| s.as_str())
         .expect("result line must have stop_reason");
-    assert!(
-        stop_reason.contains("EndTurn"),
-        "expected EndTurn stop_reason, got: {stop_reason}"
+    assert_eq!(
+        stop_reason, "end_turn",
+        "expected snake_case end_turn stop_reason, got: {stop_reason}"
     );
 }
 
@@ -152,9 +155,20 @@ agents:
 /// - each request receives its JSON-RPC response, and
 /// - the forwarded `session/update` containing "hi" arrives before the prompt
 ///   response.
-#[tokio::test]
+///
+/// Every request/response round-trip is bounded by [`RPC_TIMEOUT`] so a child
+/// crash or stall fails the test promptly instead of hanging CI. A
+/// `multi_thread` runtime is used so the timeout timer fires even while the
+/// blocking child-stdio read is pending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_subprocess_e2e() {
+    use std::time::Duration;
+
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    /// Per-round-trip timeout — generous enough for a debug-build spawn + ACP
+    /// handshake, tight enough to fail fast on a stalled child.
+    const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
     // Write the config YAML to a temp file.
     let dir = tempfile::tempdir().expect("tempdir");
@@ -198,6 +212,9 @@ async fn serve_subprocess_e2e() {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(stderr_file)
+        // Kill the child if this test panics (e.g. on a round-trip timeout) so
+        // a stalled server is reaped rather than leaked.
+        .kill_on_drop(true)
         .spawn()
         .expect("spawn bitrouter acp serve");
 
@@ -244,8 +261,28 @@ async fn serve_subprocess_e2e() {
         }
     }
 
+    // Run one round-trip under [`RPC_TIMEOUT`]; kill the child and panic on
+    // elapse so a stalled server never hangs the test runner.
+    async fn bounded_round_trip(
+        stdin: &mut (impl AsyncWriteExt + Unpin),
+        reader: &mut BufReader<impl tokio::io::AsyncRead + Unpin>,
+        request: serde_json::Value,
+        request_id: &str,
+        timeout: Duration,
+    ) -> (serde_json::Value, Vec<serde_json::Value>) {
+        match tokio::time::timeout(timeout, rpc_round_trip(stdin, reader, request, request_id))
+            .await
+        {
+            Ok(out) => out,
+            Err(_) => panic!(
+                "timed out after {}s waiting for response to id {request_id}",
+                timeout.as_secs()
+            ),
+        }
+    }
+
     // ── 1. initialize ─────────────────────────────────────────────────────
-    let (init_resp, _) = rpc_round_trip(
+    let (init_resp, _) = bounded_round_trip(
         &mut child_stdin,
         &mut reader,
         serde_json::json!({
@@ -255,6 +292,7 @@ async fn serve_subprocess_e2e() {
             "params": { "protocolVersion": 1 }
         }),
         "1",
+        RPC_TIMEOUT,
     )
     .await;
     assert!(
@@ -263,7 +301,7 @@ async fn serve_subprocess_e2e() {
     );
 
     // ── 2. session/new ────────────────────────────────────────────────────
-    let (new_resp, _) = rpc_round_trip(
+    let (new_resp, _) = bounded_round_trip(
         &mut child_stdin,
         &mut reader,
         serde_json::json!({
@@ -273,6 +311,7 @@ async fn serve_subprocess_e2e() {
             "params": { "cwd": "/", "mcpServers": [] }
         }),
         "2",
+        RPC_TIMEOUT,
     )
     .await;
     let session_id = new_resp["result"]["sessionId"]
@@ -283,7 +322,7 @@ async fn serve_subprocess_e2e() {
     // ── 3. session/prompt ─────────────────────────────────────────────────
     // The stub streams a `session/update` before the prompt result. Collect
     // all lines until we get the response for id "3".
-    let (prompt_resp, notifications) = rpc_round_trip(
+    let (prompt_resp, notifications) = bounded_round_trip(
         &mut child_stdin,
         &mut reader,
         serde_json::json!({
@@ -296,6 +335,7 @@ async fn serve_subprocess_e2e() {
             }
         }),
         "3",
+        RPC_TIMEOUT,
     )
     .await;
 

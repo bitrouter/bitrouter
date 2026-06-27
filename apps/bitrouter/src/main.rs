@@ -593,26 +593,19 @@ async fn run() -> Result<()> {
     // construction, so registering it before the exporter exists would
     // lock the bridge to the default no-op and silently drop every later
     // span. The two-stage init is the simplest way around that.
-    // `acp serve` keeps stdout exclusively for the ACP JSON-RPC wire format
-    // (the manager reads from its stdout); logging must go to stderr so it
-    // doesn't corrupt the JSON-RPC stream. We install an explicit stderr
-    // subscriber here rather than the default (stdout) one. The exclusion
-    // below mirrors how `Command::Serve` defers its subscriber init to after
-    // the OTel exporter is available.
-    let is_acp_serve = matches!(
-        &cli.command,
-        Command::Acp {
-            cmd: AcpCmd::Serve { .. }
-        }
-    );
-    if matches!(cli.command, Command::Serve { .. }) || is_acp_serve {
-        if is_acp_serve {
-            // ACP serve: init immediately with stderr so the wire format on
-            // stdout is uncontaminated. (The real `serve` defers init to get
-            // OTel first — no OTel needed for acp serve in v1.)
-            init_stderr_tracing_subscriber();
-        }
+    //
+    // Both `acp` subcommands keep stdout exclusively for their machine-readable
+    // protocol — JSON-RPC for `acp serve`, NDJSON for `acp prompt` — so their
+    // logging must go to stderr instead of the default (stdout) writer, or it
+    // would interleave with and corrupt that stream. The exclusion of
+    // `Command::Serve` mirrors how it defers its subscriber init to after the
+    // OTel exporter is available.
+    let is_acp = matches!(&cli.command, Command::Acp { .. });
+    if matches!(cli.command, Command::Serve { .. }) {
         // `Command::Serve` defers its init — handled inside `serve()`.
+    } else if is_acp {
+        // Any `acp` subcommand: init with stderr so stdout stays pristine.
+        init_stderr_tracing_subscriber();
     } else {
         init_basic_tracing_subscriber();
     }
@@ -881,8 +874,8 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 // ===== tracing subscriber init =====
 
 /// Install a basic fmt-only tracing subscriber. Used for every command
-/// except `serve` and `acp serve` — see [`init_serve_tracing_subscriber`]
-/// and [`init_stderr_tracing_subscriber`].
+/// except `serve` and the `acp` subcommands — see
+/// [`init_serve_tracing_subscriber`] and [`init_stderr_tracing_subscriber`].
 fn init_basic_tracing_subscriber() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -892,10 +885,10 @@ fn init_basic_tracing_subscriber() {
         .init();
 }
 
-/// Install a tracing subscriber that writes to **stderr**. Used for
-/// `bitrouter acp serve`, which keeps stdout exclusively for the ACP
-/// JSON-RPC wire format — logging on stdout would corrupt the stream that the
-/// manager reads.
+/// Install a tracing subscriber that writes to **stderr**. Used for the `acp`
+/// subcommands, which keep stdout exclusively for their machine-readable
+/// protocol stream (JSON-RPC for `acp serve`, NDJSON for `acp prompt`) —
+/// logging on stdout would corrupt the stream the caller parses.
 fn init_stderr_tracing_subscriber() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
