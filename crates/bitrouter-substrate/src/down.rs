@@ -54,7 +54,9 @@ use agent_client_protocol::schema::v1::{
     NewSessionResponse, PromptRequest, PromptResponse, RequestPermissionRequest, SessionId,
     SessionNotification,
 };
-use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Dispatch, Responder, Stdio};
+use agent_client_protocol::{
+    Agent, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
+};
 use futures::StreamExt;
 
 use crate::engine::Session;
@@ -102,12 +104,12 @@ fn serve_on(
     // `acp_session_id` never crosses this boundary.
     let record_id = session.state().record_id.clone();
 
-    // One `Arc<Session>` clone per handler / forwarding closure.
-    let session_new = Arc::clone(&session);
+    // One `Arc<Session>` clone per handler / forwarding closure that needs the
+    // session. (`session/new` doesn't — it only echoes the record_id.)
     let record_for_new = record_id.clone();
     let session_prompt = Arc::clone(&session);
     let session_dispatch = Arc::clone(&session);
-    let session_forward = Arc::clone(&session);
+    let session_forward = session;
     let record_for_forward = record_id;
 
     Agent
@@ -127,13 +129,12 @@ fn serve_on(
         )
         // ── session/new ─────────────────────────────────────────────────────
         .on_receive_request(
+            // The handler doesn't touch the session: it just echoes our stable,
+            // manager-facing `record_id` as the session id (the upstream
+            // acp_session_id stays internal). The session was already launched.
             move |_req: NewSessionRequest,
                   responder: Responder<NewSessionResponse>,
                   _cx: ConnectionTo<Client>| {
-                // Keep the session alive for the whole connection: a handler
-                // closure must own a clone so the `Arc` count never drops to the
-                // forwarding tasks alone.
-                let _keep = Arc::clone(&session_new);
                 let record_id = record_for_new.clone();
                 async move { responder.respond(NewSessionResponse::new(SessionId::new(record_id))) }
             },
@@ -166,25 +167,51 @@ fn serve_on(
             agent_client_protocol::on_receive_request!(),
         )
         // ── catch-all: session/cancel, fs/*, terminal/*, unknown ────────────
+        // This fallback sees every message no typed handler above claimed —
+        // including responses to OUR server-initiated requests. It must
+        // discriminate by `Dispatch` variant, not blanket-error every method
+        // (the simple_agent example does the latter only because it never sends
+        // requests, so it never receives responses).
         .on_receive_dispatch(
             move |message: Dispatch, cx: ConnectionTo<Client>| {
                 let session = Arc::clone(&session_dispatch);
                 async move {
-                    if message.method() == METHOD_SESSION_CANCEL {
-                        // `session/cancel` is a notification; cancel the in-flight
-                        // turn off the dispatch path and acknowledge.
-                        cx.spawn(async move {
-                            let _ = session.cancel().await;
-                            Ok(())
-                        })?;
-                        return Ok(());
+                    match message {
+                        // Responses to the agent's OWN server-initiated requests
+                        // (e.g. `request_permission`) must NOT be answered here —
+                        // pass them through so the SDK routes them back to the
+                        // waiting `send_request`. Erroring them would break the
+                        // permission round-trip.
+                        Dispatch::Response(..) => Ok(Handled::No {
+                            message,
+                            retry: false,
+                        }),
+                        // `session/cancel` is a notification: cancel the in-flight
+                        // turn off the dispatch path and claim the message.
+                        Dispatch::Notification(_) if message.method() == METHOD_SESSION_CANCEL => {
+                            cx.spawn(async move {
+                                let _ = session.cancel().await;
+                                Ok(())
+                            })?;
+                            Ok(Handled::Yes)
+                        }
+                        // Any other unhandled request (fs/*, terminal/*, unknown):
+                        // answer with a proper "method not found" rather than
+                        // dropping. Claims the message.
+                        Dispatch::Request(..) => {
+                            message.respond_with_error(
+                                agent_client_protocol::schema::v1::Error::method_not_found(),
+                                cx,
+                            )?;
+                            Ok(Handled::Yes)
+                        }
+                        // Any other unhandled notification: a notification has no
+                        // reply, so pass it through rather than fabricating one.
+                        Dispatch::Notification(_) => Ok(Handled::No {
+                            message,
+                            retry: false,
+                        }),
                     }
-                    // fs/*, terminal/*, and any other unhandled method: answer
-                    // with a proper "method not found" rather than dropping.
-                    message.respond_with_error(
-                        agent_client_protocol::schema::v1::Error::method_not_found(),
-                        cx,
-                    )
                 }
             },
             agent_client_protocol::on_receive_dispatch!(),
@@ -302,6 +329,34 @@ mod tests {
         assert_eq!(prompt_text(&[]), "");
     }
 
+    /// Launch a real [`Session`] whose upstream agent is a bash ACP stub running
+    /// `stub`. Shared by the duplex `serve_on`↔client tests below. No worktree is
+    /// created, so the caller just drops the returned `Arc` to tear down.
+    #[cfg(unix)]
+    async fn launch_stub_session(stub: &str) -> (Arc<Session>, tempfile::TempDir) {
+        use std::collections::HashMap;
+
+        use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
+
+        let cfg = AcpAgentConfig {
+            name: "stub".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "bash".to_string(),
+                args: vec!["-c".to_string(), stub.to_string()],
+                env: HashMap::new(),
+            },
+        };
+        let catalog =
+            ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog");
+        let base = tempfile::tempdir().expect("tempdir");
+        let session = Arc::new(
+            Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
+                .await
+                .expect("launch"),
+        );
+        (session, base)
+    }
+
     /// Full `serve`↔client round-trip over an in-memory duplex transport
     /// ([`agent_client_protocol::Channel`]), no subprocess for the manager side.
     ///
@@ -318,17 +373,14 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn serve_round_trips_new_prompt_and_update() {
-        use std::collections::HashMap;
-
         use agent_client_protocol::schema::ProtocolVersion;
         use agent_client_protocol::schema::v1::{
             InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification, StopReason,
         };
         use agent_client_protocol::{Channel, Client, ConnectionTo};
-        use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
         use tokio::task::LocalSet;
 
-        // ── A real Session backed by a bash ACP stub (mirrors engine.rs). ───
+        // The upstream stub streams an `agent_message_chunk` update then ends.
         const BASH_STUB: &str = r#"
             while read line; do
               id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
@@ -344,22 +396,7 @@ mod tests {
         let local = LocalSet::new();
         local
             .run_until(async {
-                let cfg = AcpAgentConfig {
-                    name: "stub".to_string(),
-                    transport: AcpTransport::Stdio {
-                        command: "bash".to_string(),
-                        args: vec!["-c".to_string(), BASH_STUB.to_string()],
-                        env: HashMap::new(),
-                    },
-                };
-                let catalog = ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)])
-                    .expect("catalog");
-                let base = tempfile::tempdir().expect("tempdir");
-                let session = Arc::new(
-                    Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
-                        .await
-                        .expect("launch"),
-                );
+                let (session, _base) = launch_stub_session(BASH_STUB).await;
                 let record_id = session.state().record_id.clone();
 
                 // ── serve(agent side) ↔ test Client over an in-memory duplex. ──
@@ -433,6 +470,281 @@ mod tests {
 
                 // No worktree (None) → nothing on disk to clean. Dropping all
                 // references lets the upstream child be reaped.
+                drop(session);
+            })
+            .await;
+    }
+
+    /// End-to-end permission round-trip:
+    /// upstream `request_permission` → up.rs `PendingPermission` →
+    /// down.rs forwarder re-issues to the manager → test client answers
+    /// `AllowOnce` → `outcome_from_selection` → `pending.resolve` → up.rs
+    /// `select_option` picks the `allow_once` option → upstream gets the allow
+    /// id back.
+    ///
+    /// The upstream stub offers `allow_once` (id `allow`) + `reject_once` (id
+    /// `rej`) mid-prompt, reads the response, and echoes the chosen optionId into
+    /// a `session/update` (`chose:<id>`). The test asserts the forwarded update
+    /// carries `chose:allow`, proving the manager's allow choice reached the
+    /// upstream through the full down→manager→down→upstream path.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_forwards_permission_and_resolves_allow() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+            RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+            SessionNotification, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo, Responder};
+        use tokio::task::LocalSet;
+
+        const PERM_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                    printf '{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{"sessionId":"u1","toolCall":{"toolCallId":"tc1","title":"do thing"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"rej","name":"Reject","kind":"reject_once"}]}}\n'
+                    read resp
+                    chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                    printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"chose:%s"}}}}\n' "$chosen"
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(PERM_STUB).await;
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let (update_tx, mut update_rx) =
+                    futures::channel::mpsc::unbounded::<SessionNotification>();
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    // Forwarded `session/update`s land here.
+                    .on_receive_notification(
+                        move |notif: SessionNotification, _cx: ConnectionTo<Agent>| {
+                            let update_tx = update_tx.clone();
+                            async move {
+                                let _ = update_tx.unbounded_send(notif);
+                                Ok(())
+                            }
+                        },
+                        agent_client_protocol::on_receive_notification!(),
+                    )
+                    // The manager answers the forwarded `request_permission` by
+                    // selecting the `allow_once` option from the offered set.
+                    .on_receive_request(
+                        move |req: RequestPermissionRequest,
+                              responder: Responder<RequestPermissionResponse>,
+                              _cx: ConnectionTo<Agent>| async move {
+                            let allow_id = req
+                                .options
+                                .iter()
+                                .find(|o| {
+                                    matches!(
+                                        o.kind,
+                                        agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce
+                                    )
+                                })
+                                .map(|o| o.option_id.clone())
+                                .expect("allow_once option forwarded to manager");
+                            responder.respond(RequestPermissionResponse::new(
+                                RequestPermissionOutcome::Selected(
+                                    SelectedPermissionOutcome::new(allow_id),
+                                ),
+                            ))
+                        },
+                        agent_client_protocol::on_receive_request!(),
+                    )
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        let new_session = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                new_session.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new("do X".to_string()))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+                        // The upstream echoed the chosen optionId; it must be the
+                        // allow option, proving the full round-trip selected it.
+                        let mut chose = None;
+                        for _ in 0..8 {
+                            match update_rx.next().await {
+                                Some(n) => {
+                                    let s = format!("{:?}", n.update);
+                                    if s.contains("chose:") {
+                                        chose = Some(s);
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        let chose = chose.expect("upstream echoed a chosen optionId");
+                        assert!(
+                            chose.contains("chose:allow"),
+                            "expected allow option chosen, got: {chose}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// `session/cancel` from the manager is dispatched without error. The stub
+    /// answers the handshake; the client sends a `session/cancel` notification
+    /// and the connection stays healthy (a follow-up `initialize` round-trips),
+    /// proving the catch-all dispatched cancel rather than erroring or hanging.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_dispatches_cancel_without_error() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            CancelNotification, InitializeRequest, NewSessionRequest, SessionId,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const HANDSHAKE_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/cancel*) : ;;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(HANDSHAKE_STUB).await;
+                let record_id = session.state().record_id.clone();
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .connect_with(client_channel, move |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        cx.send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+
+                        // Fire a cancel notification (no reply expected).
+                        cx.send_notification(CancelNotification::new(SessionId::new(record_id)))?;
+
+                        // The connection is still healthy: another request
+                        // round-trips, so cancel was dispatched (not fatal).
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(
+                    client_result.is_ok(),
+                    "cancel must not break the connection: {client_result:?}"
+                );
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// A method our agent doesn't handle is answered with a JSON-RPC
+    /// method-not-found error via the catch-all, never silently dropped or hung.
+    ///
+    /// We send `authenticate` (a valid Client→Agent request our endpoint does
+    /// not implement). It exercises the exact same catch-all arm as `fs/*` /
+    /// `terminal/*`: any method that isn't `session/cancel` or a typed-handled
+    /// method → `Error::method_not_found()`. (`fs/*` and `terminal/*` are
+    /// agent→client requests in ACP, so a Client can't issue them through a typed
+    /// `send_request`; `authenticate` is the cleanest unhandled method a manager
+    /// can actually send.)
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_rejects_unknown_method_with_method_not_found() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{AuthenticateRequest, InitializeRequest};
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        // Must answer both handshake steps: `Session::launch` runs
+        // `initialize` + `session/new` against the upstream before serving.
+        const HANDSHAKE_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(HANDSHAKE_STUB).await;
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+
+                        // Our agent has no `authenticate` handler → catch-all →
+                        // method-not-found (same arm fs/* and terminal/* hit).
+                        let outcome = cx
+                            .send_request(AuthenticateRequest::new("none"))
+                            .block_task()
+                            .await;
+                        assert!(
+                            outcome.is_err(),
+                            "unhandled method must be method-not-found, got: {outcome:?}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
                 drop(session);
             })
             .await;
