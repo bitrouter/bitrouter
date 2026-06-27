@@ -20,6 +20,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+serde = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util", "fs"] }

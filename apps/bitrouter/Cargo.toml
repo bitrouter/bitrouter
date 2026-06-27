@@ -44,6 +44,7 @@ serde_json.workspace = true
 async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"
+futures.workspace = true
 axoupdater = { version = "0.9", default-features = false, features = ["github_releases"] }
 semver = "1"
 thiserror.workspace = true
@@ -52,6 +53,9 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["full"] }
 wiremock = "0.6"
 futures.workspace = true
+agent-client-protocol.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
 tower = { workspace = true, features = ["util"] }
 axum.workspace = true
 axum-test = "20"

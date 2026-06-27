@@ -7,7 +7,8 @@ use agent_client_protocol::schema::v1::{
 };
 
 /// Tool execution status, mirroring `bitrouter_gui_core::protocol::ToolStatus`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
     Pending,
     Running,
@@ -24,7 +25,8 @@ pub enum PermissionOutcome {
 }
 
 /// Substrate-local event produced from one ACP `SessionUpdate`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionUpdateKind {
     MessageChunk {
         message_id: Option<String>,

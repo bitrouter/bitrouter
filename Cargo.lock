@@ -936,6 +936,7 @@ dependencies = [
 name = "bitrouter"
 version = "1.0.0-alpha.19"
 dependencies = [
+ "agent-client-protocol",
  "anyhow",
  "async-trait",
  "axoupdater",
@@ -967,6 +968,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower 0.5.3",
@@ -1182,6 +1184,7 @@ dependencies = [
  "async-trait",
  "bitrouter-sdk",
  "futures",
+ "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

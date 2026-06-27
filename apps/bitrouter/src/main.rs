@@ -264,6 +264,14 @@ enum Command {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// Per-session ACP substrate — headless agent session management.
+    ///
+    /// `serve` exposes one agent session as a vanilla ACP Agent over stdio.
+    /// `prompt` launches a session, sends one prompt, and streams NDJSON output.
+    Acp {
+        #[command(subcommand)]
+        cmd: AcpCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -514,6 +522,51 @@ enum ProviderAction {
     },
 }
 
+#[derive(Subcommand)]
+enum AcpCmd {
+    /// Serve one agent session as a vanilla ACP Agent over **stdio** until the
+    /// manager disconnects. Intended for GUIs and orchestrating agents that
+    /// speak ACP directly.
+    Serve {
+        /// Agent id — must exist under `agents:` in the config.
+        #[arg(long)]
+        agent: String,
+        /// Name of a git worktree to create inside the repo before launching.
+        /// When omitted the session runs in the current directory.
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Launch a session, send one prompt, and stream NDJSON output to stdout.
+    ///
+    /// Each streamed agent update is emitted as one JSON object per line with
+    /// a `type` field (e.g. `message_chunk`, `tool_call`). The final line has
+    /// `type: result` with a `stop_reason` field.
+    Prompt {
+        /// Agent id — must exist under `agents:` in the config.
+        #[arg(long)]
+        agent: String,
+        /// Name of a git worktree to create inside the repo before launching.
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Return immediately after submitting the prompt (emit
+        /// `{"type":"submitted"}`). The session is torn down after ack.
+        #[arg(long)]
+        no_wait: bool,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// The prompt text to send.
+        text: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     // Defer to `run` for the actual dispatch so the entry point can
@@ -540,7 +593,27 @@ async fn run() -> Result<()> {
     // construction, so registering it before the exporter exists would
     // lock the bridge to the default no-op and silently drop every later
     // span. The two-stage init is the simplest way around that.
-    if !matches!(cli.command, Command::Serve { .. }) {
+    // `acp serve` keeps stdout exclusively for the ACP JSON-RPC wire format
+    // (the manager reads from its stdout); logging must go to stderr so it
+    // doesn't corrupt the JSON-RPC stream. We install an explicit stderr
+    // subscriber here rather than the default (stdout) one. The exclusion
+    // below mirrors how `Command::Serve` defers its subscriber init to after
+    // the OTel exporter is available.
+    let is_acp_serve = matches!(
+        &cli.command,
+        Command::Acp {
+            cmd: AcpCmd::Serve { .. }
+        }
+    );
+    if matches!(cli.command, Command::Serve { .. }) || is_acp_serve {
+        if is_acp_serve {
+            // ACP serve: init immediately with stderr so the wire format on
+            // stdout is uncontaminated. (The real `serve` defers init to get
+            // OTel first — no OTel needed for acp serve in v1.)
+            init_stderr_tracing_subscriber();
+        }
+        // `Command::Serve` defers its init — handled inside `serve()`.
+    } else {
         init_basic_tracing_subscriber();
     }
 
@@ -624,6 +697,7 @@ async fn run() -> Result<()> {
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action).await,
         Command::Mcp { action } => mcp_cmd(action).await,
+        Command::Acp { cmd } => acp_cmd(cmd).await,
         Command::Update {
             check,
             tag,
@@ -807,9 +881,24 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 // ===== tracing subscriber init =====
 
 /// Install a basic fmt-only tracing subscriber. Used for every command
-/// except `serve` — see [`init_serve_tracing_subscriber`].
+/// except `serve` and `acp serve` — see [`init_serve_tracing_subscriber`]
+/// and [`init_stderr_tracing_subscriber`].
 fn init_basic_tracing_subscriber() {
     tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
+/// Install a tracing subscriber that writes to **stderr**. Used for
+/// `bitrouter acp serve`, which keeps stdout exclusively for the ACP
+/// JSON-RPC wire format — logging on stdout would corrupt the stream that the
+/// manager reads.
+fn init_stderr_tracing_subscriber() {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -2000,6 +2089,42 @@ async fn agents_cmd(action: AgentsAction) -> Result<()> {
             }
             Err(e) => anyhow::bail!(e),
         },
+    }
+}
+
+// ===== `bitrouter acp …` (per-session ACP substrate) =====
+
+async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
+    match cmd {
+        AcpCmd::Serve {
+            agent,
+            worktree,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            bitrouter::acp_cli::serve(cfg, &agent, worktree.as_deref()).await
+        }
+        AcpCmd::Prompt {
+            agent,
+            worktree,
+            no_wait,
+            config,
+            text,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::prompt(
+                cfg,
+                &agent,
+                worktree.as_deref(),
+                &text,
+                no_wait,
+                &mut stdout,
+            )
+            .await
+        }
     }
 }
 
