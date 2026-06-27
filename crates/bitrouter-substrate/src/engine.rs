@@ -120,7 +120,6 @@ impl Session {
             .lookup(agent_id)
             .ok_or_else(|| anyhow::anyhow!("no acp agent configured for '{agent_id}'"))?
             .clone();
-        let AcpTransport::Stdio { command, args, env } = &transport;
 
         // ── Worktree (optional) ────────────────────────────────────────────
         let worktrees = WorktreeManager::new(base_repo.clone());
@@ -128,7 +127,40 @@ impl Session {
             Some(name) => Some(worktrees.create(name).await?),
             None => None,
         };
-        let cwd = worktree_path.clone().unwrap_or(base_repo);
+
+        // Everything after a successful `create` runs in `build`. If it fails we
+        // must remove the just-created worktree before propagating the error, or
+        // it leaks on disk.
+        match Self::build(agent_id, transport, base_repo, worktree_path.clone()).await {
+            Ok(session) => Ok(session),
+            Err(original) => {
+                if let Some(path) = &worktree_path {
+                    // Best-effort cleanup; a remove error must not mask the
+                    // original failure that triggered the cleanup.
+                    if let Err(remove_err) = worktrees.remove(path).await {
+                        tracing::warn!(
+                            error = %remove_err,
+                            path = %path.display(),
+                            "failed to remove worktree after launch error"
+                        );
+                    }
+                }
+                Err(original)
+            }
+        }
+    }
+
+    /// The body of [`launch`] after the worktree has been created (if any).
+    /// Returns a fully wired `Session`, or an error; on error the caller
+    /// ([`launch`]) removes the worktree.
+    async fn build(
+        agent_id: &str,
+        transport: AcpTransport,
+        base_repo: PathBuf,
+        worktree_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
+        let AcpTransport::Stdio { command, args, env } = &transport;
+        let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
 
         // ── Upstream connection (agent child) ──────────────────────────────
         let conn = Arc::new(UpstreamConnection::spawn(command, args, env, Some(cwd)).await?);
@@ -197,7 +229,10 @@ impl Session {
             pipeline,
             turn,
             worktree: worktree_path,
-            worktrees,
+            // `WorktreeManager` is a thin `base_repo` wrapper; a fresh one for
+            // the session's own shutdown removal is equivalent to the one
+            // `launch` keeps for error-path cleanup.
+            worktrees: WorktreeManager::new(base_repo),
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
         })
     }
@@ -240,12 +275,17 @@ impl Session {
         &self.state
     }
 
-    /// Drop the upstream (kills the child) and remove the worktree (if any).
+    /// Drops the connection (which kills the child once the driver observes the
+    /// closed channel) and removes the worktree (if any); logs a warning if the
+    /// connection could not be released within the drain bound.
     ///
     /// Drops everything that holds an `Arc<UpstreamConnection>` clone — the turn
     /// controller (whose worker task captured the pipeline), `Session`'s own
     /// pipeline clone, and finally the connection — so the driver future ends
-    /// and the agent child is killed, *then* removes the worktree.
+    /// and the agent child is killed, *then* removes the worktree. Teardown is
+    /// best-effort: if the worker has not released its connection clone within
+    /// [`SHUTDOWN_DRAIN_YIELDS`] yields the connection is dropped anyway, but a
+    /// warning is logged because the child may not have terminated.
     pub async fn shutdown(self) -> anyhow::Result<()> {
         let Session {
             conn,
@@ -270,6 +310,15 @@ impl Session {
                 break;
             }
             tokio::task::yield_now().await;
+        }
+        // If another clone is still outstanding, dropping `conn` will NOT end the
+        // driver future, so the child may survive. Surface that instead of
+        // silently claiming a clean teardown.
+        if Arc::strong_count(&conn) > 1 {
+            tracing::warn!(
+                strong_count = Arc::strong_count(&conn),
+                "upstream connection not released within drain bound; child may not have terminated"
+            );
         }
         drop(conn);
 
@@ -345,6 +394,21 @@ mod tests {
         ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog")
     }
 
+    /// Catalog whose agent points at a non-existent binary, so
+    /// `UpstreamConnection::spawn` (and thus `launch`) fails. Used to exercise
+    /// the error-path worktree cleanup.
+    fn doomed_catalog() -> ConfigAcpRoutingTable {
+        let cfg = AcpAgentConfig {
+            name: "stub".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "bitrouter-no-such-binary-xyzzy".to_string(),
+                args: vec![],
+                env: HashMap::new(),
+            },
+        };
+        ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog")
+    }
+
     #[tokio::test]
     async fn launch_then_prompt_returns_response() {
         let base = tempfile::tempdir().expect("tempdir");
@@ -405,6 +469,27 @@ mod tests {
         assert!(
             !worktree_path.exists(),
             "worktree should be removed after shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn launch_failure_removes_worktree_no_leak() {
+        let repo = init_repo();
+        let catalog = doomed_catalog();
+
+        let worktree_path = repo
+            .path()
+            .join(".bitrouter")
+            .join("worktrees")
+            .join("doomed");
+
+        let result =
+            Session::launch(&catalog, "stub", repo.path().to_path_buf(), Some("doomed")).await;
+
+        assert!(result.is_err(), "launch should fail on a bad binary");
+        assert!(
+            !worktree_path.exists(),
+            "worktree must be removed when launch fails, not leaked"
         );
     }
 
