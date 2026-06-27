@@ -43,6 +43,9 @@ tower-http = { workspace = true, optional = true }
 # `config_file` feature
 serde-saphyr = { workspace = true, optional = true }
 
+# `acp` feature — typed ACP schema payloads (PromptRequest / PromptResponse / …)
+agent-client-protocol-schema = { workspace = true, optional = true }
+
 # `mcp` feature — official Rust MCP SDK.
 # <https://github.com/modelcontextprotocol/rust-sdk>
 rmcp = { workspace = true, optional = true }
@@ -66,7 +69,7 @@ mcp = ["dep:rmcp", "dep:rmcp-reqwest", "tokio/process"]
 # `ConfigAcpRoutingTable` for the `acp` pure-routing pipeline.
 # Without this feature the SDK still exposes `acp::Pipeline`, hook traits,
 # and the `AcpTransport` enum, so a consumer can plug in a custom Executor.
-acp = ["tokio/process", "tokio/io-util"]
+acp = ["dep:agent-client-protocol-schema", "tokio/process", "tokio/io-util"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = [

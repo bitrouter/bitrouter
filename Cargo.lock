@@ -1128,6 +1128,7 @@ dependencies = [
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.19"
 dependencies = [
+ "agent-client-protocol-schema",
  "async-stream",
  "async-trait",
  "axum 0.8.9",
