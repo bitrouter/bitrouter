@@ -3,6 +3,7 @@
 //! nudge-cache TTL) lives in small pure functions so it can be unit-tested
 //! without touching the network or replacing the running binary.
 
+use crate::output::reports::update::UpdateReport;
 use crate::{daemon, style};
 use anyhow::Result;
 use axoupdater::{AxoUpdater, UpdateRequest};
@@ -30,6 +31,15 @@ fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMethod
         return InstallMethod::Cargo;
     }
     InstallMethod::Unknown
+}
+
+/// Stable lowercase label for the JSON `install_method` field.
+fn method_label(method: InstallMethod) -> &'static str {
+    match method {
+        InstallMethod::Homebrew => "homebrew",
+        InstallMethod::Cargo => "cargo",
+        InstallMethod::Unknown => "unknown",
+    }
 }
 
 /// The exact command a user should run to upgrade a package-manager-managed
@@ -79,11 +89,30 @@ pub struct UpdateOptions {
     pub yes: bool,
 }
 
-/// What the dispatch layer must still do after `run` returns.
+/// The result of `run`: the report to emit through the [`Output`] driver, plus
+/// whether the dispatch layer must still restart a running daemon onto the new
+/// binary before emitting.
+///
+/// [`Output`]: crate::output::Output
 #[derive(Debug)]
 pub struct RunOutcome {
-    /// A running daemon needs restarting to pick up the new binary.
+    /// The single result value for `bitrouter update`, rendered to stdout.
+    pub report: UpdateReport,
+    /// A running daemon needs restarting to pick up the new binary. When true,
+    /// `report.daemon` is already set to `restarted` on the optimistic
+    /// assumption the restart succeeds (a failure surfaces as the error
+    /// envelope instead, replacing the whole result).
     pub restart_needed: bool,
+}
+
+impl RunOutcome {
+    /// A terminal outcome that needs no daemon restart.
+    fn done(report: UpdateReport) -> Self {
+        Self {
+            report,
+            restart_needed: false,
+        }
+    }
 }
 
 /// Current binary version, baked in at compile time.
@@ -120,27 +149,17 @@ fn build_updater() -> Option<AxoUpdater> {
 }
 
 pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
-    let p = style::Palette::for_stdout();
-    let current = current_version();
+    let current = current_version().to_string();
 
     // 1. No receipt -> package-manager install; delegate, never clobber.
     let Some(mut updater) = build_updater() else {
         let exe = std::env::current_exe().unwrap_or_default();
         let method = detect_install_method(&exe, cargo_home().as_deref());
-        println!(
-            "{dim}bitrouter looks installed via {how}. Update with:{reset}\n    {cmd}",
-            dim = p.dim,
-            reset = p.reset,
-            how = match method {
-                InstallMethod::Homebrew => "Homebrew",
-                InstallMethod::Cargo => "Cargo",
-                InstallMethod::Unknown => "your package manager",
-            },
-            cmd = delegation_command(method),
-        );
-        return Ok(RunOutcome {
-            restart_needed: false,
-        });
+        return Ok(RunOutcome::done(UpdateReport::delegated(
+            current,
+            method_label(method),
+            delegation_command(method),
+        )));
     };
 
     // 2. Channel / pin.
@@ -156,63 +175,52 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
 
     // 3. Dry run.
     if opts.check {
-        if updater.is_update_needed().await? {
-            match updater.query_new_version().await? {
-                Some(v) => println!("update available: {current} -> {v}"),
-                None => println!("update available (target version unknown)"),
-            }
+        let available = updater.is_update_needed().await?;
+        let target = if available {
+            updater.query_new_version().await?.map(|v| v.to_string())
         } else {
-            println!("up to date ({current})");
-        }
-        return Ok(RunOutcome {
-            restart_needed: false,
-        });
+            None
+        };
+        return Ok(RunOutcome::done(UpdateReport::checked(
+            current, available, target,
+        )));
     }
 
-    // 4. Confirm + swap.
-    if !opts.yes && !confirm(&p, current, &target_label)? {
-        println!("aborted");
-        return Ok(RunOutcome {
-            restart_needed: false,
-        });
+    // 4. Confirm + swap. The prompt is interactive UI, not the command result,
+    // so it goes to stderr — stdout carries only the final report.
+    if !opts.yes && !confirm(&current, &target_label)? {
+        return Ok(RunOutcome::done(UpdateReport::aborted(current)));
     }
     let Some(result) = updater.run().await? else {
-        println!("already up to date ({current})");
-        return Ok(RunOutcome {
-            restart_needed: false,
-        });
+        return Ok(RunOutcome::done(UpdateReport::unchanged(current)));
     };
-    println!(
-        "{green}✓{reset} updated {current} -> {new}",
-        green = p.green,
-        reset = p.reset,
-        new = result.new_version,
-    );
+    let new_version = result.new_version.to_string();
 
-    // 5. Daemon awareness.
+    // 5. Daemon awareness. The dispatch layer performs the restart (when asked)
+    // before emitting; we label the report optimistically here.
     let daemon_running = daemon::endpoint_in_use(socket);
-    if daemon_running && !opts.restart {
-        println!(
-            "{dim}A daemon is running the old binary. Run `bitrouter restart` to serve {new}.{reset}",
-            dim = p.dim,
-            reset = p.reset,
-            new = result.new_version,
-        );
-    }
+    let (daemon, restart_needed) = match (daemon_running, opts.restart) {
+        (true, true) => (Some("restarted"), true),
+        (true, false) => (Some("restart_needed"), false),
+        (false, _) => (None, false),
+    };
     Ok(RunOutcome {
-        restart_needed: daemon_running && opts.restart,
+        report: UpdateReport::updated(current, new_version, daemon),
+        restart_needed,
     })
 }
 
 /// Interactive y/N confirmation. Defaults to no on empty input or non-tty EOF.
-fn confirm(p: &style::Palette, current: &str, target: &str) -> Result<bool> {
+/// The prompt is written to stderr so stdout stays a clean JSON result.
+fn confirm(current: &str, target: &str) -> Result<bool> {
     use std::io::Write;
-    print!(
+    let p = style::Palette::for_stderr();
+    eprint!(
         "Update bitrouter from {bold}{current}{reset} to {target}? [y/N] ",
         bold = p.bold,
         reset = p.reset,
     );
-    std::io::stdout().flush()?;
+    std::io::stderr().flush()?;
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line)? == 0 {
         return Ok(false);

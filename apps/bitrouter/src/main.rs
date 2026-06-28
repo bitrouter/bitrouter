@@ -712,11 +712,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             };
             let outcome = bitrouter::update::run(opts, &socket).await?;
             if outcome.restart_needed {
+                // Bring the daemon onto the new binary before emitting, so a
+                // restart failure surfaces as the error envelope. The restart's
+                // own report is folded into `outcome.report.daemon`.
                 let log_path = resolve_log_path(source.home(), None);
-                restart(&source, &socket, &log_path).await.map(|_| ())
-            } else {
-                Ok(())
+                restart(&source, &socket, &log_path).await?;
             }
+            output.emit(&outcome.report)?;
+            Ok(())
         }
     }
 }

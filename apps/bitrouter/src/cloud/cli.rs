@@ -748,16 +748,11 @@ async fn run_namespace(action: NamespaceAction) -> std::result::Result<(), SdkEr
         NamespaceAction::Current(flag) => {
             // Offline — the namespace is baked into the local credential.
             let nsid = client.namespace_id();
-            if effective_json(flag.json) {
-                let body = serde_json::json!({ "namespace_id": nsid });
-                println!("{}", serde_json::to_string_pretty(&body)?);
-            } else {
-                match nsid {
-                    Some(id) => println!("{id}"),
-                    None => println!("(no namespace — run `bitrouter cloud login`)"),
-                }
-            }
-            Ok(())
+            let body = serde_json::json!({ "namespace_id": nsid });
+            emit(flag.json, &body, |_| match nsid {
+                Some(id) => id.to_owned(),
+                None => "(no namespace — run `bitrouter cloud login`)".to_owned(),
+            })
         }
     }
 }
