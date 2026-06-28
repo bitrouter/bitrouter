@@ -166,8 +166,14 @@ impl Session {
         let conn = Arc::new(UpstreamConnection::spawn(command, args, env, Some(cwd)).await?);
         let acp_session_id = conn.acp_session_id().to_string();
 
-        // ── Identity ───────────────────────────────────────────────────────
-        let mut state = SessionState::new(acp_session_id.clone(), agent_id.to_string());
+        // ── Identity (D8/D10) ──────────────────────────────────────────────
+        // `record_id` is a STABLE, distinct manager-facing id — minted here, NOT
+        // the upstream `acp_session_id`. Keeping them separate lets the
+        // manager-facing id survive an upstream reconnect (v2) while the upstream
+        // wire id can change. The down-facing `SessionAgent` returns `record_id`
+        // for `session/new`; the upstream `acp_session_id` stays internal.
+        let record_id = uuid::Uuid::new_v4().to_string();
+        let mut state = SessionState::new(record_id, agent_id.to_string());
         state.set_acp_session_id(acp_session_id.clone());
         if let Some(agent_sid) = conn.agent_session_id() {
             state.set_agent_session_id(agent_sid.to_string());

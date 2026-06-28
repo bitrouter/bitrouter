@@ -355,6 +355,32 @@ async fn serve_subprocess_e2e() {
         "expected a forwarded session/update with 'hi'; notifications: {notifications:?}"
     );
 
-    // ── Cleanup ───────────────────────────────────────────────────────────
-    let _ = child.kill().await;
+    // ── Disconnect: serve must exit on its OWN when the manager closes stdin ─
+    // This is the regression guard for the process-leak bug: dropping the
+    // child's stdin handle delivers EOF to `bitrouter acp serve` (the manager
+    // disconnecting). The server must detect EOF, tear down, drop its
+    // `Arc<Session>` (which kills the upstream agent child), and exit — WITHOUT
+    // us having to `kill()` it. We assert it exits on its own within a few
+    // seconds.
+    drop(child_stdin);
+
+    let exit_status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    match exit_status {
+        Ok(Ok(status)) => {
+            // Exited on its own. Success is exiting promptly; the exit code may be
+            // non-zero because `connect_with` surfaces the EOF as an error, which
+            // is fine — the point is it did not hang and did not need a kill.
+            eprintln!("serve exited on stdin close with status: {status:?}");
+        }
+        Ok(Err(e)) => panic!("error waiting for serve child: {e}"),
+        Err(_) => {
+            // Hung: kill so the test runner isn't left with a leaked process,
+            // then fail loudly — this is the bug we are guarding against.
+            let _ = child.kill().await;
+            panic!(
+                "bitrouter acp serve did NOT exit within 5s after the manager \
+                 closed stdin — it hung (process/agent-child leak regression)"
+            );
+        }
+    }
 }

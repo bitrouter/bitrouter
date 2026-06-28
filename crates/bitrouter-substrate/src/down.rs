@@ -37,15 +37,25 @@
 //!   item. The await happens inside a spawned task (off the dispatch path), so a
 //!   slow manager never blocks message dispatch.
 //!
-//! ## Connection handle for the forwarding tasks
+//! ## Connection handle + lifecycle for the forwarding tasks
 //!
 //! Request handlers receive a `ConnectionTo<Client>` per call, but the forwarding
 //! tasks must run for the connection's whole life. We get a long-lived handle the
 //! same way [`crate::up`] does for the client side: `connect_with` runs a
 //! `main_fn` closure that owns the `ConnectionTo<Client>`. The closure spawns the
-//! two forwarding tasks via [`ConnectionTo::spawn`] and then parks on
-//! `future::pending()`, keeping the connection (and its background actors) alive
-//! until stdio closes.
+//! two forwarding tasks via [`ConnectionTo::spawn`], then awaits a disconnect
+//! signal.
+//!
+//! **Exit-on-disconnect.** `main_fn` must NOT park on `future::pending()`: the
+//! SDK's `connect_with` runs `run_until(background, main_fn)`, and `background`
+//! does not complete on a bare stdin EOF (its incoming actor stays alive while any
+//! `ConnectionTo` clone — held by our handlers/forwarders — keeps the connection's
+//! internal channels open). A `pending()` `main_fn` therefore never returns,
+//! leaking the `bitrouter acp serve` process and orphaning the upstream agent
+//! child. Instead we wrap the transport in [`EofSignaling`], which fires a
+//! one-shot when the manager's write side hits EOF; `main_fn` awaits that and
+//! returns, so `run_until` drops `background` (cancelling the forwarders) and the
+//! `Arc<Session>` drops, killing the upstream child.
 
 use std::sync::Arc;
 
@@ -55,9 +65,10 @@ use agent_client_protocol::schema::v1::{
     SessionNotification,
 };
 use agent_client_protocol::{
-    Agent, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
+    Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
 };
 use futures::StreamExt;
+use futures::channel::oneshot;
 
 use crate::engine::Session;
 use crate::translate::outcome_from_selection;
@@ -83,9 +94,84 @@ fn prompt_text(blocks: &[ContentBlock]) -> String {
     out
 }
 
+/// A transport wrapper that fires a one-shot when the inner transport's
+/// **incoming** stream ends (the manager's write side / our stdin hit EOF).
+///
+/// Why this exists: the SDK's `connect_with` drives `run_until(background,
+/// main_fn)`. `background` (the connection's actors) does NOT complete on a bare
+/// stdin EOF — its incoming actor stays alive as long as any `ConnectionTo` clone
+/// holds the connection's internal channel senders (our handlers and forwarding
+/// tasks do). So `serve`'s `main_fn` cannot park on `pending()`: it would never
+/// return, leaking the `bitrouter acp serve` process and orphaning the upstream
+/// agent child. This wrapper gives `main_fn` an explicit disconnect signal to
+/// await; when it fires, `main_fn` returns, `run_until` drops `background` (which
+/// cancels the forwarding tasks), and dropping the `Arc<Session>` kills the
+/// upstream child.
+struct EofSignaling<T> {
+    inner: T,
+    eof_tx: oneshot::Sender<()>,
+}
+
+impl<T: ConnectTo<Agent>> ConnectTo<Agent> for EofSignaling<T> {
+    async fn connect_to(self, client: impl ConnectTo<Client>) -> agent_client_protocol::Result<()> {
+        // We only ever drive this wrapper through `into_channel_and_future`
+        // (that's what `Builder::connect_with` calls). Provide a correct
+        // `connect_to` anyway by running the channel↔client copy and our spliced
+        // transport future CONCURRENTLY (the channel copy and the splice each run
+        // forever until the transport ends, so they must not be sequenced).
+        let (channel, future) = self.into_channel_and_future();
+        futures::future::try_join(ConnectTo::<Agent>::connect_to(channel, client), future).await?;
+        Ok(())
+    }
+
+    fn into_channel_and_future(
+        self,
+    ) -> (
+        Channel,
+        futures::future::BoxFuture<'static, agent_client_protocol::Result<()>>,
+    ) {
+        let EofSignaling { inner, eof_tx } = self;
+        let (inner_channel, inner_future) = inner.into_channel_and_future();
+        let Channel {
+            rx: mut inner_rx,
+            tx: inner_tx,
+        } = inner_channel;
+
+        // Splice the inner incoming stream through a fresh channel so we observe
+        // its termination (EOF) and fire `eof_tx`. Outgoing messages pass through
+        // `inner_tx` unchanged.
+        let (spliced_tx, spliced_rx) = futures::channel::mpsc::unbounded();
+        let splice = async move {
+            while let Some(msg) = inner_rx.next().await {
+                if spliced_tx.unbounded_send(msg).is_err() {
+                    break;
+                }
+            }
+            // Inner incoming closed → manager disconnected. Signal once.
+            let _ = eof_tx.send(());
+            Ok(())
+        };
+
+        let combined = async move {
+            // Run the inner transport future and the splice together; either
+            // ending means the transport is done.
+            futures::future::try_join(inner_future, splice).await?;
+            Ok(())
+        };
+
+        (
+            Channel {
+                rx: spliced_rx,
+                tx: inner_tx,
+            },
+            Box::pin(combined),
+        )
+    }
+}
+
 /// Serve `session` as a vanilla ACP Agent over stdio until the manager
 /// disconnects. The returned future resolves when the stdio connection closes
-/// (or errors).
+/// (or errors), at which point the upstream agent child is reaped.
 pub fn serve(
     session: Arc<Session>,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
@@ -100,6 +186,14 @@ fn serve_on(
     session: Arc<Session>,
     transport: impl ConnectTo<Agent> + 'static,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
+    // Wrap the transport so we get a one-shot when the manager disconnects
+    // (incoming EOF). `main_fn` awaits this instead of parking forever.
+    let (eof_tx, eof_rx) = oneshot::channel::<()>();
+    let transport = EofSignaling {
+        inner: transport,
+        eof_tx,
+    };
+
     // The manager-facing session id is our stable `record_id`; the upstream
     // `acp_session_id` never crosses this boundary.
     let record_id = session.state().record_id.clone();
@@ -222,9 +316,15 @@ fn serve_on(
             move |connection: ConnectionTo<Client>| async move {
                 spawn_update_forwarder(&connection, &session_forward, record_for_forward.clone())?;
                 spawn_permission_forwarder(&connection, &session_forward)?;
-                // Park: keep the connection (and its handlers) alive until stdio
-                // closes, at which point `connect_with` tears the future down.
-                std::future::pending::<agent_client_protocol::Result<()>>().await
+                // Keep the connection (and its handlers/forwarders) alive until
+                // the manager disconnects (incoming EOF), then return so
+                // `run_until` tears `background` down — cancelling the forwarding
+                // tasks and dropping their `Arc<Session>` clones. The caller's
+                // remaining `Arc<Session>` then drops on return, killing the
+                // upstream agent child. `eof_rx` resolving `Err` (sender dropped)
+                // is also a teardown signal, so either arm returns `Ok(())`.
+                let _ = eof_rx.await;
+                Ok(())
             },
         )
 }
@@ -745,6 +845,91 @@ mod tests {
                 assert!(client_result.is_ok(), "client failed: {client_result:?}");
                 agent.abort();
                 let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// Regression: after a full session round-trip (so the forwarding tasks are
+    /// live), the manager disconnecting must make `serve_on` complete on its own
+    /// — NOT hang. Before the [`EofSignaling`] transport fix, `main_fn` parked on
+    /// `pending()` and never returned because the connection's `background`
+    /// actors stay alive while any `ConnectionTo` clone (held by the forwarders)
+    /// exists; the process leaked and the upstream child was orphaned.
+    ///
+    /// We also assert that once `serve_on` returns, the test's `Arc<Session>` is
+    /// the **sole** owner (strong_count == 1) — proving no forwarding task
+    /// retained a clone, so dropping it here reaps the upstream child.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_exits_when_manager_disconnects() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, NewSessionRequest, PromptRequest, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const BASH_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}\n';
+                                  printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(BASH_STUB).await;
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let client_result = Client
+                    .builder()
+                    .name("m")
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        let ns = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                ns.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new("x".to_string()))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+                        Ok(())
+                    })
+                    .await;
+                assert!(client_result.is_ok());
+
+                // Client returned → its `connect_with` closed the duplex → manager
+                // disconnect. `serve_on` MUST now complete on its own (no abort).
+                let exited = tokio::time::timeout(std::time::Duration::from_secs(5), agent).await;
+                assert!(
+                    exited.is_ok(),
+                    "serve_on did NOT exit on manager disconnect (hung)"
+                );
+                let join = exited.expect("serve_on exited");
+                assert!(join.is_ok(), "serve_on task panicked: {join:?}");
+
+                // No forwarding task retained an `Arc<Session>` clone, so the test
+                // is the sole owner; dropping it reaps the upstream child.
+                assert_eq!(
+                    Arc::strong_count(&session),
+                    1,
+                    "a forwarding task leaked an Arc<Session> clone"
+                );
                 drop(session);
             })
             .await;
