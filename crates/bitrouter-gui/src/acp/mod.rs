@@ -1,3 +1,3 @@
-//! ACP client integration: the real `Feed` over `bitrouter agent-proxy`.
+//! ACP client integration: the real `Feed` over `bitrouter acp serve --agent <id>`.
 pub mod feed;
 pub mod translate;

@@ -1,5 +1,5 @@
 //! `AcpFeed` — a real `Feed` that drives one ACP session through
-//! `bitrouter agent-proxy <id>`. Owns a tokio runtime on a dedicated thread
+//! `bitrouter acp serve --agent <id>`. Owns a tokio runtime on a dedicated thread
 //! (the `ai.rs` pattern) and bridges ACP to the `Feed`'s `futures` channels.
 //!
 //! ## Deadlock avoidance
@@ -58,7 +58,7 @@ pub struct AcpFeed {
 impl AcpFeed {
     pub fn new(bin: &str, agent_id: &str) -> Self {
         Self {
-            agent_command: format!("{bin} agent-proxy {agent_id}"),
+            agent_command: format!("{bin} acp serve --agent {agent_id}"),
             agent_id: agent_id.to_string(),
         }
     }
@@ -66,8 +66,9 @@ impl AcpFeed {
     pub fn from_env() -> Self {
         let bin = std::env::var("BITROUTER_BIN").unwrap_or_else(|_| "bitrouter".into());
         // `claude-acp` is the bitrouter catalog id for Anthropic Claude (Zed's
-        // `claude-code-acp`); verified against `bitrouter agents list`. Override
-        // with BITROUTER_GUI_AGENT for any other configured agent.
+        // `claude-code-acp`), passed as `acp serve --agent <id>`; verified against
+        // `bitrouter agents list`. Override with BITROUTER_GUI_AGENT for any other
+        // configured agent.
         let agent = std::env::var("BITROUTER_GUI_AGENT").unwrap_or_else(|_| "claude-acp".into());
         Self::new(&bin, &agent)
     }
@@ -351,8 +352,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_builds_proxy_command() {
+    fn new_builds_serve_command() {
         let feed = AcpFeed::new("bitrouter", "claude-code");
-        assert_eq!(feed.agent_command, "bitrouter agent-proxy claude-code");
+        assert_eq!(feed.agent_command, "bitrouter acp serve --agent claude-code");
     }
 }
