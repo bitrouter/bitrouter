@@ -69,7 +69,8 @@ reachable through the current SDK without forking it.
 
 ### Follow-up (separate issue)
 
-File a follow-up to harden teardown once #613 lands:
+Tracked in [bitrouter-gui#4](https://github.com/bitrouter/bitrouter-gui/issues/4) — harden teardown
+once #613 lands:
 
 - Expose / fork an SDK graceful-shutdown path (close stdin, await child exit with a SIGKILL
   backstop) so serve runs its own cascade and the no-orphan guarantee no longer depends on the
