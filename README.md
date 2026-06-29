@@ -8,15 +8,15 @@
 [![Telegram](https://img.shields.io/badge/Telegram-26A5E4?logo=telegram&logoColor=white)](https://t.me/bitrouterai)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 
-Optimize your agent for cost and performance — with every run.
-An open-source LLM router that sends routine calls to open models and pays frontier prices only for the calls that earn them. Zero harness changes.
+**Cost-optimize your production agentic loops.**
+An open-source agentic LLM gateway & router that cost-optimizes your production agentic loops by making models, tools, and agents all routable primitives. Zero harness changes.
 
-> **Not every agent run needs Claude Opus 4.8 — or even Claude 5.**
-> \~80% of agent workloads run just fine on cheaper open-source models without sacrificing performance. Use BitRouter alongside Claude Code (or any coding agent) to reserve your subscription budget for the calls that actually need it. **Enjoy 25% off all open-source model calls on BitRouter Cloud today.**
+> **You're tokenmaxxing in production.**
+> Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most of them don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
 
 ## Before & After
 
-Without BitRouter, your coding agent routes every call — file reads, summaries, tool calls, scaffolding — through the same frontier model. With BitRouter, routine work goes to open models automatically; frontier models get invoked only when they're justified.
+Without BitRouter, your agent routes every call — file reads, summaries, tool calls, scaffolding — through the same frontier model. With BitRouter, routine work goes to open models automatically; frontier models get invoked only when they're justified.
 
 | | Without BitRouter | With BitRouter |
 | --- | --- | --- |
@@ -27,15 +27,55 @@ Without BitRouter, your coding agent routes every call — file reads, summaries
 
 <!-- Screenshots coming — will be added here -->
 
-### Benchmark
+## Three primitives, one gateway
 
-| Metric | Without BitRouter | With BitRouter |
-| --- | --- | --- |
-| **Cost per task** | baseline | — |
-| **Task success rate** | baseline | — |
-| **Avg. latency** | baseline | — |
+An agentic loop consumes three things. Other routers govern only the first. BitRouter makes all three routable, observable, and cost-governed:
 
-<!-- Benchmark data coming — replace with real numbers -->
+- **Models** — route LLM calls across providers, protocols, and accounts. *(the classic router, cross-protocol)*
+- **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints.
+- **Agents** — an **ACP gateway**: sub-agents are first-class, so you hand a task to a cheaper agent the same way you route a call to a cheaper model.
+
+Cost optimization isn't just model selection — it's the cheapest model, the cheapest tool, and the cheapest sub-agent that still gets the loop to its goal.
+
+## The self-improving loop
+
+BitRouter wraps your agentic loop in a second loop. Each loop gets its own **policy spec** — a config file that declares how its calls, tools, and agents should route. BitRouter runs a continuous **observe → evaluate → act** cycle against it:
+
+- **Observe** — every model, tool, and agent call, with cost and outcome attributed to the hop.
+- **Evaluate** — score each run against the loop's goal.
+- **Act** — update the policy spec. Let an agent self-tune the spec from the eval signal, or edit it yourself.
+
+The result is a loop that gets cheaper the longer it runs in production — without re-paying frontier prices for work that never needed them.
+
+## Features
+
+Purpose-built for autonomous agents — concrete capabilities for unattended, multi-step execution:
+
+- **Cross-protocol routing** — an OpenAI-format request to an Anthropic or Google upstream, and back
+- **Multi-account failover + load-balancing** — reroute mid-run; a rate-limit at file 140 never re-pays for files 1–139
+- **MCP gateway** — auth, access control, and identity forwarding in front of any MCP server
+- **AgentSkills gateway** — install and serve skills as governed resources
+- **ACP gateway** — route work to sub-agents as a first-class primitive
+- **Per-request cost + latency** attributed to every agent, model, and hop
+- **Telemetry export** to Prometheus or any OTLP backend
+- **Per-loop policy spec** — declare routing; tune by hand or let an agent self-tune from the eval signal
+- **Virtual keys (`brvk_`)** scoped per agent or user — no agent holds an upstream key
+- **Per-agent spend caps + loop guards** to contain runaway cost
+- **Injection + output guardrails** at the router, before requests leave your network
+- **Zero-config auto-detection** + custom OpenAI-/Anthropic-compatible providers
+
+## Comparison
+
+|  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Best for** | Cost-optimizing agent loops | Model marketplace | Unifying provider SDKs | Model optimization | Fast unified gateway | Fast unified gateway |
+| **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
+| **Optimizes** | The **loop**, by cost | Static routing | Static routing | The model | Static routing | Static routing |
+| **Model catalog** | Curated + bring any provider | **1,600+ marketplace** | Any provider | Curated | **1,600+** | 23+ providers |
+
+_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust. TensorZero is no longer maintained._
+
+**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM (Python), Portkey (TypeScript), and Bifrost (Go) are unified gateways — fast, OpenAI-compatible, guardrails included — but they route models. TensorZero (Rust) adds a production feedback loop, but optimizes the model itself, not the loop. BitRouter is the only one that treats models, tools, and agents as a single routable surface — a Rust-native gateway that cost-optimizes the whole production loop, with cross-protocol routing, MCP and ACP gateways, and guardrails out of the box.
 
 ## Install
 
@@ -68,48 +108,34 @@ BitRouter is a local proxy between your agent and every LLM provider. One env-va
 + OPENAI_BASE_URL=http://localhost:4356        # all providers, automatic failover
 ```
 
-### Local (BYOK)
-
-Set your provider API keys and start:
-
-```bash
-export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GOOGLE_API_KEY also work
-bitrouter start
-# Proxy running at http://localhost:4356
-```
-
-BitRouter auto-detects any key set in the environment — no config file needed. Point your agent runtime at `http://localhost:4356` and any provider whose key is present is immediately available.
-
-For advanced routing rules, guardrails, or multi-account failover, scaffold a config file:
-
-```bash
-bitrouter init          # writes ./bitrouter.yaml (override with `-c <path>`)
-bitrouter start
-```
-
-### Cloud
-
-Sign in to your BitRouter Cloud account from the terminal — one OAuth account covers every model the gateway offers, no upstream provider keys required:
-
-```bash
-bitrouter auth login    # RFC 8628 device flow against api.bitrouter.ai
-bitrouter start         # `bitrouter` provider auto-enables once signed in
-```
-
-Manage keys, usage, billing, policies, and BYOK from the same CLI — see `bitrouter cloud --help` or [`CLI.md`](CLI.md#cloud-account-management).
-
 ### CLI
 
+BitRouter runs as a local daemon — start it with your own keys or a Cloud sign-in.
+
+**Bring your own keys (BYOK)** — auto-detected from the environment, no config file needed:
+
 ```bash
-bitrouter start / stop / restart               # daemon lifecycle
-bitrouter route <model>                        # trace how a model name resolves
-bitrouter agents list / check / install        # ACP agent management
-bitrouter key sign --user <id>                 # mint a scoped brvk_ API key
-bitrouter auth login / logout / whoami         # BitRouter Cloud sign-in
-bitrouter cloud keys / usage / billing         # manage cloud account
+export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GEMINI_API_KEY also work
+bitrouter start                 # proxy running at http://localhost:4356
 ```
 
-See [`CLI.md`](CLI.md) for flags, config resolution, and examples.
+**Or sign in to BitRouter Cloud** — one OAuth account covers every model, no upstream provider keys:
+
+```bash
+bitrouter auth login            # RFC 8628 device flow against api.bitrouter.ai
+bitrouter start                 # `bitrouter` provider auto-enables once signed in
+```
+
+Point your agent runtime at `http://localhost:4356` and any available provider is live. For advanced routing rules, guardrails, or multi-account failover, scaffold a config with `bitrouter init` (writes `./bitrouter.yaml`).
+
+```bash
+bitrouter start / stop / restart        # daemon lifecycle
+bitrouter route <model>                 # trace how a model name resolves
+bitrouter key sign --user <id>          # mint a scoped brvk_ API key
+bitrouter cloud keys / usage / billing  # manage your cloud account
+```
+
+See [`CLI.md`](CLI.md) for the full command reference, flags, and config resolution.
 
 ### Agent Skill
 
@@ -123,101 +149,40 @@ bitrouter skills add bitrouter        # via BitRouter's own installer
 npx skills add bitrouter/bitrouter    # via the generic skills CLI
 ```
 
-### Claude Code on your Claude subscription (with telemetry)
+### MCP
 
-Run Claude Code on your **Claude Pro/Max subscription** through BitRouter, with BitRouter in the path purely for side-effects — observability today, optional model rerouting tomorrow. From a freshly-installed `bitrouter`:
-
-**1. Adopt your existing Claude Code session as the `claude-code` subscription provider** (drives the `claude` CLI's own login if you're not signed in yet):
+Use BitRouter from any MCP client — it exposes `complete`, `list_models`, and `status` as MCP tools (the *origin* server, distinct from the MCP gateway that proxies your own MCP servers):
 
 ```bash
-bitrouter providers login claude-code
+bitrouter mcp serve                    # stdio → local daemon at 127.0.0.1:4356
+bitrouter mcp install --client claude  # print the Claude/Cursor mcpServers config block
 ```
 
-**2. Turn on full first-party telemetry** (off by default) — create `~/.bitrouter/bitrouter.yaml`:
+Add `--transport http` to target the multi-tenant cloud backend.
 
-```yaml
-server:
-  skip_auth: true          # local daemon: admit credential-less spawn traffic
-plugins:
-  bitrouter-observe:
-    telemetry:
-      enabled: true        # nothing is exported unless you opt in
-      level: full          # metadata + request/response content (use `metadata` to omit content)
-                           # endpoint omitted → defaults to https://telemetry.bitrouter.ai
-```
+### GUI
 
-**3. Start the daemon in the background and verify it's up:**
+Native desktop app for driving multi-agent loops — coming soon.
 
-```bash
-bitrouter start            # detached; logs to ~/.bitrouter/bitrouter.log
-bitrouter status           # running: yes — listen 127.0.0.1:4356
-bitrouter observe status   # telemetry exporter endpoint + state
-```
+## Models & providers
 
-**4. Launch an interactive Claude Code session pointed at BitRouter:**
+BitRouter routes to a *model*, not a provider. Each open-weight family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
 
-```bash
-bitrouter spawn -a claude  # interactive; run `bitrouter stop` when you're done
-```
+| Open model            | Lab      |
+| --------------------- | -------- |
+| DeepSeek V3.2 / V4    | DeepSeek |
+| Qwen3 / Qwen3-Coder   | Alibaba  |
+| Kimi K2               | Moonshot |
+| GLM-5 / 5.1           | Z.ai     |
+| MiniMax M2–M3         | MiniMax  |
+| MiMo V2               | Xiaomi   |
+| Step 3.5              | StepFun  |
 
-Genuine Claude Code traffic — recognised by its `anthropic-beta: claude-code-*` agent-profile marker — is routed to your subscription; anything else falls through to your other configured providers. Telemetry is attributed to an anonymous install id. *(Optional: run `bitrouter cloud login` first to also serve non-Claude-Code models from your BitRouter Cloud account.)*
-
-## Comparison
-
-|                           | **BitRouter**                               | **OpenRouter**            | **LiteLLM**                    |
-| ------------------------- | ------------------------------------------- | ------------------------- | ------------------------------ |
-| **Architecture**          | Local-first proxy + optional cloud          | Cloud-only SaaS           | Local proxy (Python)           |
-| **Language**              | Rust                                        | Closed-source             | Python                         |
-| **Self-hosted**           | Yes                                         | No                        | Yes                            |
-| **Agent-native**          | Yes — built for autonomous agent runtimes   | No — human-facing gateway | Partial — SDK-oriented         |
-| **Agent protocols**       | MCP + ACP                                   | No                        | MCP                            |
-| **Agent guardrails**      | Built-in (inspect, redact, block)           | Yes                       | Yes                            |
-| **Cross-protocol routing**| Yes (e.g. OpenAI format → Anthropic upstream)| Provider-specific        | Yes (unified interface)        |
-| **Observability**         | CLI + per-request cost tracking + Prometheus| Web dashboard             | Logging + callbacks + WebUI    |
-| **Extensibility**         | Trait-based SDK — import and compose crates | API only                  | Python middleware               |
-| **Performance**           | ~10ms                                       | ~30ms (cloud)             | ~500ms                         |
-| **License**               | Apache 2.0                                  | Proprietary               | Apache 2.0                     |
-
-**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM is a Python proxy for unifying provider SDKs. BitRouter is a Rust-native proxy purpose-built for autonomous agents — with cross-protocol routing, MCP and ACP support, and guardrails out of the box.
-
-## Features
-
-BitRouter is purpose-built for autonomous agents — every feature is designed for unattended, multi-step execution rather than human-in-the-loop API access.
-
-### Reliability
-
-Agents can't retry a provider outage the way a human can. BitRouter reroutes across providers mid-run, transparently — so a rate-limit at file 140 never makes you re-pay for 139 files of work. Configure fallback chains, round-robin across multiple accounts, or let cross-protocol routing send OpenAI-format requests to an Anthropic or Google upstream automatically.
-
-### Observability
-
-Billed per run. Now visible per run. Every agent, every model, every hop — with cost and latency attributed to the call. Query spend from the CLI without reaching for a dashboard, export to Prometheus or any OTLP backend, or trace exactly how a model name resolves before it hits the upstream with `bitrouter route <model>`.
-
-### Security
-
-One policy at the router — before requests leave your network and before responses reach your agent. Injection and output filtering, private by default. Virtual keys (`brvk_`) scope credentials per agent or user so no agent ever holds an upstream key directly; per-agent spend caps and loop guards keep runaway costs contained.
-
-### Efficiency
-
-Pay open-source prices for the calls that don't need frontier. Route by policy: fall back to a cheaper provider when the primary exceeds a cost threshold, or pin call types to the model with the best price-to-quality ratio for that task. Scoped virtual keys let you cap what each agent or user can spend before it touches your upstream account.
-
-## Supported Providers
-
-| Provider        | Status | Notes                                                          |
-| --------------- | ------ | -------------------------------------------------------------- |
-| OpenAI          | ✅     | Chat Completions + Responses API                               |
-| Anthropic       | ✅     | Messages API + Claude Pro/Max subscription (PKCE)              |
-| Google          | ✅     | Generative AI API                                              |
-| Amazon Bedrock  | ✅     | Via AWS SDK (opt-in)                                           |
-| OpenRouter      | ✅     | Chat Completions + Responses API                               |
-| OpenCode Zen    | ✅     | Curated models across Chat Completions, Messages, and Generate Content protocols      |
-| OpenCode Go     | ✅     | Low-cost subscription for open coding models                   |
-| BitRouter Cloud | ✅     | OAuth sign-in (`bitrouter auth login`); cloud-managed routing  |
-| GitHub Copilot  | ✅     | GitHub OAuth device flow (`bitrouter login github-copilot`)    |
-| ChatGPT Codex   | ✅     | ChatGPT subscription PKCE (`bitrouter login openai-codex`)     |
+Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [provider registry](https://github.com/bitrouter/provider-registry).
 
 **Want to add a provider?** Open an issue or submit a PR. **Interested in a first-party integration?** Email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
 
-## Supported Harnesses
+## Harness integrations
 
 Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356` and you're done. The following harnesses are tested and supported:
 
@@ -238,22 +203,10 @@ The full provider and harness catalog lives at [github.com/bitrouter/provider-re
 
 - [`CLI.md`](CLI.md) — full CLI reference with flags and examples
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
+- [`docs/`](docs/) — guides and recipes (e.g. [Claude Code on your subscription](docs/claude-code-subscription.md))
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
-
-## Roadmap
-
-- [x] Core routing engine and provider abstractions
-- [x] OpenAI, Anthropic, Google, and Amazon Bedrock adapters
-- [x] Zero-config auto-detection from environment variables
-- [x] Custom provider support (OpenAI-compatible / Anthropic-compatible)
-- [x] Cross-protocol routing (e.g. OpenAI format → Anthropic provider)
-- [x] MCP gateway and ACP agent integration
-- [x] Multiple accounts per provider — failover + load-balancing
-- [x] Virtual key management (`bitrouter key`) backed by SQLite / PostgreSQL / MySQL
-- [ ] Telemetry and usage analytics
-- [ ] Provider & model routing policy customization
 
 ## Star History
 
