@@ -490,8 +490,17 @@ mod tests {
     #[test]
     fn terminal_echo() -> anyhow::Result<()> {
         let mut cx = TestAppContext::single();
-        let args = vec!["-n".to_string(), "hi".to_string()];
-        let terminal = spawn_in_test(&mut cx, "/bin/echo", &args, 24, 80)?;
+        // Use a child that prints "hi" and then stays alive briefly, rather than
+        // an instantly-exiting program. `/bin/echo` as the *direct* PTY child
+        // exits in microseconds, racing the readable-output poll event against
+        // the child-exit event; alacritty's loop is built with `drain_on_exit =
+        // false` (see `Terminal::spawn`), so if the exit is observed first it
+        // breaks before reading the pending bytes — flaky on slow/contended CI
+        // runners (empty grid), reliable on fast local machines. Real terminals
+        // always have a long-lived shell as the direct child, so keep this child
+        // alive past the read with a short sleep to remove the race entirely.
+        let args = vec!["-c".to_string(), "printf hi; sleep 2".to_string()];
+        let terminal = spawn_in_test(&mut cx, "/bin/sh", &args, 24, 80)?;
 
         // The PTY reader runs on its own OS thread, parsing bytes into the
         // shared `Term`. Poll the snapshot until "hi" shows up, with a wall
