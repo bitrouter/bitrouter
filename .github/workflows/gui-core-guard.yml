@@ -1,0 +1,25 @@
+name: gui-core-guard
+
+# When bitrouter's ACP/CLI surface changes, ensure the gpui-free GUI core still
+# compiles against it. gui-core has no gpui deps, so this runs on a cheap linux
+# runner with the GUI's own toolchain.
+on:
+  pull_request:
+    paths:
+      - "apps/bitrouter/src/acp_cli.rs"
+      - "crates/bitrouter-substrate/**"
+      - "apps/bitrouter/src/main.rs"
+
+permissions:
+  contents: read
+
+jobs:
+  build-gui-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build gui-core (gpui-free)
+        run: cargo build -p bitrouter-gui-core --locked
