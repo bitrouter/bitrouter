@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "plugins/*", "apps/*", "mcp", "xtask"]
+# The GUI is vendored under gui/ as its own workspace (own Cargo.lock, resolver,
+# rust-toolchain 1.95, gpui git pins). Excluded so core builds never compile gpui.
+exclude = ["gui"]
 
 [workspace.package]
 version = "1.0.0-alpha.19"
