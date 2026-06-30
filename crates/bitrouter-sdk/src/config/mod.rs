@@ -184,6 +184,55 @@ pub struct PolicyTableConfig {
     /// chosen tier is in this list is left as-is; one whose tier is absent is
     /// clamped to [`tool_use_tier`](Self::tool_use_tier).
     pub tool_safe_tiers: Vec<String>,
+    /// Online adequacy learning. When enabled, the daemon observes each
+    /// downgraded request's outcome and, after repeated failures, escalates the
+    /// offending fingerprint to a more capable tier — so an operator's downgrade
+    /// that proves inadequate is self-correcting. Off by default.
+    pub adequacy: AdequacyConfig,
+}
+
+/// Online adequacy-learning settings — the `policy_table.adequacy` block.
+///
+/// When [`enabled`](Self::enabled), the daemon watches every request a downgrade
+/// produced and counts the ones that hard-fail (an upstream error or a stream
+/// error). Once a fingerprint accumulates
+/// [`escalation_threshold`](Self::escalation_threshold) such failures it is
+/// *pinned*: subsequent requests with that fingerprint route to
+/// [`escalation_tier`](Self::escalation_tier) instead of the cheap tier the
+/// static table would pick. A pin decays after
+/// [`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried
+/// later. This is a safety net layered on the static table — it never downgrades
+/// on its own, only escalates a downgrade that is failing.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct AdequacyConfig {
+    /// Whether online adequacy learning is active. Off by default, so a
+    /// `policy_table:` with no `adequacy:` block behaves exactly as the static
+    /// table.
+    pub enabled: bool,
+    /// Tier a pinned fingerprint escalates to. When unset, falls back to
+    /// [`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when
+    /// [`enabled`](Self::enabled).
+    pub escalation_tier: Option<String>,
+    /// Number of *consecutive* hard failures on a downgraded fingerprint before
+    /// it is pinned to the escalation tier (a clean outcome resets the tally).
+    /// Default `1` — escalate on the first failure (conservative / sticky).
+    pub escalation_threshold: u32,
+    /// How long, in seconds, a pin lasts before the downgrade is re-attempted.
+    /// `0` means the pin never decays (until the process restarts or the row is
+    /// cleared). Default `1800` (30 minutes).
+    pub pin_cooldown_secs: u64,
+}
+
+impl Default for AdequacyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            escalation_tier: None,
+            escalation_threshold: 1,
+            pin_cooldown_secs: 1800,
+        }
+    }
 }
 
 /// A provider's routing-preference class. Its position in
@@ -909,6 +958,20 @@ fn validate_policy_table(config: &Config) -> Result<()> {
         return Err(BitrouterError::bad_request(format!(
             "policy_table tool_use_tier '{tier}' must also be listed in tool_safe_tiers"
         )));
+    }
+    // Adequacy learning escalates a pinned fingerprint to its escalation tier
+    // (or the default tier), so that target must exist and resolve to a defined
+    // tier when learning is enabled.
+    let adequacy = &policy.adequacy;
+    if let Some(tier) = &adequacy.escalation_tier {
+        check("adequacy.escalation_tier", tier)?;
+    }
+    if adequacy.enabled && adequacy.escalation_tier.is_none() && policy.default_tier.is_none() {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy is enabled but no escalation target is set: \
+             set adequacy.escalation_tier or default_tier"
+                .to_string(),
+        ));
     }
     Ok(())
 }

@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adequacy;
 pub mod agent_proxy;
 pub mod agents;
 pub mod assemble;

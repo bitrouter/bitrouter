@@ -72,3 +72,14 @@ policy_table:
   tool_use_tier: capable
   tool_safe_tiers:
     - capable
+  # Online adequacy learning (off by default). When enabled, the daemon watches
+  # every request a downgrade produced and, after `escalation_threshold` hard
+  # failures, pins that fingerprint to `escalation_tier` (here `capable`) so the
+  # downgrade self-corrects. A pin decays after `pin_cooldown_secs`, so a
+  # transient failure is retried later. The learner only ever escalates a failing
+  # downgrade — it never downgrades on its own.
+  adequacy:
+    enabled: false
+    escalation_tier: capable
+    escalation_threshold: 2
+    pin_cooldown_secs: 1800

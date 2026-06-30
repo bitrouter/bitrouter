@@ -545,3 +545,76 @@ policy_table:
         "got: {err}"
     );
 }
+
+#[test]
+fn parses_adequacy_section() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+    capable: vendor/capable
+  default_tier: capable
+  adequacy:
+    enabled: true
+    escalation_tier: capable
+    escalation_threshold: 3
+    pin_cooldown_secs: 600
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let adequacy = &cfg.policy_table.adequacy;
+    assert!(adequacy.enabled);
+    assert_eq!(adequacy.escalation_tier.as_deref(), Some("capable"));
+    assert_eq!(adequacy.escalation_threshold, 3);
+    assert_eq!(adequacy.pin_cooldown_secs, 600);
+}
+
+#[test]
+fn adequacy_defaults_when_section_omitted() {
+    // A `policy_table:` with no `adequacy:` block is off, with sane defaults.
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let adequacy = &cfg.policy_table.adequacy;
+    assert!(!adequacy.enabled);
+    assert_eq!(adequacy.escalation_threshold, 1);
+    assert_eq!(adequacy.pin_cooldown_secs, 1800);
+}
+
+#[test]
+fn adequacy_unknown_escalation_tier_is_a_400() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  adequacy:
+    enabled: true
+    escalation_tier: capable
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("adequacy.escalation_tier references unknown tier 'capable'"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn adequacy_enabled_without_escalation_target_is_a_400() {
+    // Enabled, but neither escalation_tier nor default_tier is set — a pin would
+    // have nowhere to escalate to.
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  adequacy:
+    enabled: true
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string().contains("no escalation target is set"),
+        "got: {err}"
+    );
+}

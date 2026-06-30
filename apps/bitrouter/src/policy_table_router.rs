@@ -24,18 +24,20 @@
 //! the kind of thing an operator keeps under version control.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::PolicyTableConfig;
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 
-/// Ingress [`PromptTransform`] that rewrites `prompt.model` per a static policy
-/// table keyed on a per-request fingerprint, with a hard tool-use guardrail.
-///
-/// Built from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`],
-/// which returns `None` when the section defines no tiers (so an unconfigured
-/// deployment registers nothing).
-pub struct PolicyTableRouter {
+use crate::adequacy::AdequacyLedger;
+
+/// The resolved, immutable policy spec — the fingerprint→tier→model table plus
+/// the guardrail and (for adaptive routing) the escalation tier and a reverse
+/// model→tier index. Shared via [`Arc`] between the router (which reads it on
+/// the ingress hot path) and the adequacy observer (which recomputes the
+/// fingerprint and maps the served model back to a tier).
+pub struct PolicyTable {
     /// Tier name → model id the request is rewritten to.
     tiers: HashMap<String, String>,
     /// Request fingerprint → tier name.
@@ -47,24 +49,164 @@ pub struct PolicyTableRouter {
     tool_use_tier: Option<String>,
     /// Tiers that handle tool calls reliably.
     tool_safe_tiers: Vec<String>,
+    /// Tier a pinned fingerprint escalates to (adequacy.escalation_tier, else
+    /// default_tier). `None` when neither is configured.
+    escalation_tier: Option<String>,
+    /// Reverse index model id → tier name, for mapping a served model back to
+    /// its tier at observe time.
+    model_to_tier: HashMap<String, String>,
 }
 
-impl PolicyTableRouter {
-    /// Build a router from the `policy_table:` config, or `None` when the
-    /// section is inert (no tiers defined) — mirroring
-    /// `FusionAliasConfig::from_settings`, so an unconfigured deployment wires no
-    /// transform.
-    pub fn from_config(config: &PolicyTableConfig) -> Option<Self> {
+impl PolicyTable {
+    /// Build the shared spec from config, or `None` when the section is inert
+    /// (no tiers defined).
+    pub fn from_config(config: &PolicyTableConfig) -> Option<Arc<Self>> {
         if config.tiers.is_empty() {
             return None;
         }
-        Some(Self {
+        let model_to_tier = config
+            .tiers
+            .iter()
+            .map(|(tier, model)| (model.clone(), tier.clone()))
+            .collect();
+        let escalation_tier = config
+            .adequacy
+            .escalation_tier
+            .clone()
+            .or_else(|| config.default_tier.clone());
+        Some(Arc::new(Self {
             tiers: config.tiers.clone(),
             fingerprints: config.fingerprints.clone(),
             default_tier: config.default_tier.clone(),
             tool_use_tier: config.tool_use_tier.clone(),
             tool_safe_tiers: config.tool_safe_tiers.clone(),
+            escalation_tier,
+            model_to_tier,
+        }))
+    }
+
+    /// The tier a fingerprint maps to (or `default_tier`), before any guardrail
+    /// or escalation. `None` when unmapped and no default tier is set.
+    fn tier_for_fingerprint(&self, fingerprint: &str) -> Option<&str> {
+        self.fingerprints
+            .get(fingerprint)
+            .or(self.default_tier.as_ref())
+            .map(String::as_str)
+    }
+
+    /// Apply the hard tool-use guardrail: a tool-carrying request whose `tier` is
+    /// not tool-safe is clamped up to `tool_use_tier`. Returns the effective tier.
+    fn guardrail<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> &'a str {
+        if !prompt.tools.is_empty()
+            && !self.tool_safe_tiers.iter().any(|t| t == tier)
+            && let Some(floor) = self.tool_use_tier.as_deref()
+        {
+            return floor;
+        }
+        tier
+    }
+
+    /// The model id a tier routes to.
+    fn model_of_tier(&self, tier: &str) -> Option<&str> {
+        self.tiers.get(tier).map(String::as_str)
+    }
+
+    /// The tier a served model id belongs to (reverse of [`Self::model_of_tier`]).
+    /// Used by the adequacy observer to map an outcome back to a tier.
+    pub(crate) fn tier_of_model(&self, model: &str) -> Option<&str> {
+        self.model_to_tier.get(model).map(String::as_str)
+    }
+
+    /// The tier a pinned fingerprint escalates to. Used by the router (to apply a
+    /// pin) and the observer (to tell a downgrade from the escalation tier).
+    pub(crate) fn escalation_tier(&self) -> Option<&str> {
+        self.escalation_tier.as_deref()
+    }
+
+    /// The tier the *static* table (fingerprint → tier → guardrail, before any
+    /// adequacy escalation) would route this prompt to. The observer uses it to
+    /// confirm a request was a genuine policy-router downgrade — the served tier
+    /// matches the static decision — before crediting its outcome, so a caller's
+    /// explicit route or a coincidental model match is not mistaken for one.
+    pub(crate) fn static_tier(&self, prompt: &Prompt) -> Option<&str> {
+        let fingerprint = Self::fingerprint(prompt);
+        let tier = self.tier_for_fingerprint(&fingerprint)?;
+        Some(self.guardrail(tier, prompt))
+    }
+
+    /// A coarse fingerprint of the agent-loop step, derived purely from the
+    /// prompt body (so it is stable regardless of the inbound protocol). It
+    /// classifies the request by the model's *most recent* turn:
+    ///
+    /// - `after_<tool>` — the model's last turn called `<tool>` (the request is
+    ///   most likely the follow-up that feeds the tool result back). This is the
+    ///   common in-loop step.
+    /// - `midstream` — the model's last turn was a plain reply with no tool call
+    ///   (e.g. it answered, then the user sent a fresh instruction). Keying on
+    ///   the *most recent* turn — rather than the last tool call anywhere in the
+    ///   history — is what keeps a request that has moved past a tool turn from
+    ///   being misread as the `after_<tool>` step.
+    /// - `opening` — the model has taken no turn yet (the first request).
+    ///
+    /// When a turn makes several tool calls at once, the last call in the turn
+    /// names the step. The fingerprint reads [`Content::ToolCall`] (whose name
+    /// is always present) rather than a [`Content::ToolResult`] (whose name is
+    /// wire-dependent and often absent).
+    pub fn fingerprint(prompt: &Prompt) -> String {
+        // Walk back to the model's most recent turn and classify by it.
+        for message in prompt.messages.iter().rev() {
+            if message.role != Role::Assistant {
+                continue;
+            }
+            let last_call = message
+                .content
+                .iter()
+                .rev()
+                .find_map(|content| match content {
+                    Content::ToolCall { name, .. } => Some(name.as_str()),
+                    _ => None,
+                });
+            return match last_call {
+                Some(name) => format!("after_{name}"),
+                None => "midstream".to_string(),
+            };
+        }
+        "opening".to_string()
+    }
+}
+
+/// Ingress [`PromptTransform`] that rewrites `prompt.model` per a [`PolicyTable`]
+/// keyed on a per-request fingerprint, with a hard tool-use guardrail.
+///
+/// When an [`AdequacyLedger`] is attached, a fingerprint that the ledger has
+/// *pinned* (because the downgrade kept failing) is routed to the table's
+/// escalation tier instead of the cheap one — adaptive, self-correcting routing.
+/// Without a ledger the router is exactly the static table.
+///
+/// Build it from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`]
+/// (static, `None` when no tiers are defined) or [`PolicyTableRouter::new`] (with
+/// a shared table and optional ledger, for the adaptive wiring).
+pub struct PolicyTableRouter {
+    table: Arc<PolicyTable>,
+    ledger: Option<Arc<AdequacyLedger>>,
+}
+
+impl PolicyTableRouter {
+    /// Build a static router from the `policy_table:` config, or `None` when the
+    /// section is inert (no tiers defined) — mirroring
+    /// `FusionAliasConfig::from_settings`, so an unconfigured deployment wires no
+    /// transform. No adequacy ledger is attached.
+    pub fn from_config(config: &PolicyTableConfig) -> Option<Self> {
+        PolicyTable::from_config(config).map(|table| Self {
+            table,
+            ledger: None,
         })
+    }
+
+    /// Build a router over a shared [`PolicyTable`] and an optional
+    /// [`AdequacyLedger`] (the adaptive wiring).
+    pub fn new(table: Arc<PolicyTable>, ledger: Option<Arc<AdequacyLedger>>) -> Self {
+        Self { table, ledger }
     }
 
     /// Apply the policy table to a prompt, returning whether the model was
@@ -88,81 +230,32 @@ impl PolicyTableRouter {
         if carries_bitrouter_server_tool(prompt) {
             return false;
         }
-        let Some(tier) = self.resolve_tier(prompt) else {
+        let fingerprint = PolicyTable::fingerprint(prompt);
+        let mut tier = self.table.tier_for_fingerprint(&fingerprint);
+        // Adequacy escalation: a pinned fingerprint (a downgrade the ledger
+        // learned is failing) routes to the escalation tier, overriding the
+        // static — cheaper — tier. Reading the ledger is sync and lock-cheap.
+        if let Some(ledger) = &self.ledger
+            && ledger.is_pinned(&fingerprint)
+            && let Some(escalation) = self.table.escalation_tier()
+        {
+            tier = Some(escalation);
+        }
+        let Some(tier) = tier else {
             return false;
         };
-        let Some(model) = self.tiers.get(tier) else {
+        // The tool-use guardrail applies on top of whichever tier was chosen.
+        let tier = self.table.guardrail(tier, prompt);
+        let Some(model) = self.table.model_of_tier(tier) else {
             // Unreachable for a config that passed `validate_policy_table`, but
             // a no-op is the safe fallback rather than a panic.
             return false;
         };
-        if prompt.model == *model {
+        if prompt.model == model {
             return false;
         }
-        prompt.model = model.clone();
+        prompt.model = model.to_string();
         true
-    }
-
-    /// The tier this request resolves to: the fingerprint's tier (or
-    /// `default_tier`), clamped up to `tool_use_tier` when the request carries
-    /// tools and the chosen tier is not in `tool_safe_tiers`. `None` when the
-    /// fingerprint maps to nothing and there is no default tier.
-    fn resolve_tier(&self, prompt: &Prompt) -> Option<&str> {
-        let fingerprint = Self::fingerprint(prompt);
-        let mut tier = self
-            .fingerprints
-            .get(&fingerprint)
-            .or(self.default_tier.as_ref())
-            .map(String::as_str)?;
-        // Hard tool-use guardrail: never route a tool-carrying request to a tier
-        // not known tool-safe; clamp it up to the configured floor instead.
-        if !prompt.tools.is_empty()
-            && !self.tool_safe_tiers.iter().any(|t| t == tier)
-            && let Some(floor) = self.tool_use_tier.as_deref()
-        {
-            tier = floor;
-        }
-        Some(tier)
-    }
-
-    /// A coarse fingerprint of the agent-loop step, derived purely from the
-    /// prompt body (so it is stable regardless of the inbound protocol). It
-    /// classifies the request by the model's *most recent* turn:
-    ///
-    /// - `after_<tool>` — the model's last turn called `<tool>` (the request is
-    ///   most likely the follow-up that feeds the tool result back). This is the
-    ///   common in-loop step.
-    /// - `midstream` — the model's last turn was a plain reply with no tool call
-    ///   (e.g. it answered, then the user sent a fresh instruction). Keying on
-    ///   the *most recent* turn — rather than the last tool call anywhere in the
-    ///   history — is what keeps a request that has moved past a tool turn from
-    ///   being misread as the `after_<tool>` step.
-    /// - `opening` — the model has taken no turn yet (the first request).
-    ///
-    /// When a turn makes several tool calls at once, the last call in the turn
-    /// names the step. The fingerprint reads [`Content::ToolCall`] (whose name
-    /// is always present) rather than a [`Content::ToolResult`] (whose name is
-    /// wire-dependent and often absent).
-    fn fingerprint(prompt: &Prompt) -> String {
-        // Walk back to the model's most recent turn and classify by it.
-        for message in prompt.messages.iter().rev() {
-            if message.role != Role::Assistant {
-                continue;
-            }
-            let last_call = message
-                .content
-                .iter()
-                .rev()
-                .find_map(|content| match content {
-                    Content::ToolCall { name, .. } => Some(name.as_str()),
-                    _ => None,
-                });
-            return match last_call {
-                Some(name) => format!("after_{name}"),
-                None => "midstream".to_string(),
-            };
-        }
-        "opening".to_string()
     }
 }
 
@@ -226,11 +319,21 @@ mod tests {
             default_tier: Some("flagship".to_string()),
             tool_use_tier: Some("flagship".to_string()),
             tool_safe_tiers: vec!["flagship".to_string()],
+            adequacy: Default::default(),
         }
     }
 
     fn router() -> PolicyTableRouter {
         PolicyTableRouter::from_config(&config()).expect("tiers are configured")
+    }
+
+    /// `config()` with online adequacy learning enabled, escalating pinned
+    /// fingerprints to the flagship tier.
+    fn config_with_escalation() -> PolicyTableConfig {
+        let mut cfg = config();
+        cfg.adequacy.enabled = true;
+        cfg.adequacy.escalation_tier = Some("flagship".to_string());
+        cfg
     }
 
     fn prompt(model: &str) -> Prompt {
@@ -406,6 +509,7 @@ mod tests {
             default_tier: None,
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
         };
         let r = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut p = prompt("inbound");
@@ -464,6 +568,7 @@ mod tests {
             default_tier: None,
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
         };
         let r = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut p = prompt("inbound");
@@ -487,6 +592,7 @@ mod tests {
             default_tier: Some("flagship".to_string()),
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
         };
         let r = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut p = prompt("inbound");
@@ -509,5 +615,65 @@ mod tests {
             ),
             "vendor/fusion-outer"
         );
+    }
+
+    // ---- adaptive routing (the adequacy ledger) ----
+
+    /// A read step prompt — fingerprints to `after_read_file` (→ cheap statically).
+    fn read_step() -> Vec<Message> {
+        vec![user("fix the bug"), assistant_calls("read_file")]
+    }
+
+    fn route_with(router: &PolicyTableRouter, messages: Vec<Message>) -> String {
+        let mut p = prompt("inbound");
+        p.messages = messages;
+        router.apply(&mut p);
+        p.model
+    }
+
+    #[tokio::test]
+    async fn a_pinned_fingerprint_escalates_over_the_static_downgrade() {
+        let table = PolicyTable::from_config(&config_with_escalation()).expect("configured");
+        let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
+        let router = PolicyTableRouter::new(table, Some(ledger.clone()));
+
+        // Before any failure, the static table downgrades `after_read_file`.
+        assert_eq!(route_with(&router, read_step()), "vendor/cheap");
+
+        // One inadequate outcome pins the fingerprint (threshold 1).
+        ledger.observe("after_read_file", true).await;
+
+        // Now the same step escalates to the flagship (escalation) tier.
+        assert_eq!(
+            route_with(&router, read_step()),
+            "vendor/flagship",
+            "a pinned fingerprint escalates over the static downgrade"
+        );
+    }
+
+    #[tokio::test]
+    async fn escalation_is_scoped_to_the_pinned_fingerprint() {
+        let table = PolicyTable::from_config(&config_with_escalation()).expect("configured");
+        let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
+        let router = PolicyTableRouter::new(table, Some(ledger.clone()));
+
+        ledger.observe("after_read_file", true).await; // pin only this fingerprint
+
+        // A different downgraded step is unaffected: map `after_grep` → cheap.
+        // (It is unmapped here, so it falls to default flagship anyway; assert the
+        // pinned one escalates while an opening request stays flagship as before.)
+        assert_eq!(route_with(&router, read_step()), "vendor/flagship"); // pinned
+        assert_eq!(
+            route_with(&router, vec![user("start")]),
+            "vendor/flagship" // `opening` was always flagship; unchanged
+        );
+    }
+
+    #[tokio::test]
+    async fn no_ledger_means_no_escalation() {
+        // Built with `from_config` (no ledger): observing has nothing to read, so
+        // routing stays exactly static.
+        let router = PolicyTableRouter::from_config(&config_with_escalation()).expect("configured");
+        assert_eq!(route_with(&router, read_step()), "vendor/cheap");
     }
 }
