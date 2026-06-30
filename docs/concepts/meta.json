@@ -1,0 +1,15 @@
+{
+  "title": "Concepts",
+  "icon": "BookOpen",
+  "defaultOpen": false,
+  "pages": [
+    "---Gateways---",
+    "models",
+    "tools",
+    "agents",
+    "---Extending BitRouter---",
+    "cli",
+    "plugins",
+    "hooks"
+  ]
+}
