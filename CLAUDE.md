@@ -25,6 +25,26 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
 2. Keep `skills/bitrouter/SKILL.md` under ~200 lines; deep detail goes in
    `skills/bitrouter/references/`.
 
+## Documentation
+
+Product docs live in `docs/` and are synced to the docs site (`bitrouter-docs`)
+at build time. `docs/CONTRIBUTING.md` is the authoring contract (plain Markdown,
+no `import`/`export`, only the whitelisted global components, extensionless
+internal links).
+
+1. **ALWAYS** keep English and Chinese in lockstep. Every `docs/<section>/<name>.md`
+   has a Simplified-Chinese sibling `docs/<section>/<name>.zh.md`. When you add,
+   edit, or remove a doc page, make the **identical** change to its `.zh.md` in the
+   same change — never ship an English-only or out-of-date translation.
+2. A translation mirrors the English page exactly except for prose: preserve every
+   code block, component tag (`<Callout>`, `<Tabs>`, …), heading, and link target
+   verbatim; translate only human-readable text. Keep `title:` as the English;
+   translate `description:`.
+3. **NEVER** hand-edit the `sourceHash` frontmatter field — the docs sync manages it
+   (it tracks whether a translation is current).
+4. **NEVER** author API-reference operation pages or the `ai-resources`/root nav
+   here — those are owned by `bitrouter-docs` (see `docs/CONTRIBUTING.md`).
+
 ## Contributing
 
 1. **ALWAYS** use the **conventional** git commit message format. Keep the title under 60 characters. The message body and footer can be any length.
