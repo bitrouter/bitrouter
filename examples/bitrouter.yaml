@@ -47,3 +47,28 @@ models:
         service_id: claude-sonnet-4-6
       - provider: openai
         service_id: gpt-4o
+
+# Config-driven per-request model routing. An ingress transform fingerprints
+# each request by its agent-loop step and rewrites the model to the tier the
+# table assigns, so a long agent loop can spend a capable model only where it
+# matters and a cheaper one on routine steps — without the caller changing how
+# it addresses the router. Inert unless `tiers` is non-empty.
+policy_table:
+  # Tier name -> the model id requests on that tier route to. Each value is a
+  # `provider:model` direct route here; a bare canonical id (resolved via the
+  # cascade) works too.
+  tiers:
+    cheap: openai:gpt-4o
+    capable: anthropic:claude-sonnet-4-6
+  # Agent-loop step -> tier. `opening` is the first turn (no model reply yet);
+  # `after_<tool>` means the model's most recent call was to `<tool>`.
+  fingerprints:
+    opening: capable # set up the task on the capable tier
+    after_read_file: cheap # summarising a file read is routine — downgrade
+  # Any fingerprint not listed above.
+  default_tier: capable
+  # Hard guardrail: a request carrying tools is clamped up to this tier unless
+  # the tier it would otherwise get is listed in `tool_safe_tiers`.
+  tool_use_tier: capable
+  tool_safe_tiers:
+    - capable

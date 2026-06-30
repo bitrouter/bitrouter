@@ -456,3 +456,92 @@ fn primary_api_key_prefers_top_level_then_first_account() {
     };
     assert_eq!(p2.primary_api_key(), "second");
 }
+
+#[test]
+fn policy_table_absent_leaves_section_empty() {
+    // No `policy_table:` block → the section defaults to inert (no tiers).
+    let cfg = parse_with(
+        "providers:\n  a:\n    api_base: https://a.example/v1\n",
+        |_| None,
+    )
+    .unwrap();
+    assert!(cfg.policy_table.tiers.is_empty());
+    assert!(cfg.policy_table.fingerprints.is_empty());
+    assert!(cfg.policy_table.default_tier.is_none());
+    assert!(cfg.policy_table.tool_use_tier.is_none());
+    assert!(cfg.policy_table.tool_safe_tiers.is_empty());
+}
+
+#[test]
+fn parses_policy_table_section() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+    flagship: vendor/flagship
+  fingerprints:
+    opening: flagship
+    after_read_file: cheap
+  default_tier: flagship
+  tool_use_tier: flagship
+  tool_safe_tiers:
+    - flagship
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    assert_eq!(
+        cfg.policy_table.tiers.get("cheap").map(String::as_str),
+        Some("vendor/cheap")
+    );
+    assert_eq!(
+        cfg.policy_table
+            .fingerprints
+            .get("opening")
+            .map(String::as_str),
+        Some("flagship")
+    );
+    assert_eq!(cfg.policy_table.default_tier.as_deref(), Some("flagship"));
+    assert_eq!(cfg.policy_table.tool_use_tier.as_deref(), Some("flagship"));
+    assert_eq!(
+        cfg.policy_table.tool_safe_tiers,
+        vec!["flagship".to_string()]
+    );
+}
+
+#[test]
+fn policy_table_unknown_tier_is_a_400() {
+    // A fingerprint that maps to a tier absent from `tiers:` is a config error,
+    // not a silent fall-through.
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  fingerprints:
+    opening: flagship
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string().contains("unknown tier 'flagship'"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn policy_table_tool_use_tier_must_be_tool_safe() {
+    // The guardrail target must itself be declared tool-safe, else the floor it
+    // clamps tool requests to is not actually safe.
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+    capable: vendor/capable
+  tool_use_tier: capable
+  tool_safe_tiers:
+    - cheap
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("tool_use_tier 'capable' must also be listed in tool_safe_tiers"),
+        "got: {err}"
+    );
+}

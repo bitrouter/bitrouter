@@ -337,6 +337,52 @@
       },
       "type": "array"
     },
+    "PolicyTableConfig": {
+      "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform fingerprints each request by its agent-loop step (the\nmost recent tool the model called, or the opening turn) and looks the\nfingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;\n[`tiers`](Self::tiers) then maps that tier to the model id the request is\nrewritten to. A hard tool-use guardrail keeps tool-carrying requests on a\ntier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
+      "properties": {
+        "default_tier": {
+          "default": null,
+          "description": "Tier applied to any fingerprint not listed in\n[`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint\nis left on the model the caller requested (the transform no-ops).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprints": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Request fingerprint → tier name. A fingerprint is the agent-loop step:\n`opening` (no model turn yet), `after_<tool>` (the model last called\n`<tool>`), or `midstream` (a model turn with no tool call). A fingerprint\nabsent from this map falls back to [`default_tier`](Self::default_tier).",
+          "type": "object"
+        },
+        "tiers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Tier name → the model id every request on that tier is routed to. The\nvalue is fed straight into the routing table, so it may be a bare\ncanonical id (resolved via the cascade/registry) or an explicit\n`provider:model` id (a Strategy-1 direct route). The section is inert\nwhile this map is empty.",
+          "type": "object"
+        },
+        "tool_safe_tiers": {
+          "default": [],
+          "description": "Tiers known to handle tool calls reliably. A tool-carrying request whose\nchosen tier is in this list is left as-is; one whose tier is absent is\nclamped to [`tool_use_tier`](Self::tool_use_tier).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tool_use_tier": {
+          "default": null,
+          "description": "Tool-use guardrail target: the tier a request carrying tools is clamped\nup to when the tier it would otherwise get is not in\n[`tool_safe_tiers`](Self::tool_safe_tiers). When unset, the guardrail is\ndisabled and tool requests route by fingerprint like any other.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "PresetConfig": {
       "description": "An `@preset` definition.",
       "properties": {
@@ -1124,6 +1170,10 @@
       "default": {},
       "description": "Plugin config, keyed by plugin / bundle id.",
       "type": "object"
+    },
+    "policy_table": {
+      "$ref": "#/$defs/PolicyTableConfig",
+      "description": "Config-driven per-request model routing: a fingerprint → tier → model\npolicy table an ingress transform applies, with a hard tool-use\nguardrail. Empty by default — when no tiers are defined the transform is\nnot registered and traffic routes exactly as it would without it."
     },
     "presets": {
       "additionalProperties": {

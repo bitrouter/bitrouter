@@ -486,6 +486,19 @@ pub async fn build_app_with_path(
     let app = app.prompt_transform(
         Arc::new(crate::claude_code::ClaudeCodeRouter) as Arc<dyn PromptTransform>
     );
+    // Config-driven per-request model routing (`policy_table:`): an ingress
+    // transform that fingerprints the agent-loop step and rewrites `prompt.model`
+    // to the tier the policy table assigns, enforcing the tool-use guardrail.
+    // Wired only when `policy_table.tiers` is non-empty. Registered LAST, after
+    // the fusion alias and the Claude Code router, so the routes they own win:
+    // the transform skips any already-`provider:`-routed model (the `claude-code:`
+    // subscription route) and any request carrying a bitrouter server-tool
+    // declaration (the `bitrouter/fusion` alias's injected tool).
+    let app = match crate::policy_table_router::PolicyTableRouter::from_config(&config.policy_table)
+    {
+        Some(transform) => app.prompt_transform(Arc::new(transform) as Arc<dyn PromptTransform>),
+        None => app,
+    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
