@@ -838,4 +838,85 @@ mod tests {
         router.apply(&mut p);
         assert_eq!(p.model, "vendor/flagship", "guardrail clamps the trial");
     }
+
+    // ---- fingerprint parity through the real Chat Completions wire ----
+    //
+    // These exercise the full ingress path a harness drives — an OpenAI Chat
+    // Completions request body parsed by the daemon's inbound adapter into the
+    // canonical `Prompt`, then fingerprinted — and assert the agent-loop step
+    // label, so the native router keys requests the same way an external
+    // fingerprinting proxy would.
+
+    fn fingerprint_of(body: serde_json::Value) -> String {
+        use bitrouter_sdk::language_model::inbound_adapter_for;
+        use bitrouter_sdk::language_model::types::ApiProtocol;
+        let adapter =
+            inbound_adapter_for(&ApiProtocol::ChatCompletions).expect("chat completions adapter");
+        let prompt = adapter.parse_request(body).expect("parse request");
+        PolicyTable::fingerprint(&prompt)
+    }
+
+    #[test]
+    fn opening_request_fingerprints_through_the_wire() {
+        // System + first user turn, no assistant yet → the opening step.
+        assert_eq!(
+            fingerprint_of(serde_json::json!({
+                "model": "m",
+                "messages": [
+                    {"role": "system", "content": "You are an agent."},
+                    {"role": "user", "content": "fix the bug"}
+                ]
+            })),
+            "opening"
+        );
+    }
+
+    #[test]
+    fn after_tool_steps_fingerprint_through_the_wire() {
+        // The common in-loop step: the model called <tool>, its result returns
+        // as an OpenAI `{role:"tool", tool_call_id, ...}` message (which carries
+        // no tool name on the wire). The fingerprint recovers the step from the
+        // assistant's tool call, matching `after_<tool>` for every loop tool.
+        let after = |tool: &str| {
+            serde_json::json!({
+                "model": "m",
+                "messages": [
+                    {"role": "user", "content": "fix the bug"},
+                    {"role": "assistant", "content": serde_json::Value::Null,
+                     "tool_calls": [
+                        {"id": "c1", "type": "function",
+                         "function": {"name": tool, "arguments": "{}"}}
+                     ]},
+                    {"role": "tool", "tool_call_id": "c1", "content": "<result>"}
+                ]
+            })
+        };
+        for tool in ["terminal", "patch", "read_file"] {
+            assert_eq!(
+                fingerprint_of(after(tool)),
+                format!("after_{tool}"),
+                "the wire parse + fingerprint must label this the after_{tool} step"
+            );
+        }
+    }
+
+    #[test]
+    fn trailing_user_turn_is_keyed_by_the_last_model_turn() {
+        // A documented divergence from a simpler last-message scheme: a fresh
+        // user instruction after a plain model reply is keyed by the model's most
+        // recent turn (`midstream`), not by the trailing user message. Neither
+        // `midstream` nor a user-followup label is in the demo's converged policy,
+        // so this does not affect that workload's routing.
+        assert_eq!(
+            fingerprint_of(serde_json::json!({
+                "model": "m",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "done"},
+                    {"role": "user", "content": "now do Y"}
+                ]
+            })),
+            "midstream"
+        );
+    }
 }
