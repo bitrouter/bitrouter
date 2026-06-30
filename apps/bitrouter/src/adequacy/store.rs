@@ -89,7 +89,7 @@ impl AdequacyStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adequacy::AdequacyLedger;
+    use crate::adequacy::{AdequacyLedger, Outcome};
     use crate::db;
     use bitrouter_sdk::config::AdequacyConfig;
 
@@ -135,10 +135,13 @@ mod tests {
             escalation_tier: None,
             escalation_threshold: 1,
             pin_cooldown_secs: 0,
+            ..Default::default()
         };
         // First ledger: a failure pins the fingerprint and persists it.
         let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
-        ledger.observe("after_edit", true).await;
+        ledger
+            .observe("after_edit", Outcome::StaticDowngrade { inadequate: true })
+            .await;
         assert!(ledger.is_pinned("after_edit"));
         // A fresh ledger over the same db warms its cache from the stored pin.
         let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;

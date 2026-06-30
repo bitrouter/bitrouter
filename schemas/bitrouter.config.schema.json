@@ -95,6 +95,33 @@
             "null"
           ]
         },
+        "explore_enabled": {
+          "default": false,
+          "description": "Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)\nis on, the daemon periodically trials [`explore_tier`](Self::explore_tier)\non fingerprints the static table routes to the escalation tier (i.e. ones\nthe operator did *not* downgrade), and locks a fingerprint to the cheap\ntier once it survives [`explore_threshold`](Self::explore_threshold)\ntrials — so safe downgrades are found automatically rather than only\nhand-configured. A trial that fails escalates and stops (the same pin as\nthe safety path). Off by default; requires `enabled`. This is the\n*aggressive* half — it routes traffic the operator left at the capable\ntier to a cheaper one on a fraction of requests.",
+          "type": "boolean"
+        },
+        "explore_interval": {
+          "default": 5,
+          "description": "Trial cadence: roughly one in `explore_interval` eligible requests is a\ntrial (the rest stay on the escalation tier). Default `5`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "explore_threshold": {
+          "default": 3,
+          "description": "Consecutive adequate trials before a fingerprint is locked to the cheap\ntier (the learned downgrade). Default `3`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "explore_tier": {
+          "default": null,
+          "description": "The cheap tier exploration trials toward. Must resolve to a defined tier\nwhen [`explore_enabled`](Self::explore_enabled). Required to explore.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "pin_cooldown_secs": {
           "default": 1800,
           "description": "How long, in seconds, a pin lasts before the downgrade is re-attempted.\n`0` means the pin never decays (until the process restarts or the row is\ncleared). Default `1800` (30 minutes).",

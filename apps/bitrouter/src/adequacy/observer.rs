@@ -16,7 +16,7 @@ use bitrouter_sdk::language_model::{
     ObserveHook, Phase, PipelineContext, RequestOutcome, StreamContext,
 };
 
-use crate::adequacy::AdequacyLedger;
+use crate::adequacy::{AdequacyLedger, Outcome};
 use crate::policy_table_router::PolicyTable;
 
 /// Feeds the [`AdequacyLedger`] from request outcomes against the shared
@@ -42,33 +42,62 @@ impl ObserveHook for AdequacyObserveHook {
     async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
 
     async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
-        // Credit the outcome only to a *genuine* policy-router downgrade: the
-        // served model must map to exactly the tier the static table resolves
-        // for this request (so a caller's explicit route, a coincidental model
-        // match, or an adequacy escalation is not mistaken for a downgrade)...
-        let Some(served_tier) = self.table.tier_of_model(ctx.model()) else {
-            return;
-        };
-        if self.table.static_tier(ctx.prompt()) != Some(served_tier) {
-            return;
-        }
-        // ...and that tier must be a downgrade, not the escalation tier (a
-        // request already escalated failing is not a downgrade to pin).
-        if Some(served_tier) == self.table.escalation_tier() {
-            return;
-        }
         let inadequate = match outcome {
             // A hard failure — an upstream error (including a mid-stream stream
-            // error, which the pipeline now surfaces as `Failed`), a route /
-            // auth / policy failure, etc.
+            // error, which the pipeline surfaces as `Failed`), a route / auth /
+            // policy failure, etc.
             RequestOutcome::Failed(_) => true,
             // The client hanging up tells us nothing about the tier — skip.
             RequestOutcome::ClientDisconnected => return,
-            // A completed request got a response: the downgrade held.
+            // A completed request got a response: the route held.
             RequestOutcome::Completed => false,
         };
-        let fingerprint = PolicyTable::fingerprint(ctx.prompt());
-        self.ledger.observe(&fingerprint, inadequate).await;
+        // Which of the table's tiers actually served the request. Not one of
+        // ours ⇒ nothing to learn.
+        let Some(served_tier) = self.table.tier_of_model(ctx.model()) else {
+            return;
+        };
+        let static_tier = self.table.static_tier(ctx.prompt());
+        let escalation_tier = self.table.escalation_tier();
+
+        // A genuine *static* (operator-configured) downgrade: the served tier is
+        // exactly the static decision, and it is a downgrade (not the escalation
+        // tier). This guards against a caller's explicit route / coincidental
+        // model match being mistaken for one.
+        if static_tier == Some(served_tier) && Some(served_tier) != escalation_tier {
+            let fingerprint = PolicyTable::fingerprint(ctx.prompt());
+            self.ledger
+                .observe(&fingerprint, Outcome::StaticDowngrade { inadequate })
+                .await;
+            return;
+        }
+
+        // An *exploration* candidate: the static decision is the escalation tier
+        // (the operator did not downgrade it). The request either trialed the
+        // explore tier or stayed on the escalation tier (advancing the cadence).
+        if self.table.exploration_enabled()
+            && escalation_tier.is_some()
+            && static_tier == escalation_tier
+        {
+            let trialed = self.table.explore_tier() == Some(served_tier);
+            // Count only a trial (served the explore tier) or a cadence-advance
+            // (served the escalation tier). A candidate served on some third tier
+            // — e.g. a tool request whose explore-tier trial the guardrail clamped
+            // up to the tool-use tier — is intentionally not counted: a real trial
+            // there would be clamped too, so exploration is correctly inert for it.
+            if trialed || Some(served_tier) == escalation_tier {
+                let fingerprint = PolicyTable::fingerprint(ctx.prompt());
+                self.ledger
+                    .observe(
+                        &fingerprint,
+                        Outcome::Exploration {
+                            trialed,
+                            inadequate,
+                        },
+                    )
+                    .await;
+            }
+        }
     }
 }
 
@@ -100,6 +129,28 @@ mod tests {
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
             adequacy: Default::default(),
+        };
+        PolicyTable::from_config(&cfg).expect("configured")
+    }
+
+    // The same table with exploration on: `opening` (static = capable = the
+    // escalation tier) is a candidate trialed toward `cheap`.
+    fn explore_table() -> Arc<PolicyTable> {
+        let cfg = PolicyTableConfig {
+            tiers: HashMap::from([
+                ("cheap".to_string(), "vendor/cheap".to_string()),
+                ("capable".to_string(), "vendor/capable".to_string()),
+            ]),
+            fingerprints: HashMap::from([("opening".to_string(), "capable".to_string())]),
+            default_tier: Some("capable".to_string()),
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: bitrouter_sdk::config::AdequacyConfig {
+                enabled: true,
+                explore_enabled: true,
+                explore_tier: Some("cheap".to_string()),
+                ..Default::default()
+            },
         };
         PolicyTable::from_config(&cfg).expect("configured")
     }
@@ -211,5 +262,48 @@ mod tests {
         )
         .await;
         assert!(!ledger.is_pinned("after_read_file"));
+    }
+
+    // ---- exploration classification ----
+
+    #[tokio::test]
+    async fn a_failed_trial_pins_the_candidate() {
+        // `opening` is an exploration candidate (static = capable = escalation).
+        // A request served by the cheap (explore) tier is a trial; failing it pins.
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
+        hook.on_request_end(&ctx("vendor/cheap", vec![user("start")]), &failed())
+            .await;
+        assert!(ledger.is_pinned("opening"));
+    }
+
+    #[tokio::test]
+    async fn an_adequate_trial_advances_toward_a_lock() {
+        // explore_threshold 1 → one adequate trial locks the downgrade.
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
+        hook.on_request_end(
+            &ctx("vendor/cheap", vec![user("start")]),
+            &RequestOutcome::Completed,
+        )
+        .await;
+        assert!(ledger.is_locked("opening"), "an adequate trial locks it");
+    }
+
+    #[tokio::test]
+    async fn a_candidate_on_the_escalation_tier_advances_the_cadence() {
+        // A candidate served by the escalation tier is not a trial — it only
+        // advances the trial cadence (interval 2 → due after two such requests).
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
+        assert!(!ledger.should_trial("opening"));
+        for _ in 0..2 {
+            hook.on_request_end(
+                &ctx("vendor/capable", vec![user("start")]),
+                &RequestOutcome::Completed,
+            )
+            .await;
+        }
+        assert!(ledger.should_trial("opening"), "the cadence advanced");
     }
 }

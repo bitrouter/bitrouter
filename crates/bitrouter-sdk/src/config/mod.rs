@@ -222,6 +222,26 @@ pub struct AdequacyConfig {
     /// `0` means the pin never decays (until the process restarts or the row is
     /// cleared). Default `1800` (30 minutes).
     pub pin_cooldown_secs: u64,
+    /// Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)
+    /// is on, the daemon periodically trials [`explore_tier`](Self::explore_tier)
+    /// on fingerprints the static table routes to the escalation tier (i.e. ones
+    /// the operator did *not* downgrade), and locks a fingerprint to the cheap
+    /// tier once it survives [`explore_threshold`](Self::explore_threshold)
+    /// trials — so safe downgrades are found automatically rather than only
+    /// hand-configured. A trial that fails escalates and stops (the same pin as
+    /// the safety path). Off by default; requires `enabled`. This is the
+    /// *aggressive* half — it routes traffic the operator left at the capable
+    /// tier to a cheaper one on a fraction of requests.
+    pub explore_enabled: bool,
+    /// The cheap tier exploration trials toward. Must resolve to a defined tier
+    /// when [`explore_enabled`](Self::explore_enabled). Required to explore.
+    pub explore_tier: Option<String>,
+    /// Trial cadence: roughly one in `explore_interval` eligible requests is a
+    /// trial (the rest stay on the escalation tier). Default `5`.
+    pub explore_interval: u32,
+    /// Consecutive adequate trials before a fingerprint is locked to the cheap
+    /// tier (the learned downgrade). Default `3`.
+    pub explore_threshold: u32,
 }
 
 impl Default for AdequacyConfig {
@@ -231,6 +251,10 @@ impl Default for AdequacyConfig {
             escalation_tier: None,
             escalation_threshold: 1,
             pin_cooldown_secs: 1800,
+            explore_enabled: false,
+            explore_tier: None,
+            explore_interval: 5,
+            explore_threshold: 3,
         }
     }
 }
@@ -971,6 +995,24 @@ fn validate_policy_table(config: &Config) -> Result<()> {
             "policy_table.adequacy is enabled but no escalation target is set: \
              set adequacy.escalation_tier or default_tier"
                 .to_string(),
+        ));
+    }
+    // Exploration trials toward `explore_tier`, which must exist and be a defined
+    // tier when exploration is enabled.
+    if let Some(tier) = &adequacy.explore_tier {
+        check("adequacy.explore_tier", tier)?;
+    }
+    if adequacy.explore_enabled && adequacy.explore_tier.is_none() {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.explore_enabled is set but adequacy.explore_tier is not"
+                .to_string(),
+        ));
+    }
+    // Exploration rides on the adequacy ledger, which is only wired when learning
+    // is enabled — so `explore_enabled` without `enabled` would be silently inert.
+    if adequacy.explore_enabled && !adequacy.enabled {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.explore_enabled requires adequacy.enabled".to_string(),
         ));
     }
     Ok(())

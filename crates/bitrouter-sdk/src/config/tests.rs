@@ -618,3 +618,99 @@ policy_table:
         "got: {err}"
     );
 }
+
+#[test]
+fn parses_exploration_section() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+    capable: vendor/capable
+  default_tier: capable
+  adequacy:
+    enabled: true
+    explore_enabled: true
+    explore_tier: cheap
+    explore_interval: 8
+    explore_threshold: 4
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let adequacy = &cfg.policy_table.adequacy;
+    assert!(adequacy.explore_enabled);
+    assert_eq!(adequacy.explore_tier.as_deref(), Some("cheap"));
+    assert_eq!(adequacy.explore_interval, 8);
+    assert_eq!(adequacy.explore_threshold, 4);
+}
+
+#[test]
+fn exploration_defaults_when_omitted() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let adequacy = &cfg.policy_table.adequacy;
+    assert!(!adequacy.explore_enabled);
+    assert_eq!(adequacy.explore_interval, 5);
+    assert_eq!(adequacy.explore_threshold, 3);
+}
+
+#[test]
+fn exploration_unknown_explore_tier_is_a_400() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  default_tier: cheap
+  adequacy:
+    enabled: true
+    explore_tier: nope
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("adequacy.explore_tier references unknown tier 'nope'"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn exploration_enabled_without_target_is_a_400() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  default_tier: cheap
+  adequacy:
+    enabled: true
+    explore_enabled: true
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("explore_enabled is set but adequacy.explore_tier is not"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn exploration_requires_adequacy_enabled() {
+    // `explore_enabled` without `enabled` would be silently inert (the ledger is
+    // only wired when learning is on) — reject it loudly.
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  default_tier: cheap
+  adequacy:
+    explore_enabled: true
+    explore_tier: cheap
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("explore_enabled requires adequacy.enabled"),
+        "got: {err}"
+    );
+}

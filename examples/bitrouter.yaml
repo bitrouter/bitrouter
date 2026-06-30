@@ -83,3 +83,14 @@ policy_table:
     escalation_tier: capable
     escalation_threshold: 2
     pin_cooldown_secs: 1800
+    # Aggressive downgrade *discovery* (off by default). When enabled, the daemon
+    # periodically trials `explore_tier` on fingerprints the table routes to the
+    # escalation tier (ones you did NOT downgrade) and locks a fingerprint to the
+    # cheap tier once it survives `explore_threshold` trials — finding safe
+    # downgrades automatically. A trial that fails escalates and stops, like the
+    # safety path. This routes some of your capable-tier traffic to the cheap tier
+    # speculatively, so it is the aggressive knob.
+    explore_enabled: false
+    explore_tier: cheap
+    explore_interval: 5
+    explore_threshold: 3

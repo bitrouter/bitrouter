@@ -52,6 +52,11 @@ pub struct PolicyTable {
     /// Tier a pinned fingerprint escalates to (adequacy.escalation_tier, else
     /// default_tier). `None` when neither is configured.
     escalation_tier: Option<String>,
+    /// Cheap tier exploration trials toward (adequacy.explore_tier). `None` when
+    /// exploration is off.
+    explore_tier: Option<String>,
+    /// Whether aggressive downgrade discovery is enabled.
+    exploration_enabled: bool,
     /// Reverse index model id → tier name, for mapping a served model back to
     /// its tier at observe time.
     model_to_tier: HashMap<String, String>,
@@ -74,6 +79,11 @@ impl PolicyTable {
             .escalation_tier
             .clone()
             .or_else(|| config.default_tier.clone());
+        // Exploration is live only when enabled, a target tier is set, and there
+        // is an escalation tier to be a candidate against.
+        let exploration_enabled = config.adequacy.explore_enabled
+            && config.adequacy.explore_tier.is_some()
+            && escalation_tier.is_some();
         Some(Arc::new(Self {
             tiers: config.tiers.clone(),
             fingerprints: config.fingerprints.clone(),
@@ -81,6 +91,8 @@ impl PolicyTable {
             tool_use_tier: config.tool_use_tier.clone(),
             tool_safe_tiers: config.tool_safe_tiers.clone(),
             escalation_tier,
+            explore_tier: config.adequacy.explore_tier.clone(),
+            exploration_enabled,
             model_to_tier,
         }))
     }
@@ -124,14 +136,30 @@ impl PolicyTable {
     }
 
     /// The tier the *static* table (fingerprint → tier → guardrail, before any
-    /// adequacy escalation) would route this prompt to. The observer uses it to
+    /// adequacy adaptation) would route this prompt to. The observer uses it to
     /// confirm a request was a genuine policy-router downgrade — the served tier
     /// matches the static decision — before crediting its outcome, so a caller's
     /// explicit route or a coincidental model match is not mistaken for one.
     pub(crate) fn static_tier(&self, prompt: &Prompt) -> Option<&str> {
         let fingerprint = Self::fingerprint(prompt);
-        let tier = self.tier_for_fingerprint(&fingerprint)?;
+        self.static_tier_for(&fingerprint, prompt)
+    }
+
+    /// [`Self::static_tier`] for an already-computed fingerprint.
+    fn static_tier_for(&self, fingerprint: &str, prompt: &Prompt) -> Option<&str> {
+        let tier = self.tier_for_fingerprint(fingerprint)?;
         Some(self.guardrail(tier, prompt))
+    }
+
+    /// The cheap tier exploration trials toward (raw; gate on
+    /// [`Self::exploration_enabled`]).
+    pub(crate) fn explore_tier(&self) -> Option<&str> {
+        self.explore_tier.as_deref()
+    }
+
+    /// Whether aggressive downgrade discovery is live.
+    pub(crate) fn exploration_enabled(&self) -> bool {
+        self.exploration_enabled
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -231,21 +259,17 @@ impl PolicyTableRouter {
             return false;
         }
         let fingerprint = PolicyTable::fingerprint(prompt);
-        let mut tier = self.table.tier_for_fingerprint(&fingerprint);
-        // Adequacy escalation: a pinned fingerprint (a downgrade the ledger
-        // learned is failing) routes to the escalation tier, overriding the
-        // static — cheaper — tier. Reading the ledger is sync and lock-cheap.
-        if let Some(ledger) = &self.ledger
-            && ledger.is_pinned(&fingerprint)
-            && let Some(escalation) = self.table.escalation_tier()
-        {
-            tier = Some(escalation);
-        }
-        let Some(tier) = tier else {
+        // The static decision (fingerprint → tier → guardrail). No tier ⇒ no-op.
+        let Some(static_tier) = self.table.static_tier_for(&fingerprint, prompt) else {
             return false;
         };
-        // The tool-use guardrail applies on top of whichever tier was chosen.
-        let tier = self.table.guardrail(tier, prompt);
+        // Layer the ledger's adaptation on top (escalation pin / exploration);
+        // without a ledger this is exactly the static tier. Reading the ledger is
+        // sync and lock-cheap.
+        let tier = match &self.ledger {
+            Some(ledger) => self.adapt(ledger, &fingerprint, static_tier, prompt),
+            None => static_tier,
+        };
         let Some(model) = self.table.model_of_tier(tier) else {
             // Unreachable for a config that passed `validate_policy_table`, but
             // a no-op is the safe fallback rather than a panic.
@@ -256,6 +280,38 @@ impl PolicyTableRouter {
         }
         prompt.model = model.to_string();
         true
+    }
+
+    /// Adapt the `static_tier` using the ledger's learned state. Safety wins
+    /// first: a *pinned* fingerprint escalates. Otherwise, an exploration
+    /// *candidate* (one the static table routes to the escalation tier) is routed
+    /// to the explore tier when it is locked (a learned downgrade) or due for a
+    /// trial. Every override is re-guardrailed; an inapplicable case returns the
+    /// static tier unchanged.
+    fn adapt<'a>(
+        &'a self,
+        ledger: &AdequacyLedger,
+        fingerprint: &str,
+        static_tier: &'a str,
+        prompt: &Prompt,
+    ) -> &'a str {
+        // Safety half: a pinned downgrade escalates.
+        if ledger.is_pinned(fingerprint)
+            && let Some(escalation) = self.table.escalation_tier()
+        {
+            return self.table.guardrail(escalation, prompt);
+        }
+        // Aggressive half: trial / lock a downgrade for a candidate fingerprint
+        // (the static decision is the escalation tier — the operator left it
+        // capable, so it is eligible for cheaper trials).
+        if self.table.exploration_enabled()
+            && Some(static_tier) == self.table.escalation_tier()
+            && let Some(explore) = self.table.explore_tier()
+            && (ledger.is_locked(fingerprint) || ledger.should_trial(fingerprint))
+        {
+            return self.table.guardrail(explore, prompt);
+        }
+        static_tier
     }
 }
 
@@ -301,6 +357,7 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adequacy::Outcome;
     use bitrouter_sdk::language_model::types::{GenerationParams, Message, ProviderMetadata, Tool};
 
     /// A policy table with a cheap and a flagship tier: `opening` and tool-heavy
@@ -641,7 +698,12 @@ mod tests {
         assert_eq!(route_with(&router, read_step()), "vendor/cheap");
 
         // One inadequate outcome pins the fingerprint (threshold 1).
-        ledger.observe("after_read_file", true).await;
+        ledger
+            .observe(
+                "after_read_file",
+                Outcome::StaticDowngrade { inadequate: true },
+            )
+            .await;
 
         // Now the same step escalates to the flagship (escalation) tier.
         assert_eq!(
@@ -657,7 +719,12 @@ mod tests {
         let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
         let router = PolicyTableRouter::new(table, Some(ledger.clone()));
 
-        ledger.observe("after_read_file", true).await; // pin only this fingerprint
+        ledger
+            .observe(
+                "after_read_file",
+                Outcome::StaticDowngrade { inadequate: true },
+            )
+            .await; // pin only this fingerprint
 
         // A different downgraded step is unaffected: map `after_grep` → cheap.
         // (It is unmapped here, so it falls to default flagship anyway; assert the
@@ -675,5 +742,100 @@ mod tests {
         // routing stays exactly static.
         let router = PolicyTableRouter::from_config(&config_with_escalation()).expect("configured");
         assert_eq!(route_with(&router, read_step()), "vendor/cheap");
+    }
+
+    // ---- aggressive exploration (downgrade discovery) ----
+
+    /// `config()` with exploration on: `opening` → flagship (the escalation tier)
+    /// is an exploration candidate, trialed toward the cheap tier.
+    fn config_with_exploration() -> PolicyTableConfig {
+        let mut cfg = config_with_escalation();
+        cfg.adequacy.explore_enabled = true;
+        cfg.adequacy.explore_tier = Some("cheap".to_string());
+        cfg.adequacy.explore_interval = 2;
+        cfg.adequacy.explore_threshold = 2;
+        cfg
+    }
+
+    fn exploring_router(ledger: Arc<AdequacyLedger>) -> PolicyTableRouter {
+        let table = PolicyTable::from_config(&config_with_exploration()).expect("configured");
+        PolicyTableRouter::new(table, Some(ledger))
+    }
+
+    fn trial_ok() -> Outcome {
+        Outcome::Exploration {
+            trialed: true,
+            inadequate: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unseen_candidate_stays_on_the_escalation_tier() {
+        // No learned state yet → `opening` routes to its static (escalation) tier.
+        let router = exploring_router(Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2)));
+        assert_eq!(route_with(&router, vec![user("start")]), "vendor/flagship");
+    }
+
+    #[tokio::test]
+    async fn a_due_trial_routes_a_candidate_to_the_explore_tier() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        // Two non-trial observations advance the cadence so a trial is due.
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            inadequate: false,
+        };
+        ledger.observe("opening", non_trial()).await;
+        ledger.observe("opening", non_trial()).await;
+        let router = exploring_router(ledger);
+        assert_eq!(
+            route_with(&router, vec![user("start")]),
+            "vendor/cheap",
+            "a candidate due for a trial routes to the explore tier"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_locked_candidate_routes_to_the_explore_tier() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        ledger.observe("opening", trial_ok()).await; // 1 adequate trial
+        ledger.observe("opening", trial_ok()).await; // 2 → locked
+        let router = exploring_router(ledger);
+        assert_eq!(route_with(&router, vec![user("start")]), "vendor/cheap");
+    }
+
+    #[tokio::test]
+    async fn a_pinned_candidate_escalates_over_exploration() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        // A failed trial pins the candidate (safety wins).
+        ledger
+            .observe(
+                "opening",
+                Outcome::Exploration {
+                    trialed: true,
+                    inadequate: true,
+                },
+            )
+            .await;
+        let router = exploring_router(ledger);
+        assert_eq!(
+            route_with(&router, vec![user("start")]),
+            "vendor/flagship",
+            "a pin overrides exploration"
+        );
+    }
+
+    #[tokio::test]
+    async fn exploration_respects_the_tool_use_guardrail() {
+        // A locked candidate that carries tools is clamped back up by the
+        // guardrail: a tool request is never downgraded below the tool-safe tier,
+        // even when exploration has locked the cheap tier.
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
+        ledger.observe("opening", trial_ok()).await; // locks (threshold 1)
+        let router = exploring_router(ledger);
+        let mut p = prompt("inbound");
+        p.messages = vec![user("start")];
+        p.tools = vec![a_tool()];
+        router.apply(&mut p);
+        assert_eq!(p.model, "vendor/flagship", "guardrail clamps the trial");
     }
 }
