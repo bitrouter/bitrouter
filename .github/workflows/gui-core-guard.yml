@@ -10,6 +10,9 @@ on:
       - "crates/bitrouter-substrate/**"
       - "apps/bitrouter/src/main.rs"
 
+permissions:
+  contents: read
+
 jobs:
   build-gui-core:
     runs-on: ubuntu-latest
