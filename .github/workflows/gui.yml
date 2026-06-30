@@ -1,0 +1,23 @@
+name: gui
+
+on:
+  push:
+    branches: [main]
+    paths: ["gui/**"]
+  pull_request:
+    paths: ["gui/**"]
+
+# The GUI is a separate, excluded workspace. Build it on its own runner so gpui
+# (Zed git deps + 1.95.0 toolchain) never touches the core CI jobs.
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build GUI workspace
+        run: cargo build --locked
+      - name: Test GUI workspace
+        run: cargo test -p bitrouter-gui-core -p bitrouter-gui
