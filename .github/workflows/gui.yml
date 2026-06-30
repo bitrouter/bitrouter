@@ -7,6 +7,9 @@ on:
   pull_request:
     paths: ["gui/**"]
 
+permissions:
+  contents: read
+
 # The GUI is a separate, excluded workspace. Build it on its own runner so gpui
 # (Zed git deps + 1.95.0 toolchain) never touches the core CI jobs.
 jobs:
