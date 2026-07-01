@@ -4,7 +4,7 @@ description: The full catalog of models any BitRouter account can call — live 
 sourceHash: 86d87ac9130c04fd5ca161b83bc6f263323dbb88eb5d4be1d45f451a216af27c
 ---
 
-Every model BitRouter can route to is listed below, with live pricing. Reach any of them over your own provider keys ([BYOK](/docs/features/byok), paid to the providers at their list price) or one [BitRouter Cloud](/docs/get-started/self-hosted-vs-cloud) account — one sign-in, no upstream keys, billed per request with failed requests not charged. Running your own model? See [local & private models](/docs/integrations/models) (free).
+Every model BitRouter can route to is listed below, with live pricing. Reach any of them over your own provider keys ([BYOK](/docs/features/byok), paid to the providers at their list price) or one [BitRouter Cloud](/docs/get-started/self-hosted-and-cloud) account — one sign-in, no upstream keys, billed per request with failed requests not charged. Running your own model? See [local & private models](/docs/integrations/models) (free).
 
 Prices are USD per **million tokens**, refreshed continuously from the live catalog. Open models are served **25% below official** by default — see [Discounted open models](#discounted-open-models) below.
 

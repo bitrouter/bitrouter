@@ -1,18 +1,84 @@
 ---
-title: Self-Hosted vs Cloud
-description: Understand what running BitRouter self-hosted gives you out of the box, and what BitRouter Cloud adds on top — so you can choose the right starting point.
-sourceHash: 285427fef893d159acdf9770fd34cc0f2d3a7543b7951105c987fabbcbba5c67
+title: Self-Hosted & Cloud
+description: Install the open-source BitRouter binary and run it self-hosted, or sign in to BitRouter Cloud — the same core either way. How to install both, and what Cloud adds on top.
 ---
 
-BitRouter ships as a single open-source binary under Apache 2.0. You can run it entirely self-hosted with your own provider keys and never pay for the software itself. **BitRouter Cloud** is an optional hosted layer you attach to that same binary when you want managed infrastructure, team features, or a provider network you don't have to wire up yourself.
+BitRouter has two front doors, and both run the **same open-source core** (Apache 2.0). Self-host the binary with your own keys, or sign in to BitRouter Cloud — the routing engine is identical. This page shows how to install and run both, then breaks down what a Cloud account adds so you can pick a starting point.
 
-This page is the one place in get-started where Cloud is framed against the self-hosted option. Read it once, decide, then move on.
+## Install the binary
+
+Install the open-source binary:
+
+<Tabs items={['macOS / Linux', 'Homebrew', 'npm', 'cargo']}>
+<Tab value="macOS / Linux">
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/latest/download/bitrouter-installer.sh | sh
+```
+
+</Tab>
+<Tab value="Homebrew">
+
+```bash
+brew install bitrouter/tap/bitrouter
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install -g bitrouter
+```
+
+</Tab>
+<Tab value="cargo">
+
+```bash
+cargo install bitrouter
+```
+
+</Tab>
+</Tabs>
+
+## Run self-hosted
+
+Set your provider keys in the environment and start the proxy:
+
+```bash
+export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GEMINI_API_KEY also work
+bitrouter start
+# Proxy running at http://127.0.0.1:4356
+```
+
+BitRouter auto-detects any key set in the environment — no config file needed. Any provider whose key is present is immediately available. See [BYOK](/docs/features/byok) for the full list of recognized variables, or [local & private models](/docs/integrations/models) to point BitRouter at Ollama, vLLM, or LM Studio for free.
+
+For advanced routing rules, guardrails, or multi-account failover, scaffold a config file:
+
+```bash
+bitrouter init          # writes ./bitrouter.yaml (override with `-c <path>`)
+bitrouter start
+```
+
+## Use BitRouter Cloud
+
+Sign in to a BitRouter Cloud account from the terminal — one account covers every model the hosted network offers, with no upstream provider keys required:
+
+```bash
+bitrouter auth login    # RFC 8628 device flow against api.bitrouter.ai
+bitrouter start         # the `bitrouter` provider auto-enables once signed in
+```
+
+You can also point an agent straight at the hosted endpoint without running a local binary. Either way the core is the same — a Cloud account is an account and network, not a separate deployment. See the [Models](/docs/get-started/models) catalog for pricing.
+
+## Point your agent at the proxy
+
+However you start it, BitRouter is a drop-in proxy. Point your agent runtime at the proxy base URL — `http://127.0.0.1:4356` when self-hosting — and every model call routes through BitRouter with no harness changes.
 
 ## The core is identical either way
 
 Every routing, fallback, model-variant, BYOK, local-model, guardrail, observability, MCP, ACP, and structured-output capability works the same whether you self-host the binary or attach a Cloud account to it. Cloud adds what needs a server _you_ don't run — it does not replace or restrict the core.
 
-## Capability comparison
+### Capability comparison
 
 | Capability | Self-hosted (OSS) | Cloud |
 | --- | --- | --- |
@@ -69,7 +135,7 @@ The Cloud console surfaces per-workspace request history, spend, and usage break
 
 ### Billing and SLA
 
-Cloud provides managed billing (one wallet, per-request, failed requests not charged) and an uptime SLA on the hosted endpoint. Self-hosted has no software licensing cost and no SLA commitment from Anthropic on your own infrastructure.
+Cloud provides managed billing (one wallet, per-request, failed requests not charged) and an uptime SLA on the hosted endpoint. Self-hosted has no software licensing cost and no SLA commitment on your own infrastructure.
 
 ## Attaching Cloud to a self-hosted binary
 
@@ -85,7 +151,7 @@ You can add or remove the Cloud account at any time. The binary's self-hosted ca
 
 ## Next steps
 
-- **Using Cloud managed models** — see [Managed Models](/docs/get-started/models) for the model catalog, pricing, and how to make your first managed request.
-- **Namespaces (OSS isolation)** — see [Namespaces](/docs/features/namespaces) for the self-hosted isolation primitive.
-- **Team workspaces** — see [Cloud Workspaces](/docs/features/namespaces) for seats, credential scoping, and per-workspace policies.
-- **Full Cloud overview** — see [Cloud Overview](/docs/get-started/self-hosted-vs-cloud) for the complete hosted layer reference.
+<Cards>
+  <Card title="Quick Start" href="/docs/get-started/quickstart" description="Get an agent routing through BitRouter in under a minute" />
+  <Card title="Models" href="/docs/get-started/models" description="The full catalog, pricing, and open-model discounts" />
+</Cards>
