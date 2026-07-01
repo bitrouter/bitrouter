@@ -128,3 +128,7 @@ bitrouter cloud oauth-client delete <client-id>
 ```
 
 Requires the `clients:read` / `clients:write` scopes — not in the default set. The freshly minted `client_secret` for confidential clients is returned exactly once in the `register` response.
+
+## Other ways to drive BitRouter
+
+The CLI isn't the only surface onto the daemon. An agent can also drive BitRouter over [MCP](/docs/concepts/mcp) — the origin server exposing `complete`, `list_models`, and `status` as tools — or via the shipped [`/bitrouter` Agent Skill](/docs/concepts/agent-skill), which teaches a coding agent to install and operate BitRouter on its own.

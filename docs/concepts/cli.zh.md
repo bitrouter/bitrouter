@@ -145,3 +145,7 @@ bitrouter cloud oauth-client delete <client-id>
 ```
 
 需要 `clients:read` / `clients:write` scope，不在默认集合中。机密客户端新生成的 `client_secret` 仅在 `register` 响应中返回一次。
+
+## 驱动 BitRouter 的其他方式
+
+CLI 并非通往守护进程的唯一界面。智能体也可以经 [MCP](/docs/concepts/mcp) 驱动 BitRouter——即公布 `complete`、`list_models` 与 `status` 作为工具的源服务器——或经所附带的 [`/bitrouter` Agent Skill](/docs/concepts/agent-skill)，它会教一个编码智能体自行安装并操作 BitRouter。
