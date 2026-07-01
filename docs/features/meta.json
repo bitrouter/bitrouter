@@ -13,6 +13,7 @@
     "---Tools gateway---",
     "server-tools",
     "websearch",
+    "web-fetch",
     "subagent",
     "advisor",
     "fusion",
