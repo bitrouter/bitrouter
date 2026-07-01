@@ -764,6 +764,7 @@ mod beta_forward_tests {
             headers,
             prompt,
             inbound_protocol: None,
+            session_key: None,
         })
     }
 

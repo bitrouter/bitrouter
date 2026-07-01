@@ -31,8 +31,18 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use uuid::Uuid;
 
 use crate::style::Palette;
+
+/// The env var Claude Code reads to inject custom HTTP headers into every
+/// outbound Anthropic API request. Format: `Name: value`, newline-separated
+/// for multiple headers. When this variable already contains user-set headers,
+/// we APPEND (rather than replace) by merging on a newline separator.
+///
+/// Ref: Claude Code environment variables (`ANTHROPIC_CUSTOM_HEADERS`):
+/// <https://code.claude.com/docs/en/env-vars>
+const ANTHROPIC_CUSTOM_HEADERS_ENV: &str = "ANTHROPIC_CUSTOM_HEADERS";
 
 /// The coding-agent harnesses `bitrouter spawn` can launch. v1 ships Claude
 /// Code only; the enum is the extension point for `codex` / `gemini` later, so
@@ -159,7 +169,21 @@ pub async fn run(
     // exported for this agent → the BitRouter API key → a local placeholder.
     let parent_auth = nonempty_env(spec.auth_token_env);
     let bitrouter_key = nonempty_env(BITROUTER_API_KEY_ENV);
-    let env = build_child_env(&spec, &base_url, parent_auth, bitrouter_key);
+    // Generate ONE session id per spawn invocation (in `run`, not inside
+    // `build_child_env` which is unit-tested with arbitrary args). This id
+    // rides in `ANTHROPIC_CUSTOM_HEADERS` so Claude Code forwards it as the
+    // `X-Bitrouter-Session-Id` HTTP header on every API call made during
+    // this agent session.
+    let session_id = Uuid::new_v4().to_string();
+    let existing_custom_headers = nonempty_env(ANTHROPIC_CUSTOM_HEADERS_ENV);
+    let env = build_child_env(
+        &spec,
+        &base_url,
+        parent_auth,
+        bitrouter_key,
+        &session_id,
+        existing_custom_headers,
+    );
 
     let p = Palette::for_stderr();
     eprintln!(
@@ -194,8 +218,8 @@ pub async fn run(
 }
 
 /// Build the environment overrides layered on top of the inherited parent
-/// environment: always force the routing base URL, and resolve the gateway
-/// bearer token by precedence.
+/// environment: always force the routing base URL, resolve the gateway
+/// bearer token by precedence, and inject the session id as a custom header.
 ///
 /// Returned as an explicit list (rather than mutating the global env) so the
 /// logic is unit-testable. `parent_auth` is any auth token the user already
@@ -205,18 +229,47 @@ pub async fn run(
 /// (which in this repo is the *upstream* Anthropic provider key, not a valid
 /// BitRouter inbound credential) cannot accidentally become the auth Claude
 /// Code sends to the router.
+///
+/// `session_id` is ONE UUID v4 generated in [`run`] (per spawn invocation).
+/// `existing_custom_headers` is the current `ANTHROPIC_CUSTOM_HEADERS` value
+/// from the parent env (may be `None`). The session header is **merged** into
+/// any existing value rather than replacing it, so user-configured headers
+/// survive the spawn.
+///
+/// The injected header reaches the proxy as `X-Bitrouter-Session-Id: <uuid>`
+/// because Claude Code forwards every entry of `ANTHROPIC_CUSTOM_HEADERS`
+/// verbatim to the configured gateway. See:
+/// <https://code.claude.com/docs/en/env-vars>
 fn build_child_env(
     spec: &AgentSpec,
     base_url: &str,
     parent_auth: Option<String>,
     bitrouter_key: Option<String>,
+    session_id: &str,
+    existing_custom_headers: Option<String>,
 ) -> Vec<(&'static str, String)> {
     let token = parent_auth
         .or(bitrouter_key)
         .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_string());
+
+    // Build the `ANTHROPIC_CUSTOM_HEADERS` value: prepend the session header,
+    // then append any headers the user already had, separated by a newline.
+    // The `SESSION_ID_HEADER` constant is already lowercase; Claude Code
+    // normalises header names and forwards them as typed. Using the canonical
+    // title-case form (`X-Bitrouter-Session-Id`) here makes the injected value
+    // more readable when inspected with `env | grep ANTHROPIC`.
+    let session_header_line = format!("X-Bitrouter-Session-Id: {session_id}");
+    let custom_headers = match existing_custom_headers {
+        Some(existing) if !existing.trim().is_empty() => {
+            format!("{session_header_line}\n{existing}")
+        }
+        _ => session_header_line,
+    };
+
     vec![
         (spec.base_url_env, base_url.to_string()),
         (spec.auth_token_env, token),
+        (ANTHROPIC_CUSTOM_HEADERS_ENV, custom_headers),
     ]
 }
 
@@ -708,10 +761,15 @@ mod tests {
         assert_eq!(derive_base_url("[::1]"), "http://[::1]:4356");
     }
 
+    /// Helper: retrieve a specific env key value from a built env list.
+    fn env_val<'a>(env: &'a [(&'static str, String)], key: &str) -> Option<&'a str> {
+        env.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str())
+    }
+
     #[test]
     fn child_env_always_sets_base_url() {
         let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://127.0.0.1:4356", None, None);
+        let env = build_child_env(&spec, "http://127.0.0.1:4356", None, None, "sid1", None);
         assert!(
             env.iter()
                 .any(|(k, v)| *k == "ANTHROPIC_BASE_URL" && v == "http://127.0.0.1:4356")
@@ -735,15 +793,24 @@ mod tests {
             "http://x:1",
             Some("user-token".into()),
             Some("brk_key".into()),
+            "sid",
+            None,
         );
         assert_eq!(auth_token(&explicit).as_deref(), Some("user-token"));
 
         // No explicit token → fall back to the BitRouter API key.
-        let from_key = build_child_env(&spec, "http://x:1", None, Some("brk_key".into()));
+        let from_key = build_child_env(
+            &spec,
+            "http://x:1",
+            None,
+            Some("brk_key".into()),
+            "sid",
+            None,
+        );
         assert_eq!(auth_token(&from_key).as_deref(), Some("brk_key"));
 
         // Neither set → the local placeholder so the harness still starts.
-        let placeholder = build_child_env(&spec, "http://x:1", None, None);
+        let placeholder = build_child_env(&spec, "http://x:1", None, None, "sid", None);
         assert_eq!(
             auth_token(&placeholder).as_deref(),
             Some(PLACEHOLDER_API_KEY)
@@ -755,9 +822,59 @@ mod tests {
         // The auth token is ALWAYS set explicitly, so a stray inherited
         // ANTHROPIC_API_KEY can never silently become the inbound credential.
         let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://x:1", None, None);
+        let env = build_child_env(&spec, "http://x:1", None, None, "sid", None);
         assert!(env.iter().any(|(k, _)| *k == "ANTHROPIC_AUTH_TOKEN"));
         assert!(env.iter().all(|(k, _)| *k != "ANTHROPIC_API_KEY"));
+    }
+
+    // ===== Session id injection tests =====
+
+    #[test]
+    fn child_env_injects_session_id_in_custom_headers() {
+        let spec = SpawnAgent::Claude.spec();
+        let sid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let env = build_child_env(&spec, "http://x:1", None, None, sid, None);
+        let custom = env_val(&env, ANTHROPIC_CUSTOM_HEADERS_ENV)
+            .expect("ANTHROPIC_CUSTOM_HEADERS must be set");
+        assert!(
+            custom.contains(sid),
+            "session id must appear in ANTHROPIC_CUSTOM_HEADERS; got: {custom}"
+        );
+        assert!(
+            custom.contains("X-Bitrouter-Session-Id"),
+            "header name must be set; got: {custom}"
+        );
+    }
+
+    #[test]
+    fn child_env_merges_existing_custom_headers() {
+        let spec = SpawnAgent::Claude.spec();
+        let sid = "test-session-uuid";
+        let existing = "X-My-Header: my-value";
+        let env = build_child_env(&spec, "http://x:1", None, None, sid, Some(existing.into()));
+        let custom = env_val(&env, ANTHROPIC_CUSTOM_HEADERS_ENV)
+            .expect("ANTHROPIC_CUSTOM_HEADERS must be set");
+        assert!(
+            custom.contains(sid),
+            "session id must be present; got: {custom}"
+        );
+        assert!(
+            custom.contains("X-My-Header: my-value"),
+            "pre-existing header must be preserved; got: {custom}"
+        );
+    }
+
+    #[test]
+    fn child_env_session_id_appears_exactly_once() {
+        let spec = SpawnAgent::Claude.spec();
+        let sid = "unique-session-id-42";
+        let env = build_child_env(&spec, "http://x:1", None, None, sid, None);
+        let custom = env_val(&env, ANTHROPIC_CUSTOM_HEADERS_ENV).unwrap_or("");
+        let count = custom.matches(sid).count();
+        assert_eq!(
+            count, 1,
+            "session id must appear exactly once; got: {custom}"
+        );
     }
 
     #[test]

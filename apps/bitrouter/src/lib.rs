@@ -25,6 +25,7 @@ pub mod output;
 pub mod paths;
 pub mod policy;
 pub mod reload;
+pub mod session;
 pub mod skills;
 pub mod spawn;
 pub mod style;

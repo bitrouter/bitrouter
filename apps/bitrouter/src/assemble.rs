@@ -60,6 +60,7 @@ use crate::auth::AuthHook;
 use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
+use crate::session::SessionCorrelationHook;
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -444,14 +445,19 @@ pub async fn build_app_with_path(
             if server_tools_enabled {
                 lm.pre_request_hook(ServerToolDeclarationsHook);
             }
-            // Stage 1, in order: auth → policy. The guardrail plugin appends its
-            // hooks after this closure (see `.plugin(...)` below), preserving the
+            // Stage 1, in order: auth → policy → session-correlation.
+            // The guardrail plugin appends its hooks after this closure
+            // (see `.plugin(...)` below), preserving the
             // auth → policy → guardrail order.
             lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
             ));
+            // Session correlation hook: derives the session key AFTER auth
+            // so the authenticated user_id is available for the fallback hash.
+            // Always allows — pure bookkeeping, no gating.
+            lm.pre_request_hook(SessionCorrelationHook);
             // OpenTelemetry exporter — register the *same* Arc as a hook
             // here. Construction happened above so `Assembled.observe`
             // can hold a query handle on it.

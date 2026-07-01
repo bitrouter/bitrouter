@@ -436,6 +436,14 @@ impl ObserveHook for OtelExporter {
                     KeyValue::new("gen_ai.operation.name", "chat"),
                     KeyValue::new("gen_ai.request.model", model),
                 ];
+                // Session correlation key — emitted on the root `chat` span
+                // so every request in a session is queryable by key. The key is
+                // a `bitrouter.*` attribute (not `gen_ai.*`) so it never
+                // triggers the single-event billing invariant on gen_ai-aware
+                // backends.
+                if let Some(key) = ctx.session_key() {
+                    attributes.push(KeyValue::new("bitrouter.session_key", key.to_string()));
+                }
                 // The root `chat` span is the single gen_ai *generation* for the
                 // request, so the request parameters (temperature, max_tokens, …)
                 // live here — not on the per-hop CLIENT span, which is no longer a
@@ -2097,6 +2105,96 @@ mod hop_tests {
                 .map(|m| m.contains("upstream down") || m.contains("Upstream"))
                 .unwrap_or(false),
             "exception.message should carry the upstream error text"
+        );
+    }
+
+    // ===== Session correlation key telemetry tests =====
+
+    #[tokio::test]
+    async fn session_key_stamped_on_root_chat_span_when_set() {
+        // When a session key is present on the context, it must appear as
+        // `bitrouter.session_key` on the root INTERNAL `chat` span.
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+        ctx.set_session_key("test-session-uuid-abc123".to_string());
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            str_attr(root_chat, "bitrouter.session_key"),
+            Some("test-session-uuid-abc123"),
+            "session key must be emitted as bitrouter.session_key on the root span"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_key_absent_when_not_set() {
+        // When no session key is set (e.g. raw SDK usage without the HTTP
+        // server's session hook), the attribute must not appear.
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        // Note: no ctx.set_session_key(...) call.
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            str_attr(root_chat, "bitrouter.session_key"),
+            None,
+            "bitrouter.session_key must be absent when not set"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_key_is_bitrouter_attr_not_gen_ai() {
+        // The session key MUST be a `bitrouter.*` attribute — not `gen_ai.*` —
+        // so gen_ai-aware backends (PostHog $ai_*) do not count it as an event
+        // and trigger the single-event billing invariant.
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+        ctx.set_session_key("derived:0102030405060708".to_string());
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+
+        // Must be present under the bitrouter.* namespace.
+        assert!(
+            str_attr(root_chat, "bitrouter.session_key").is_some(),
+            "must have bitrouter.session_key"
+        );
+        // Must NOT appear under gen_ai.* (no such attribute should exist at all).
+        let gen_ai_session = root_chat.attributes.iter().any(|kv| {
+            kv.key.as_str().starts_with("gen_ai.") && kv.key.as_str().contains("session")
+        });
+        assert!(
+            !gen_ai_session,
+            "session key must not appear under gen_ai.* namespace"
         );
     }
 }

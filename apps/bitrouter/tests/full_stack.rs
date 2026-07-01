@@ -696,3 +696,71 @@ async fn e2e_full_stack_otel_span_hierarchy() {
 
     fs.teardown().await;
 }
+
+// ===== Test 6 — session key non-leak guarantee =====
+//
+// The `x-bitrouter-session-id` header and the derived session key are
+// internal-only. Neither must ever reach the upstream provider.
+
+#[tokio::test]
+async fn e2e_session_key_never_forwarded_to_upstream() {
+    let fs = assemble_full_stack().await;
+
+    // Send a request with an explicit session id header.
+    let explicit_session_id = "test-explicit-session-uuid-87654321";
+    let resp = fs
+        .server
+        .post("/v1/chat/completions")
+        .add_header("authorization", format!("Bearer {}", fs.brvk_secret))
+        .add_header("accept", "text/event-stream")
+        .add_header("x-bitrouter-session-id", explicit_session_id)
+        .json(&clean_body(true))
+        .await;
+    resp.assert_status_ok();
+    let _ = resp.text();
+
+    wait_for_metering_row(&fs.db, "fullstack-key").await;
+
+    // The upstream must have received exactly one request.
+    let upstream_reqs = fs
+        .upstream
+        .received_requests()
+        .await
+        .expect("upstream received requests");
+    let upstream = upstream_reqs
+        .first()
+        .expect("upstream got the chat completion call");
+
+    // Neither the inbound header nor any derived key must appear upstream.
+    for (header_name, header_value) in upstream.headers.iter() {
+        let name_lower = header_name.as_str().to_lowercase();
+        assert_ne!(
+            name_lower,
+            "x-bitrouter-session-id",
+            "x-bitrouter-session-id must NOT be forwarded to the upstream provider; \
+             found header '{name_lower}: {}'",
+            header_value.to_str().unwrap_or("<binary>")
+        );
+        // The derived key always starts with "derived:" — confirm it doesn't
+        // appear in any header value.
+        if let Ok(val) = header_value.to_str() {
+            assert!(
+                !val.starts_with("derived:"),
+                "derived session key prefix must not appear in upstream header \
+                 '{name_lower}'; got: {val}"
+            );
+        }
+    }
+    // Also confirm the session id value itself is nowhere in the upstream headers.
+    for (_, header_value) in upstream.headers.iter() {
+        if let Ok(val) = header_value.to_str() {
+            assert!(
+                !val.contains(explicit_session_id),
+                "explicit session id value must not appear in any upstream header; \
+                 got value: {val}"
+            );
+        }
+    }
+
+    fs.teardown().await;
+}
