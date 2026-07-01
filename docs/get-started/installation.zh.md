@@ -67,7 +67,7 @@ bitrouter auth login    # RFC 8628 device flow against api.bitrouter.ai
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
 
-你也可以不运行本地二进制，直接把 agent 指向托管端点。无论哪种方式，核心都是同一套——云端账号是账号与网络，而非另一套部署。完整说明见 [自托管 vs 云端](/docs/get-started/self-hosted-vs-cloud)，模型目录与价格见 [托管供应商](/docs/get-started/models-and-providers)。
+你也可以不运行本地二进制，直接把 agent 指向托管端点。无论哪种方式，核心都是同一套——云端账号是账号与网络，而非另一套部署。完整说明见 [自托管 vs 云端](/docs/get-started/self-hosted-vs-cloud)，模型目录与价格见 [托管供应商](/docs/get-started/models)。
 
 ## 把你的 agent 指向代理
 

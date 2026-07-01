@@ -55,7 +55,7 @@ Every routing, fallback, model-variant, BYOK, local-model, guardrail, observabil
 
 ### Managed provider network
 
-Cloud's managed provider network means you make model requests without setting up upstream accounts or storing API keys. Today this is [Managed Models](/docs/get-started/models-and-providers) — one account, requests billed per token, open models served at a discount below official pricing. Managed Tools and Agents are on the roadmap.
+Cloud's managed provider network means you make model requests without setting up upstream accounts or storing API keys. Today this is [Managed Models](/docs/get-started/models) — one account, requests billed per token, open models served at a discount below official pricing. Managed Tools and Agents are on the roadmap.
 
 ### Team workspaces
 
@@ -85,7 +85,7 @@ You can add or remove the Cloud account at any time. The binary's self-hosted ca
 
 ## Next steps
 
-- **Using Cloud managed models** — see [Managed Models](/docs/get-started/models-and-providers) for the model catalog, pricing, and how to make your first managed request.
+- **Using Cloud managed models** — see [Managed Models](/docs/get-started/models) for the model catalog, pricing, and how to make your first managed request.
 - **Namespaces (OSS isolation)** — see [Namespaces](/docs/features/namespaces) for the self-hosted isolation primitive.
 - **Team workspaces** — see [Cloud Workspaces](/docs/features/namespaces) for seats, credential scoping, and per-workspace policies.
 - **Full Cloud overview** — see [Cloud Overview](/docs/get-started/self-hosted-vs-cloud) for the complete hosted layer reference.

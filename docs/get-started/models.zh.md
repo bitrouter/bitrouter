@@ -1,23 +1,23 @@
 ---
-title: Models & Providers
-description: 托管的 BitRouter Cloud 供应商——一个账户，无需上游密钥——完整的模型目录与定价，并对开放模型自动打折。
+title: Models
+description: 任何 BitRouter 账户都能调用的完整模型目录——实时定价，可经你自己的密钥或一个托管的 BitRouter Cloud 账户触达，并对开放模型自动打折。
 sourceHash: 86d87ac9130c04fd5ca161b83bc6f263323dbb88eb5d4be1d45f451a216af27c
 ---
 
-**BitRouter Cloud 供应商**让 agent 只用一个 BitRouter 账户即可调用下面的任意模型——无需上游供应商密钥，也无需逐个供应商注册。你按这里列出的价格直接向 BitRouter 付费，按请求计费；失败的请求不计费。
+BitRouter 能路由到的每个模型都列在下面，并附实时定价。你可以经自己的供应商密钥（[BYOK](/docs/features/byok)，按各供应商官方价直接向其付费）触达它们中的任意一个，也可以经一个 [BitRouter Cloud](/docs/get-started/self-hosted-vs-cloud) 账户——一次登录，无需上游密钥，按请求计费且失败请求不计费。要运行自己的模型？参见[本地与私有模型](/docs/integrations/models)（免费）。
+
+价格以美元 / **百万 token** 计，并持续从实时目录刷新。开放模型默认以**官方价低 25%** 提供——参见下文[折扣开放模型](#discounted-open-models)。
+
+<ModelsTable />
+
+## 使用 BitRouter Cloud
+
+**BitRouter Cloud 供应商**让 agent 只用一个 BitRouter 账户即可调用上面的任意模型——无需上游供应商密钥，也无需逐个供应商注册。你按这里列出的价格直接向 BitRouter 付费，按请求计费；失败的请求不计费。
 
 ```bash
 bitrouter auth login    # one-time device-flow sign-in
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
-
-更想用自己的供应商账户？改用 [BYOK](/docs/features/byok)——你按各供应商的官方价直接向其付费。要运行自己的模型？参见[本地与私有模型](/docs/integrations/models)（免费）。
-
-## 受支持的模型与定价
-
-价格以美元 / **百万 token** 计，并持续从实时目录刷新。开放模型默认以**官方价低 25%** 提供——参见下文[折扣开放模型](#discounted-open-models)。
-
-<ModelsTable />
 
 ## 供应商
 

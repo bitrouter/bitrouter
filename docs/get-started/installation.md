@@ -67,7 +67,7 @@ bitrouter auth login    # RFC 8628 device flow against api.bitrouter.ai
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
 
-You can also point an agent straight at the hosted endpoint without running a local binary. Either way the core is the same — a Cloud account is an account and network, not a separate deployment. See [Self-host vs Cloud](/docs/get-started/self-hosted-vs-cloud) for the full breakdown, and the [managed provider](/docs/get-started/models-and-providers) for the model catalog and pricing.
+You can also point an agent straight at the hosted endpoint without running a local binary. Either way the core is the same — a Cloud account is an account and network, not a separate deployment. See [Self-host vs Cloud](/docs/get-started/self-hosted-vs-cloud) for the full breakdown, and the [managed provider](/docs/get-started/models) for the model catalog and pricing.
 
 ## Point your agent at the proxy
 

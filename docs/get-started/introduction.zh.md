@@ -8,7 +8,7 @@ sourceHash: d98ac30ce61a9f4c773cb4c3d2cb2e7f5123012dacae3b17c6f32904ecdeeefb
 
 BitRouter 是**面向 LLM Agent 的开放智能路由器**——一个开源、可本地部署、无前端的 Rust 二进制，为任意 Agent 提供统一端点，用以发现、路由并支付任意 LLM、工具或子 Agent。原生为自主 Agent 循环而生，具备一流的 CLI 运行时控制、可靠性、可观测性与防护；并作为一个无许可的市场与路由器运行——任意提供商可注册，任意消费者可使用。
 
-[核心（Core）](/docs/get-started/installation)**以 Apache 2.0 协议开源，可免费自托管**——自带密钥或运行本地模型即可，无需付费。[云（Cloud）](/docs/get-started/self-hosted-vs-cloud)是可选的托管层，在其之上额外提供托管提供商、Agent 自主支付与账户级防护策略管理。完整的[模型与定价](/docs/get-started/models-and-providers)目录见此。
+[核心（Core）](/docs/get-started/installation)**以 Apache 2.0 协议开源，可免费自托管**——自带密钥或运行本地模型即可，无需付费。[云（Cloud）](/docs/get-started/self-hosted-vs-cloud)是可选的托管层，在其之上额外提供托管提供商、Agent 自主支付与账户级防护策略管理。完整的[模型与定价](/docs/get-started/models)目录见此。
 
 ## 功能
 
