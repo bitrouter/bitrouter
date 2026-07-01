@@ -1,10 +1,10 @@
 ---
-title: Build a plugin
-description: Write a BitRouter plugin against the trait-based Rust SDK — implement a hook, package it as a Plugin, and install it into the router.
+title: Plugins & hooks
+description: The hook pipeline and plugin model behind BitRouter, and how to write one against the trait-based Rust SDK.
 sourceHash: 5c4baeccdc37711fd6c7521c89d26b855671e21d2e7b552c436f0ade975c888e
 ---
 
-# Build a plugin
+# Plugins & hooks
 
 BitRouter is a programmable router for LLM API traffic. Inbound requests on any
 supported wire protocol are normalised into a canonical pipeline, run through an
@@ -23,6 +23,19 @@ surface. If you only need to configure providers, routing, or guardrail rules,
 use [`bitrouter.yaml`](/docs/guides/self-host) instead — you do not need to write
 a plugin.
 </Callout>
+
+## Hooks and plugins, conceptually
+
+A **hook** is a callback that runs at a specific point as a request flows through
+the router. Depending on the stage it attaches to, a hook can **allow, deny,
+mutate, or observe** the request — those four are the only things a stage is ever
+allowed to do.
+
+A **plugin** bundles a related set of hooks (plus any migrations they need) and
+installs them in one call. It's a *convenience package, not the atomic unit*: every
+plugin can be reproduced by registering its hooks one by one — bundling just makes a
+capability reproducible and installable in a single step. The core ships several
+this way: `bitrouter-guardrails`, `bitrouter-observe`, and `bitrouter-attestation`.
 
 ## The pipeline a plugin hooks into
 
