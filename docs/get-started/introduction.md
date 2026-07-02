@@ -14,7 +14,7 @@ It runs anywhere your agent runs, with no dependencies to install, and is operat
 
 An agentic loop consumes three things. Most routers govern only the first — BitRouter makes all three routable, observable, and cost-governed:
 
-- **Models** — route LLM calls across providers, protocols, and accounts (the classic router, cross-protocol). See [Model routing](/docs/concepts/models).
+- **Models** — route LLM calls across providers, protocols, and accounts (the classic router, cross-protocol). See [Models](/docs/concepts/models).
 - **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints. See [Tools](/docs/concepts/tools).
 - **Agents** — an **ACP gateway**: sub-agents are first-class, so you hand a task to a cheaper agent the same way you route a call to a cheaper model. See [Agents](/docs/concepts/agents).
 

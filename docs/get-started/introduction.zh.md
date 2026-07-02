@@ -14,7 +14,7 @@ BitRouter 是一个**开源的智能体式（agentic）LLM 网关与路由器，
 
 一个智能体循环消耗三样东西。多数路由器只治理第一样——BitRouter 让这三样都可路由、可观测、可做成本治理：
 
-- **模型（Models）** — 跨提供商、跨协议、跨账户地路由 LLM 调用（经典路由器，且跨协议）。参见 [模型路由](/docs/concepts/models)。
+- **模型（Models）** — 跨提供商、跨协议、跨账户地路由 LLM 调用（经典路由器，且跨协议）。参见 [Models](/docs/concepts/models)。
 - **工具（Tools）** — 一个 **MCP 网关**与一个 **AgentSkills 网关**：工具与技能成为受治理、可路由的资源，而非硬编码的端点。参见 [Tools](/docs/concepts/tools)。
 - **智能体（Agents）** — 一个 **ACP 网关**：子智能体是一等公民，因此你把一个任务交给更便宜的智能体，就像把一次调用路由到更便宜的模型一样。参见 [Agents](/docs/concepts/agents)。
 

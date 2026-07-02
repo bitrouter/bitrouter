@@ -56,4 +56,4 @@ policy_table:
 
 - [供应商选择](/docs/features/provider-selection)——被选中模型背后的各供应商是如何排名的。
 - [模型回退](/docs/features/model-fallback)——失败时沿一份有序的模型列表逐个尝试。
-- [模型路由](/docs/concepts/models)——为什么一个模型是策略据以路由的聚合体。
+- [Models](/docs/concepts/models)——为什么一个模型是策略据以路由的聚合体。

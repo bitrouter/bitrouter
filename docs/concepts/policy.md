@@ -56,4 +56,4 @@ This page is about **routing** policy in the local router. BitRouter Cloud has a
 
 - [Provider selection](/docs/features/provider-selection) — how the providers behind a chosen model are ranked.
 - [Model fallback](/docs/features/model-fallback) — walk an ordered list of models on failure.
-- [Model routing](/docs/concepts/models) — why a model is an aggregate the policy routes across.
+- [Models](/docs/concepts/models) — why a model is an aggregate the policy routes across.
