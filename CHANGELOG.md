@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.20](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.19...v1.0.0-alpha.20)
+
+
+### ⛰️ Features
+
+- *(cli)* Route `update` through the JSON output layer ([#620](https://github.com/bitrouter/bitrouter/pull/620)) - ([a2edc3f](https://github.com/bitrouter/bitrouter/commit/a2edc3f409627cd595ffe9429196ec4648ad40ae))
+- *(cli)* JSON output layer with a uniform error envelope ([#610](https://github.com/bitrouter/bitrouter/pull/610)) - ([df6e3cc](https://github.com/bitrouter/bitrouter/commit/df6e3cc487bba9e60461828c86a028656a619e21))
+- *(server-tools)* Built-in web_fetch tool (BYOK) ([#612](https://github.com/bitrouter/bitrouter/pull/612)) - ([ba5308d](https://github.com/bitrouter/bitrouter/commit/ba5308df77cf8457812b93af6ff557a8c8f24728))
+- *(server-tools)* Add Tavily web_search backend, drop Perplexity ([#608](https://github.com/bitrouter/bitrouter/pull/608)) - ([6579faa](https://github.com/bitrouter/bitrouter/commit/6579faa122381208b5b4902b8c59b1429fd640e6))
+- *(server-tools)* Built-in web_search with BYOK backends ([#603](https://github.com/bitrouter/bitrouter/pull/603)) - ([7ebc572](https://github.com/bitrouter/bitrouter/commit/7ebc572ef33cb902a8a1ecea2b7d351a1300c4c1))
+- *(update)* Add bitrouter update self-updater ([#607](https://github.com/bitrouter/bitrouter/pull/607)) - ([2b95d0c](https://github.com/bitrouter/bitrouter/commit/2b95d0c941930c8a7b10c58e33b5c66e2db16e4d))
+
+### 🐛 Bug Fixes
+
+- *(config)* Don't expand ${VAR} inside YAML comments ([#609](https://github.com/bitrouter/bitrouter/pull/609)) - ([7628d98](https://github.com/bitrouter/bitrouter/commit/7628d9855412da2a51e07ac11fe31a8b3510850e))
+- *(observe)* Stop the settle span double-counting as a telemetry event ([#605](https://github.com/bitrouter/bitrouter/pull/605)) - ([2453112](https://github.com/bitrouter/bitrouter/commit/2453112f6e7703186c67cb1ae1f8578a5548084f))
+
+
 ## [1.0.0-alpha.19](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.18...v1.0.0-alpha.19)
 
 
