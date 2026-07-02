@@ -413,6 +413,30 @@ pub async fn build_app_with_path(
         .and_then(FusionAliasConfig::from_settings)
         .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
 
+    // Config-driven per-request model routing (`policy_table:`). The shared
+    // table is read by the ingress router (below) and, when online adequacy
+    // learning is enabled, by the adequacy observe hook. The ledger persists its
+    // escalation pins in the local db and warms its in-memory cache from it.
+    let policy_table = crate::policy_table_router::PolicyTable::from_config(&config.policy_table);
+    let adequacy_ledger = match &policy_table {
+        Some(_) if config.policy_table.adequacy.enabled => {
+            let store = crate::adequacy::store::AdequacyStore::new(db.clone());
+            Some(Arc::new(
+                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await,
+            ))
+        }
+        _ => None,
+    };
+    // The adequacy observe hook learns from request outcomes. Built before the
+    // builder closure so it can be moved into it; `None` unless learning is on.
+    let adequacy_observe = match (&policy_table, &adequacy_ledger) {
+        (Some(table), Some(ledger)) => Some(crate::adequacy::observer::AdequacyObserveHook::new(
+            table.clone(),
+            ledger.clone(),
+        )),
+        _ => None,
+    };
+
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
     // the `bitrouter agent-proxy <id>` CLI dispatches against this pipeline.
@@ -458,6 +482,13 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
+            // Online adequacy learning: observe each request's outcome and pin a
+            // downgraded fingerprint that keeps hard-failing, so the policy
+            // router (below) escalates it next time. Wired only when
+            // `policy_table.adequacy.enabled`.
+            if let Some(hook) = adequacy_observe {
+                lm.observe_hook(hook);
+            }
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -495,6 +526,21 @@ pub async fn build_app_with_path(
     let app = app.prompt_transform(
         Arc::new(crate::claude_code::ClaudeCodeRouter) as Arc<dyn PromptTransform>
     );
+    // Config-driven per-request model routing (`policy_table:`): an ingress
+    // transform that fingerprints the agent-loop step and rewrites `prompt.model`
+    // to the tier the policy table assigns, enforcing the tool-use guardrail.
+    // Wired only when `policy_table.tiers` is non-empty. Registered LAST, after
+    // the fusion alias and the Claude Code router, so the routes they own win:
+    // the transform skips any already-`provider:`-routed model (the `claude-code:`
+    // subscription route) and any request carrying a bitrouter server-tool
+    // declaration (the `bitrouter/fusion` alias's injected tool).
+    let app = match policy_table {
+        Some(table) => {
+            let router = crate::policy_table_router::PolicyTableRouter::new(table, adequacy_ledger);
+            app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
+        }
+        None => app,
+    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.

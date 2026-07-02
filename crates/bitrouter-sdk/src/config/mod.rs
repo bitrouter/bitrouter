@@ -77,6 +77,11 @@ pub struct Config {
     /// BYOK providers, where to fetch it from, and the provider-class priority
     /// ladder used to order the auto-cascade.
     pub registry: RegistryConfig,
+    /// Config-driven per-request model routing: a fingerprint → tier → model
+    /// policy table an ingress transform applies, with a hard tool-use
+    /// guardrail. Empty by default — when no tiers are defined the transform is
+    /// not registered and traffic routes exactly as it would without it.
+    pub policy_table: PolicyTableConfig,
 }
 
 impl Default for Config {
@@ -95,6 +100,7 @@ impl Default for Config {
             agents: HashMap::new(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
+            policy_table: PolicyTableConfig::default(),
         }
     }
 }
@@ -133,6 +139,122 @@ impl Default for RegistryConfig {
             enabled: true,
             url: DEFAULT_REGISTRY_URL.to_string(),
             provider_priority: ProviderClass::default_priority(),
+        }
+    }
+}
+
+/// Config-driven per-request model routing — the top-level `policy_table:` block
+/// in `bitrouter.yaml`.
+///
+/// An ingress transform fingerprints each request by its agent-loop step (the
+/// most recent tool the model called, or the opening turn) and looks the
+/// fingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;
+/// [`tiers`](Self::tiers) then maps that tier to the model id the request is
+/// rewritten to. A hard tool-use guardrail keeps tool-carrying requests on a
+/// tier known to handle tools.
+///
+/// The section is active only when [`tiers`](Self::tiers) is non-empty — an
+/// absent or tier-less block leaves routing untouched. The whole spec is static
+/// and operator-owned: it is versionable in `bitrouter.yaml` and never mutated
+/// at runtime.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct PolicyTableConfig {
+    /// Tier name → the model id every request on that tier is routed to. The
+    /// value is fed straight into the routing table, so it may be a bare
+    /// canonical id (resolved via the cascade/registry) or an explicit
+    /// `provider:model` id (a Strategy-1 direct route). The section is inert
+    /// while this map is empty.
+    pub tiers: HashMap<String, String>,
+    /// Request fingerprint → tier name. A fingerprint is the agent-loop step:
+    /// `opening` (no model turn yet), `after_<tool>` (the model last called
+    /// `<tool>`), or `midstream` (a model turn with no tool call). A fingerprint
+    /// absent from this map falls back to [`default_tier`](Self::default_tier).
+    pub fingerprints: HashMap<String, String>,
+    /// Tier applied to any fingerprint not listed in
+    /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint
+    /// is left on the model the caller requested (the transform no-ops).
+    pub default_tier: Option<String>,
+    /// Tool-use guardrail target: the tier a request carrying tools is clamped
+    /// up to when the tier it would otherwise get is not in
+    /// [`tool_safe_tiers`](Self::tool_safe_tiers). When unset, the guardrail is
+    /// disabled and tool requests route by fingerprint like any other.
+    pub tool_use_tier: Option<String>,
+    /// Tiers known to handle tool calls reliably. A tool-carrying request whose
+    /// chosen tier is in this list is left as-is; one whose tier is absent is
+    /// clamped to [`tool_use_tier`](Self::tool_use_tier).
+    pub tool_safe_tiers: Vec<String>,
+    /// Online adequacy learning. When enabled, the daemon observes each
+    /// downgraded request's outcome and, after repeated failures, escalates the
+    /// offending fingerprint to a more capable tier — so an operator's downgrade
+    /// that proves inadequate is self-correcting. Off by default.
+    pub adequacy: AdequacyConfig,
+}
+
+/// Online adequacy-learning settings — the `policy_table.adequacy` block.
+///
+/// When [`enabled`](Self::enabled), the daemon watches every request a downgrade
+/// produced and counts the ones that hard-fail (an upstream error or a stream
+/// error). Once a fingerprint accumulates
+/// [`escalation_threshold`](Self::escalation_threshold) such failures it is
+/// *pinned*: subsequent requests with that fingerprint route to
+/// [`escalation_tier`](Self::escalation_tier) instead of the cheap tier the
+/// static table would pick. A pin decays after
+/// [`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried
+/// later. This is a safety net layered on the static table — it never downgrades
+/// on its own, only escalates a downgrade that is failing.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct AdequacyConfig {
+    /// Whether online adequacy learning is active. Off by default, so a
+    /// `policy_table:` with no `adequacy:` block behaves exactly as the static
+    /// table.
+    pub enabled: bool,
+    /// Tier a pinned fingerprint escalates to. When unset, falls back to
+    /// [`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when
+    /// [`enabled`](Self::enabled).
+    pub escalation_tier: Option<String>,
+    /// Number of *consecutive* hard failures on a downgraded fingerprint before
+    /// it is pinned to the escalation tier (a clean outcome resets the tally).
+    /// Default `1` — escalate on the first failure (conservative / sticky).
+    pub escalation_threshold: u32,
+    /// How long, in seconds, a pin lasts before the downgrade is re-attempted.
+    /// `0` means the pin never decays (until the process restarts or the row is
+    /// cleared). Default `1800` (30 minutes).
+    pub pin_cooldown_secs: u64,
+    /// Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)
+    /// is on, the daemon periodically trials [`explore_tier`](Self::explore_tier)
+    /// on fingerprints the static table routes to the escalation tier (i.e. ones
+    /// the operator did *not* downgrade), and locks a fingerprint to the cheap
+    /// tier once it survives [`explore_threshold`](Self::explore_threshold)
+    /// trials — so safe downgrades are found automatically rather than only
+    /// hand-configured. A trial that fails escalates and stops (the same pin as
+    /// the safety path). Off by default; requires `enabled`. This is the
+    /// *aggressive* half — it routes traffic the operator left at the capable
+    /// tier to a cheaper one on a fraction of requests.
+    pub explore_enabled: bool,
+    /// The cheap tier exploration trials toward. Must resolve to a defined tier
+    /// when [`explore_enabled`](Self::explore_enabled). Required to explore.
+    pub explore_tier: Option<String>,
+    /// Trial cadence: roughly one in `explore_interval` eligible requests is a
+    /// trial (the rest stay on the escalation tier). Default `5`.
+    pub explore_interval: u32,
+    /// Consecutive adequate trials before a fingerprint is locked to the cheap
+    /// tier (the learned downgrade). Default `3`.
+    pub explore_threshold: u32,
+}
+
+impl Default for AdequacyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            escalation_tier: None,
+            escalation_threshold: 1,
+            pin_cooldown_secs: 1800,
+            explore_enabled: false,
+            explore_tier: None,
+            explore_interval: 5,
+            explore_threshold: 3,
         }
     }
 }
@@ -853,6 +975,7 @@ where
     let mut config: Config = serde_saphyr::from_str(&substituted)
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
+    validate_policy_table(&config)?;
     // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
     // route at a loopback / private / metadata URL. A typo or a malicious
     // YAML otherwise has the executor send every upstream request — and
@@ -884,6 +1007,82 @@ where
         }
     }
     Ok(config)
+}
+
+/// Validate the `policy_table:` section: every tier a fingerprint maps to, the
+/// default tier, the tool-use guardrail tier, and each tool-safe tier must be
+/// defined in [`PolicyTableConfig::tiers`]. A reference to an undefined tier is
+/// a configuration error rather than a silent fall-through to the caller's
+/// model. A section with no tiers is inert and validates trivially.
+fn validate_policy_table(config: &Config) -> Result<()> {
+    let policy = &config.policy_table;
+    if policy.tiers.is_empty() {
+        return Ok(());
+    }
+    let check = |role: &str, tier: &str| -> Result<()> {
+        if policy.tiers.contains_key(tier) {
+            Ok(())
+        } else {
+            Err(BitrouterError::bad_request(format!(
+                "policy_table {role} references unknown tier '{tier}'"
+            )))
+        }
+    };
+    for (fingerprint, tier) in &policy.fingerprints {
+        check(&format!("fingerprint '{fingerprint}'"), tier)?;
+    }
+    if let Some(tier) = &policy.default_tier {
+        check("default_tier", tier)?;
+    }
+    if let Some(tier) = &policy.tool_use_tier {
+        check("tool_use_tier", tier)?;
+    }
+    for tier in &policy.tool_safe_tiers {
+        check("tool_safe_tiers entry", tier)?;
+    }
+    // The guardrail clamps a non-tool-safe tier *up* to `tool_use_tier`, so that
+    // target must itself be declared tool-safe — otherwise the floor it clamps
+    // to is not actually safe for tool-carrying requests.
+    if let Some(tier) = &policy.tool_use_tier
+        && !policy.tool_safe_tiers.iter().any(|t| t == tier)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "policy_table tool_use_tier '{tier}' must also be listed in tool_safe_tiers"
+        )));
+    }
+    // Adequacy learning escalates a pinned fingerprint to its escalation tier
+    // (or the default tier), so that target must exist and resolve to a defined
+    // tier when learning is enabled.
+    let adequacy = &policy.adequacy;
+    if let Some(tier) = &adequacy.escalation_tier {
+        check("adequacy.escalation_tier", tier)?;
+    }
+    if adequacy.enabled && adequacy.escalation_tier.is_none() && policy.default_tier.is_none() {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy is enabled but no escalation target is set: \
+             set adequacy.escalation_tier or default_tier"
+                .to_string(),
+        ));
+    }
+    // Exploration trials toward `explore_tier`, which must exist and be a defined
+    // tier when exploration is enabled.
+    if let Some(tier) = &adequacy.explore_tier {
+        check("adequacy.explore_tier", tier)?;
+    }
+    if adequacy.explore_enabled && adequacy.explore_tier.is_none() {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.explore_enabled is set but adequacy.explore_tier is not"
+                .to_string(),
+        ));
+    }
+    // Exploration rides on the adequacy ledger, which is only wired when learning
+    // is enabled — so `explore_enabled` without `enabled` would be silently inert.
+    if adequacy.explore_enabled && !adequacy.enabled {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.explore_enabled requires adequacy.enabled".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Resolve every provider's `derives` chain: any field this provider left

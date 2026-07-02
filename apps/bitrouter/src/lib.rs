@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adequacy;
 pub mod agent_proxy;
 pub mod agents;
 pub mod assemble;
@@ -24,6 +25,7 @@ pub mod metering;
 pub mod output;
 pub mod paths;
 pub mod policy;
+pub mod policy_table_router;
 pub mod reload;
 pub mod skills;
 pub mod spawn;

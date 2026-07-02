@@ -640,14 +640,27 @@ impl StreamSettlementGuard {
     /// Finalise inline on a normal/errored/aborted termination.
     async fn finalize(&mut self, outcome: StreamOutcome) {
         if let Some((mut processor, mut ctx)) = self.state.take() {
+            // Surface whether the request actually succeeded to `on_request_end`,
+            // computed before `processor.finish` consumes the outcome.
+            let request_outcome = request_outcome_for(&outcome);
             processor.finish(outcome).await;
             ctx.absorb_stream(processor.into_context());
             self.pipeline.run_settlement(&mut ctx, true, None).await;
             self.pipeline.observe_after(Phase::Settlement, &ctx).await;
-            self.pipeline
-                .observe_end(&ctx, RequestOutcome::Completed)
-                .await;
+            self.pipeline.observe_end(&ctx, request_outcome).await;
         }
+    }
+}
+
+/// Map a terminal [`StreamOutcome`] to the [`RequestOutcome`] observers see at
+/// request end. A mid-stream upstream error is a failure; a `StreamHook` abort
+/// is a deliberate policy stop (e.g. a guardrail), not an upstream failure, so
+/// it reads as completed.
+fn request_outcome_for(outcome: &StreamOutcome) -> RequestOutcome {
+    match outcome {
+        StreamOutcome::UpstreamError(err) => RequestOutcome::Failed(err.clone()),
+        StreamOutcome::ClientDisconnected => RequestOutcome::ClientDisconnected,
+        StreamOutcome::Completed | StreamOutcome::Aborted(_) => RequestOutcome::Completed,
     }
 }
 
@@ -770,5 +783,46 @@ fn log_request_finished(settle: &SettlementContext) {
             error = %err,
             "request finished"
         ),
+    }
+}
+
+#[cfg(test)]
+mod stream_outcome_tests {
+    use super::{RequestOutcome, StreamOutcome, request_outcome_for};
+    use crate::error::BitrouterError;
+
+    #[test]
+    fn upstream_error_maps_to_failed() {
+        // The fix for the streaming-error blind spot: a mid-stream upstream error
+        // must reach `on_request_end` as `Failed`, not a silent `Completed`.
+        let outcome = StreamOutcome::UpstreamError(BitrouterError::internal("mid-stream boom"));
+        assert!(matches!(
+            request_outcome_for(&outcome),
+            RequestOutcome::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn abort_and_completion_map_to_completed() {
+        // A StreamHook abort is a deliberate stop (e.g. a guardrail), not an
+        // upstream failure.
+        assert!(matches!(
+            request_outcome_for(&StreamOutcome::Aborted(BitrouterError::bad_request(
+                "blocked"
+            ))),
+            RequestOutcome::Completed
+        ));
+        assert!(matches!(
+            request_outcome_for(&StreamOutcome::Completed),
+            RequestOutcome::Completed
+        ));
+    }
+
+    #[test]
+    fn disconnect_maps_to_disconnect() {
+        assert!(matches!(
+            request_outcome_for(&StreamOutcome::ClientDisconnected),
+            RequestOutcome::ClientDisconnected
+        ));
     }
 }
