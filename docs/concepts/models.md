@@ -1,5 +1,5 @@
 ---
-title: Model routing
+title: Models
 description: On BitRouter a model is an aggregate served by many providers — reached through four protocols, ranked per request, with discounted open supply.
 sourceHash: 5db2bbc903ccb998b052947933b808037a2c8e06a473f3657c0e65672db6eecf
 ---
