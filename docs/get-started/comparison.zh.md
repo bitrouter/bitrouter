@@ -1,12 +1,23 @@
 ---
-title: 对比
-description: BitRouter 与 OpenRouter、LiteLLM 及其他 LLM API 网关的差异。
+title: Comparison
+description: BitRouter 与 OpenRouter、LiteLLM、TensorZero、Portkey、Bifrost 的差异——唯一为整个智能体循环做成本优化的路由器。
 sourceHash: 4347981e13132d55c473e289cb3a9783141fa87545d4923b5f4dace5a50222a6
 ---
 
-BitRouter 是唯一**专为 Agent 而生的智能路由器与开放市场**——开放（Apache 2.0、可本地部署、提供商注册与消费者使用均无许可）、智能（多提供商路由、可编程回退、运行时防护，路由开销低于 10ms）、Agent 原生（KYA 身份、自主 x402/MPP 支付、MCP/ACP 网关，以及为长时运行循环设计的可靠性原语）。
+BitRouter 与下面这些网关都路由 LLM 流量。差别在于它们*路由什么*、*优化什么*。BitRouter 是唯一一个把**模型、工具与智能体视为单一可路由面**、并按成本优化整个生产**循环**的方案——开源、可自托管、且以 Rust 原生。
 
-现有方案大致分为三类，没有任何一类同时覆盖以上三个属性。
+|  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
+| --- | --- | --- | --- | --- | --- | --- |
+| **最适合** | 为智能体循环做成本优化 | 模型市场 | 统一各家提供商 SDK | 模型优化 | 快速统一网关 | 快速统一网关 |
+| **可路由的原语** | 模型 + 工具 + **智能体**（MCP + ACP） | 模型 | 模型 + 工具（MCP） | 模型 | 模型 + 工具（MCP） | 模型 + 工具（MCP） |
+| **优化对象** | **循环**，按成本 | 静态路由 | 静态路由 | 模型本身 | 静态路由 | 静态路由 |
+| **模型目录** | 精选 + 可接入任意提供商 | **1,600+ 市场** | 任意提供商 | 精选 | **1,600+** | 23+ 提供商 |
+
+_除 OpenRouter 外均为开源且可自托管；BitRouter 与 TensorZero 采用 Rust。TensorZero 已停止维护。_
+
+**TL;DR** —— OpenRouter 是面向人工选模型的云端 API 市场。LiteLLM（Python）、Portkey（TypeScript）与 Bifrost（Go）是统一网关——快速、OpenAI 兼容、自带护栏——但它们路由的是模型。TensorZero（Rust）增加了一个生产反馈循环，但优化的是模型本身，而非循环。BitRouter 是唯一一个把模型、工具与智能体视为单一可路由面的方案——一个以 Rust 原生、为整个生产循环做成本优化的网关，开箱即带跨协议路由、MCP 与 ACP 网关以及护栏。
+
+本页余下部分把整个领域分为三类。没有任何一类能同时覆盖一个智能体循环所需的全部。
 
 ## vs 云端 SaaS 路由器（OpenRouter 等同类产品）
 

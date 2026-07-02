@@ -1,23 +1,23 @@
 ---
-title: Models & Providers
-description: The hosted BitRouter Cloud provider — one account, no upstream keys — the full model catalog with pricing, and automatic discounts on open models.
+title: Models
+description: The full catalog of models any BitRouter account can call — live pricing, reachable over your own keys or one hosted BitRouter Cloud account, with automatic discounts on open models.
 sourceHash: 86d87ac9130c04fd5ca161b83bc6f263323dbb88eb5d4be1d45f451a216af27c
 ---
 
-The **BitRouter Cloud provider** lets an agent call any model below with a single BitRouter account — no upstream provider keys, no per-provider signups. You pay BitRouter directly at the prices listed here, billed per request; failed requests aren't billed.
+Every model BitRouter can route to is listed below, with live pricing. Reach any of them over your own provider keys ([BYOK](/docs/features/byok), paid to the providers at their list price) or one [BitRouter Cloud](/docs/get-started/self-hosted-and-cloud) account — one sign-in, no upstream keys, billed per request with failed requests not charged. Running your own model? See [local & private models](/docs/integrations/models) (free).
+
+Prices are USD per **million tokens**, refreshed continuously from the live catalog. Open models are served **25% below official** by default — see [Discounted open models](#discounted-open-models) below.
+
+<ModelsTable />
+
+## Using BitRouter Cloud
+
+The **BitRouter Cloud provider** lets an agent call any model above with a single BitRouter account — no upstream provider keys, no per-provider signups. You pay BitRouter directly at the prices listed here, billed per request; failed requests aren't billed.
 
 ```bash
 bitrouter auth login    # one-time device-flow sign-in
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
-
-Prefer your own provider accounts? Use [BYOK](/docs/features/byok) instead — you pay providers directly at their list price. Running your own model? See [local & private models](/docs/integrations/models) (free).
-
-## Supported models & pricing
-
-Prices are USD per **million tokens**, refreshed continuously from the live catalog. Open models are served **25% below official** by default — see [Discounted open models](#discounted-open-models) below.
-
-<ModelsTable />
 
 ## Providers
 

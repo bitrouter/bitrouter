@@ -33,7 +33,7 @@ You turn server tools on by declaring them in the request's `tools` array — no
 }
 ```
 
-A fourth built-in, [**Web search**](/docs/features/websearch), works the same way — declare `bitrouter:web_search` to give the model a search backed by a key you bring.
+Two more built-ins, [**Web search**](/docs/features/websearch) and [**Web fetch**](/docs/features/web-fetch), work the same way — declare `bitrouter:web_search` or `bitrouter:web_fetch` to give the model a search or a BYOK URL reader backed by a key you bring.
 
 MCP-server tools are wired through configuration instead — set `server_tools.mcp_servers` to the servers whose tools BitRouter should run inside the loop.
 

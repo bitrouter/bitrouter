@@ -1,12 +1,23 @@
 ---
 title: Comparison
-description: How BitRouter differs from OpenRouter, LiteLLM, and other LLM API gateways.
+description: How BitRouter differs from OpenRouter, LiteLLM, TensorZero, Portkey, and Bifrost — the only router that cost-optimizes the whole agent loop.
 sourceHash: 4347981e13132d55c473e289cb3a9783141fa87545d4923b5f4dace5a50222a6
 ---
 
-BitRouter is the only **smart router and open marketplace built specifically for agents** — open (Apache 2.0, locally deployable, permissionless registration and usage), intelligent (multi-provider routing, programmable fallbacks, runtime guardrails, sub-10ms overhead), and agent-native (KYA identity, autonomous x402/MPP payments, MCP/ACP gateway, reliability primitives for long-running loops).
+BitRouter and the gateways below all route LLM traffic. The difference is *what* they route and *what* they optimize. BitRouter is the only one that treats **models, tools, and agents as a single routable surface** and optimizes the whole production **loop** by cost — open-source, self-hostable, and Rust-native.
 
-Most existing tools fall into one of three categories. None covers all three properties at once.
+|  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Best for** | Cost-optimizing agent loops | Model marketplace | Unifying provider SDKs | Model optimization | Fast unified gateway | Fast unified gateway |
+| **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
+| **Optimizes** | The **loop**, by cost | Static routing | Static routing | The model | Static routing | Static routing |
+| **Model catalog** | Curated + bring any provider | **1,600+ marketplace** | Any provider | Curated | **1,600+** | 23+ providers |
+
+_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust. TensorZero is no longer maintained._
+
+**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM (Python), Portkey (TypeScript), and Bifrost (Go) are unified gateways — fast, OpenAI-compatible, guardrails included — but they route models. TensorZero (Rust) adds a production feedback loop, but optimizes the model itself, not the loop. BitRouter is the only one that treats models, tools, and agents as a single routable surface — a Rust-native gateway that cost-optimizes the whole production loop, with cross-protocol routing, MCP and ACP gateways, and guardrails out of the box.
+
+The rest of this page breaks the field into three categories. None covers everything an agent loop needs at once.
 
 ## vs Cloud SaaS routers (OpenRouter and similar)
 

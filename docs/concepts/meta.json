@@ -7,9 +7,11 @@
     "models",
     "tools",
     "agents",
-    "---Extending BitRouter---",
+    "---Routing---",
+    "policy",
+    "---Interfaces---",
     "cli",
-    "plugins",
-    "hooks"
+    "mcp",
+    "agent-skill"
   ]
 }

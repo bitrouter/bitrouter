@@ -1,14 +1,34 @@
 ---
 title: Introduction
-description: Agent-native LLM router that makes every model call reliable, traceable, secure, and cost-effective — with zero harness changes.
+description: An open-source agentic LLM gateway that cost-optimizes your production agent loops by making models, tools, and agents all routable primitives — with zero harness changes.
 sourceHash: d98ac30ce61a9f4c773cb4c3d2cb2e7f5123012dacae3b17c6f32904ecdeeefb
 ---
 
 ## What is BitRouter?
 
-BitRouter is an **agent-native LLM router that optimizes your agent with every run**. It's a single local binary that gives any agent one endpoint to discover, route to, and pay for LLMs and tools across providers — with **zero harness changes**. Point your runtime at it and every model call becomes reliable, traceable, secure, and cost-effective.
+BitRouter is an **open-source agentic LLM gateway and router that cost-optimizes your production agent loops**. It's a single local binary that gives any agent one endpoint to route its model calls, tools, and sub-agents to the cheapest path that still reaches the goal — with **zero harness changes**. Point your runtime at it and every step of every loop stops billing at frontier prices by default.
 
-It runs anywhere your agent runs, with no dependencies to install, and is operated as a permissionless network where any provider can register and any agent can connect. The [Core](/docs/get-started/installation) is **open-source under Apache 2.0 and self-hostable for free** — bring your own keys or run a local model and you owe nothing. [Cloud](/docs/get-started/self-hosted-vs-cloud) is an optional hosted layer that adds managed providers, agentic payments, and account-wide guardrail policies on top. See the full [models & pricing](/docs/get-started/models-and-providers) catalog.
+It runs anywhere your agent runs, with no dependencies to install, and is operated as a permissionless network where any provider can register and any agent can connect. The [Core](/docs/get-started/self-hosted-and-cloud) is **open-source under Apache 2.0 and self-hostable for free** — bring your own keys or run a local model and you owe nothing. [Cloud](/docs/get-started/self-hosted-and-cloud) is an optional hosted layer that adds managed providers, agentic payments, and account-wide policies on top. Browse the full [models & pricing](/docs/get-started/models) catalog.
+
+## Three primitives, one gateway
+
+An agentic loop consumes three things. Most routers govern only the first — BitRouter makes all three routable, observable, and cost-governed:
+
+- **Models** — route LLM calls across providers, protocols, and accounts (the classic router, cross-protocol). See [Models](/docs/concepts/models).
+- **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints. See [Tools](/docs/concepts/tools).
+- **Agents** — an **ACP gateway**: sub-agents are first-class, so you hand a task to a cheaper agent the same way you route a call to a cheaper model. See [Agents](/docs/concepts/agents).
+
+Cost optimization isn't just model selection — it's the cheapest model, the cheapest tool, and the cheapest sub-agent that still gets the loop to its goal.
+
+## The self-improving loop
+
+BitRouter wraps your agent loop in a second loop. Each loop gets its own [policy](/docs/concepts/policy) — a spec that declares how its calls, tools, and agents route — and BitRouter runs a continuous **observe → evaluate → act** cycle against it:
+
+- **Observe** — every model, tool, and agent call, with cost and outcome attributed to the hop.
+- **Evaluate** — score each run against the loop's goal.
+- **Act** — update the policy. Let an agent self-tune it from the eval signal, or edit it yourself.
+
+The result is a loop that gets cheaper the longer it runs in production — without re-paying frontier prices for work that never needed them.
 
 ## Why agents run on BitRouter
 
@@ -40,7 +60,7 @@ Most calls in a run are trivial — a lookup, a format, a yes/no. BitRouter matc
 
 ## How BitRouter compares
 
-BitRouter, LiteLLM, and OpenRouter all route LLM traffic, but BitRouter is the only one that is **open-source and self-hostable, agent-native, and built on a permissionless provider marketplace** — with automatic mid-run failover and sub-10ms routing overhead. See the full [Comparison](/docs/get-started/comparison) against OpenRouter, LiteLLM, and other API gateways.
+OpenRouter, LiteLLM, Portkey, and Bifrost all route LLM traffic, and TensorZero adds a model-optimization loop — but BitRouter is the only one that treats **models, tools, and agents as a single routable surface** and optimizes the whole production **loop** by cost, not just static model selection. It's open-source, self-hostable, and Rust-native, with automatic mid-run failover and sub-10ms routing overhead. See the full [Comparison](/docs/get-started/comparison).
 
 ## Why we're building this
 
