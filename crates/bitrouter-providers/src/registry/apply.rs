@@ -32,7 +32,8 @@ use crate::catalog::types::{Catalog, CatalogCost};
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    AutoSyncFeed, Billing, RegistryData, RegistryPricing, RegistryProvider, RegistryRateLimits,
+    AutoSyncFeed, Billing, RegistryAccess, RegistryData, RegistryPricing, RegistryProvider,
+    RegistryRateLimits,
 };
 
 /// The provider id of the hosted bitrouter gateway. The pooled registry entry
@@ -127,11 +128,25 @@ fn apply_cloud_all_canonical(config: &mut Config, data: &RegistryData) {
         cloud.class = Some(ProviderClass::BitrouterCloud);
     }
     if cloud.models.is_empty() && !data.canonical.is_empty() {
-        cloud.models = data
-            .canonical
+        let provider_models = data
+            .providers
             .iter()
-            .map(|m| ProviderModel {
-                id: m.id.clone(),
+            .find(|p| {
+                p.name == BITROUTER_CLOUD_ID
+                    && p.is_active()
+                    && p.access() == RegistryAccess::Private
+            })
+            .map(|p| p.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>());
+        let model_ids = provider_models.unwrap_or_else(|| {
+            data.canonical
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>()
+        });
+        cloud.models = model_ids
+            .into_iter()
+            .map(|id| ProviderModel {
+                id: id.to_owned(),
                 // The gateway accepts canonical ids directly — no translation.
                 provider_model_id: None,
                 api_protocol: None,
@@ -139,7 +154,7 @@ fn apply_cloud_all_canonical(config: &mut Config, data: &RegistryData) {
                 pricing: None,
             })
             .collect();
-        // We filled the catalog from the canonical list; don't probe `/models`.
+        // We filled the catalog from the registry snapshot; don't probe `/models`.
         cloud.auto_discover = false;
     }
 }
@@ -888,5 +903,32 @@ mod tests {
             );
             assert_eq!(cloud_models, 2);
         });
+    }
+
+    #[test]
+    fn hosted_gateway_uses_private_registry_model_list_when_present() {
+        let mut config = Config::default();
+        config
+            .providers
+            .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
+        let mut pool = provider(BITROUTER_CLOUD_ID);
+        pool.access = Some(RegistryAccess::Private);
+        pool.models = vec![RegistryModel {
+            id: "deepseek/deepseek-v3.2".to_string(),
+            provider_model_id: "deepseek-v3.2".to_string(),
+            api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
+            pricing: None,
+            rate_limits: None,
+        }];
+        let data = data_with(vec![pool], vec!["deepseek/deepseek-v3.2", "z-ai/glm-5.2"]);
+
+        apply_registry(&mut config, &data);
+
+        let ids: Vec<&str> = config.providers[BITROUTER_CLOUD_ID]
+            .models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["deepseek/deepseek-v3.2"]);
     }
 }
