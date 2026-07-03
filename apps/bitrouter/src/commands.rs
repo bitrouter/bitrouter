@@ -451,7 +451,24 @@ pub struct LoginOutcome {
     pub path: String,
 }
 
+/// Non-interactive provider-login controls.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProviderLoginOptions {
+    /// Require importing an already-authenticated vendor CLI session.
+    pub import_existing: bool,
+    /// Refuse browser-based PKCE flows.
+    pub no_browser: bool,
+}
+
 pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutcome> {
+    login_provider_with_options(provider_id, label, ProviderLoginOptions::default()).await
+}
+
+pub async fn login_provider_with_options(
+    provider_id: &str,
+    label: &str,
+    options: ProviderLoginOptions,
+) -> Result<LoginOutcome> {
     use bitrouter_providers::builtin;
 
     // The `bitrouter` cloud gateway is compiled in; every other provider's
@@ -492,11 +509,7 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutco
             std::mem::discriminant(&entry.auth)
         );
     }
-    let chosen = if methods.len() == 1 {
-        methods[0]
-    } else {
-        prompt_method_choice(&entry.display_name, &methods)?
-    };
+    let chosen = choose_auth_method(&entry, &methods, options)?;
     eprintln!();
     eprintln!(
         "  Logging in to {} via {}",
@@ -529,6 +542,43 @@ pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutco
         method: kind.to_string(),
         path: store.path().display().to_string(),
     })
+}
+
+fn choose_auth_method(
+    entry: &bitrouter_providers::ProviderEntry,
+    methods: &[AuthMethod],
+    options: ProviderLoginOptions,
+) -> Result<AuthMethod> {
+    if options.import_existing {
+        if methods.contains(&AuthMethod::ImportFromCli) {
+            return Ok(AuthMethod::ImportFromCli);
+        }
+        anyhow::bail!(
+            "provider '{}' cannot import an existing vendor CLI session",
+            entry.id
+        );
+    }
+
+    let selectable: Vec<AuthMethod> = if options.no_browser {
+        methods
+            .iter()
+            .copied()
+            .filter(|m| *m != AuthMethod::PkceSubscription)
+            .collect()
+    } else {
+        methods.to_vec()
+    };
+    if selectable.is_empty() {
+        anyhow::bail!(
+            "provider '{}' has no non-browser login path; rerun without --no-browser",
+            entry.id
+        );
+    }
+    if selectable.len() == 1 || options.no_browser {
+        Ok(selectable[0])
+    } else {
+        prompt_method_choice(&entry.display_name, &selectable)
+    }
 }
 
 /// Adopt the user's existing Claude Code session as the live credential source
@@ -1247,6 +1297,50 @@ mod tests {
         assert!(methods.contains(&AuthMethod::ImportFromCli));
         assert!(methods.contains(&AuthMethod::PkceSubscription));
         assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
+    }
+
+    #[test]
+    fn import_existing_selects_vendor_cli_import_without_prompting() {
+        let entry = entry_for(serde_json::json!({
+            "name": "openai-codex",
+            "api_base": "https://chatgpt.com/backend-api/codex",
+            "status": "active",
+            "auth": { "kind": "oauth", "handler": "openai-codex" },
+            "models": []
+        }));
+        let methods = available_methods(&entry);
+        let chosen = choose_auth_method(
+            &entry,
+            &methods,
+            ProviderLoginOptions {
+                import_existing: true,
+                no_browser: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(chosen, AuthMethod::ImportFromCli);
+    }
+
+    #[test]
+    fn import_existing_rejects_providers_without_vendor_cli_import() {
+        let entry = entry_for(serde_json::json!({
+            "name": "anthropic",
+            "api_base": "https://api.anthropic.com/v1",
+            "status": "active",
+            "auth": { "kind": "header", "header": "x-api-key", "env": "ANTHROPIC_API_KEY" },
+            "models": []
+        }));
+        let methods = available_methods(&entry);
+        let err = choose_auth_method(
+            &entry,
+            &methods,
+            ProviderLoginOptions {
+                import_existing: true,
+                no_browser: true,
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("cannot import"));
     }
 
     fn sample_config() -> Config {
