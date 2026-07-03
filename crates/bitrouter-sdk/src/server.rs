@@ -550,13 +550,27 @@ fn mcp_error_response(id: serde_json::Value, code: i64, message: &str) -> Respon
         .into_response()
 }
 
-async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
+async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let models = state.language_model.routing_table().list_models();
     let data: Vec<_> = models
         .into_iter()
         .map(|m| serde_json::json!({ "id": m.id, "object": "model", "providers": m.providers }))
         .collect();
-    Json(serde_json::json!({ "object": "list", "data": data }))
+    let mut body = serde_json::json!({ "object": "list", "data": data });
+    if is_codex_user_agent(&headers)
+        && let Some(obj) = body.as_object_mut()
+        && let Some(data) = obj.get("data").cloned()
+    {
+        obj.insert("models".to_string(), data);
+    }
+    Json(body)
+}
+
+fn is_codex_user_agent(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ua| ua.to_ascii_lowercase().contains("codex"))
 }
 
 // ===== inbound protocol handlers =====
@@ -816,6 +830,80 @@ impl IntoResponse for BitrouterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::language_model::PipelineBuilder;
+    use crate::language_model::executor::MockExecutor;
+    use crate::language_model::routing::StaticRoutingTable;
+    use crate::language_model::types::{ApiProtocol, AuthScheme, RoutingTarget};
+    use axum::body::to_bytes;
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
+
+    fn test_state_with_models() -> AppState {
+        let table = StaticRoutingTable::new();
+        table.insert(
+            "gpt-5.5",
+            vec![RoutingTarget {
+                provider_name: "openai-codex".to_string(),
+                service_id: "gpt-5.5".to_string(),
+                api_base: "https://example.invalid".to_string(),
+                api_key: "test-key".to_string(),
+                api_protocol: ApiProtocol::Responses,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::XApiKey,
+            }],
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(MockExecutor::always_text("ok")));
+        let pipeline = builder.build().unwrap();
+        AppState {
+            language_model: Arc::new(pipeline),
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: vec![],
+        }
+    }
+
+    async fn models_json(user_agent: Option<&str>) -> serde_json::Value {
+        let mut builder = Request::builder().uri("/v1/models");
+        if let Some(ua) = user_agent {
+            builder = builder.header(header::USER_AGENT, ua);
+        }
+        let response = build_router(test_state_with_models())
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn v1_models_keeps_openai_shape_for_generic_clients() {
+        let body = models_json(None).await;
+        assert_eq!(body["object"], serde_json::json!("list"));
+        assert!(body.get("data").is_some());
+        assert!(
+            body.get("models").is_none(),
+            "generic OpenAI-compatible clients should keep the existing response shape: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v1_models_adds_codex_models_field_for_codex_user_agent() {
+        let body = models_json(Some("codex-cli/0.142.5")).await;
+        assert_eq!(body["object"], serde_json::json!("list"));
+        assert_eq!(body["data"][0]["id"], serde_json::json!("gpt-5.5"));
+        assert_eq!(
+            body["models"][0]["id"],
+            serde_json::json!("gpt-5.5"),
+            "Codex CLI expects a top-level models field while the OpenAI data field remains present"
+        );
+    }
 
     #[test]
     fn payment_required_emits_www_authenticate() {

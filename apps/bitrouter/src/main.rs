@@ -21,7 +21,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
-use bitrouter::output::Output;
 use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
@@ -39,6 +38,7 @@ use bitrouter::output::reports::tools::{
     ToolsStatusReport,
 };
 use bitrouter::output::reports::verify::{Check, VerifyReport};
+use bitrouter::output::{CliReport, Output};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
@@ -257,6 +257,10 @@ enum Command {
         /// regardless.)
         #[arg(long)]
         no_start: bool,
+        /// Check the agent binary, BitRouter base URL, and route compatibility
+        /// without launching the agent.
+        #[arg(long)]
+        check: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
@@ -541,6 +545,13 @@ enum ProviderAction {
         /// Ignored for the `bitrouter` provider (it uses the cloud credential).
         #[arg(short, long, default_value = "default")]
         label: String,
+        /// Import an existing vendor CLI session without prompting for a
+        /// browser sign-in. Currently supported by openai-codex.
+        #[arg(long)]
+        import_existing: bool,
+        /// Do not run a browser-based provider OAuth flow.
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Log out of an upstream provider — clears every stored credential for
     /// it. For the built-in `bitrouter` provider this is `cloud logout`.
@@ -674,22 +685,30 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             base_url,
             no_install,
             no_start,
+            check,
             agent_args,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            bitrouter::spawn::run(
-                &source,
-                &cfg,
-                bitrouter::spawn::SpawnOptions {
-                    agent,
-                    agent_args,
-                    base_url,
-                    no_install,
-                    no_start,
-                },
-            )
-            .await
+            let opts = bitrouter::spawn::SpawnOptions {
+                agent,
+                agent_args,
+                base_url,
+                no_install,
+                no_start,
+                check,
+            };
+            if opts.check {
+                let report = bitrouter::spawn::check(&cfg, &opts).await?;
+                output.emit(&report)?;
+                if report.exit_code() == 0 {
+                    Ok(())
+                } else {
+                    std::process::exit(report.exit_code());
+                }
+            } else {
+                bitrouter::spawn::run(&source, &cfg, opts).await
+            }
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
@@ -1696,11 +1715,22 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             output.emit(&ProvidersReport { providers })?;
             Ok(())
         }
-        ProviderAction::Login { provider, label } => {
+        ProviderAction::Login {
+            provider,
+            label,
+            import_existing,
+            no_browser,
+        } => {
             // The built-in `bitrouter` provider authenticates with the cloud
             // OAuth credential, so logging into it IS the cloud sign-in
             // (`cloud login`); other providers use the per-provider store.
             if provider == "bitrouter" {
+                if import_existing || no_browser {
+                    anyhow::bail!(
+                        "`bitrouter providers login bitrouter` uses BitRouter Cloud OAuth; \
+                         --import-existing/--no-browser apply to upstream provider logins"
+                    );
+                }
                 bitrouter::cloud::cli::run(
                     bitrouter::cloud::cli::CloudAction::Login {
                         authorization_server: None,
@@ -1711,7 +1741,15 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                 )
                 .await
             } else {
-                let outcome = bitrouter::commands::login_provider(&provider, &label).await?;
+                let outcome = bitrouter::commands::login_provider_with_options(
+                    &provider,
+                    &label,
+                    bitrouter::commands::ProviderLoginOptions {
+                        import_existing,
+                        no_browser,
+                    },
+                )
+                .await?;
                 output.emit(&ProviderLoginReport {
                     provider: outcome.provider,
                     label: outcome.label,
@@ -2005,6 +2043,39 @@ mod tests {
                 assert!(!stable && !restart && !yes);
             }
             _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn provider_login_import_existing_flags_parse() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "providers",
+            "login",
+            "openai-codex",
+            "--import-existing",
+            "--no-browser",
+            "--label",
+            "work",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Providers {
+                action:
+                    ProviderAction::Login {
+                        provider,
+                        label,
+                        import_existing,
+                        no_browser,
+                    },
+            } => {
+                assert_eq!(provider, "openai-codex");
+                assert_eq!(label, "work");
+                assert!(import_existing);
+                assert!(no_browser);
+            }
+            _ => panic!("expected provider login"),
         }
     }
 }

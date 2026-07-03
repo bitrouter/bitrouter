@@ -27,7 +27,19 @@ Everything after `--` is forwarded to Codex:
 bitrouter spawn --agent codex -- --model openai/gpt-5-codex
 ```
 
+Before launching a long run, ask BitRouter to check the route it will use:
+
+```bash
+bitrouter spawn --agent codex --check -- --model openai/gpt-5-codex
+```
+
+The check verifies that `codex` is installed, the BitRouter base URL is reachable, and the forwarded model has at least one Responses-compatible endpoint. It does **not** require the provider to be `openai-codex`; any model source that routes over the Responses protocol can be used by the Codex harness.
+
 `spawn` does not edit `~/.codex/config.toml`. It starts from your existing Codex model selection, then points Codex at a transient `bitrouter` provider with `base_url = "<BitRouter>/v1"` and `wire_api = "responses"`. If `BITROUTER_API_KEY` is exported, Codex uses it through `env_key`; otherwise BitRouter injects a local placeholder that works with the `skip_auth: true` default written by `bitrouter init`.
+
+<Callout type="warn">
+Avoid forwarding Codex `-c` / `--config` flags through `bitrouter spawn --agent codex`. Current Codex releases can let those forwarded config flags override the transient provider injection, which means the run may silently stop using BitRouter. `spawn` rejects that shape and asks you to move the option into Codex config or inspect the route with `--check`.
+</Callout>
 
 ## Permanent config
 
