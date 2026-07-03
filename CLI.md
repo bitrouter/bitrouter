@@ -207,7 +207,7 @@ Stdio bridge between an ACP-aware editor and a configured upstream agent. The ed
 bitrouter spawn -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] -- <agent args…>
 ```
 
-Launches a coding-agent harness (`-a claude` for Claude Code) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files** — only the child process environment is set (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+Launches a coding-agent harness (`-a claude` for Claude Code, `-a codex` for Codex CLI) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. Claude Code gets child-process environment overrides (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`); Codex gets one-shot `-c` config overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions` or `bitrouter spawn -a codex -- --model openai/gpt-5-codex`.
 
 The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing agent binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines).
 
@@ -230,14 +230,14 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 ### `bitrouter providers login <provider>`
 
 ```
-bitrouter providers login anthropic       # Claude Pro/Max subscription PKCE flow
-bitrouter providers login openai-codex    # ChatGPT subscription PKCE flow
+bitrouter providers login claude-code     # Claude Pro/Max subscription via Claude Code
+bitrouter providers login openai-codex    # ChatGPT subscription via Codex
 bitrouter providers login github-copilot  # GitHub device-code flow
 ```
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
 
-For `anthropic` and `openai-codex`, the login menu also offers **"Import an existing session from the vendor CLI"** — bitrouter reads the credential the matching first-party CLI already stored (Claude Code from the macOS Keychain or `~/.claude/.credentials.json`; Codex from the macOS Keychain or `$CODEX_HOME/auth.json`) and adopts it, with no fresh browser sign-in. The imported token refreshes automatically like any other.
+For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 
 For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami) below.
 

@@ -222,12 +222,12 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Launch a coding-agent harness (Claude Code) as a child process with
-    /// its API base URL pointed at the local BitRouter daemon — no agent
+    /// Launch a coding-agent harness (Claude Code or Codex) as a child process
+    /// with its API base URL pointed at the local BitRouter daemon — no agent
     /// config files are touched. Follows `cargo run`'s separator convention:
     /// bitrouter options come before `--`, everything after `--` is forwarded
-    /// to the agent verbatim, e.g.
-    /// `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+    /// to the agent verbatim, e.g. `bitrouter spawn -a codex -- --model
+    /// openai/gpt-5-codex`.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
@@ -1304,7 +1304,7 @@ fn print_onboarding_hint() {
     eprintln!();
     eprintln!("  3. Or use a provider you already pay for, locally:");
     eprintln!();
-    eprintln!("       bitrouter providers login anthropic       # Claude Pro/Max subscription");
+    eprintln!("       bitrouter providers login claude-code     # Claude Pro/Max subscription");
     eprintln!("       bitrouter providers login github-copilot  # GitHub Copilot subscription");
     eprintln!("       bitrouter providers login openai-codex    # ChatGPT subscription");
     eprintln!();

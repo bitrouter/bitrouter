@@ -358,6 +358,13 @@ fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMeth
     if is_claude_code {
         methods.push(AuthMethod::ClaudeCodeSession);
     }
+    // Providers with a sibling vendor CLI can adopt its existing session as a
+    // one-shot copy — currently only Codex (`openai-codex`). List that before
+    // PKCE so the default path reuses an already-authenticated local CLI
+    // session when one exists.
+    if import_cli_for(&entry.id).is_some() {
+        methods.push(AuthMethod::ImportFromCli);
+    }
     // `anthropic` is platform / pay-as-you-go: offer the API-key path only. The
     // PKCE registry still carries an `anthropic` entry (the Claude subscription
     // browser flow), but that subscription path now belongs to the dedicated
@@ -366,14 +373,6 @@ fn available_methods(entry: &bitrouter_providers::ProviderEntry) -> Vec<AuthMeth
     let has_pkce = !is_anthropic && bitrouter_providers::oauth::registry::has_pkce_flow(&entry.id);
     if has_pkce {
         methods.push(AuthMethod::PkceSubscription);
-    }
-    // Providers with a sibling vendor CLI can adopt its existing session as a
-    // one-shot copy — currently only Codex (`openai-codex`). `anthropic` has no
-    // such import: subscription sign-in moved to the `claude-code` provider via
-    // the live `ClaudeCodeSession` above (the one-shot copy is what risked the
-    // family-revoke), and `import_cli_for` no longer maps `anthropic`.
-    if import_cli_for(&entry.id).is_some() {
-        methods.push(AuthMethod::ImportFromCli);
     }
     match &entry.auth {
         AuthScheme::Bearer { .. } | AuthScheme::Header { .. } => {
@@ -1240,7 +1239,13 @@ mod tests {
             "models": []
         }));
         let methods = available_methods(&entry);
+        assert_eq!(
+            methods.first(),
+            Some(&AuthMethod::ImportFromCli),
+            "openai-codex onboarding should first reuse an existing Codex CLI session"
+        );
         assert!(methods.contains(&AuthMethod::ImportFromCli));
+        assert!(methods.contains(&AuthMethod::PkceSubscription));
         assert!(!methods.contains(&AuthMethod::ClaudeCodeSession));
     }
 

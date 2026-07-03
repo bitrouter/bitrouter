@@ -84,6 +84,7 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 | Command | Effect |
 |---|---|
 | `bitrouter agent-proxy <agent> [--config PATH]` | Stdio bridge between an ACP-aware editor and an upstream agent declared under `agents:`. Editor spawns this binary as a subprocess. Routes JSON-RPC newline-framed over stdio. |
+| `bitrouter spawn --agent <claude\|codex> [--config PATH] [--base-url URL] -- <agent args...>` | Launch a coding-agent CLI through BitRouter without editing agent config files. Claude uses child env overrides; Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. |
 
 ## Unimplemented in v1.0
 

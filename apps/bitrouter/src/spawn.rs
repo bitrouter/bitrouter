@@ -1,11 +1,12 @@
-//! `bitrouter spawn` — launch a coding-agent harness (Claude Code, …) as a
+//! `bitrouter spawn` — launch a coding-agent harness (Claude Code, Codex, …) as a
 //! child process with its API base URL pointed at the local BitRouter daemon.
 //!
 //! The agent's traffic then routes through BitRouter without ever touching the
-//! agent's own config files: instead of mutating `~/.claude/config.json` (the
+//! agent's own config files: instead of mutating `~/.claude/config.json` or
+//! `~/.codex/config.toml` (the
 //! "config takeover" model used by some switcher tools — invasive, needs
-//! backup/restore and crash recovery), we set `ANTHROPIC_BASE_URL` in the
-//! *child process environment only*. Nothing on disk changes, and if BitRouter
+//! backup/restore and crash recovery), we set per-process environment variables
+//! or one-shot CLI config overrides. Nothing on disk changes, and if BitRouter
 //! is down the user simply runs the agent directly.
 //!
 //! CLI shape follows `cargo run`'s separator convention so there is no
@@ -24,6 +25,14 @@
 //!   <https://code.claude.com/docs/en/settings#environment-variables>.
 //! - Install commands are the official native installers documented in the
 //!   Claude Code quickstart: <https://code.claude.com/docs/en/quickstart>.
+//!
+//! ## Codex integration
+//!
+//! - Codex custom providers are configured with `model_providers.<id>` and can
+//!   be overridden per invocation with repeated `-c key=value` flags.
+//! - Current Codex builds route custom providers through the Responses API, so
+//!   the BitRouter provider uses `wire_api = "responses"` and a `/v1` base URL.
+//!   See <https://developers.openai.com/codex/config-advanced#custom-model-providers>.
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
@@ -34,14 +43,13 @@ use clap::ValueEnum;
 
 use crate::style::Palette;
 
-/// The coding-agent harnesses `bitrouter spawn` can launch. v1 ships Claude
-/// Code only; the enum is the extension point for `codex` / `gemini` later, so
-/// the dispatch, env-injection, and install machinery is written against the
-/// [`AgentSpec`] metadata rather than hard-coded to one agent.
+/// The coding-agent harnesses `bitrouter spawn` can launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SpawnAgent {
     /// Anthropic's Claude Code CLI (`claude`).
     Claude,
+    /// OpenAI's Codex CLI (`codex`).
+    Codex,
 }
 
 impl SpawnAgent {
@@ -67,6 +75,15 @@ impl SpawnAgent {
                 base_url_env: "ANTHROPIC_BASE_URL",
                 auth_token_env: "ANTHROPIC_AUTH_TOKEN",
             },
+            SpawnAgent::Codex => AgentSpec {
+                agent: self,
+                id: "codex",
+                binary: "codex",
+                // Codex custom providers are configured through `-c` one-shot
+                // overrides rather than fixed endpoint env vars.
+                base_url_env: "",
+                auth_token_env: "",
+            },
         }
     }
 }
@@ -85,6 +102,15 @@ pub struct AgentSpec {
     /// Env var the agent reads its gateway bearer token from (sent as
     /// `Authorization: Bearer`), which is BitRouter's inbound auth scheme.
     pub auth_token_env: &'static str,
+}
+
+/// What `bitrouter spawn` injects into the child process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChildLaunch {
+    /// Environment overrides for the child process.
+    env: Vec<(&'static str, String)>,
+    /// Arguments inserted before the user's forwarded args.
+    args_prefix: Vec<String>,
 }
 
 /// BitRouter's own API-key env var (`brk_…`). When set, we forward it to the
@@ -157,9 +183,14 @@ pub async fn run(
 
     // Auth-token precedence (highest first): an auth token the user already
     // exported for this agent → the BitRouter API key → a local placeholder.
-    let parent_auth = nonempty_env(spec.auth_token_env);
+    // Codex has no fixed endpoint/auth env vars; it gets one-shot config args
+    // from `build_child_launch` below.
+    let parent_auth = match opts.agent {
+        SpawnAgent::Claude => nonempty_env(spec.auth_token_env),
+        SpawnAgent::Codex => None,
+    };
     let bitrouter_key = nonempty_env(BITROUTER_API_KEY_ENV);
-    let env = build_child_env(&spec, &base_url, parent_auth, bitrouter_key);
+    let launch = build_child_launch(&spec, &base_url, parent_auth, bitrouter_key);
 
     let p = Palette::for_stderr();
     eprintln!(
@@ -172,8 +203,9 @@ pub async fn run(
     );
 
     let mut cmd = tokio::process::Command::new(&binary);
+    cmd.args(&launch.args_prefix);
     cmd.args(&opts.agent_args);
-    for (k, v) in &env {
+    for (k, v) in &launch.env {
         cmd.env(k, v);
     }
     // Inherit the parent's stdio so the agent owns the terminal directly
@@ -218,6 +250,91 @@ fn build_child_env(
         (spec.base_url_env, base_url.to_string()),
         (spec.auth_token_env, token),
     ]
+}
+
+/// Build all per-agent child-process overrides. Claude Code uses environment
+/// variables; Codex uses transient `-c` config overrides because custom model
+/// providers are a Codex config concept.
+fn build_child_launch(
+    spec: &AgentSpec,
+    base_url: &str,
+    parent_auth: Option<String>,
+    bitrouter_key: Option<String>,
+) -> ChildLaunch {
+    match spec.agent {
+        SpawnAgent::Claude => ChildLaunch {
+            env: build_child_env(spec, base_url, parent_auth, bitrouter_key),
+            args_prefix: Vec::new(),
+        },
+        SpawnAgent::Codex => build_codex_child_launch(base_url, bitrouter_key),
+    }
+}
+
+fn build_codex_child_launch(base_url: &str, bitrouter_key: Option<String>) -> ChildLaunch {
+    let mut env = Vec::new();
+    let mut args_prefix = vec![
+        "-c".to_string(),
+        codex_config_string("model_provider", "bitrouter"),
+        "-c".to_string(),
+        codex_config_string("model_providers.bitrouter.name", "BitRouter"),
+        "-c".to_string(),
+        codex_config_string(
+            "model_providers.bitrouter.base_url",
+            &codex_api_base_url(base_url),
+        ),
+        "-c".to_string(),
+        codex_config_string("model_providers.bitrouter.wire_api", "responses"),
+    ];
+
+    match bitrouter_key {
+        Some(key) => {
+            env.push((BITROUTER_API_KEY_ENV, key));
+            args_prefix.push("-c".to_string());
+            args_prefix.push(codex_config_string(
+                "model_providers.bitrouter.env_key",
+                BITROUTER_API_KEY_ENV,
+            ));
+        }
+        None => {
+            args_prefix.push("-c".to_string());
+            args_prefix.push(codex_config_string(
+                "model_providers.bitrouter.experimental_bearer_token",
+                PLACEHOLDER_API_KEY,
+            ));
+        }
+    }
+
+    ChildLaunch { env, args_prefix }
+}
+
+fn codex_api_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1")
+    }
+}
+
+fn codex_config_string(key: &str, value: &str) -> String {
+    format!("{key}={}", toml_string(value))
+}
+
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Read an environment variable, treating an unset *or empty* value as absent.
@@ -576,13 +693,19 @@ pub struct InstallCommand {
 impl InstallCommand {
     /// The official native installer for `agent` on the *current* platform.
     ///
-    /// Sources (Claude Code quickstart, "Native Install"):
-    /// <https://code.claude.com/docs/en/quickstart>
+    /// Sources:
+    /// - Claude Code quickstart, "Native Install":
+    ///   <https://code.claude.com/docs/en/quickstart>
     /// - macOS / Linux: `curl -fsSL https://claude.ai/install.sh | bash`
     /// - Windows:       `irm https://claude.ai/install.ps1 | iex`
+    /// - Codex quickstart:
+    ///   <https://developers.openai.com/codex/quickstart>
+    /// - macOS / Linux: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
+    /// - Windows:       `irm https://chatgpt.com/codex/install.ps1 | iex`
     pub fn for_agent(agent: SpawnAgent) -> Self {
         match agent {
             SpawnAgent::Claude => Self::claude(),
+            SpawnAgent::Codex => Self::codex(),
         }
     }
 
@@ -608,6 +731,36 @@ impl InstallCommand {
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
                 "irm https://claude.ai/install.ps1 | iex".to_string(),
+            ],
+            human,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn codex() -> Self {
+        let human = "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string();
+        Self {
+            program: "sh",
+            args: vec![
+                "-c".to_string(),
+                "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string(),
+            ],
+            human,
+        }
+    }
+
+    #[cfg(windows)]
+    fn codex() -> Self {
+        let human =
+            r#"powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex""#
+                .to_string();
+        Self {
+            program: "powershell",
+            args: vec![
+                "-ExecutionPolicy".to_string(),
+                "ByPass".to_string(),
+                "-c".to_string(),
+                "irm https://chatgpt.com/codex/install.ps1 | iex".to_string(),
             ],
             human,
         }
@@ -769,6 +922,64 @@ mod tests {
     }
 
     #[test]
+    fn codex_spec_uses_codex_binary() {
+        let spec = SpawnAgent::Codex.spec();
+        assert_eq!(spec.binary, "codex");
+        assert_eq!(spec.id, "codex");
+    }
+
+    #[test]
+    fn codex_launch_args_route_responses_to_bitrouter_v1() {
+        let spec = SpawnAgent::Codex.spec();
+        let launch = build_child_launch(&spec, "http://127.0.0.1:4356", None, None);
+        assert!(launch.args_prefix.contains(&"-c".to_string()));
+        assert!(
+            launch
+                .args_prefix
+                .contains(&"model_provider=\"bitrouter\"".to_string())
+        );
+        assert!(launch.args_prefix.contains(
+            &"model_providers.bitrouter.base_url=\"http://127.0.0.1:4356/v1\"".to_string()
+        ));
+        assert!(
+            launch
+                .args_prefix
+                .contains(&"model_providers.bitrouter.wire_api=\"responses\"".to_string())
+        );
+        assert!(launch.args_prefix.contains(
+            &"model_providers.bitrouter.experimental_bearer_token=\"bitrouter-local\"".to_string()
+        ));
+    }
+
+    #[test]
+    fn codex_launch_uses_env_key_when_bitrouter_key_exists() {
+        let spec = SpawnAgent::Codex.spec();
+        let launch = build_child_launch(
+            &spec,
+            "http://127.0.0.1:4356",
+            None,
+            Some("brk_test".into()),
+        );
+        assert!(
+            launch
+                .env
+                .iter()
+                .any(|(k, v)| *k == BITROUTER_API_KEY_ENV && v == "brk_test")
+        );
+        assert!(
+            launch
+                .args_prefix
+                .contains(&"model_providers.bitrouter.env_key=\"BITROUTER_API_KEY\"".to_string())
+        );
+        assert!(
+            launch
+                .args_prefix
+                .iter()
+                .all(|arg| !arg.contains("experimental_bearer_token"))
+        );
+    }
+
+    #[test]
     fn install_command_is_the_official_native_installer() {
         let cmd = InstallCommand::for_agent(SpawnAgent::Claude);
         // Same canonical URL on every platform; the transport differs.
@@ -781,6 +992,18 @@ mod tests {
         #[cfg(windows)]
         {
             assert!(cmd.display().contains("install.ps1"));
+        }
+
+        let codex = InstallCommand::for_agent(SpawnAgent::Codex);
+        assert!(codex.display().contains("chatgpt.com/codex/install"));
+        #[cfg(not(windows))]
+        {
+            assert!(codex.display().contains("install.sh"));
+            assert!(codex.display().contains("| sh"));
+        }
+        #[cfg(windows)]
+        {
+            assert!(codex.display().contains("install.ps1"));
         }
     }
 

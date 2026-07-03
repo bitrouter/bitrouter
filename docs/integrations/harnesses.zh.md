@@ -8,7 +8,7 @@ sourceHash: 85f397c71e014e6dec7bcdb24119abf335a484362d4dccf2cb2e10df212a475d
 
 <Cards>
   <Card title="Claude Code" href="/docs/integrations/claude-code" description="通过 ANTHROPIC_BASE_URL 走 Anthropic Messages" />
-  <Card title="Codex" href="/docs/integrations/codex" description="在 ~/.codex/config.toml 中配置自定义 provider" />
+  <Card title="Codex" href="/docs/integrations/codex" description="spawn 包装器或自定义 provider" />
   <Card title="OpenCode" href="/docs/integrations/opencode" description="在 opencode.json 中配置 provider" />
   <Card title="Hermes" href="/docs/integrations/hermes" description="Nous Research 的自我改进 Agent" />
   <Card title="OpenClaw" href="/docs/integrations/openclaw" description="跨多平台的消息网关" />

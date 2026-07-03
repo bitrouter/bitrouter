@@ -189,7 +189,7 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 | Harness        | Status | Notes                                                                                       |
 | -------------- | ------ | ------------------------------------------------------------------------------------------- |
 | Claude Code    | ✅     | [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway)                           |
-| OpenAI Codex   | ✅     | [Custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
+| OpenAI Codex   | ✅     | `bitrouter spawn --agent codex` or [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
 | OpenCode       | ✅     | Via [models.dev](https://github.com/anomalyco/models.dev)                                  |
 | Hermes Agent   | ✅     | Native plugin — [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
 | Openclaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
