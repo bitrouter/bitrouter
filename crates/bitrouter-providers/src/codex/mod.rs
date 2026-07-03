@@ -21,9 +21,13 @@
 //!
 //! The ChatGPT/Codex backend requires `store: false` and
 //! `include: ["reasoning.encrypted_content"]` on the Responses body.
-//! [`OpenAiCodexAuthApplier::prepare_body`] sets both at render time. The
-//! system prompt already rides in the Responses `instructions` field (set by
-//! the Responses adapter), so it is left as-is. Mirrors OpenClaw
+//! [`OpenAiCodexAuthApplier::prepare_body`] sets both at render time. It also
+//! folds any `system` / `developer` message items into `instructions`, because
+//! Codex CLI custom-provider traffic can carry those in `input[]` and the
+//! ChatGPT Codex backend rejects them there. It also gives `custom` tool
+//! declarations a `name` when the generic Responses renderer emitted only
+//! `{type:"custom", ...}`; the Codex backend validates `name` for custom tools
+//! while rejecting it on some hosted tools. Mirrors OpenClaw
 //! `src/llm/providers/openai-chatgpt-responses.ts`.
 
 pub mod headers;
@@ -309,17 +313,142 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
             );
         }
     }
+    let lifted_instructions = lift_instruction_messages(obj);
     // Ensure `instructions` is present even when the caller sent no system
     // prompt — the Codex backend expects it.
     let has_instructions = obj
         .get("instructions")
         .and_then(Value::as_str)
         .is_some_and(|s| !s.is_empty());
-    if !has_instructions {
+    if !lifted_instructions.is_empty() {
+        let lifted = lifted_instructions.join("\n\n");
+        let instructions = if has_instructions {
+            let existing = obj
+                .get("instructions")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!("{existing}\n\n{lifted}")
+        } else {
+            lifted
+        };
+        obj.insert("instructions".to_string(), Value::String(instructions));
+    } else if !has_instructions {
         obj.insert(
             "instructions".to_string(),
             Value::String(DEFAULT_INSTRUCTIONS.to_string()),
         );
+    }
+    ensure_tool_names(obj);
+    ensure_tool_descriptions(obj);
+}
+
+fn lift_instruction_messages(obj: &mut serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let Some(serde_json::Value::Array(items)) = obj.get_mut("input") else {
+        return Vec::new();
+    };
+    let mut lifted = Vec::new();
+    let mut kept = Vec::with_capacity(items.len());
+    for item in std::mem::take(items) {
+        if is_instruction_message(&item) {
+            if let Some(text) = message_text(&item)
+                && !text.trim().is_empty()
+            {
+                lifted.push(text);
+            }
+        } else {
+            kept.push(item);
+        }
+    }
+    *items = kept;
+    lifted
+}
+
+fn ensure_tool_names(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(serde_json::Value::Array(tools)) = obj.get_mut("tools") else {
+        return;
+    };
+    for tool in tools {
+        let Some(tool_obj) = tool.as_object_mut() else {
+            continue;
+        };
+        let has_name = tool_obj
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        if has_name {
+            continue;
+        }
+        if tool_obj.get("type").and_then(serde_json::Value::as_str) == Some("custom") {
+            tool_obj.insert(
+                "name".to_string(),
+                serde_json::Value::String("custom".to_string()),
+            );
+        }
+    }
+}
+
+fn ensure_tool_descriptions(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(serde_json::Value::Array(tools)) = obj.get_mut("tools") else {
+        return;
+    };
+    for tool in tools {
+        let Some(tool_obj) = tool.as_object_mut() else {
+            continue;
+        };
+        if tool_obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_search") {
+            continue;
+        }
+        let has_description = tool_obj
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        if !has_description {
+            tool_obj.insert(
+                "description".to_string(),
+                serde_json::Value::String("Search for available tools.".to_string()),
+            );
+        }
+        tool_obj
+            .entry("parameters".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+    }
+}
+
+fn is_instruction_message(item: &serde_json::Value) -> bool {
+    let is_message = item
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|kind| kind == "message");
+    if !is_message {
+        return false;
+    }
+    matches!(
+        item.get("role").and_then(serde_json::Value::as_str),
+        Some("system" | "developer")
+    )
+}
+
+fn message_text(item: &serde_json::Value) -> Option<String> {
+    let content = item.get("content")?;
+    let mut parts = Vec::new();
+    collect_text(content, &mut parts);
+    (!parts.is_empty()).then(|| parts.join(""))
+}
+
+fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_text(item, out);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            if let Some(text) = obj.get("text").and_then(serde_json::Value::as_str) {
+                out.push(text.to_string());
+            }
+        }
+        _ => {}
     }
 }
 
@@ -541,5 +670,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body3["instructions"], serde_json::json!("be a pirate"));
+
+        let mut body4 = serde_json::json!({
+            "input": [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{ "type": "input_text", "text": "base rules" }]
+                },
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": "developer rules"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "hello" }]
+                }
+            ]
+        });
+        applier
+            .prepare_body(&mut body4, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(
+            body4["instructions"],
+            serde_json::json!("base rules\n\ndeveloper rules")
+        );
+        assert_eq!(body4["input"].as_array().unwrap().len(), 1);
+        assert_eq!(body4["input"][0]["role"], serde_json::json!("user"));
+
+        let mut body5 = serde_json::json!({
+            "input": [],
+            "tools": [
+                { "type": "custom" },
+                { "type": "tool_search" },
+                { "type": "function", "name": "read_file", "parameters": {} }
+            ]
+        });
+        applier
+            .prepare_body(&mut body5, &codex_target(None))
+            .await
+            .unwrap();
+        assert_eq!(body5["tools"][0]["name"], serde_json::json!("custom"));
+        assert_eq!(
+            body5["tools"][1]["description"],
+            serde_json::json!("Search for available tools.")
+        );
+        assert_eq!(body5["tools"][1]["parameters"], serde_json::json!({}));
+        assert!(body5["tools"][1].get("name").is_none());
+        assert_eq!(body5["tools"][2]["name"], serde_json::json!("read_file"));
     }
 }
