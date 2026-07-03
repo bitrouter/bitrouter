@@ -574,9 +574,7 @@ fn choose_auth_method(
             entry.id
         );
     }
-    if selectable.len() == 1 {
-        Ok(selectable[0])
-    } else if options.no_browser {
+    if selectable.len() == 1 || options.no_browser {
         Ok(selectable[0])
     } else {
         prompt_method_choice(&entry.display_name, &selectable)
