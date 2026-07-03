@@ -40,7 +40,7 @@ Agent runtimes that drive their own loop — point one at BitRouter and run it o
 <Cards>
   <Card title="Harnesses overview" href="/docs/integrations/harnesses" description="Harness vs. model source" />
   <Card title="Claude Code" href="/docs/integrations/claude-code" description="Anthropic Messages via ANTHROPIC_BASE_URL" />
-  <Card title="Codex" href="/docs/integrations/codex" description="Custom provider in ~/.codex/config.toml" />
+  <Card title="Codex" href="/docs/integrations/codex" description="Spawn wrapper or custom provider" />
   <Card title="OpenCode" href="/docs/integrations/opencode" description="Provider block in opencode.json" />
   <Card title="Hermes" href="/docs/integrations/hermes" description="Nous Research's self-improving agent" />
   <Card title="OpenClaw" href="/docs/integrations/openclaw" description="Messaging gateway across many channels" />

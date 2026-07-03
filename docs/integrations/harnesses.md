@@ -8,7 +8,7 @@ A **harness** is the agent runtime that drives the loop — the CLI or service t
 
 <Cards>
   <Card title="Claude Code" href="/docs/integrations/claude-code" description="Anthropic Messages via ANTHROPIC_BASE_URL" />
-  <Card title="Codex" href="/docs/integrations/codex" description="Custom provider in ~/.codex/config.toml" />
+  <Card title="Codex" href="/docs/integrations/codex" description="Spawn wrapper or custom provider" />
   <Card title="OpenCode" href="/docs/integrations/opencode" description="Provider block in opencode.json" />
   <Card title="Hermes" href="/docs/integrations/hermes" description="Nous Research's self-improving agent" />
   <Card title="OpenClaw" href="/docs/integrations/openclaw" description="Messaging gateway across many channels" />

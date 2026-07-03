@@ -4,7 +4,7 @@ description: Route your ChatGPT plan through BitRouter via the Codex backend —
 sourceHash: ebdaa5b67dcae3c46e127d28467be57ed8f2624e8058c61fe9bc748695cde34d
 ---
 
-Have a ChatGPT Plus or Pro plan? Use it as a model source through the **Codex** backend. `bitrouter providers login openai-codex` runs the same OAuth flow OpenAI's Codex CLI uses, stores the refreshing token, and attaches it to requests on the `openai-codex` provider — so your ChatGPT subscription covers the tokens, with no `OPENAI_API_KEY`.
+Have a ChatGPT Plus or Pro plan? Use it as a model source through the **Codex** backend. `bitrouter providers login openai-codex` first reuses an existing local Codex CLI session when one is present, otherwise it can run the same OAuth flow OpenAI's Codex CLI uses, stores the refreshing token, and attaches it to requests on the `openai-codex` provider — so your ChatGPT subscription covers the tokens, with no `OPENAI_API_KEY`.
 
 <Callout type="warn">
 **`openai-codex` is not `openai`.** This is a separate provider. It reaches ChatGPT's Codex backend (`chatgpt.com/backend-api/codex`), speaks the **Responses API only**, and is authenticated solely by your subscription's OAuth — it does *not* share endpoints or credentials with the standard `openai` (API-key) provider. For pay-per-token access to the public OpenAI API, use the `openai` provider with a key instead.
@@ -16,14 +16,14 @@ Have a ChatGPT Plus or Pro plan? Use it as a model source through the **Codex** 
 bitrouter providers login openai-codex
 ```
 
-This opens OpenAI's authorize page in your browser (PKCE, on a pinned loopback port), and on approval stores the credential under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The token auto-refreshes — log in once. To remove it:
+By default, the menu offers **"Import an existing session from the vendor CLI"** first. BitRouter reads the credential the Codex CLI already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. If no local Codex session exists, choose the browser subscription flow; it opens OpenAI's authorize page (PKCE, on a pinned loopback port), then stores the credential under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The token auto-refreshes — log in once. To remove it:
 
 ```bash
 bitrouter providers logout openai-codex
 ```
 
 <Callout type="info">
-**Already signed in to Codex?** The login menu offers **"Import an existing session from the vendor CLI"** — BitRouter adopts the credential the Codex CLI already stored (macOS Keychain or `$CODEX_HOME/auth.json`), with no fresh browser sign-in. The imported token refreshes like any other.
+**Already signed in to Codex?** Press enter on the default import option. The file credential wins over Keychain so BitRouter follows the same local Codex home you are already using.
 </Callout>
 
 ### Multiple accounts
