@@ -7,6 +7,24 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Max scrollback lines retained per pane (ring buffer).
 const SCROLLBACK_CAP: usize = 2000;
 
+/// Which key-handling mode the TUI is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Keys go to the focused pane's prompt (default).
+    Normal,
+    /// Pane-management keys (new/close/focus/zoom).
+    Agent,
+    /// Selecting an agent to spawn.
+    Picker,
+}
+
+/// State of the agent picker overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickerState {
+    pub agents: Vec<String>,
+    pub selected: usize,
+}
+
 /// One rendered scrollback line, tagged for styling by the UI layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
@@ -69,6 +87,11 @@ pub struct AppState {
     pub focus: usize,
     pub input: String,
     pub should_quit: bool,
+    pub mode: Mode,
+    pub zoom: bool,
+    pub picker: Option<PickerState>,
+    pub available_agents: Vec<String>,
+    pub notice: Option<String>,
 }
 
 impl AppState {
@@ -78,6 +101,11 @@ impl AppState {
             focus: 0,
             input: String::new(),
             should_quit: false,
+            mode: Mode::Normal,
+            zoom: false,
+            picker: None,
+            available_agents: Vec::new(),
+            notice: None,
         }
     }
 
@@ -92,6 +120,11 @@ impl AppState {
 
     fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
         self.panes.iter_mut().find(|p| p.record_id == record_id)
+    }
+
+    /// Set the list of agent ids the picker offers (from the config catalog).
+    pub fn set_available_agents(&mut self, agents: Vec<String>) {
+        self.available_agents = agents;
     }
 }
 
@@ -126,12 +159,23 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        AppEvent::Key(key) => reduce_key(state, key),
+        AppEvent::AgentSpawned { .. } => Vec::new(), // implemented in Task 4
+        AppEvent::AgentSpawnFailed { .. } => Vec::new(), // implemented in Task 4
+        AppEvent::Key(key) => match state.mode {
+            Mode::Normal => reduce_key_normal(state, key),
+            Mode::Agent => reduce_key_agent(state, key),
+            Mode::Picker => reduce_key_picker(state, key),
+        },
     }
 }
 
-/// Handle a keypress. Permission keys take priority when a prompt is pending.
-fn reduce_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+/// NORMAL-mode keys. Permission keys take priority when a prompt is pending.
+fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    // Ctrl-A enters AGENT (pane-management) mode.
+    if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.mode = Mode::Agent;
+        return Vec::new();
+    }
     let focus_id = match state.focused() {
         Some(p) => p.record_id.clone(),
         None => return Vec::new(),
@@ -197,6 +241,24 @@ fn reduce_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         _ => Vec::new(),
     }
+}
+
+/// AGENT-mode keys. Task 1: only Esc (→ Normal); focus/zoom/close/new land in
+/// Tasks 2–3.
+fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = Mode::Normal;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// PICKER-mode keys. Filled in Task 3.
+fn reduce_key_picker(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    let _ = (state, key);
+    Vec::new()
 }
 
 /// Fold one translated update into a pane's scrollback.
@@ -470,5 +532,37 @@ mod tests {
         let effects = reduce(&mut st, &AppEvent::Key(key));
         assert_eq!(effects, vec![Effect::Quit]);
         assert!(st.should_quit);
+    }
+
+    #[test]
+    fn ctrl_a_enters_agent_mode() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut st = AppState::new(pane());
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Agent);
+    }
+
+    #[test]
+    fn esc_returns_to_normal_from_agent() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Esc)));
+        assert_eq!(st.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn ctrl_a_does_not_type_into_input() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        assert_eq!(st.input, "");
     }
 }

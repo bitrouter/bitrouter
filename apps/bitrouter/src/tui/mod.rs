@@ -170,6 +170,9 @@ fn apply_effect(
             }
             None
         }
+        // Wired in M2a Task 6 (the multi-session run loop).
+        Effect::SpawnAgent { .. } => None,
+        Effect::CloseAgent { .. } => None,
     }
 }
 

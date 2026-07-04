@@ -37,6 +37,10 @@ pub enum AppEvent {
     },
     /// The session's agent child exited.
     Exited { record_id: String },
+    /// A newly launched session's pane should appear.
+    AgentSpawned { record_id: String, agent_id: String },
+    /// Launching a session failed; surface a transient notice.
+    AgentSpawnFailed { agent_id: String, error: String },
 }
 
 /// Side effect the loop performs after a reduce. Keeps `reduce` pure.
@@ -51,6 +55,10 @@ pub enum Effect {
     },
     /// Tear down and exit the TUI.
     Quit,
+    /// Launch a new agent session (the loop performs the async launch).
+    SpawnAgent { agent_id: String },
+    /// Shut down and remove the session `record_id`.
+    CloseAgent { record_id: String },
 }
 
 /// The channel message the loop receives. Carries the real `PendingPermission`
