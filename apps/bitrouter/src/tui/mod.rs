@@ -82,12 +82,16 @@ struct Spawner<'a> {
     tx: UnboundedSender<Incoming>,
 }
 
+/// In-flight prompt tasks keyed by the owning session's `record_id`, so a
+/// pane close can abort+await just that session's tasks.
+type PromptTasks = HashMap<String, Vec<tokio::task::JoinHandle<()>>>;
+
 /// The live session registry plus everything else `apply_effect` mutates,
 /// bundled so the function stays under clippy's `too_many_arguments` threshold.
 struct Runtime<'a> {
     sessions: HashMap<String, Arc<Session>>,
     pending: HashMap<String, bitrouter_substrate::up::PendingPermission>,
-    prompt_tasks: Vec<tokio::task::JoinHandle<()>>,
+    prompt_tasks: PromptTasks,
     spawner: Spawner<'a>,
 }
 
@@ -105,7 +109,7 @@ async fn event_loop(
     let mut rt = Runtime {
         sessions,
         pending: HashMap::new(),
-        prompt_tasks: Vec::new(),
+        prompt_tasks: HashMap::new(),
         spawner: Spawner {
             catalog,
             base_repo,
@@ -136,20 +140,25 @@ async fn event_loop(
                     Some(AppEvent::Update { record_id, update })
                 }
                 Some(Incoming::Permission { record_id, pending: p }) => {
-                    // Stash the handle; hand the reducer display-only data.
-                    let ev = AppEvent::Permission {
-                        record_id: record_id.clone(),
-                        title: p.tool_call.fields.title.clone().unwrap_or_default(),
-                        diff: p
-                            .tool_call
-                            .fields
-                            .content
-                            .as_deref()
-                            .and_then(bitrouter_substrate::translate::render_diff),
-                        options: perm_options(&p),
-                    };
-                    rt.pending.insert(record_id, *p);
-                    Some(ev)
+                    if rt.sessions.contains_key(&record_id) {
+                        // Stash the handle; hand the reducer display-only data.
+                        let ev = AppEvent::Permission {
+                            record_id: record_id.clone(),
+                            title: p.tool_call.fields.title.clone().unwrap_or_default(),
+                            diff: p
+                                .tool_call
+                                .fields
+                                .content
+                                .as_deref()
+                                .and_then(bitrouter_substrate::translate::render_diff),
+                            options: perm_options(&p),
+                        };
+                        rt.pending.insert(record_id, *p);
+                        Some(ev)
+                    } else {
+                        // Pane already closed; dropping `p` denies the request.
+                        None
+                    }
                 }
                 Some(Incoming::Exited { record_id }) => Some(AppEvent::Exited { record_id }),
                 None => Some(AppEvent::Key(quit_key())),
@@ -161,8 +170,11 @@ async fn event_loop(
         for effect in effects {
             apply_effect(effect, &mut state, &mut rt).await;
         }
-        // Reap finished prompt tasks so the vec stays bounded over a long session.
-        rt.prompt_tasks.retain(|h| !h.is_finished());
+        // Reap finished prompt tasks so the map stays bounded over a long session.
+        rt.prompt_tasks.retain(|_, handles| {
+            handles.retain(|h| !h.is_finished());
+            !handles.is_empty()
+        });
     }
 }
 
@@ -174,11 +186,12 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         Effect::Prompt { record_id, text } => {
             if let Some(sess) = rt.sessions.get(&record_id) {
                 let sess = Arc::clone(sess);
-                rt.prompt_tasks.push(tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     if let Err(e) = sess.prompt(&text).await {
                         tracing::warn!(error = %e, "prompt failed");
                     }
-                }));
+                });
+                rt.prompt_tasks.entry(record_id).or_default().push(handle);
             }
         }
         Effect::ResolvePermission { record_id, outcome } => {
@@ -221,6 +234,12 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         }
         Effect::CloseAgent { record_id } => {
             rt.pending.remove(&record_id);
+            if let Some(handles) = rt.prompt_tasks.remove(&record_id) {
+                for handle in handles {
+                    handle.abort();
+                    let _ = handle.await;
+                }
+            }
             if let Some(sess) = rt.sessions.remove(&record_id) {
                 shutdown_session(sess).await;
             }
@@ -228,14 +247,15 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
     }
 }
 
-/// Abort and await any in-flight prompt tasks so their `Arc<Session>` clones are
-/// released before teardown takes sole ownership of the session.
-async fn abort_prompt_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
-    for handle in tasks.drain(..) {
-        handle.abort();
-        // An aborted handle resolves to a JoinError; discarding it is fine — we
-        // only await to guarantee the task (and its Arc clone) is fully dropped.
-        let _ = handle.await;
+/// Abort and await every in-flight prompt task (across all sessions) so their
+/// `Arc<Session>` clones are released before teardown takes sole ownership.
+async fn abort_prompt_tasks(tasks: &mut PromptTasks) {
+    for (_, handles) in tasks.drain() {
+        for handle in handles {
+            handle.abort();
+            // An aborted handle resolves to a JoinError; discarding is fine.
+            let _ = handle.await;
+        }
     }
 }
 

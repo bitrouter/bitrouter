@@ -80,7 +80,9 @@ impl PaneState {
     }
 }
 
-/// Whole-app render state. M1: exactly one pane. `focus` is its index.
+/// Whole-app render state. Holds N agent panes; `focus` indexes the active one
+/// (it may momentarily be out of bounds right after the last pane closes, before
+/// `should_quit` ends the loop — callers use the `Option`-returning accessors).
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub panes: Vec<PaneState>,
@@ -109,7 +111,8 @@ impl AppState {
         }
     }
 
-    /// The focused pane. M1 always has ≥1 pane.
+    /// The focused pane. Panes can be empty (e.g. right after the last pane
+    /// closes), so callers must handle `None`.
     pub fn focused_mut(&mut self) -> Option<&mut PaneState> {
         self.panes.get_mut(self.focus)
     }
