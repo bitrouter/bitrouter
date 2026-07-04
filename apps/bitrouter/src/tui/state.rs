@@ -243,16 +243,63 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// AGENT-mode keys. Task 1: only Esc (→ Normal); focus/zoom/close/new land in
-/// Tasks 2–3.
+/// AGENT-mode keys: pane management.
 fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
             state.mode = Mode::Normal;
             Vec::new()
         }
+        KeyCode::Char('n') => {
+            state.picker = Some(PickerState {
+                agents: state.available_agents.clone(),
+                selected: 0,
+            });
+            state.mode = Mode::Picker;
+            Vec::new()
+        }
+        KeyCode::Char('f') => {
+            state.zoom = !state.zoom;
+            Vec::new()
+        }
+        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+            if !state.panes.is_empty() {
+                state.focus = (state.focus + 1) % state.panes.len();
+            }
+            Vec::new()
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            if !state.panes.is_empty() {
+                state.focus = (state.focus + state.panes.len() - 1) % state.panes.len();
+            }
+            Vec::new()
+        }
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as usize) - ('1' as usize);
+            if idx < state.panes.len() {
+                state.focus = idx;
+            }
+            Vec::new()
+        }
+        KeyCode::Char('x') => close_focused(state),
         _ => Vec::new(),
     }
+}
+
+/// Remove the focused pane, adjust `focus`, and emit `CloseAgent` so the run
+/// loop shuts the session down. Quitting the last pane exits the TUI.
+fn close_focused(state: &mut AppState) -> Vec<Effect> {
+    let record_id = match state.panes.get(state.focus) {
+        Some(pane) => pane.record_id.clone(),
+        None => return Vec::new(),
+    };
+    state.panes.remove(state.focus);
+    if state.panes.is_empty() {
+        state.should_quit = true;
+    } else if state.focus >= state.panes.len() {
+        state.focus = state.panes.len() - 1;
+    }
+    vec![Effect::CloseAgent { record_id }]
 }
 
 /// PICKER-mode keys. Filled in Task 3.
@@ -564,5 +611,103 @@ mod tests {
             &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
         );
         assert_eq!(st.input, "");
+    }
+
+    fn panes3() -> AppState {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.panes.push(PaneState::new("r1".into(), "a1".into()));
+        st.panes.push(PaneState::new("r2".into(), "a2".into()));
+        st
+    }
+
+    #[test]
+    fn tab_cycles_focus_forward_wrapping() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = panes3();
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
+        assert_eq!(st.focus, 1);
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
+        assert_eq!(st.focus, 2);
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
+        assert_eq!(st.focus, 0);
+    }
+
+    #[test]
+    fn left_cycles_focus_backward_wrapping() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = panes3();
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Left)));
+        assert_eq!(st.focus, 2);
+    }
+
+    #[test]
+    fn digit_focuses_pane_in_range_only() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = panes3();
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('3'))));
+        assert_eq!(st.focus, 2);
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('9'))));
+        assert_eq!(st.focus, 2); // out of range → unchanged
+    }
+
+    #[test]
+    fn f_toggles_zoom() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = panes3();
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('f'))));
+        assert!(st.zoom);
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('f'))));
+        assert!(!st.zoom);
+    }
+
+    #[test]
+    fn x_closes_focused_and_emits_close_agent() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = panes3();
+        st.mode = Mode::Agent;
+        st.focus = 1;
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
+        assert_eq!(
+            fx,
+            vec![Effect::CloseAgent {
+                record_id: "r1".into()
+            }]
+        );
+        assert_eq!(st.panes.len(), 2);
+        assert_eq!(st.panes[0].record_id, "r0");
+        assert_eq!(st.panes[1].record_id, "r2");
+    }
+
+    #[test]
+    fn x_on_last_pane_sets_should_quit() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
+        assert_eq!(
+            fx,
+            vec![Effect::CloseAgent {
+                record_id: "rec-1".into()
+            }]
+        );
+        assert!(st.should_quit);
+        assert!(st.panes.is_empty());
+    }
+
+    #[test]
+    fn n_opens_picker_with_available_agents() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        st.available_agents = vec!["fake".into(), "claude-acp".into()];
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('n'))));
+        assert_eq!(st.mode, Mode::Picker);
+        let p = st.picker.as_ref().expect("picker set");
+        assert_eq!(p.agents, vec!["fake".to_string(), "claude-acp".to_string()]);
+        assert_eq!(p.selected, 0);
     }
 }
