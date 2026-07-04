@@ -159,8 +159,21 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        AppEvent::AgentSpawned { .. } => Vec::new(), // implemented in Task 4
-        AppEvent::AgentSpawnFailed { .. } => Vec::new(), // implemented in Task 4
+        AppEvent::AgentSpawned {
+            record_id,
+            agent_id,
+        } => {
+            state
+                .panes
+                .push(PaneState::new(record_id.clone(), agent_id.clone()));
+            state.focus = state.panes.len() - 1;
+            state.notice = None;
+            Vec::new()
+        }
+        AppEvent::AgentSpawnFailed { agent_id, error } => {
+            state.notice = Some(format!("failed to spawn {agent_id}: {error}"));
+            Vec::new()
+        }
         AppEvent::Key(key) => match state.mode {
             Mode::Normal => reduce_key_normal(state, key),
             Mode::Agent => reduce_key_agent(state, key),
@@ -540,6 +553,57 @@ mod tests {
             },
         );
         assert!(st.panes[0].lines.is_empty());
+    }
+
+    #[test]
+    fn agent_spawned_appends_and_focuses_new_pane() {
+        let mut st = AppState::new(pane()); // 1 pane, focus 0
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawned {
+                record_id: "r9".into(),
+                agent_id: "fake".into(),
+            },
+        );
+        assert_eq!(st.panes.len(), 2);
+        assert_eq!(st.focus, 1);
+        assert_eq!(st.panes[1].record_id, "r9");
+        assert_eq!(st.panes[1].agent_id, "fake");
+    }
+
+    #[test]
+    fn second_agent_spawned_focuses_newest() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawned {
+                record_id: "r1".into(),
+                agent_id: "a".into(),
+            },
+        );
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawned {
+                record_id: "r2".into(),
+                agent_id: "b".into(),
+            },
+        );
+        assert_eq!(st.panes.len(), 3);
+        assert_eq!(st.focus, 2);
+    }
+
+    #[test]
+    fn agent_spawn_failed_sets_notice_and_adds_no_pane() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawnFailed {
+                agent_id: "fake".into(),
+                error: "boom".into(),
+            },
+        );
+        assert_eq!(st.panes.len(), 1);
+        assert_eq!(st.notice.as_deref(), Some("failed to spawn fake: boom"));
     }
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
