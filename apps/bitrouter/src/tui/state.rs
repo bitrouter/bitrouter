@@ -302,10 +302,43 @@ fn close_focused(state: &mut AppState) -> Vec<Effect> {
     vec![Effect::CloseAgent { record_id }]
 }
 
-/// PICKER-mode keys. Filled in Task 3.
+/// PICKER-mode keys: navigate + choose an agent to spawn.
 fn reduce_key_picker(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
-    let _ = (state, key);
-    Vec::new()
+    let picker = match state.picker.as_mut() {
+        Some(p) => p,
+        // Defensive: no active picker → just return to Normal.
+        None => {
+            state.mode = Mode::Normal;
+            return Vec::new();
+        }
+    };
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            picker.selected = picker.selected.saturating_sub(1);
+            Vec::new()
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !picker.agents.is_empty() {
+                picker.selected = (picker.selected + 1).min(picker.agents.len() - 1);
+            }
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let selected = picker.agents.get(picker.selected).cloned();
+            state.picker = None;
+            state.mode = Mode::Normal;
+            match selected {
+                Some(agent_id) => vec![Effect::SpawnAgent { agent_id }],
+                None => Vec::new(), // empty picker → just close, no spawn
+            }
+        }
+        KeyCode::Esc => {
+            state.picker = None;
+            state.mode = Mode::Normal;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Fold one translated update into a pane's scrollback.
@@ -709,5 +742,77 @@ mod tests {
         let p = st.picker.as_ref().expect("picker set");
         assert_eq!(p.agents, vec!["fake".to_string(), "claude-acp".to_string()]);
         assert_eq!(p.selected, 0);
+    }
+
+    fn picker_state(agents: &[&str]) -> AppState {
+        let mut st = AppState::new(pane());
+        let agents: Vec<String> = agents.iter().map(|s| s.to_string()).collect();
+        st.available_agents = agents.clone();
+        st.mode = Mode::Picker;
+        st.picker = Some(PickerState {
+            agents,
+            selected: 0,
+        });
+        st
+    }
+
+    #[test]
+    fn picker_down_then_up_clamps_at_bounds() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = picker_state(&["a", "b", "c"]);
+        let down = |st: &mut AppState| {
+            reduce(st, &AppEvent::Key(KeyEvent::from(KeyCode::Down)));
+        };
+        let up = |st: &mut AppState| {
+            reduce(st, &AppEvent::Key(KeyEvent::from(KeyCode::Up)));
+        };
+        down(&mut st);
+        assert_eq!(st.picker.as_ref().expect("p").selected, 1);
+        down(&mut st);
+        assert_eq!(st.picker.as_ref().expect("p").selected, 2);
+        down(&mut st);
+        assert_eq!(st.picker.as_ref().expect("p").selected, 2); // clamp
+        up(&mut st);
+        assert_eq!(st.picker.as_ref().expect("p").selected, 1);
+        up(&mut st);
+        assert_eq!(st.picker.as_ref().expect("p").selected, 0);
+        up(&mut st);
+        assert_eq!(st.picker.as_ref().expect("p").selected, 0); // clamp
+    }
+
+    #[test]
+    fn picker_enter_spawns_selected_and_returns_to_normal() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = picker_state(&["fake", "claude"]);
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Down))); // select "claude"
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        assert_eq!(
+            fx,
+            vec![Effect::SpawnAgent {
+                agent_id: "claude".into()
+            }]
+        );
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.picker.is_none());
+    }
+
+    #[test]
+    fn picker_esc_cancels_with_no_effect() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = picker_state(&["fake"]);
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.picker.is_none());
+    }
+
+    #[test]
+    fn picker_enter_on_empty_list_just_closes() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = picker_state(&[]);
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.picker.is_none());
     }
 }
