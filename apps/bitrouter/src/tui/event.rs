@@ -63,7 +63,7 @@ pub enum Incoming {
     },
     Permission {
         record_id: String,
-        pending: PendingPermission,
+        pending: Box<PendingPermission>,
     },
     Exited {
         record_id: String,

@@ -1,6 +1,7 @@
 //! `bitrouter tui` — in-process multi-agent manager (M1: single agent).
 
 mod event;
+mod pump;
 mod state;
 
 use anyhow::{Context, Result};
