@@ -1,9 +1,10 @@
-//! `bitrouter tui` — in-process multi-agent manager (M1: single agent).
+//! `bitrouter tui` — in-process multi-agent manager.
 mod event;
 mod pump;
 mod state;
 mod ui;
 
+use std::collections::HashMap;
 use std::io::{self, Stdout};
 use std::sync::Arc;
 
@@ -18,48 +19,45 @@ use crossterm::terminal::{
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::tui::event::{AppEvent, Effect, Incoming, PermOption};
 use crate::tui::state::{AppState, PaneState, reduce};
 
-/// Launch the TUI against `agent_id`, optionally inside a git worktree `name`.
+/// Launch the TUI with an initial agent; `n` (in AGENT mode) spawns more.
 pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
-    // ── Load config + build the agent catalog (same path acp_cli uses). ──
+    // ── Config + catalog. ──
     let source = crate::paths::resolve_config(None)?;
     let cfg = crate::paths::load_config(&source).await?;
     let catalog = bitrouter_sdk::acp::ConfigAcpRoutingTable::from_configs(
         cfg.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
     )
     .context("building acp catalog from config.agents")?;
+    let agent_ids: Vec<String> = cfg.agents.keys().cloned().collect();
     let base_repo = std::env::current_dir().context("resolving current directory")?;
 
-    // ── Launch the single session. ──
-    let session = Session::launch(&catalog, agent_id, base_repo, worktree)
+    // ── Initial session. ──
+    let session = Session::launch(&catalog, agent_id, base_repo.clone(), worktree)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let record_id = session.state().record_id.clone();
     let session = Arc::new(session);
 
-    // ── Channel + pump. ──
+    // ── Channel + pump. The loop keeps `tx` to pump agents spawned later. ──
     let (tx, rx) = unbounded_channel::<Incoming>();
     pump::spawn(Arc::clone(&session), record_id.clone(), tx.clone());
-    // The pump holds its own sender clones; drop ours so the channel closes when
-    // the agent's streams end (agent exit → loop receives None → quit).
-    drop(tx);
+
+    let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
+    sessions.insert(record_id.clone(), session);
 
     // ── Initial state. ──
-    let state = AppState::new(PaneState::new(record_id.clone(), agent_id.to_string()));
+    let mut state = AppState::new(PaneState::new(record_id, agent_id.to_string()));
+    state.set_available_agents(agent_ids);
 
-    // ── Run with the terminal in raw/alt-screen mode; always restore. ──
+    // ── Run; the loop owns full session teardown. ──
     let mut terminal = setup_terminal().context("entering raw mode")?;
-    let result = event_loop(&mut terminal, state, rx, &session).await;
+    let result = event_loop(&mut terminal, state, rx, sessions, &catalog, base_repo, tx).await;
     restore_terminal(&mut terminal).ok();
-
-    // ── Teardown the session. ──
-    if let Ok(only) = Arc::try_unwrap(session) {
-        only.shutdown().await.context("session shutdown")?;
-    }
     result
 }
 
@@ -77,27 +75,52 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-/// The core loop: draw, then select terminal input vs pumped session events,
-/// reduce each into state, and apply the returned effects.
+/// Bundles what's needed to launch new sessions from inside the loop.
+struct Spawner<'a> {
+    catalog: &'a bitrouter_sdk::acp::ConfigAcpRoutingTable,
+    base_repo: std::path::PathBuf,
+    tx: UnboundedSender<Incoming>,
+}
+
+/// The live session registry plus everything else `apply_effect` mutates,
+/// bundled so the function stays under clippy's `too_many_arguments` threshold.
+struct Runtime<'a> {
+    sessions: HashMap<String, Arc<Session>>,
+    pending: HashMap<String, bitrouter_substrate::up::PendingPermission>,
+    prompt_tasks: Vec<tokio::task::JoinHandle<()>>,
+    spawner: Spawner<'a>,
+}
+
+/// The core loop over a registry of sessions. Draws, muxes input vs pumped
+/// events, reduces, and applies effects (including async spawn/close).
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     mut state: AppState,
     mut rx: UnboundedReceiver<Incoming>,
-    session: &Arc<Session>,
+    sessions: HashMap<String, Arc<Session>>,
+    catalog: &bitrouter_sdk::acp::ConfigAcpRoutingTable,
+    base_repo: std::path::PathBuf,
+    tx: UnboundedSender<Incoming>,
 ) -> Result<()> {
-    // Handles to pending permissions, keyed by record_id, resolved on keypress.
-    let mut pending: std::collections::HashMap<String, bitrouter_substrate::up::PendingPermission> =
-        std::collections::HashMap::new();
+    let mut rt = Runtime {
+        sessions,
+        pending: HashMap::new(),
+        prompt_tasks: Vec::new(),
+        spawner: Spawner {
+            catalog,
+            base_repo,
+            tx,
+        },
+    };
     let mut keys = EventStream::new();
-    let mut prompt_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     loop {
         if let Err(e) = terminal.draw(|f| ui::render(&state, f)) {
-            abort_prompt_tasks(&mut prompt_tasks).await;
+            cleanup(&mut rt).await;
             return Err(e).context("draw");
         }
         if state.should_quit {
-            abort_prompt_tasks(&mut prompt_tasks).await;
+            cleanup(&mut rt).await;
             return Ok(());
         }
 
@@ -125,7 +148,7 @@ async fn event_loop(
                             .and_then(bitrouter_substrate::translate::render_diff),
                         options: perm_options(&p),
                     };
-                    pending.insert(record_id, *p);
+                    rt.pending.insert(record_id, *p);
                     Some(ev)
                 }
                 Some(Incoming::Exited { record_id }) => Some(AppEvent::Exited { record_id }),
@@ -136,43 +159,72 @@ async fn event_loop(
         let Some(app_event) = app_event else { continue };
         let effects = reduce(&mut state, &app_event);
         for effect in effects {
-            if let Some(handle) = apply_effect(effect, session, &mut pending) {
-                prompt_tasks.push(handle);
-            }
+            apply_effect(effect, &mut state, &mut rt).await;
         }
         // Reap finished prompt tasks so the vec stays bounded over a long session.
-        prompt_tasks.retain(|h| !h.is_finished());
+        rt.prompt_tasks.retain(|h| !h.is_finished());
     }
 }
 
-/// Apply one reducer effect against the live session. For `Effect::Prompt` it
-/// returns the spawned task's handle so the loop can abort+await it at teardown;
-/// other effects return `None`.
-fn apply_effect(
-    effect: Effect,
-    session: &Arc<Session>,
-    pending: &mut std::collections::HashMap<String, bitrouter_substrate::up::PendingPermission>,
-) -> Option<tokio::task::JoinHandle<()>> {
+/// Apply one reducer effect against the live session registry: send prompts,
+/// resolve permissions, and (async) spawn/close sessions.
+async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>) {
     match effect {
-        Effect::Quit => None,
-        Effect::Prompt { text, .. } => {
-            // Fire-and-forget: visible output arrives via the updates stream.
-            let session = Arc::clone(session);
-            Some(tokio::spawn(async move {
-                if let Err(e) = session.prompt(&text).await {
-                    tracing::warn!(error = %e, "prompt failed");
-                }
-            }))
+        Effect::Quit => {}
+        Effect::Prompt { record_id, text } => {
+            if let Some(sess) = rt.sessions.get(&record_id) {
+                let sess = Arc::clone(sess);
+                rt.prompt_tasks.push(tokio::spawn(async move {
+                    if let Err(e) = sess.prompt(&text).await {
+                        tracing::warn!(error = %e, "prompt failed");
+                    }
+                }));
+            }
         }
         Effect::ResolvePermission { record_id, outcome } => {
-            if let Some(p) = pending.remove(&record_id) {
+            if let Some(p) = rt.pending.remove(&record_id) {
                 p.resolve(outcome);
             }
-            None
         }
-        // Wired in M2a Task 6 (the multi-session run loop).
-        Effect::SpawnAgent { .. } => None,
-        Effect::CloseAgent { .. } => None,
+        Effect::SpawnAgent { agent_id } => {
+            match Session::launch(
+                rt.spawner.catalog,
+                &agent_id,
+                rt.spawner.base_repo.clone(),
+                None,
+            )
+            .await
+            {
+                Ok(sess) => {
+                    let rid = sess.state().record_id.clone();
+                    let sess = Arc::new(sess);
+                    rt.sessions.insert(rid.clone(), Arc::clone(&sess));
+                    pump::spawn(sess, rid.clone(), rt.spawner.tx.clone());
+                    let _ = reduce(
+                        state,
+                        &AppEvent::AgentSpawned {
+                            record_id: rid,
+                            agent_id,
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = reduce(
+                        state,
+                        &AppEvent::AgentSpawnFailed {
+                            agent_id,
+                            error: e.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+        Effect::CloseAgent { record_id } => {
+            rt.pending.remove(&record_id);
+            if let Some(sess) = rt.sessions.remove(&record_id) {
+                shutdown_session(sess).await;
+            }
+        }
     }
 }
 
@@ -184,6 +236,33 @@ async fn abort_prompt_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
         // An aborted handle resolves to a JoinError; discarding it is fine — we
         // only await to guarantee the task (and its Arc clone) is fully dropped.
         let _ = handle.await;
+    }
+}
+
+/// Abort in-flight prompt tasks, drop pending permissions (defaulting them to
+/// Deny in the substrate), and shut down every session. Called on every
+/// loop-exit path.
+async fn cleanup(rt: &mut Runtime<'_>) {
+    abort_prompt_tasks(&mut rt.prompt_tasks).await;
+    // Dropping a PendingPermission defaults it to Deny in the substrate.
+    rt.pending.clear();
+    for (_, sess) in rt.sessions.drain() {
+        shutdown_session(sess).await;
+    }
+}
+
+/// Best-effort session shutdown: take sole ownership and shut down; warn (don't
+/// fail) if a clone is still outstanding or shutdown errors.
+async fn shutdown_session(sess: Arc<Session>) {
+    match Arc::try_unwrap(sess) {
+        Ok(only) => {
+            if let Err(e) = only.shutdown().await {
+                tracing::warn!(error = %e, "session shutdown failed");
+            }
+        }
+        Err(_) => {
+            tracing::warn!("session still referenced at teardown; worktree may leak");
+        }
     }
 }
 
