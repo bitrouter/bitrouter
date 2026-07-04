@@ -56,7 +56,6 @@ pub enum Effect {
 /// The channel message the loop receives. Carries the real `PendingPermission`
 /// handle (not `Clone`), which the loop stashes before deriving `AppEvent`.
 pub enum Incoming {
-    Key(KeyEvent),
     Update {
         record_id: String,
         update: SessionUpdateKind,

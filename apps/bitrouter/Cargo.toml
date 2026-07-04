@@ -51,6 +51,7 @@ semver = "1"
 thiserror.workspace = true
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true, features = ["event-stream"] }
+agent-client-protocol = { workspace = true }
 
 [features]
 default = ["tui"]
