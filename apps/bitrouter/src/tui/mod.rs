@@ -1,5 +1,8 @@
 //! `bitrouter tui` — in-process multi-agent manager (M1: single agent).
 
+mod event;
+mod state;
+
 use anyhow::{Context, Result};
 
 /// Launch the TUI against `agent_id`, optionally inside a git worktree `name`.
