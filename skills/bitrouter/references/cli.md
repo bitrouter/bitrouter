@@ -42,6 +42,12 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
 
+## TUI
+
+| Command | Effect |
+|---|---|
+| `bitrouter tui --agent <id> [--worktree <name>]` | Launch the in-process single-agent terminal UI (M1). Streams the agent's messages/thoughts/tool-calls into a scrollback pane; `›` prompt sends input; permission prompts answered inline with `y`/`a`/`n`; `Ctrl-C` exits. Gated by the default-on `tui` feature. In-process (no daemon owns the session) — run `bitrouter serve` alongside so agent traffic routes through the proxy. Multi-agent grid / cost HUD / detach are future work. |
+
 ## Setup helpers
 
 | Command | Effect |
