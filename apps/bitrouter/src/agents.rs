@@ -13,10 +13,8 @@
 //! invoked via `npx -y`, so there is no binary to download or checksum.
 //! External-registry + binary-install support is tracked as a follow-up.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use bitrouter_sdk::acp::{AcpStdioExecutor, AcpTarget, Executor};
-use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
 
 /// One well-known ACP agent in the bundled catalog.
@@ -140,25 +138,15 @@ fn describe_invocation(cfg: &bitrouter_sdk::acp::AcpAgentConfig) -> String {
 /// `bitrouter agents check` — spawn each *configured* agent, send an
 /// `initialize` request, and report whether the round-trip succeeded.
 pub async fn check(config: &Config) -> Vec<CheckRow> {
-    let executor = AcpStdioExecutor::new();
+    use bitrouter_sdk::acp::AcpTransport;
     let mut out = Vec::with_capacity(config.agents.len());
     let mut sorted: Vec<_> = config.agents.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (id, cfg) in sorted {
-        let target = AcpTarget {
-            agent_name: id.clone(),
-            transport: cfg.transport.clone(),
-        };
-        let request = bitrouter_sdk::acp::AcpRequest::new(
-            id.clone(),
-            "initialize",
-            serde_json::json!({}),
-            CallerContext::local(),
-        );
-        let started = Instant::now();
-        let outcome = match executor.execute(&target, &request).await {
-            Ok(_) => Ok(started.elapsed()),
-            Err(e) => Err(e.to_string()),
+        let outcome = match &cfg.transport {
+            AcpTransport::Stdio { command, args, env } => {
+                bitrouter_substrate::up::health_check(command, args, env).await
+            }
         };
         out.push(CheckRow {
             id: id.clone(),
@@ -251,11 +239,15 @@ mod tests {
     use std::collections::HashMap;
 
     fn agent(name: &str, cmd: &str) -> AcpAgentConfig {
+        agent_with_args(name, cmd, &[])
+    }
+
+    fn agent_with_args(name: &str, cmd: &str, args: &[&str]) -> AcpAgentConfig {
         AcpAgentConfig {
             name: name.into(),
             transport: AcpTransport::Stdio {
                 command: cmd.into(),
-                args: vec![],
+                args: args.iter().map(|s| s.to_string()).collect(),
                 env: HashMap::new(),
             },
         }
@@ -293,11 +285,30 @@ mod tests {
         assert!(custom.description.contains("stdio ./bot"));
     }
 
+    /// A bash stub that answers `initialize` with a JSON-RPC error so the
+    /// health-check fails fast (no process-exit hang, no timeout wait).
+    #[cfg(unix)]
+    const ERROR_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*) printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32600,"message":"not supported"}}\n' "$id";;
+          esac
+        done
+    "#;
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn check_reports_per_agent_failure_independently() {
         let mut cfg = Config::default();
-        cfg.agents.insert("a".into(), agent("a", "/bin/false"));
-        cfg.agents.insert("b".into(), agent("b", "/bin/false"));
+        cfg.agents.insert(
+            "a".into(),
+            agent_with_args("a", "bash", &["-c", ERROR_STUB]),
+        );
+        cfg.agents.insert(
+            "b".into(),
+            agent_with_args("b", "bash", &["-c", ERROR_STUB]),
+        );
         let rows = check(&cfg).await;
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "a");

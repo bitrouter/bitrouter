@@ -52,4 +52,4 @@ models:
 
 ## Notes & gotchas
 
-> **TODO:** anything OpenClaw-specific learned in testing — especially around the ACP bridge (`bitrouter agent-proxy`) if OpenClaw also speaks ACP.
+> **TODO:** anything OpenClaw-specific learned in testing — especially around ACP if OpenClaw also speaks it.

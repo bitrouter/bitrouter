@@ -80,8 +80,8 @@ providers:
 #       command: uvx
 #       args: ["mcp-server-git"]
 
-# Upstream ACP (Agent Client Protocol) agents — invoked from an editor
-# via `bitrouter agent-proxy <id>`. Spec:
+# Upstream ACP (Agent Client Protocol) agents — manage with
+# `bitrouter agents list` / `check` / `install`. Spec:
 # https://agentclientprotocol.com/protocol/schema
 # agents:
 #   claude:

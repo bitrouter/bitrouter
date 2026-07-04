@@ -29,6 +29,19 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 | `bitrouter agents install <id>` | Print a paste-ready YAML stub for catalog entry `<id>`. |
 | `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: wired / endpoint / sampler / cardinality usage / in-flight spans. JSON output for tooling. |
 
+## ACP sessions
+
+Per-session ACP substrate — one process = one session = one agent. Managers (GUI, AI agents, editors) spawn one process per session and drive it; orchestration is external to the substrate.
+
+| Command | Effect |
+|---|---|
+| `bitrouter acp serve --agent <id> [--worktree <name>] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel`). Logs go to stderr; stdout carries ACP JSON-RPC. |
+| `bitrouter acp prompt --agent <id> [--worktree <name>] [--no-wait] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. |
+
+**NDJSON format** (for `acp prompt`): each update line is a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`. The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` is emitted.
+
+See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
+
 ## Setup helpers
 
 | Command | Effect |
@@ -79,11 +92,10 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 | `bitrouter cloud byok list/set/delete` | BYOK provider keys. `set` takes already-sealed ciphertext (`--ciphertext-b64` + `--kek-id` matching the cloud's current X25519 public key). Scope: `byok:read` / `byok:write`. |
 | `bitrouter cloud oauth-client list/register/update/delete` | Registered OAuth clients on the account. Confidential clients return `client_secret` exactly once at `register`. Scope: `clients:read` / `clients:write` (opt-in via `--scope`). |
 
-## ACP bridge
+## Coding-agent harness
 
 | Command | Effect |
 |---|---|
-| `bitrouter agent-proxy <agent> [--config PATH]` | Stdio bridge between an ACP-aware editor and an upstream agent declared under `agents:`. Editor spawns this binary as a subprocess. Routes JSON-RPC newline-framed over stdio. |
 | `bitrouter spawn --agent <claude\|codex> [--config PATH] [--base-url URL] -- <agent args...>` | Launch a coding-agent CLI through BitRouter without editing agent config files. Claude uses child env overrides; Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. |
 
 ## Unimplemented in v1.0

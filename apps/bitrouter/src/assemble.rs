@@ -11,7 +11,6 @@ use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
-use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
@@ -413,23 +412,6 @@ pub async fn build_app_with_path(
         .and_then(FusionAliasConfig::from_settings)
         .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
 
-    // Optional ACP pure-routing pipeline — wired only when the config
-    // declares at least one upstream agent. Mirrors the MCP wiring above;
-    // the `bitrouter agent-proxy <id>` CLI dispatches against this pipeline.
-    let acp_routing = if config.agents.is_empty() {
-        None
-    } else {
-        Some(Arc::new(
-            ConfigAcpRoutingTable::from_configs(
-                config.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
-            )
-            .context("building the ACP routing table from config.agents")?,
-        ))
-    };
-    let acp_executor: Option<Arc<AcpStdioExecutor>> = acp_routing
-        .as_ref()
-        .map(|_| Arc::new(AcpStdioExecutor::new()));
-
     let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -509,14 +491,6 @@ pub async fn build_app_with_path(
                 app
             }
         }
-        _ => app,
-    };
-    // ACP pipeline — separate match because it's an independent optional
-    // configuration step on the same builder.
-    let app = match (acp_routing, acp_executor) {
-        (Some(table), Some(exec)) => app.acp(move |a| {
-            a.routing_table(table).executor(exec);
-        }),
         _ => app,
     };
     let app = app.build().context("building the App")?;
