@@ -111,9 +111,57 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        // Permission + Key handled in Tasks 4–5.
-        _ => Vec::new(),
+        AppEvent::Permission {
+            record_id,
+            title,
+            diff,
+            options,
+        } => {
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.pending = Some(PendingView {
+                    title: title.clone(),
+                    diff: diff.clone(),
+                    options: options.clone(),
+                });
+            }
+            Vec::new()
+        }
+        AppEvent::Key(key) => reduce_key(state, key),
     }
+}
+
+/// Handle a keypress. Permission keys take priority when a prompt is pending.
+fn reduce_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    let focus_id = match state.focused() {
+        Some(p) => p.record_id.clone(),
+        None => return Vec::new(),
+    };
+    let has_pending = state
+        .focused()
+        .map(|p| p.pending.is_some())
+        .unwrap_or(false);
+
+    if has_pending {
+        let outcome = match key.code {
+            KeyCode::Char('y') => Some(PermissionOutcome::AllowOnce),
+            KeyCode::Char('a') => Some(PermissionOutcome::AllowAlways),
+            KeyCode::Char('n') => Some(PermissionOutcome::Deny),
+            _ => None,
+        };
+        if let Some(outcome) = outcome {
+            if let Some(pane) = state.focused_mut() {
+                pane.pending = None;
+            }
+            return vec![Effect::ResolvePermission {
+                record_id: focus_id,
+                outcome,
+            }];
+        }
+        return Vec::new();
+    }
+
+    // Input editing / submit lands in Task 5.
+    Vec::new()
 }
 
 /// Fold one translated update into a pane's scrollback.
@@ -162,11 +210,91 @@ fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::event::AppEvent;
-    use bitrouter_substrate::translate::{SessionUpdateKind, ToolStatus};
+    use crate::tui::event::{AppEvent, Effect, PermOption};
+    use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
 
     fn pane() -> PaneState {
         PaneState::new("rec-1".into(), "claude".into())
+    }
+
+    fn allow_deny() -> Vec<PermOption> {
+        vec![
+            PermOption {
+                outcome: PermissionOutcome::AllowOnce,
+                label: "allow".into(),
+            },
+            PermOption {
+                outcome: PermissionOutcome::Deny,
+                label: "deny".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn permission_event_sets_pending_view() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "rec-1".into(),
+                title: "WRITE src/x.rs".into(),
+                diff: Some("- a\n+ b".into()),
+                options: allow_deny(),
+            },
+        );
+        let pending = st.panes[0].pending.as_ref().expect("pending set");
+        assert_eq!(pending.title, "WRITE src/x.rs");
+        assert_eq!(pending.options.len(), 2);
+    }
+
+    #[test]
+    fn y_key_resolves_pending_allow_once_and_clears_it() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "rec-1".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: allow_deny(),
+            },
+        );
+        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('y'))));
+        assert_eq!(
+            effects,
+            vec![Effect::ResolvePermission {
+                record_id: "rec-1".into(),
+                outcome: PermissionOutcome::AllowOnce,
+            }]
+        );
+        assert!(
+            st.panes[0].pending.is_none(),
+            "pending cleared after resolve"
+        );
+    }
+
+    #[test]
+    fn n_key_resolves_pending_deny() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "rec-1".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: allow_deny(),
+            },
+        );
+        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('n'))));
+        assert_eq!(
+            effects,
+            vec![Effect::ResolvePermission {
+                record_id: "rec-1".into(),
+                outcome: PermissionOutcome::Deny,
+            }]
+        );
     }
 
     #[test]
