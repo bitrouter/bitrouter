@@ -142,6 +142,13 @@ fn reduce_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         .unwrap_or(false);
 
     if has_pending {
+        // Ctrl-C must escape even a pending permission. Dropping the pending
+        // handle in the run loop's teardown defaults the request to Deny, so
+        // this is safe.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            state.should_quit = true;
+            return vec![Effect::Quit];
+        }
         let outcome = match key.code {
             KeyCode::Char('y') => Some(PermissionOutcome::AllowOnce),
             KeyCode::Char('a') => Some(PermissionOutcome::AllowAlways),
@@ -441,6 +448,24 @@ mod tests {
     #[test]
     fn ctrl_c_emits_quit() {
         let mut st = AppState::new(pane());
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let effects = reduce(&mut st, &AppEvent::Key(key));
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert!(st.should_quit);
+    }
+
+    #[test]
+    fn ctrl_c_during_pending_permission_quits() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "rec-1".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: allow_deny(),
+            },
+        );
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         let effects = reduce(&mut st, &AppEvent::Key(key));
         assert_eq!(effects, vec![Effect::Quit]);

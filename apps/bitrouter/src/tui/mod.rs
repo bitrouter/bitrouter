@@ -44,6 +44,9 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     // ── Channel + pump. ──
     let (tx, rx) = unbounded_channel::<Incoming>();
     pump::spawn(Arc::clone(&session), record_id.clone(), tx.clone());
+    // The pump holds its own sender clones; drop ours so the channel closes when
+    // the agent's streams end (agent exit → loop receives None → quit).
+    drop(tx);
 
     // ── Initial state. ──
     let state = AppState::new(PaneState::new(record_id.clone(), agent_id.to_string()));
@@ -86,10 +89,15 @@ async fn event_loop(
     let mut pending: std::collections::HashMap<String, bitrouter_substrate::up::PendingPermission> =
         std::collections::HashMap::new();
     let mut keys = EventStream::new();
+    let mut prompt_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     loop {
-        terminal.draw(|f| ui::render(&state, f)).context("draw")?;
+        if let Err(e) = terminal.draw(|f| ui::render(&state, f)) {
+            abort_prompt_tasks(&mut prompt_tasks).await;
+            return Err(e).context("draw");
+        }
         if state.should_quit {
+            abort_prompt_tasks(&mut prompt_tasks).await;
             return Ok(());
         }
 
@@ -128,33 +136,51 @@ async fn event_loop(
         let Some(app_event) = app_event else { continue };
         let effects = reduce(&mut state, &app_event);
         for effect in effects {
-            apply_effect(effect, session, &mut pending).await;
+            if let Some(handle) = apply_effect(effect, session, &mut pending) {
+                prompt_tasks.push(handle);
+            }
         }
+        // Reap finished prompt tasks so the vec stays bounded over a long session.
+        prompt_tasks.retain(|h| !h.is_finished());
     }
 }
 
-/// Apply one reducer effect against the live session.
-async fn apply_effect(
+/// Apply one reducer effect against the live session. For `Effect::Prompt` it
+/// returns the spawned task's handle so the loop can abort+await it at teardown;
+/// other effects return `None`.
+fn apply_effect(
     effect: Effect,
     session: &Arc<Session>,
     pending: &mut std::collections::HashMap<String, bitrouter_substrate::up::PendingPermission>,
-) {
+) -> Option<tokio::task::JoinHandle<()>> {
     match effect {
-        Effect::Quit => { /* loop exits via should_quit */ }
+        Effect::Quit => None,
         Effect::Prompt { text, .. } => {
             // Fire-and-forget: visible output arrives via the updates stream.
             let session = Arc::clone(session);
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 if let Err(e) = session.prompt(&text).await {
                     tracing::warn!(error = %e, "prompt failed");
                 }
-            });
+            }))
         }
         Effect::ResolvePermission { record_id, outcome } => {
             if let Some(p) = pending.remove(&record_id) {
                 p.resolve(outcome);
             }
+            None
         }
+    }
+}
+
+/// Abort and await any in-flight prompt tasks so their `Arc<Session>` clones are
+/// released before teardown takes sole ownership of the session.
+async fn abort_prompt_tasks(tasks: &mut Vec<tokio::task::JoinHandle<()>>) {
+    for handle in tasks.drain(..) {
+        handle.abort();
+        // An aborted handle resolves to a JoinError; discarding it is fine — we
+        // only await to guarantee the task (and its Arc clone) is fully dropped.
+        let _ = handle.await;
     }
 }
 
