@@ -160,8 +160,36 @@ fn reduce_key(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         return Vec::new();
     }
 
-    // Input editing / submit lands in Task 5.
-    Vec::new()
+    // Ctrl-C quits from anywhere.
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.should_quit = true;
+        return vec![Effect::Quit];
+    }
+
+    match key.code {
+        KeyCode::Char(c) => {
+            state.input.push(c);
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let text = std::mem::take(&mut state.input);
+            if text.is_empty() {
+                return Vec::new();
+            }
+            if let Some(pane) = state.focused_mut() {
+                pane.push(Line::UserPrompt(text.clone()));
+            }
+            vec![Effect::Prompt {
+                record_id: focus_id,
+                text,
+            }]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Fold one translated update into a pane's scrollback.
@@ -363,5 +391,59 @@ mod tests {
             },
         );
         assert!(st.panes[0].lines.is_empty());
+    }
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn typing_appends_to_input() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('h'))));
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('i'))));
+        assert_eq!(st.input, "hi");
+    }
+
+    #[test]
+    fn backspace_removes_last_char() {
+        let mut st = AppState::new(pane());
+        st.input = "hi".into();
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Backspace)));
+        assert_eq!(st.input, "h");
+    }
+
+    #[test]
+    fn enter_emits_prompt_effect_records_line_and_clears_input() {
+        let mut st = AppState::new(pane());
+        st.input = "fix the bug".into();
+        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        assert_eq!(
+            effects,
+            vec![Effect::Prompt {
+                record_id: "rec-1".into(),
+                text: "fix the bug".into(),
+            }]
+        );
+        assert_eq!(st.input, "");
+        assert_eq!(
+            st.panes[0].lines,
+            vec![Line::UserPrompt("fix the bug".into())]
+        );
+    }
+
+    #[test]
+    fn enter_on_empty_input_is_a_noop() {
+        let mut st = AppState::new(pane());
+        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        assert!(effects.is_empty());
+        assert!(st.panes[0].lines.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_emits_quit() {
+        let mut st = AppState::new(pane());
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let effects = reduce(&mut st, &AppEvent::Key(key));
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert!(st.should_quit);
     }
 }
