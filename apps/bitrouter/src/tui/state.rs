@@ -98,7 +98,142 @@ impl AppState {
 /// Fold one event into state, returning effects for the loop to run.
 /// PURE: no I/O, no session access.
 pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
-    // Implemented in Tasks 3–5.
-    let _ = (state, event);
-    Vec::new()
+    match event {
+        AppEvent::Update { record_id, update } => {
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                apply_update(pane, update);
+            }
+            Vec::new()
+        }
+        AppEvent::Exited { record_id } => {
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.exited = true;
+            }
+            Vec::new()
+        }
+        // Permission + Key handled in Tasks 4–5.
+        _ => Vec::new(),
+    }
+}
+
+/// Fold one translated update into a pane's scrollback.
+fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
+    match update {
+        SessionUpdateKind::MessageChunk { text, .. } => pane.push(Line::Message(text.clone())),
+        SessionUpdateKind::ThoughtChunk { text, .. } => pane.push(Line::Thought(text.clone())),
+        SessionUpdateKind::ToolCall {
+            id, title, status, ..
+        } => pane.push(Line::Tool {
+            id: id.clone(),
+            title: title.clone(),
+            status: status.clone(),
+        }),
+        SessionUpdateKind::ToolCallUpdate {
+            id, status, title, ..
+        } => {
+            // Merge into the existing tool line by id; if absent, append a new one.
+            if let Some(Line::Tool {
+                title: t,
+                status: s,
+                ..
+            }) = pane
+                .lines
+                .iter_mut()
+                .rev()
+                .find(|l| matches!(l, Line::Tool { id: lid, .. } if lid == id))
+            {
+                if let Some(new_status) = status {
+                    *s = new_status.clone();
+                }
+                if let Some(new_title) = title {
+                    *t = new_title.clone();
+                }
+            } else {
+                pane.push(Line::Tool {
+                    id: id.clone(),
+                    title: title.clone().unwrap_or_default(),
+                    status: status.clone().unwrap_or(ToolStatus::Pending),
+                });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::event::AppEvent;
+    use bitrouter_substrate::translate::{SessionUpdateKind, ToolStatus};
+
+    fn pane() -> PaneState {
+        PaneState::new("rec-1".into(), "claude".into())
+    }
+
+    #[test]
+    fn message_chunk_appends_a_message_line() {
+        let mut st = AppState::new(pane());
+        let ev = AppEvent::Update {
+            record_id: "rec-1".into(),
+            update: SessionUpdateKind::MessageChunk {
+                message_id: None,
+                text: "hi".into(),
+            },
+        };
+        let effects = reduce(&mut st, &ev);
+        assert!(effects.is_empty());
+        assert_eq!(st.panes[0].lines, vec![Line::Message("hi".into())]);
+    }
+
+    #[test]
+    fn tool_call_then_update_merges_status() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "rec-1".into(),
+                update: SessionUpdateKind::ToolCall {
+                    id: "t1".into(),
+                    title: "run tests".into(),
+                    status: ToolStatus::Running,
+                    diff: None,
+                },
+            },
+        );
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "rec-1".into(),
+                update: SessionUpdateKind::ToolCallUpdate {
+                    id: "t1".into(),
+                    status: Some(ToolStatus::Ok),
+                    title: None,
+                    diff: None,
+                },
+            },
+        );
+        assert_eq!(
+            st.panes[0].lines,
+            vec![Line::Tool {
+                id: "t1".into(),
+                title: "run tests".into(),
+                status: ToolStatus::Ok
+            }],
+        );
+    }
+
+    #[test]
+    fn update_for_unknown_record_is_ignored() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "nope".into(),
+                update: SessionUpdateKind::MessageChunk {
+                    message_id: None,
+                    text: "x".into(),
+                },
+            },
+        );
+        assert!(st.panes[0].lines.is_empty());
+    }
 }
