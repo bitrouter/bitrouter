@@ -300,6 +300,17 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
+    /// Launch the in-process multi-agent TUI. M1: hosts a single ACP agent in a
+    /// worktree, streams its output, sends prompts, answers permissions.
+    #[cfg(feature = "tui")]
+    Tui {
+        /// Agent id (must exist under `agents:` in the config).
+        #[arg(short, long)]
+        agent: String,
+        /// Optional git worktree name to create for this session.
+        #[arg(short, long)]
+        worktree: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -761,6 +772,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
         Command::Mcp { action } => mcp_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
+        #[cfg(feature = "tui")]
+        Command::Tui { agent, worktree } => bitrouter::tui::run(&agent, worktree.as_deref()).await,
         Command::Update {
             check,
             tag,

@@ -29,6 +29,8 @@ pub mod skills;
 pub mod spawn;
 pub mod style;
 pub mod tools;
+#[cfg(feature = "tui")]
+pub mod tui;
 pub mod update;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};

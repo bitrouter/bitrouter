@@ -49,6 +49,12 @@ futures.workspace = true
 axoupdater = { version = "0.9", default-features = false, features = ["github_releases"] }
 semver = "1"
 thiserror.workspace = true
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true, features = ["event-stream"] }
+
+[features]
+default = ["tui"]
+tui = ["dep:ratatui", "dep:crossterm"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
