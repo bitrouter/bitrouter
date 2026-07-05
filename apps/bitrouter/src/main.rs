@@ -300,14 +300,17 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Launch the in-process multi-agent TUI. M1: hosts a single ACP agent in a
-    /// worktree, streams its output, sends prompts, answers permissions.
+    /// Launch the in-process multi-agent TUI. Starts with one ACP agent
+    /// (`--agent`) and grows from there: `Ctrl-A` opens agent mode to spawn more
+    /// (tiled grid, tabs, focus, zoom), `Ctrl-B` broadcasts a prompt to several
+    /// agents at once. Streams each agent's output, sends prompts, and answers
+    /// permissions inline.
     #[cfg(feature = "tui")]
     Tui {
-        /// Agent id (must exist under `agents:` in the config).
+        /// Agent id for the first pane (must exist under `agents:` in the config).
         #[arg(short, long)]
         agent: String,
-        /// Optional git worktree name to create for this session.
+        /// Optional git worktree name to create for the first session.
         #[arg(short, long)]
         worktree: Option<String>,
     },

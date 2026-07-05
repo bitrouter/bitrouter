@@ -47,7 +47,7 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | Command | Effect |
 |---|---|
 | `bitrouter tui --agent <id> [--worktree <name>]` | Launch the in-process multi-agent terminal UI. Starts with one agent (`--agent`); each pane streams the agent's messages/thoughts/tool-calls into a scrollback pane and takes prompts at its `›` line; permission prompts answered inline with `y`/`a`/`n`. Panes render in a tiled grid with a focus highlight. `Ctrl-C` exits. Gated by the default-on `tui` feature. In-process (no daemon owns the session) — run `bitrouter serve` alongside so agent traffic routes through the proxy. |
-| TUI modes | **NORMAL** (default): keys go to the focused pane; `Ctrl-A` → AGENT mode. **AGENT** (`Ctrl-A`): `n` new agent (opens a picker over configured agents) · `x` close focused · `Tab`/`←`/`→`/`1`-`9` switch focus · `f` zoom the focused pane fullscreen · `Esc` back to NORMAL. **PICKER**: `↑`/`↓` select · `Enter` spawn · `Esc` cancel. Tabs / broadcast / cost HUD / detach are future work. |
+| TUI modes | **NORMAL** (default): keys go to the focused pane; `Ctrl-A` → AGENT mode, `Ctrl-B` → BROADCAST. **AGENT** (`Ctrl-A`): `n` new agent (picker over configured agents) · `x` close focused · `Tab`/`←`/`→`/`1`-`9` switch focus · `f` zoom · `t` new tab · `[`/`]` prev/next tab · `Esc`. **PICKER**: `↑`/`↓` select · `Enter` spawn · `Esc`. **BROADCAST** (`Ctrl-B`): `Space`/`1`-`9` toggle pane selection · `a` select all · type · `Enter` send to selection · `Esc`. Panes render in a tiled grid grouped by tab; a background pane needing attention rings the bell and shows `●`. Cost HUD / detach are future work. |
 
 ## Setup helpers
 
