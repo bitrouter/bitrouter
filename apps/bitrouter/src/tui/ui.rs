@@ -23,14 +23,19 @@ pub fn render(state: &AppState, frame: &mut Frame) {
         .split(area);
     let grid_area = chunks[0];
 
+    let (panes, focus): (&[PaneState], usize) = match state.active() {
+        Some(t) => (t.panes.as_slice(), t.focus),
+        None => (&[], 0),
+    };
+
     if state.zoom {
         if let Some(pane) = state.focused() {
-            render_grid_pane(pane, true, state.focus, frame, grid_area);
+            render_grid_pane(pane, true, focus, frame, grid_area);
         }
     } else {
-        let rects = grid_rects(grid_area, state.panes.len());
-        for (i, (pane, rect)) in state.panes.iter().zip(rects.iter()).enumerate() {
-            render_grid_pane(pane, i == state.focus, i, frame, *rect);
+        let rects = grid_rects(grid_area, panes.len());
+        for (i, (pane, rect)) in panes.iter().zip(rects.iter()).enumerate() {
+            render_grid_pane(pane, i == focus, i, frame, *rect);
         }
     }
 
@@ -247,8 +252,12 @@ mod tests {
 
     fn three_panes() -> AppState {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
-        st.panes.push(PaneState::new("r1".into(), "a1".into()));
-        st.panes.push(PaneState::new("r2".into(), "a2".into()));
+        st.tabs[0]
+            .panes
+            .push(PaneState::new("r1".into(), "a1".into()));
+        st.tabs[0]
+            .panes
+            .push(PaneState::new("r2".into(), "a2".into()));
         st
     }
 
@@ -262,10 +271,10 @@ mod tests {
     #[test]
     fn zoom_shows_only_focused_pane() {
         let mut st = three_panes();
-        st.panes[1]
+        st.tabs[0].panes[1]
             .lines
             .push(Line::Message("SECOND_PANE_UNIQUE".into()));
-        st.focus = 0;
+        st.tabs[0].focus = 0;
         st.zoom = true;
         let text = draw(&st, 80, 24);
         assert!(text.contains("a0"), "focused agent present");

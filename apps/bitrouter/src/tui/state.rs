@@ -80,13 +80,21 @@ impl PaneState {
     }
 }
 
-/// Whole-app render state. Holds N agent panes; `focus` indexes the active one
-/// (it may momentarily be out of bounds right after the last pane closes, before
-/// `should_quit` ends the loop — callers use the `Option`-returning accessors).
+/// A cohort of agent panes shown together. `focus` indexes `panes`.
 #[derive(Debug, Clone)]
-pub struct AppState {
+pub struct Tab {
+    pub title: String,
     pub panes: Vec<PaneState>,
     pub focus: usize,
+}
+
+/// Whole-app render state. Holds N tabs, each with N agent panes; `active_tab`
+/// indexes `tabs`. Accessors return `Option` because a tab or pane may be absent
+/// transiently (e.g. right after the last pane closes, before `should_quit`).
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub tabs: Vec<Tab>,
+    pub active_tab: usize,
     pub input: String,
     pub should_quit: bool,
     pub mode: Mode,
@@ -94,13 +102,18 @@ pub struct AppState {
     pub picker: Option<PickerState>,
     pub available_agents: Vec<String>,
     pub notice: Option<String>,
+    pub broadcast_input: String,
 }
 
 impl AppState {
     pub fn new(pane: PaneState) -> Self {
         Self {
-            panes: vec![pane],
-            focus: 0,
+            tabs: vec![Tab {
+                title: "1".to_string(),
+                panes: vec![pane],
+                focus: 0,
+            }],
+            active_tab: 0,
             input: String::new(),
             should_quit: false,
             mode: Mode::Normal,
@@ -108,26 +121,44 @@ impl AppState {
             picker: None,
             available_agents: Vec::new(),
             notice: None,
+            broadcast_input: String::new(),
         }
-    }
-
-    /// The focused pane. Panes can be empty (e.g. right after the last pane
-    /// closes), so callers must handle `None`.
-    pub fn focused_mut(&mut self) -> Option<&mut PaneState> {
-        self.panes.get_mut(self.focus)
-    }
-
-    pub fn focused(&self) -> Option<&PaneState> {
-        self.panes.get(self.focus)
-    }
-
-    fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
-        self.panes.iter_mut().find(|p| p.record_id == record_id)
     }
 
     /// Set the list of agent ids the picker offers (from the config catalog).
     pub fn set_available_agents(&mut self, agents: Vec<String>) {
         self.available_agents = agents;
+    }
+
+    /// The active tab.
+    pub fn active(&self) -> Option<&Tab> {
+        self.tabs.get(self.active_tab)
+    }
+
+    /// The active tab, mutably.
+    pub fn active_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.get_mut(self.active_tab)
+    }
+
+    /// The active tab's focused pane.
+    pub fn focused(&self) -> Option<&PaneState> {
+        let t = self.tabs.get(self.active_tab)?;
+        t.panes.get(t.focus)
+    }
+
+    /// The active tab's focused pane, mutably.
+    pub fn focused_mut(&mut self) -> Option<&mut PaneState> {
+        let t = self.tabs.get_mut(self.active_tab)?;
+        t.panes.get_mut(t.focus)
+    }
+
+    /// Find a pane by `record_id` across ALL tabs (updates/permissions may target
+    /// a pane in a non-active tab).
+    fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
+        self.tabs
+            .iter_mut()
+            .flat_map(|t| t.panes.iter_mut())
+            .find(|p| p.record_id == record_id)
     }
 }
 
@@ -166,10 +197,11 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             record_id,
             agent_id,
         } => {
-            state
-                .panes
-                .push(PaneState::new(record_id.clone(), agent_id.clone()));
-            state.focus = state.panes.len() - 1;
+            if let Some(tab) = state.active_mut() {
+                tab.panes
+                    .push(PaneState::new(record_id.clone(), agent_id.clone()));
+                tab.focus = tab.panes.len() - 1;
+            }
             state.notice = None;
             Vec::new()
         }
@@ -279,21 +311,27 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-            if !state.panes.is_empty() {
-                state.focus = (state.focus + 1) % state.panes.len();
+            if let Some(tab) = state.active_mut()
+                && !tab.panes.is_empty()
+            {
+                tab.focus = (tab.focus + 1) % tab.panes.len();
             }
             Vec::new()
         }
         KeyCode::Left | KeyCode::Char('h') => {
-            if !state.panes.is_empty() {
-                state.focus = (state.focus + state.panes.len() - 1) % state.panes.len();
+            if let Some(tab) = state.active_mut()
+                && !tab.panes.is_empty()
+            {
+                tab.focus = (tab.focus + tab.panes.len() - 1) % tab.panes.len();
             }
             Vec::new()
         }
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as usize) - ('1' as usize);
-            if idx < state.panes.len() {
-                state.focus = idx;
+            if let Some(tab) = state.active_mut()
+                && idx < tab.panes.len()
+            {
+                tab.focus = idx;
             }
             Vec::new()
         }
@@ -302,18 +340,35 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// Remove the focused pane, adjust `focus`, and emit `CloseAgent` so the run
-/// loop shuts the session down. Quitting the last pane exits the TUI.
+/// Remove the active tab's focused pane, emit `CloseAgent`, and (if the tab is
+/// now empty) remove the tab. Quitting the last pane of the last tab exits.
 fn close_focused(state: &mut AppState) -> Vec<Effect> {
-    let record_id = match state.panes.get(state.focus) {
-        Some(pane) => pane.record_id.clone(),
-        None => return Vec::new(),
+    let (record_id, tab_now_empty) = {
+        let tab = match state.active_mut() {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let record_id = match tab.panes.get(tab.focus) {
+            Some(pane) => pane.record_id.clone(),
+            None => return Vec::new(),
+        };
+        tab.panes.remove(tab.focus);
+        if tab.panes.is_empty() {
+            (record_id, true)
+        } else {
+            if tab.focus >= tab.panes.len() {
+                tab.focus = tab.panes.len() - 1;
+            }
+            (record_id, false)
+        }
     };
-    state.panes.remove(state.focus);
-    if state.panes.is_empty() {
-        state.should_quit = true;
-    } else if state.focus >= state.panes.len() {
-        state.focus = state.panes.len() - 1;
+    if tab_now_empty {
+        state.tabs.remove(state.active_tab);
+        if state.tabs.is_empty() {
+            state.should_quit = true;
+        } else if state.active_tab >= state.tabs.len() {
+            state.active_tab = state.tabs.len() - 1;
+        }
     }
     vec![Effect::CloseAgent { record_id }]
 }
@@ -424,6 +479,15 @@ mod tests {
     }
 
     #[test]
+    fn new_app_has_one_tab_with_one_pane() {
+        let st = AppState::new(pane());
+        assert_eq!(st.tabs.len(), 1);
+        assert_eq!(st.active_tab, 0);
+        assert_eq!(st.tabs[0].panes.len(), 1);
+        assert_eq!(st.tabs[0].focus, 0);
+    }
+
+    #[test]
     fn permission_event_sets_pending_view() {
         let mut st = AppState::new(pane());
         reduce(
@@ -435,7 +499,7 @@ mod tests {
                 options: allow_deny(),
             },
         );
-        let pending = st.panes[0].pending.as_ref().expect("pending set");
+        let pending = st.tabs[0].panes[0].pending.as_ref().expect("pending set");
         assert_eq!(pending.title, "WRITE src/x.rs");
         assert_eq!(pending.options.len(), 2);
     }
@@ -462,7 +526,7 @@ mod tests {
             }]
         );
         assert!(
-            st.panes[0].pending.is_none(),
+            st.tabs[0].panes[0].pending.is_none(),
             "pending cleared after resolve"
         );
     }
@@ -502,7 +566,7 @@ mod tests {
         };
         let effects = reduce(&mut st, &ev);
         assert!(effects.is_empty());
-        assert_eq!(st.panes[0].lines, vec![Line::Message("hi".into())]);
+        assert_eq!(st.tabs[0].panes[0].lines, vec![Line::Message("hi".into())]);
     }
 
     #[test]
@@ -533,7 +597,7 @@ mod tests {
             },
         );
         assert_eq!(
-            st.panes[0].lines,
+            st.tabs[0].panes[0].lines,
             vec![Line::Tool {
                 id: "t1".into(),
                 title: "run tests".into(),
@@ -555,7 +619,7 @@ mod tests {
                 },
             },
         );
-        assert!(st.panes[0].lines.is_empty());
+        assert!(st.tabs[0].panes[0].lines.is_empty());
     }
 
     #[test]
@@ -568,10 +632,10 @@ mod tests {
                 agent_id: "fake".into(),
             },
         );
-        assert_eq!(st.panes.len(), 2);
-        assert_eq!(st.focus, 1);
-        assert_eq!(st.panes[1].record_id, "r9");
-        assert_eq!(st.panes[1].agent_id, "fake");
+        assert_eq!(st.tabs[0].panes.len(), 2);
+        assert_eq!(st.tabs[0].focus, 1);
+        assert_eq!(st.tabs[0].panes[1].record_id, "r9");
+        assert_eq!(st.tabs[0].panes[1].agent_id, "fake");
     }
 
     #[test]
@@ -591,8 +655,8 @@ mod tests {
                 agent_id: "b".into(),
             },
         );
-        assert_eq!(st.panes.len(), 3);
-        assert_eq!(st.focus, 2);
+        assert_eq!(st.tabs[0].panes.len(), 3);
+        assert_eq!(st.tabs[0].focus, 2);
     }
 
     #[test]
@@ -605,7 +669,7 @@ mod tests {
                 error: "boom".into(),
             },
         );
-        assert_eq!(st.panes.len(), 1);
+        assert_eq!(st.tabs[0].panes.len(), 1);
         assert_eq!(st.notice.as_deref(), Some("failed to spawn fake: boom"));
     }
 
@@ -641,7 +705,7 @@ mod tests {
         );
         assert_eq!(st.input, "");
         assert_eq!(
-            st.panes[0].lines,
+            st.tabs[0].panes[0].lines,
             vec![Line::UserPrompt("fix the bug".into())]
         );
     }
@@ -651,7 +715,7 @@ mod tests {
         let mut st = AppState::new(pane());
         let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
         assert!(effects.is_empty());
-        assert!(st.panes[0].lines.is_empty());
+        assert!(st.tabs[0].panes[0].lines.is_empty());
     }
 
     #[test]
@@ -715,8 +779,12 @@ mod tests {
 
     fn panes3() -> AppState {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
-        st.panes.push(PaneState::new("r1".into(), "a1".into()));
-        st.panes.push(PaneState::new("r2".into(), "a2".into()));
+        st.tabs[0]
+            .panes
+            .push(PaneState::new("r1".into(), "a1".into()));
+        st.tabs[0]
+            .panes
+            .push(PaneState::new("r2".into(), "a2".into()));
         st
     }
 
@@ -726,11 +794,11 @@ mod tests {
         let mut st = panes3();
         st.mode = Mode::Agent;
         reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
-        assert_eq!(st.focus, 1);
+        assert_eq!(st.tabs[0].focus, 1);
         reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
-        assert_eq!(st.focus, 2);
+        assert_eq!(st.tabs[0].focus, 2);
         reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
-        assert_eq!(st.focus, 0);
+        assert_eq!(st.tabs[0].focus, 0);
     }
 
     #[test]
@@ -739,7 +807,7 @@ mod tests {
         let mut st = panes3();
         st.mode = Mode::Agent;
         reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Left)));
-        assert_eq!(st.focus, 2);
+        assert_eq!(st.tabs[0].focus, 2);
     }
 
     #[test]
@@ -748,9 +816,9 @@ mod tests {
         let mut st = panes3();
         st.mode = Mode::Agent;
         reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('3'))));
-        assert_eq!(st.focus, 2);
+        assert_eq!(st.tabs[0].focus, 2);
         reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('9'))));
-        assert_eq!(st.focus, 2); // out of range → unchanged
+        assert_eq!(st.tabs[0].focus, 2); // out of range → unchanged
     }
 
     #[test]
@@ -769,7 +837,7 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent};
         let mut st = panes3();
         st.mode = Mode::Agent;
-        st.focus = 1;
+        st.tabs[0].focus = 1;
         let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
         assert_eq!(
             fx,
@@ -777,9 +845,9 @@ mod tests {
                 record_id: "r1".into()
             }]
         );
-        assert_eq!(st.panes.len(), 2);
-        assert_eq!(st.panes[0].record_id, "r0");
-        assert_eq!(st.panes[1].record_id, "r2");
+        assert_eq!(st.tabs[0].panes.len(), 2);
+        assert_eq!(st.tabs[0].panes[0].record_id, "r0");
+        assert_eq!(st.tabs[0].panes[1].record_id, "r2");
     }
 
     #[test]
@@ -795,7 +863,7 @@ mod tests {
             }]
         );
         assert!(st.should_quit);
-        assert!(st.panes.is_empty());
+        assert!(st.tabs.is_empty());
     }
 
     #[test]
