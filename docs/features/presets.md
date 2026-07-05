@@ -47,7 +47,7 @@ A preset supplies *defaults*. Anything the caller sets explicitly on the request
 Presets are scoped to a namespace. Create them in the console under **Settings → Routing Presets**, or with the management API:
 
 ```bash
-curl -X POST http://127.0.0.1:4356/v1/namespaces/{nsid}/routing-presets \
+curl -X POST https://api.bitrouter.ai/v1/namespaces/{nsid}/routing-presets \
   -H "Authorization: Bearer $BRK_KEY" \
   -H "Content-Type: application/json" \
   -d '{

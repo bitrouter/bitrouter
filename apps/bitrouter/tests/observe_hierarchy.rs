@@ -39,8 +39,10 @@ const POLL_INTERVAL_MS: u64 = 50;
 fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    // Keep the assertion independent of the developer/CI shell's RUST_LOG.
+    // A warn-level filter would drop the HTTP ingress info span before the
+    // tracing-opentelemetry bridge can export it.
+    let env_filter = tracing_subscriber::EnvFilter::new("info");
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
@@ -129,6 +131,7 @@ async fn e2e_server_span_parents_chat_via_tracing_opentelemetry_bridge() {
         .respond_with(ResponseTemplate::new(200))
         .mount(&otlp_collector)
         .await;
+    let otlp_endpoint = format!("{}/v1/traces", otlp_collector.uri());
 
     // ── minimal config with OTel wired, auth + policy + guardrails off.
     //    Metric export is off (nested `otel:` block — the only form that
@@ -159,7 +162,7 @@ plugins:
         enabled: false
 "#,
         upstream = upstream.uri(),
-        otlp = otlp_collector.uri(),
+        otlp = otlp_endpoint,
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");

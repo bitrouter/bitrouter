@@ -165,7 +165,7 @@ You can override the default backend with `--backend local|cloud`. The HTTP tran
 When running with `--transport stdio --backend cloud`, a single bearer token is used for every request. Supply it via `--token <value>` or the `BITROUTER_TOKEN` environment variable:
 
 - A `brk_*` API key minted on the dashboard, or
-- The access token written by `bitrouter auth login` (RFC 8628 device flow).
+- The access token written by `bitrouter cloud login` (RFC 8628 device flow).
 
 ```bash
 # stdio — cloud backend, single token
@@ -199,7 +199,7 @@ Each client configures its own credential in its remote-server block. Example fo
 }
 ```
 
-Different clients can use different `brk_*` keys (or their own `bitrouter auth login` access tokens) against the same running server instance.
+Different clients can use different `brk_*` keys (or their own `bitrouter cloud login` access tokens) against the same running server instance.
 
 ### http → local
 

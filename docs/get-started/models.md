@@ -15,7 +15,7 @@ Prices are USD per **million tokens**, refreshed continuously from the live cata
 The **BitRouter Cloud provider** lets an agent call any model above with a single BitRouter account — no upstream provider keys, no per-provider signups. You pay BitRouter directly at the prices listed here, billed per request; failed requests aren't billed.
 
 ```bash
-bitrouter auth login    # one-time device-flow sign-in
+bitrouter cloud login   # one-time device-flow sign-in
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
 

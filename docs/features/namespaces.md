@@ -26,7 +26,7 @@ To see which namespace your current session is bound to:
 
 ```bash
 bitrouter cloud namespace current   # offline — reads local credential
-bitrouter auth whoami               # also prints the bound namespace
+bitrouter cloud whoami              # also prints the bound namespace
 ```
 
 To list all namespaces on the node:

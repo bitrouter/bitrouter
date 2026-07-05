@@ -29,7 +29,7 @@ claude
 ```
 
 <Callout type="info">
-**No key for the local proxy.** The local proxy accepts loopback requests without auth, so `ANTHROPIC_AUTH_TOKEN` can be any placeholder. For **Cloud**, set `ANTHROPIC_BASE_URL=https://api.bitrouter.ai` and use your BitRouter key (from `bitrouter auth login` or the dashboard) as the token.
+**No key for the local proxy.** The local proxy accepts loopback requests without auth, so `ANTHROPIC_AUTH_TOKEN` can be any placeholder. For **Cloud**, set `ANTHROPIC_BASE_URL=https://api.bitrouter.ai` and use your BitRouter key (from `bitrouter cloud login` or the dashboard) as the token.
 </Callout>
 
 Prefer a file? Put the same values in `.claude/settings.json` so they apply per-project without exporting:

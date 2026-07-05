@@ -127,7 +127,8 @@ pub enum RegistryAccess {
     ApiKey,
     /// Public, but credentials are minted by a local browser/device OAuth flow
     /// (no portable key) — e.g. GitHub Copilot. The OSS obtains it via
-    /// `bitrouter login <provider>`; not poolable / BYOK-able by the cloud.
+    /// `bitrouter providers login <provider>`; not poolable / BYOK-able by
+    /// the cloud.
     LocalOauth,
     /// Public, but credentials come from a local OAuth+PKCE flow — e.g. OpenAI
     /// Codex against a ChatGPT subscription. Same consumer consequences as

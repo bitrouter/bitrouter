@@ -102,8 +102,8 @@ impl OAuthToken {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Credential {
-    /// A static API key — what `bitrouter login <provider>` stores when the
-    /// user picks "paste an API key" instead of a browser OAuth flow.
+    /// A static API key — what `bitrouter providers login <provider>` stores
+    /// when the user picks "paste an API key" instead of a browser OAuth flow.
     /// Treated as never-expiring.
     ApiKey {
         /// The plaintext key value (e.g. `sk-ant-api03-…`, `sk-…`).
@@ -115,9 +115,9 @@ pub enum Credential {
     /// Code CLI's own store (`~/.claude`) at request time, and write any
     /// refresh back there". No token is copied into this store, so bitrouter
     /// and Claude Code share one credential and can't refresh-rotate each other
-    /// out (RFC 6749 §6). Set by `bitrouter login anthropic`; consumed by the
-    /// Anthropic `AuthApplier`. Serialized as the unit-variant `{"type":
-    /// "claude_code_cli"}`.
+    /// out (RFC 6749 §6). Set by `bitrouter providers login claude-code`;
+    /// consumed by the Claude Code `AuthApplier`. Serialized as the
+    /// unit-variant `{"type": "claude_code_cli"}`.
     ClaudeCodeCli,
 }
 

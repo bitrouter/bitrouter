@@ -53,7 +53,7 @@ providers:
   anthropic: {}     # uses ANTHROPIC_API_KEY
   google: {}        # uses GEMINI_API_KEY
   openrouter: {}    # uses OPENROUTER_API_KEY
-  # github-copilot needs `bitrouter login github-copilot` first:
+  # github-copilot needs `bitrouter providers login github-copilot` first:
   # github-copilot: {}
   # A provider can hold multiple accounts — e.g. two subscriptions to
   # the same upstream. `account_strategy` is `failover` (try the first,
@@ -434,8 +434,8 @@ fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMe
     }
 }
 
-/// `bitrouter login <provider> [--label <name>]` — interactive credential
-/// setup.
+/// `bitrouter providers login <provider> [--label <name>]` — interactive
+/// credential setup.
 ///
 /// Resolves which auth methods are wired for `provider_id` (subscription
 /// PKCE / device-code / API key paste), prompts the user to pick when
@@ -831,7 +831,8 @@ fn run_api_key_paste(
 }
 
 /// `LoginUx` implementation that drives stderr + stdin. Used by the
-/// `bitrouter login` CLI; library tests provide their own scripted UX.
+/// `bitrouter providers login` CLI; library tests provide their own scripted
+/// UX.
 struct StderrLoginUx;
 
 #[async_trait::async_trait]
@@ -876,8 +877,8 @@ impl bitrouter_providers::oauth::login::LoginUx for StderrLoginUx {
     }
 }
 
-/// `bitrouter logout <provider>` — drop every stored credential for the
-/// provider (subscription OAuth or pasted API key), if any.
+/// `bitrouter providers logout <provider>` — drop every stored credential for
+/// the provider (subscription OAuth or pasted API key), if any.
 pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
         .context("opening credential store")?;

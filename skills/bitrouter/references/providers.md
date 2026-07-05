@@ -17,15 +17,16 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `anthropic` | `ANTHROPIC_API_KEY` | Header `x-api-key` | Messages API |
 | `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API — **not** `GOOGLE_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `github-copilot` | — (local OAuth) | Device flow | `bitrouter login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter login openai-codex` |
+| `claude-code` | — (local OAuth) | Claude Code session | `bitrouter providers login claude-code`; Claude Pro/Max subscription provider, distinct from `anthropic` API-key billing |
+| `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
 Zero-config mode auto-enables every API-key provider whose env var is present;
 an API-key provider without its credential gets `active: false` and falls out of
-the routing table. Local-OAuth/PKCE providers (`github-copilot`, `openai-codex`)
-are enabled by `bitrouter login`, not an env var. **First run with no network
+the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
+`openai-codex`) are enabled by `bitrouter providers login`, not an env var. **First run with no network
 and no cache**: the registry is empty, so only fully-specified local providers
 and the in-binary `bitrouter` cloud gateway are available — the known-provider
 shorthand needs one prior successful fetch. Startup still succeeds.
@@ -57,7 +58,7 @@ Rules:
   built-in's env var when the provider also has a built-in entry. No key ⇒ not
   enabled. Declare the provider explicitly with `api_key: ${MY_VAR}` to override
   the env-var name. A `local_oauth` / `local_pkce` provider is not env-gated —
-  it activates after `bitrouter login <provider>`.
+  it activates after `bitrouter providers login <provider>`.
 - **Full catalog via the sync channel.** A provider may declare an `auto_sync`
   feed (the channel the registry itself curates from). BitRouter reads the same
   channel to pull the provider's **full** catalog beyond the curated canonical
@@ -65,7 +66,7 @@ Rules:
   on startup; a `models_dev` feed pulls the provider's models from models.dev.
   The curated canonical models keep the highest route priority.
 - **BitRouter Cloud serves everything.** When the `bitrouter` provider is
-  active (env key or `bitrouter auth login`), it is populated with every model
+  active (env key or `bitrouter cloud login`), it is populated with every model
   in the canonical list.
 
 ```yaml
@@ -313,7 +314,7 @@ Editors spawn the bridge with `bitrouter agent-proxy <id>`. `bitrouter agents li
 
 ```bash
 bitrouter reload                      # hot-reload running daemon
-# or SIGHUP to the daemon pid — same effect
+# SIGHUP also reloads daemon-side config, but does not forward new shell env vars
 # or `bitrouter restart` for a clean cycle
 ```
 
