@@ -336,6 +336,28 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Char('x') => close_focused(state),
+        KeyCode::Char('t') => {
+            let title = (state.tabs.len() + 1).to_string();
+            state.tabs.push(Tab {
+                title,
+                panes: Vec::new(),
+                focus: 0,
+            });
+            state.active_tab = state.tabs.len() - 1;
+            Vec::new()
+        }
+        KeyCode::Char(']') => {
+            if !state.tabs.is_empty() {
+                state.active_tab = (state.active_tab + 1) % state.tabs.len();
+            }
+            Vec::new()
+        }
+        KeyCode::Char('[') => {
+            if !state.tabs.is_empty() {
+                state.active_tab = (state.active_tab + state.tabs.len() - 1) % state.tabs.len();
+            }
+            Vec::new()
+        }
         _ => Vec::new(),
     }
 }
@@ -877,6 +899,71 @@ mod tests {
         let p = st.picker.as_ref().expect("picker set");
         assert_eq!(p.agents, vec!["fake".to_string(), "claude-acp".to_string()]);
         assert_eq!(p.selected, 0);
+    }
+
+    #[test]
+    fn t_creates_and_switches_to_new_empty_tab() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t'))));
+        assert_eq!(st.tabs.len(), 2);
+        assert_eq!(st.active_tab, 1);
+        assert!(st.tabs[1].panes.is_empty());
+    }
+
+    #[test]
+    fn bracket_keys_cycle_tabs_with_wrap() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t')))); // 2 tabs, active 1
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t')))); // 3 tabs, active 2
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(']'))));
+        assert_eq!(st.active_tab, 0); // wrapped forward
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('['))));
+        assert_eq!(st.active_tab, 2); // wrapped backward
+    }
+
+    #[test]
+    fn spawned_agent_goes_to_active_tab() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t')))); // active tab 1, empty
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawned {
+                record_id: "r9".into(),
+                agent_id: "fake".into(),
+            },
+        );
+        assert_eq!(st.tabs[1].panes.len(), 1);
+        assert_eq!(st.tabs[1].panes[0].record_id, "r9");
+        assert_eq!(st.tabs[0].panes.len(), 1); // original tab untouched
+    }
+
+    #[test]
+    fn closing_last_pane_of_a_tab_removes_that_tab() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = AppState::new(pane());
+        st.tabs.push(Tab {
+            title: "2".into(),
+            panes: vec![PaneState::new("r1".into(), "a1".into())],
+            focus: 0,
+        });
+        st.active_tab = 1;
+        st.mode = Mode::Agent;
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
+        assert_eq!(
+            fx,
+            vec![Effect::CloseAgent {
+                record_id: "r1".into()
+            }]
+        );
+        assert_eq!(st.tabs.len(), 1); // emptied tab removed
+        assert_eq!(st.active_tab, 0); // clamped
+        assert!(!st.should_quit);
     }
 
     fn picker_state(agents: &[&str]) -> AppState {
