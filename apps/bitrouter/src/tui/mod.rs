@@ -183,6 +183,8 @@ async fn event_loop(
 async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>) {
     match effect {
         Effect::Quit => {}
+        // Wired in M2b Task 6 (actual terminal bell).
+        Effect::Bell => {}
         Effect::Prompt { record_id, text } => {
             if let Some(sess) = rt.sessions.get(&record_id) {
                 let sess = Arc::clone(sess);

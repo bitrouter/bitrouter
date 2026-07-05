@@ -61,6 +61,7 @@ pub struct PaneState {
     pub pending: Option<PendingView>,
     pub exited: bool,
     pub selected: bool,
+    pub attention: bool,
 }
 
 impl PaneState {
@@ -72,6 +73,7 @@ impl PaneState {
             pending: None,
             exited: false,
             selected: false,
+            attention: false,
         }
     }
 
@@ -177,10 +179,17 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             Vec::new()
         }
         AppEvent::Exited { record_id } => {
+            let is_focused =
+                state.focused().map(|p| p.record_id.as_str()) == Some(record_id.as_str());
+            let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.exited = true;
+                if !is_focused {
+                    pane.attention = true;
+                    effects.push(Effect::Bell);
+                }
             }
-            Vec::new()
+            effects
         }
         AppEvent::Permission {
             record_id,
@@ -188,14 +197,21 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             diff,
             options,
         } => {
+            let is_focused =
+                state.focused().map(|p| p.record_id.as_str()) == Some(record_id.as_str());
+            let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.pending = Some(PendingView {
                     title: title.clone(),
                     diff: diff.clone(),
                     options: options.clone(),
                 });
+                if !is_focused {
+                    pane.attention = true;
+                    effects.push(Effect::Bell);
+                }
             }
-            Vec::new()
+            effects
         }
         AppEvent::AgentSpawned {
             record_id,
@@ -207,6 +223,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 tab.focus = tab.panes.len() - 1;
             }
             state.notice = None;
+            clear_focused_attention(state);
             Vec::new()
         }
         AppEvent::AgentSpawnFailed { agent_id, error } => {
@@ -331,6 +348,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             {
                 tab.focus = (tab.focus + 1) % tab.panes.len();
             }
+            clear_focused_attention(state);
             Vec::new()
         }
         KeyCode::Left | KeyCode::Char('h') => {
@@ -339,6 +357,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             {
                 tab.focus = (tab.focus + tab.panes.len() - 1) % tab.panes.len();
             }
+            clear_focused_attention(state);
             Vec::new()
         }
         KeyCode::Char(c @ '1'..='9') => {
@@ -348,6 +367,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             {
                 tab.focus = idx;
             }
+            clear_focused_attention(state);
             Vec::new()
         }
         KeyCode::Char('x') => close_focused(state),
@@ -365,15 +385,25 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if !state.tabs.is_empty() {
                 state.active_tab = (state.active_tab + 1) % state.tabs.len();
             }
+            clear_focused_attention(state);
             Vec::new()
         }
         KeyCode::Char('[') => {
             if !state.tabs.is_empty() {
                 state.active_tab = (state.active_tab + state.tabs.len() - 1) % state.tabs.len();
             }
+            clear_focused_attention(state);
             Vec::new()
         }
         _ => Vec::new(),
+    }
+}
+
+/// Clear the `attention` flag on the active tab's focused pane (called after a
+/// focus or tab change — the user is now looking at it).
+fn clear_focused_attention(state: &mut AppState) {
+    if let Some(pane) = state.focused_mut() {
+        pane.attention = false;
     }
 }
 
@@ -1237,5 +1267,63 @@ mod tests {
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Normal);
         assert!(st.picker.is_none());
+    }
+
+    #[test]
+    fn permission_on_background_pane_sets_attention_and_bell() {
+        let mut st = panes3(); // focus 0 = r0
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "r1".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: vec![],
+            },
+        );
+        assert!(st.tabs[0].panes[1].attention);
+        assert!(fx.contains(&Effect::Bell));
+    }
+
+    #[test]
+    fn permission_on_focused_pane_no_attention_no_bell() {
+        let mut st = panes3(); // focus 0 = r0
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "r0".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: vec![],
+            },
+        );
+        assert!(!st.tabs[0].panes[0].attention);
+        assert!(!fx.contains(&Effect::Bell));
+        assert!(st.tabs[0].panes[0].pending.is_some());
+    }
+
+    #[test]
+    fn exit_on_background_pane_sets_attention_and_bell() {
+        let mut st = panes3();
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Exited {
+                record_id: "r2".into(),
+            },
+        );
+        assert!(st.tabs[0].panes[2].attention);
+        assert!(st.tabs[0].panes[2].exited);
+        assert!(fx.contains(&Effect::Bell));
+    }
+
+    #[test]
+    fn focusing_a_pane_clears_its_attention() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = panes3();
+        st.mode = Mode::Agent;
+        st.tabs[0].panes[1].attention = true;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('2')))); // focus pane index 1
+        assert_eq!(st.tabs[0].focus, 1);
+        assert!(!st.tabs[0].panes[1].attention);
     }
 }

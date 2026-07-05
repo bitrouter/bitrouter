@@ -55,6 +55,8 @@ pub enum Effect {
     },
     /// Tear down and exit the TUI.
     Quit,
+    /// Ring the terminal bell (background pane needs attention).
+    Bell,
     /// Launch a new agent session (the loop performs the async launch).
     SpawnAgent { agent_id: String },
     /// Shut down and remove the session `record_id`.
