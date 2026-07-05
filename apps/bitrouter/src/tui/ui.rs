@@ -59,11 +59,19 @@ pub fn render(state: &AppState, frame: &mut Frame) {
     }
 }
 
-/// Top bar: one entry per tab (`title (pane_count)`), active tab highlighted.
+/// Top bar: one entry per tab (`title (pane_count)`), active tab highlighted. A
+/// tab with any pane needing attention (background notification or a pending
+/// permission) gets a `●` so it's visible from another tab.
 fn render_tabbar(state: &AppState, frame: &mut Frame, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
     for (i, tab) in state.tabs.iter().enumerate() {
-        let label = format!("{} ({})", tab.title, tab.panes.len());
+        let alert = tab.panes.iter().any(|p| p.attention || p.pending.is_some());
+        let label = format!(
+            "{} ({}){}",
+            tab.title,
+            tab.panes.len(),
+            if alert { " ●" } else { "" }
+        );
         if i == state.active_tab {
             spans.push(Span::styled(
                 format!(" ‹{label}› "),
@@ -383,6 +391,22 @@ mod tests {
         st.tabs[0].panes[1].attention = true;
         let text = draw(&st, 80, 24);
         assert!(text.contains('●'), "attention marker rendered");
+    }
+
+    #[test]
+    fn tab_bar_flags_a_background_tab_needing_attention() {
+        use crate::tui::state::Tab;
+        let mut st = three_panes(); // stays on active tab 0 (no attention there)
+        let mut bg = PaneState::new("bg".into(), "b".into());
+        bg.attention = true;
+        st.tabs.push(Tab {
+            title: "2".into(),
+            panes: vec![bg],
+            focus: 0,
+        });
+        let text = draw(&st, 80, 24);
+        // The ● surfaces on the *tab* label so it's visible from another tab.
+        assert!(text.contains("2 (1) ●"), "background tab flagged: {text:?}");
     }
 
     #[test]
