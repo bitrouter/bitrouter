@@ -1,7 +1,7 @@
 # BitRouter
 
 [![Build status](https://github.com/bitrouter/bitrouter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bitrouter/bitrouter/actions)
-[![Status](https://bitrouter.openstatus.dev/badge/v2)](https://bitrouter.openstatus.dev)
+[![Status](https://bitrouter.openstatus.dev/badge/v2?theme=dark)](https://bitrouter.openstatus.dev)
 [![Crates.io](https://img.shields.io/crates/v/bitrouter)](https://crates.io/crates/bitrouter)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Twitter](https://img.shields.io/badge/Twitter-black?logo=x&logoColor=white)](https://x.com/BitRouterAI)
