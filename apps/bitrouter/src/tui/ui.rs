@@ -148,6 +148,7 @@ fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
         Mode::Normal => "NORMAL  ^a agent · ^c quit",
         Mode::Agent => "AGENT  n new · x close · Tab focus · 1-9 · f zoom · Esc",
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
+        Mode::Broadcast => "BROADCAST  space/1-9 select · a all · Enter send · Esc",
     };
     let text = match &state.notice {
         Some(n) => format!("{hints}   ! {n}"),

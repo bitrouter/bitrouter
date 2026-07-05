@@ -16,6 +16,8 @@ pub enum Mode {
     Agent,
     /// Selecting an agent to spawn.
     Picker,
+    /// Selecting multiple panes to send one message to all of them.
+    Broadcast,
 }
 
 /// State of the agent picker overlay.
@@ -58,6 +60,7 @@ pub struct PaneState {
     pub lines: Vec<Line>,
     pub pending: Option<PendingView>,
     pub exited: bool,
+    pub selected: bool,
 }
 
 impl PaneState {
@@ -68,6 +71,7 @@ impl PaneState {
             lines: Vec::new(),
             pending: None,
             exited: false,
+            selected: false,
         }
     }
 
@@ -213,6 +217,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             Mode::Normal => reduce_key_normal(state, key),
             Mode::Agent => reduce_key_agent(state, key),
             Mode::Picker => reduce_key_picker(state, key),
+            Mode::Broadcast => reduce_key_broadcast(state, key),
         },
     }
 }
@@ -222,6 +227,16 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     // Ctrl-A enters AGENT (pane-management) mode.
     if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.mode = Mode::Agent;
+        return Vec::new();
+    }
+    // Ctrl-B enters BROADCAST mode (with a cleared selection).
+    if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let Some(tab) = state.active_mut() {
+            for p in tab.panes.iter_mut() {
+                p.selected = false;
+            }
+        }
+        state.mode = Mode::Broadcast;
         return Vec::new();
     }
     let focus_id = match state.focused() {
@@ -431,6 +446,85 @@ fn reduce_key_picker(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         _ => Vec::new(),
+    }
+}
+
+/// BROADCAST-mode keys: select panes, type once, send to all selected.
+///
+/// v1 limitation: `Space`, digits `1`-`9`, and `a` are consumed as commands, so
+/// broadcast text cannot contain them.
+fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            clear_broadcast(state);
+            state.mode = Mode::Normal;
+            Vec::new()
+        }
+        KeyCode::Char(' ') => {
+            if let Some(tab) = state.active_mut()
+                && let Some(p) = tab.panes.get_mut(tab.focus)
+            {
+                p.selected = !p.selected;
+            }
+            Vec::new()
+        }
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as usize) - ('1' as usize);
+            if let Some(tab) = state.active_mut()
+                && let Some(p) = tab.panes.get_mut(idx)
+            {
+                p.selected = !p.selected;
+            }
+            Vec::new()
+        }
+        KeyCode::Char('a') => {
+            if let Some(tab) = state.active_mut() {
+                for p in tab.panes.iter_mut() {
+                    p.selected = true;
+                }
+            }
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            state.broadcast_input.pop();
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let text = state.broadcast_input.clone();
+            if text.is_empty() {
+                return Vec::new();
+            }
+            let mut effects = Vec::new();
+            if let Some(tab) = state.active_mut() {
+                for p in tab.panes.iter_mut() {
+                    if p.selected {
+                        p.lines.push(Line::UserPrompt(text.clone()));
+                        effects.push(Effect::Prompt {
+                            record_id: p.record_id.clone(),
+                            text: text.clone(),
+                        });
+                    }
+                }
+            }
+            clear_broadcast(state);
+            state.mode = Mode::Normal;
+            effects
+        }
+        KeyCode::Char(c) => {
+            state.broadcast_input.push(c);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Clear the broadcast input and all pane selections in the active tab.
+fn clear_broadcast(state: &mut AppState) {
+    state.broadcast_input.clear();
+    if let Some(tab) = state.active_mut() {
+        for p in tab.panes.iter_mut() {
+            p.selected = false;
+        }
     }
 }
 
@@ -964,6 +1058,113 @@ mod tests {
         assert_eq!(st.tabs.len(), 1); // emptied tab removed
         assert_eq!(st.active_tab, 0); // clamped
         assert!(!st.should_quit);
+    }
+
+    fn bc_state() -> AppState {
+        let mut st = panes3();
+        st.mode = Mode::Broadcast;
+        st
+    }
+
+    #[test]
+    fn ctrl_b_enters_broadcast_and_clears_selection() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut st = panes3();
+        st.tabs[0].panes[0].selected = true;
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+        );
+        assert_eq!(st.mode, Mode::Broadcast);
+        assert!(!st.tabs[0].panes[0].selected);
+    }
+
+    #[test]
+    fn space_toggles_focused_pane_selection() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = bc_state();
+        st.tabs[0].focus = 1;
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(' '))));
+        assert!(st.tabs[0].panes[1].selected);
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(' '))));
+        assert!(!st.tabs[0].panes[1].selected);
+    }
+
+    #[test]
+    fn a_selects_all_panes() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = bc_state();
+        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('a'))));
+        assert!(st.tabs[0].panes.iter().all(|p| p.selected));
+    }
+
+    #[test]
+    fn typing_builds_broadcast_input() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = bc_state();
+        for c in ['h', 'i'] {
+            reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(c))));
+        }
+        assert_eq!(st.broadcast_input, "hi");
+    }
+
+    #[test]
+    fn enter_sends_to_selected_and_returns_to_normal() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = bc_state();
+        st.tabs[0].panes[0].selected = true;
+        st.tabs[0].panes[2].selected = true;
+        st.broadcast_input = "go".into();
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        assert_eq!(
+            fx,
+            vec![
+                Effect::Prompt {
+                    record_id: "r0".into(),
+                    text: "go".into()
+                },
+                Effect::Prompt {
+                    record_id: "r2".into(),
+                    text: "go".into()
+                },
+            ]
+        );
+        assert_eq!(st.mode, Mode::Normal);
+        assert_eq!(st.broadcast_input, "");
+        assert!(st.tabs[0].panes.iter().all(|p| !p.selected));
+        assert_eq!(
+            st.tabs[0].panes[0].lines,
+            vec![Line::UserPrompt("go".into())]
+        );
+        assert!(st.tabs[0].panes[1].lines.is_empty());
+        assert_eq!(
+            st.tabs[0].panes[2].lines,
+            vec![Line::UserPrompt("go".into())]
+        );
+    }
+
+    #[test]
+    fn enter_with_no_selection_is_a_noop_but_exits() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = bc_state();
+        st.broadcast_input = "go".into();
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Normal);
+        assert_eq!(st.broadcast_input, "");
+    }
+
+    #[test]
+    fn esc_cancels_broadcast() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut st = bc_state();
+        st.tabs[0].panes[0].selected = true;
+        st.broadcast_input = "x".into();
+        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Normal);
+        assert_eq!(st.broadcast_input, "");
+        assert!(!st.tabs[0].panes[0].selected);
     }
 
     fn picker_state(agents: &[&str]) -> AppState {
