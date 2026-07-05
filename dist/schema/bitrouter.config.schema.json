@@ -533,7 +533,7 @@
               "type": "null"
             }
           ],
-          "description": "Routing-preference class. Set by the provider-registry merge (or\ndirectly in config), then mapped to a numeric rank via\n[`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider\nsorts after every classed one in the auto-cascade (Strategy 3). Plain\nconfigs leave this `None`, preserving the alphabetical default order."
+          "description": "Routing-preference class. Set by the public registry merge (or\ndirectly in config), then mapped to a numeric rank via\n[`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider\nsorts after every classed one in the auto-cascade (Strategy 3). Plain\nconfigs leave this `None`, preserving the alphabetical default order."
         },
         "derives": {
           "default": null,
@@ -664,7 +664,7 @@
       "type": "object"
     },
     "RegistryConfig": {
-      "description": "Runtime provider-registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
+      "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
       "properties": {
         "enabled": {
           "default": true,
@@ -679,7 +679,7 @@
           "type": "array"
         },
         "url": {
-          "default": "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist",
+          "default": "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry",
           "description": "Base URL of the registry `dist/` artifacts. Defaults to\n[`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or\nan internal mirror for reproducible deployments.",
           "type": "string"
         }
@@ -1267,7 +1267,7 @@
     },
     "registry": {
       "$ref": "#/$defs/RegistryConfig",
-      "description": "Provider-registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade."
+      "description": "Public registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade."
     },
     "server": {
       "$ref": "#/$defs/ServerConfig",

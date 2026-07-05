@@ -77,7 +77,7 @@ models:
 <Callout type="info">
 完整的顶层小节集合为 `server`、`providers`、`models`、`presets`、`variants`、`mcp`、
 `mcp_servers`、`agents`、`server_tools`、`database`、`plugins` 和 `inherit_defaults`。权威 schema
-位于核心仓库的 `schemas/bitrouter.config.schema.json`，而 `# yaml-language-server` 头部会为编辑器
+位于核心仓库的 `dist/schema/bitrouter.config.schema.json`，而 `# yaml-language-server` 头部会为编辑器
 提供自动补全与内联校验。
 </Callout>
 

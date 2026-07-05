@@ -1,5 +1,5 @@
-//! Runtime provider + model catalog, fetched from the bitrouter provider
-//! registry's distribution artifacts.
+//! Runtime provider + model catalog, fetched from the public registry
+//! distribution artifacts.
 //!
 //! The compiled-in [`crate::ProviderEntry`] answers "how do we talk to provider
 //! X" (auth + URL shape, rarely changing). This module answers "which providers
@@ -9,11 +9,11 @@
 //!
 //! ## Source
 //!
-//! <https://github.com/bitrouter/provider-registry> publishes two deterministic
-//! JSON files under `dist/`: `providers.json` (the provider view — each model
-//! carrying its dist-resolved protocol + rate limits) and `models.json` (the
-//! model view; bitrouter reads its `id`s for the canonical vocabulary). This
-//! module fetches both, merges them into a [`types::RegistryData`], and
+//! <https://github.com/bitrouter/bitrouter> publishes two deterministic JSON
+//! files under `dist/registry/`: `providers.json` (the provider view — each
+//! model carrying its dist-resolved protocol + rate limits) and `models.json`
+//! (the model view; bitrouter reads its `id`s for the canonical vocabulary).
+//! This module fetches both, merges them into a [`types::RegistryData`], and
 //! disk-caches the result.
 //!
 //! ## Layout

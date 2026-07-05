@@ -3,11 +3,11 @@
 //! The other known providers (openai/anthropic/google + the gateways) are NOT
 //! compiled in — they come from the fetched-or-cached provider registry and are
 //! configured by the registry merge ([`crate::registry::apply`]). Only the
-//! `bitrouter` hosted cloud *gateway* lives here: its id shadows the registry's
-//! pool entry and it is the cloud-applier / serves-all-canonical mechanism, so
-//! it cannot be a public-registry entry. [`entry_from_registry`] reuses the same
-//! mapper for a fetched registry provider when a consumer (e.g. `bitrouter
-//! login`) needs the auth/transport shape of one of those providers.
+//! `bitrouter` hosted cloud *gateway* lives here: the public registry owns its
+//! provider metadata, while this built-in keeps the zero-config auth/transport
+//! defaults and the local cloud OAuth/API-key auth applier. [`entry_from_registry`]
+//! reuses the same mapper for a fetched registry provider when a consumer (e.g.
+//! `bitrouter login`) needs the auth/transport shape of one of those providers.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -21,9 +21,9 @@ use crate::registry::types::{
     Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
 };
 
-/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Its id
-/// shadows the registry's pool entry, so it is hand-authored here rather than
-/// taken from the registry.
+/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Public
+/// provider metadata comes from the registry; this hand-authored entry carries
+/// auth defaults and local OAuth/API-key integration.
 const BITROUTER_TOML: &str = include_str!("../providers/bitrouter.toml");
 
 static REGISTRY: OnceLock<Vec<ProviderEntry>> = OnceLock::new();

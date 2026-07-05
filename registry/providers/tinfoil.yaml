@@ -1,0 +1,53 @@
+name: tinfoil
+metadata:
+  headquarters: US
+  name: Tinfoil
+  privacy_policy_url: https://tinfoil.sh/privacy
+  slug: tinfoil
+  status_page_url: https://status.tinfoil.sh
+  terms_of_service_url: https://tinfoil.sh/terms
+api_protocol:
+  - "*": openai
+api_base: https://inference.tinfoil.sh/v1
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 5.25
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5-1
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 5.25
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2-6
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 5.25
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-05-12
+auth_scheme: x-api-key
+community: true

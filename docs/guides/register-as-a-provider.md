@@ -12,15 +12,15 @@ The BitRouter Registry is **experimental**. Pull requests are reviewed and merge
 
 BitRouter is designed as an **open marketplace** for inference. Anyone running an OpenAI- or Anthropic-compatible inference endpoint can apply to register their models — no commercial agreement, no sales cycle, no business form.
 
-Provider listings live in a public, open-source repo:
+Provider listings live in the public BitRouter OSS repository:
 
-> **[github.com/bitrouter/provider-registry](https://github.com/bitrouter/provider-registry)**
+> **[github.com/bitrouter/bitrouter/tree/main/registry](https://github.com/bitrouter/bitrouter/tree/main/registry)**
 
 You apply by opening a pull request that adds your provider manifest. Once merged, BitRouter and any agent on the network can discover your models, route to them, and (optionally) pay you per request via x402/MPP.
 
 ## How Registration Works
 
-1. Fork [provider-registry](https://github.com/bitrouter/provider-registry).
+1. Fork [bitrouter](https://github.com/bitrouter/bitrouter).
 2. Add a manifest at `providers/<your-provider-id>.yaml` describing your endpoint and model catalog.
 3. Open a PR. CI runs schema validation and basic reachability checks against your endpoint.
 4. A maintainer reviews the PR. While we aim to merge openly, PRs are evaluated case-by-case during the experimental phase.
@@ -156,5 +156,5 @@ We reserve the right to reject or delist any provider at our discretion during t
 
 ## Get Help
 
-- Open an issue on [provider-registry](https://github.com/bitrouter/provider-registry/issues).
+- Open an issue on [bitrouter](https://github.com/bitrouter/bitrouter/issues).
 - Join the [Discord](https://discord.gg/G3zVrZDa5C).

@@ -1,0 +1,112 @@
+# Artificial Analysis → canonical crosswalk (the cache of judgments).
+#
+# Keyed on AA's stable model UUID (`id`), NOT the human slug — so when AA
+# renames a slug (e.g. dropping `-preview`/`-it`), the mapping survives.
+#
+# Each entry has exactly one verdict:
+#   canonical:   <id>   this AA model IS this canonical model
+#   collapse_of: <id>   a variant (reasoning/effort/thinking) of <id>; its score
+#                       counts toward <id> for ranking, but it is not a model on
+#                       its own
+#   ignore:      <why>  deliberately unmapped (negative cache, so it stops
+#                       re-surfacing as "unresolved" every run)
+# `slug` is human-readable only. `by`/`date` are provenance for re-review.
+#
+# This file is the frozen output of a one-time judgment (agent/human). The pure
+# `bun run curate` resolver reads it as a lookup table; the mechanical fallback
+# (deterministic slug normalization) covers the easy cases, so only the cases it
+# gets WRONG need to live here. Grow it with `bun run curate suggest`.
+entries:
+  # — word-order: AA puts the version after the tier; we put it before —
+  c2b1e769-7aee-4669-8076-73918bdebf6c:
+    slug: claude-4-5-haiku
+    canonical: anthropic/claude-haiku-4.5
+    by: human
+    date: 2026-06-02
+  a6340098-d7ae-462d-b372-0a0a67fc44b4:
+    slug: claude-4-5-haiku-reasoning
+    collapse_of: anthropic/claude-haiku-4.5
+    by: human
+    date: 2026-06-02
+  91cb6144-4937-4e4e-aeda-b4341d355c10:
+    slug: claude-4-5-sonnet
+    canonical: anthropic/claude-sonnet-4.5
+    by: human
+    date: 2026-06-02
+  90e078f2-051b-4c63-8919-76618971cb3f:
+    slug: claude-4-5-sonnet-thinking
+    collapse_of: anthropic/claude-sonnet-4.5
+    by: human
+    date: 2026-06-02
+  # — `thinking` is a reasoning variant here (unlike kimi-k2-thinking, a model) —
+  2660d74f-ce79-48a8-8b53-6e668e2071a2:
+    slug: claude-opus-4-5-thinking
+    collapse_of: anthropic/claude-opus-4.5
+    by: human
+    date: 2026-06-02
+  8a4a5ead-7789-4389-8400-30e9d20370b7:
+    slug: claude-4-opus-thinking
+    collapse_of: anthropic/claude-opus-4
+    by: human
+    date: 2026-06-02
+  a7564055-f8ba-4c4b-9e2d-060f61263645:
+    slug: claude-4-sonnet-thinking
+    collapse_of: anthropic/claude-sonnet-4
+    by: human
+    date: 2026-06-02
+  ccbfa8c3-a762-480b-aade-34fb9697f98c:
+    slug: claude-4-1-opus-thinking
+    collapse_of: anthropic/claude-opus-4.1
+    by: human
+    date: 2026-06-02
+  # — suffix drift: AA drops the instruction-tuned `-it` we keep —
+  cd26a386-4873-46ff-b853-d239050025a2:
+    slug: gemma-4-31b
+    canonical: google/gemma-4-31b-it
+    by: human
+    date: 2026-06-02
+  d0aa27aa-4705-4184-9a1d-483b78c9331c:
+    slug: gemma-4-31b-non-reasoning
+    collapse_of: google/gemma-4-31b-it
+    by: human
+    date: 2026-06-02
+  # — negative cache: real AA models we deliberately do not carry —
+  e34ffffb-d8e1-4f5c-a2c7-3ca19c235eeb:
+    slug: gpt-5-5-instant-05-26
+    ignore: latency-optimized variant; no separate canonical tier
+    by: human
+    date: 2026-06-02
+  527e943a-adc6-4e69-93af-d1608e1b5fed:
+    slug: deepseek-v3-2-speciale
+    ignore: specialized fine-tune, not in our catalog
+    by: human
+    date: 2026-06-02
+  5ea94a4a-55ac-4ea1-8898-2b3971e94af6:
+    slug: grok-4
+    ignore: not served first-party (xAI catalog lacks it; see PR #5)
+    by: human
+    date: 2026-06-02
+  0179b427-93dc-415c-bb4c-f980ddf8d088:
+    slug: qwen3-5-omni-plus
+    ignore: omni-plus tier not carried
+    by: human
+    date: 2026-06-02
+  a87fce42-eea3-4e45-a96d-fe057814f371:
+    slug: qwen3-7-plus
+    canonical: qwen/qwen3.7-plus
+    by: automation
+    date: 2026-06-04
+  1aa3694e-b656-4dbe-8f84-0c65d8897abb:
+    slug: step-3-5-flash
+    canonical: stepfun/step-3.5-flash
+    by: automation
+    date: 2026-06-04
+  46d8315e-1630-463f-ab62-84185fa0faab:
+    slug: qwen3-5-35b-a3b
+    canonical: qwen/qwen3.5-35b-a3b
+    by: automation
+    date: 2026-06-04
+  cd55210d-358e-4df1-ba9c-9acb5f186cc9:
+    slug: claude-fable-5
+    canonical: anthropic/claude-fable-5
+    by: automation

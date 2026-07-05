@@ -21,7 +21,7 @@ bitrouter start         # the `bitrouter` provider auto-enables once signed in
 
 ## 供应商
 
-上述每个模型都由一个或多个**已注册供应商**提供服务。成员资格维护在公开、开源的 [provider-registry](https://github.com/bitrouter/provider-registry) 中——任何人都可以[注册供应商](/docs/guides/register-as-a-provider)。该列表持续从注册表刷新，因此新合并的供应商会在几分钟内出现。
+上述每个模型都由一个或多个**已注册供应商**提供服务。成员资格维护在公开、开源的 [registry](https://github.com/bitrouter/bitrouter/tree/main/registry) 中——任何人都可以[注册供应商](/docs/guides/register-as-a-provider)。该列表持续从注册表刷新，因此新合并的供应商会在几分钟内出现。
 
 <ProvidersTable />
 

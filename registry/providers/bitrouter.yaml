@@ -1,0 +1,26 @@
+name: bitrouter
+display_name: BitRouter Cloud
+metadata:
+  headquarters: US
+  name: BitRouter
+  privacy_policy_url: https://bitrouter.ai/legal/privacy
+  slug: bitrouter
+  terms_of_service_url: https://bitrouter.ai/legal/terms
+kind: cloud
+access: api_key
+billing: token
+api_base: https://api.bitrouter.ai/v1
+doc_url: https://docs.bitrouter.ai
+api_protocol:
+  - "*": openai
+rate_limits: []
+models: []
+status: active
+weight: 1
+community: false
+auth:
+  kind: bearer
+  env: BITROUTER_API_KEY
+auto_sync:
+  feed: v1_models
+  url: https://api.bitrouter.ai/v1

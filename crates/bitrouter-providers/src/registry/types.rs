@@ -1,6 +1,6 @@
-//! Parsed shape of the bitrouter provider-registry distribution artifacts.
+//! Parsed shape of the public registry distribution artifacts.
 //!
-//! Source of truth: the public registry <https://github.com/bitrouter/provider-registry>.
+//! Source of truth: the public registry in <https://github.com/bitrouter/bitrouter>.
 //! It publishes two deterministic JSON files under `dist/`, each an envelope
 //! `{ "data": [ … ] }`:
 //!
@@ -121,20 +121,20 @@ pub enum RegistryKind {
 #[serde(rename_all = "snake_case")]
 pub enum RegistryAccess {
     /// Public self-registration → a portable API key (the BYOK case). The OSS
-    /// auto-enables on the env key; the cloud may pool and offers it on its
+    /// auto-enables on the env key; cloud deployments may offer it on their
     /// BYOK page.
     #[default]
     ApiKey,
     /// Public, but credentials are minted by a local browser/device OAuth flow
     /// (no portable key) — e.g. GitHub Copilot. The OSS obtains it via
-    /// `bitrouter login <provider>`; not poolable / BYOK-able by the cloud.
+    /// `bitrouter login <provider>`; not BYOK-able by cloud deployments.
     LocalOauth,
     /// Public, but credentials come from a local OAuth+PKCE flow — e.g. OpenAI
     /// Codex against a ChatGPT subscription. Same consumer consequences as
     /// [`RegistryAccess::LocalOauth`].
     LocalPkce,
-    /// No public registration — platform-pooled / invite-only (the bitrouter
-    /// pool, an anonymous aggregator). Never BYOK; the OSS never merges it.
+    /// No public registration — private / invite-only provider. Never BYOK; the
+    /// OSS never merges it.
     Private,
 }
 
@@ -295,7 +295,7 @@ impl RegistryProvider {
 
     /// Whether the OSS merges this provider at all. Everything public is merged
     /// (the OSS picks the right auth: env key for `api_key`, a local login for
-    /// `local_oauth` / `local_pkce`); only `private` (the pool) is skipped.
+    /// `local_oauth` / `local_pkce`); only `private` entries are skipped.
     pub fn is_mergeable(&self) -> bool {
         self.access() != RegistryAccess::Private
     }
@@ -470,9 +470,9 @@ mod tests {
                 "models": []
             },
             {
-                "id": "bitrouter",
-                "name": "bitrouter",
-                "api_base": "https://provider-api.bitrouter.ai/v1",
+                "id": "private-relay",
+                "name": "private-relay",
+                "api_base": "https://private-relay.example/v1",
                 "access": "private",
                 "byok": false,
                 "status": "active",
@@ -532,7 +532,7 @@ mod tests {
 
         // The coding-plan defaults to subscription billing.
         assert_eq!(env.data[1].billing, Billing::Subscription);
-        // The pool provider is access=private → filtered out at merge.
+        // Private providers are filtered out at merge.
         assert_eq!(env.data[2].access(), RegistryAccess::Private);
         assert!(!env.data[2].is_mergeable());
         // The gateway is a v1_models runtime-discovered catalog with a local

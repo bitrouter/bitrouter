@@ -32,12 +32,12 @@ shorthand needs one prior successful fetch. Startup still succeeds.
 
 ## Provider registry (catalog + priority)
 
-BitRouter fetches the public provider registry
-(`https://github.com/bitrouter/provider-registry`) at startup and on reload: a
-curated, deterministic catalog of the providers above (their transport + auth),
-the canonical models, and which providers serve them. It is fetched from the
-generated `dist/` artifacts, disk-cached under
-`$XDG_CACHE_HOME/bitrouter/provider-registry.json` (24h TTL, stale-fallback on a
+BitRouter fetches the public provider registry from
+`https://github.com/bitrouter/bitrouter/tree/main/registry` at startup and on
+reload: a deterministic catalog of public providers (their transport + auth),
+the models, and which providers serve them. It is fetched from the generated
+`dist/registry/` artifacts, disk-cached under
+`$XDG_CACHE_HOME/bitrouter/registry.json` (24h TTL, stale-fallback on a
 network outage), and merged into the routing table. If a fetch fails the cache
 is reused; with no cache (first run, offline) the registry is empty and only
 locally-configured providers route. The merge routes a **canonical** model id
@@ -47,8 +47,8 @@ to that provider's own upstream id.
 Rules:
 
 - **Public providers only.** Every public registry provider is merged; only
-  `private` ones (the pooled / invite-only entries, no public registration) are
-  skipped. The registry classifies each provider by how a caller obtains
+  `private` ones (invite-only entries, no public registration) are skipped. The
+  registry classifies each provider by how a caller obtains
   access: `api_key` (a portable key), `local_oauth` / `local_pkce` (a local
   interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.
 - **Credential-gated.** An `api_key` provider becomes routable only when its key
@@ -64,14 +64,14 @@ Rules:
   subset: a `v1_models` feed (the gateways) is probed at `GET {api_base}/models`
   on startup; a `models_dev` feed pulls the provider's models from models.dev.
   The curated canonical models keep the highest route priority.
-- **BitRouter Cloud serves everything.** When the `bitrouter` provider is
-  active (env key or `bitrouter auth login`), it is populated with every model
-  in the canonical list.
+- **BitRouter Cloud is a normal public provider.** The public registry entry is
+  still named `bitrouter`, but OSS treats it as BitRouter Cloud and discovers
+  its cloud-owned model list from `/models`.
 
 ```yaml
 registry:
   enabled: true            # default; set false (or inherit_defaults: false) to disable the merge
-  url: "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist"
+  url: "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry"
   provider_priority:       # default ladder, highest first
     - first-party-subscription
     - gateway-subscription

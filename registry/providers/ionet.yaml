@@ -1,0 +1,118 @@
+name: ionet
+metadata:
+  headquarters: US
+  name: io.net
+  privacy_policy_url: https://io.net/privacy
+  slug: ionet
+  status_page_url: https://status.io.net
+  terms_of_service_url: https://io.net/terms
+api_protocol:
+  - "*": openai
+api_base: https://api.intelligence.io.solutions/api/v1
+rate_limits:
+  - "*":
+      requests_per_minute: 50
+models:
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-ai/DeepSeek-V3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.045
+      output_tokens:
+        text: 0.38
+    capabilities:
+      - reasoning
+      - tools
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-ai/DeepSeek-V4-Pro
+    pricing:
+      input_tokens:
+        no_cache: 4.45
+        cache_read: 0.35
+      output_tokens:
+        text: 5.5
+    capabilities:
+      - reasoning
+      - tools
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-ai/DeepSeek-V4-Flash
+    pricing:
+      input_tokens:
+        no_cache: 1.55
+        cache_read: 0.38
+      output_tokens:
+        text: 2.28
+    capabilities:
+      - reasoning
+      - tools
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: moonshotai/Kimi-K2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.44
+      output_tokens:
+        text: 2
+    capabilities:
+      - reasoning
+      - tools
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: moonshotai/Kimi-K2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.74
+        cache_read: 0.25
+      output_tokens:
+        text: 3.5
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5
+    provider_model_id: zai-org/GLM-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+      output_tokens:
+        text: 3
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.1
+    provider_model_id: zai-org/GLM-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m2.5
+    provider_model_id: MiniMaxAI/MiniMax-M2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.1
+      output_tokens:
+        text: 1.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: openai/gpt-oss-120b
+    provider_model_id: openai/gpt-oss-120b
+    pricing:
+      input_tokens:
+        no_cache: 0.04
+        cache_read: 0.02
+        cache_write: 0.08
+      output_tokens:
+        text: 0.4
+status: active
+weight: 1
+submitted_at: 2026-05-12
+auth_scheme: x-api-key
+community: true
+auto_sync:
+  feed: models_dev
+  key: io-net

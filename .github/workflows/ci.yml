@@ -76,17 +76,17 @@ jobs:
             fi
           done
 
-  schema:
-    name: schema
+  dist:
+    name: dist
     runs-on: ubuntu-latest
-    # Guards the IaC config contract: the committed JSON Schema must match the
-    # serde structs, every committed example must validate, and the deprecated
-    # `serde_yaml` / unsound `serde_yml` parsers must stay out of the graph.
+    # Guards generated distribution artifacts: the committed config schema and
+    # registry dist JSON must match the Rust source/YAML data, every committed
+    # example must validate, and deprecated YAML parsers must stay out of the graph.
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: schema is up to date with the config structs
-        run: cargo xtask generate-schema --check
+      - name: generated dist is up to date
+        run: cargo run -p dist-helper -- check
       - name: validate committed example configs
         run: |
           cargo build -p bitrouter

@@ -90,7 +90,7 @@ models:
 The full set of top-level sections is `server`, `providers`, `models`,
 `presets`, `variants`, `mcp`, `mcp_servers`, `agents`, `server_tools`,
 `database`, `plugins`, and `inherit_defaults`. The authoritative schema lives at
-`schemas/bitrouter.config.schema.json` in the core repo, and the
+`dist/schema/bitrouter.config.schema.json` in the core repo, and the
 `# yaml-language-server` header gives editors autocomplete and inline validation.
 </Callout>
 

@@ -1,0 +1,37 @@
+name: moonshotai-coding-plan
+metadata:
+  headquarters: CN
+  name: Moonshot AI
+  privacy_policy_url: https://platform.kimi.ai/docs/agreement/userprivacy
+  slug: moonshotai
+  terms_of_service_url: https://platform.kimi.ai/docs/agreement/modeluse
+billing: subscription
+api_base: https://api.kimi.com/coding/v1
+api_protocol:
+  - "*": openai
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+# `kimi-for-coding` is a moving server-side alias for Moonshot's latest
+# coding model; it is mapped here to the flagship canonical id so the
+# model is routable. Pricing mirrors the standard flagship for reference
+# only — Kimi Code is a flat-rate subscription and BYOK traffic is billed
+# by Moonshot, not metered per token by the router.
+models:
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-for-coding
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.16
+      output_tokens:
+        text: 4
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-06-05
+auto_sync:
+  feed: models_dev
+  key: kimi-for-coding

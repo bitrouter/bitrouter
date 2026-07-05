@@ -1,0 +1,35 @@
+name: redpill
+metadata:
+  headquarters: US
+  name: RedPill AI
+  privacy_policy_url: https://redpill.ai/privacy
+  slug: redpill
+  terms_of_service_url: https://redpill.ai/terms
+api_protocol:
+  - "*": openai
+api_base: https://api.redpill.ai/v1
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek/deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.27
+        cache_read: 0.054
+    capabilities:
+      - reasoning
+      - tools
+  - id: anthropic/claude-sonnet-4.6
+    provider_model_id: anthropic/claude-sonnet-4-6
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+community: true

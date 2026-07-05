@@ -1,7 +1,7 @@
-//! File-based on-disk cache for the provider-registry distribution.
+//! File-based on-disk cache for the public registry distribution.
 //!
 //! Layout: a single JSON file `{ "fetched_at": <unix-secs>, "data": <RegistryData> }`.
-//! Default path: `$XDG_CACHE_HOME/bitrouter/provider-registry.json` (falling
+//! Default path: `$XDG_CACHE_HOME/bitrouter/registry.json` (falling
 //! back to `~/.cache/bitrouter/…` on Unix or
 //! `%LOCALAPPDATA%\bitrouter\cache\…` on Windows), per the XDG Base Directory
 //! spec (<https://specifications.freedesktop.org/basedir-spec/latest/>).
@@ -23,7 +23,7 @@ use crate::registry::types::RegistryData;
 pub const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Default filename inside the bitrouter cache directory.
-pub const DEFAULT_FILENAME: &str = "provider-registry.json";
+pub const DEFAULT_FILENAME: &str = "registry.json";
 
 /// Errors raised by the disk cache.
 #[derive(Debug, thiserror::Error)]
