@@ -16,12 +16,16 @@ pub fn render(state: &AppState, frame: &mut Frame) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),
-            Constraint::Length(3),
-            Constraint::Length(1),
+            Constraint::Length(1), // tab bar
+            Constraint::Min(1),    // grid
+            Constraint::Length(3), // input
+            Constraint::Length(1), // mode bar
         ])
         .split(area);
-    let grid_area = chunks[0];
+    let tabbar_area = chunks[0];
+    let grid_area = chunks[1];
+
+    render_tabbar(state, frame, tabbar_area);
 
     let (panes, focus): (&[PaneState], usize) = match state.active() {
         Some(t) => (t.panes.as_slice(), t.focus),
@@ -39,8 +43,8 @@ pub fn render(state: &AppState, frame: &mut Frame) {
         }
     }
 
-    render_input(state, frame, chunks[1]);
-    render_modebar(state, frame, chunks[2]);
+    render_input(state, frame, chunks[2]);
+    render_modebar(state, frame, chunks[3]);
 
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
@@ -53,6 +57,23 @@ pub fn render(state: &AppState, frame: &mut Frame) {
     {
         render_permission(pending, frame, area);
     }
+}
+
+/// Top bar: one entry per tab (`title (pane_count)`), active tab highlighted.
+fn render_tabbar(state: &AppState, frame: &mut Frame, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, tab) in state.tabs.iter().enumerate() {
+        let label = format!("{} ({})", tab.title, tab.panes.len());
+        if i == state.active_tab {
+            spans.push(Span::styled(
+                format!(" ‹{label}› "),
+                Style::default().fg(Color::Cyan),
+            ));
+        } else {
+            spans.push(Span::raw(format!("  {label}  ")));
+        }
+    }
+    frame.render_widget(Paragraph::new(TuiLine::from(spans)), area);
 }
 
 /// Row-major tiled layout of `n` rects within `area`. `cols = ceil(sqrt(n))`,
@@ -101,10 +122,22 @@ fn grid_rects(area: Rect, n: usize) -> Vec<Rect> {
 /// the focused pane's border highlighted, showing the scrollback tail.
 fn render_grid_pane(pane: &PaneState, focused: bool, index: usize, frame: &mut Frame, area: Rect) {
     let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
-    let warn = if pane.pending.is_some() { " ⚠" } else { "" };
-    let title = format!(" [{}] {} · {}{} ", index + 1, pane.agent_id, short, warn);
+    let mut markers = String::new();
+    if pane.pending.is_some() {
+        markers.push_str(" ⚠");
+    }
+    if pane.attention {
+        markers.push_str(" ●");
+    }
+    if pane.selected {
+        markers.push_str(" ✓");
+    }
+    let title = format!(" [{}] {} · {}{} ", index + 1, pane.agent_id, short, markers);
+    // Focused = cyan; else selected (broadcast) = green; else default.
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
+    } else if pane.selected {
+        Style::default().fg(Color::Green)
     } else {
         Style::default()
     };
@@ -138,8 +171,13 @@ fn render_line(line: &Line) -> TuiLine<'static> {
 }
 
 fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
+    let (prefix, text) = if state.mode == Mode::Broadcast {
+        ("⇉ ", state.broadcast_input.as_str())
+    } else {
+        ("› ", state.input.as_str())
+    };
     let para =
-        Paragraph::new(format!("› {}", state.input)).block(Block::default().borders(Borders::ALL));
+        Paragraph::new(format!("{prefix}{text}")).block(Block::default().borders(Borders::ALL));
     frame.render_widget(para, area);
 }
 
@@ -322,5 +360,48 @@ mod tests {
 
     fn overlaps(a: Rect, b: Rect) -> bool {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    #[test]
+    fn tab_bar_shows_all_tabs_with_active_marked() {
+        use crate::tui::state::Tab;
+        let mut st = three_panes();
+        st.tabs.push(Tab {
+            title: "2".into(),
+            panes: vec![],
+            focus: 0,
+        });
+        // active tab is 0 ("1")
+        let text = draw(&st, 80, 24);
+        assert!(text.contains("‹1"), "active tab 1 marked: {text:?}");
+        assert!(text.contains("2 (0)"), "second tab shown");
+    }
+
+    #[test]
+    fn attention_pane_shows_marker() {
+        let mut st = three_panes();
+        st.tabs[0].panes[1].attention = true;
+        let text = draw(&st, 80, 24);
+        assert!(text.contains('●'), "attention marker rendered");
+    }
+
+    #[test]
+    fn selected_pane_shows_marker_in_broadcast() {
+        use crate::tui::state::Mode;
+        let mut st = three_panes();
+        st.mode = Mode::Broadcast;
+        st.tabs[0].panes[0].selected = true;
+        let text = draw(&st, 80, 24);
+        assert!(text.contains('✓'), "selection marker rendered");
+    }
+
+    #[test]
+    fn broadcast_input_renders_in_broadcast_mode() {
+        use crate::tui::state::Mode;
+        let mut st = three_panes();
+        st.mode = Mode::Broadcast;
+        st.broadcast_input = "BROADCAST_TEXT".into();
+        let text = draw(&st, 80, 24);
+        assert!(text.contains("BROADCAST_TEXT"), "broadcast input shown");
     }
 }
