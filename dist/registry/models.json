@@ -163,12 +163,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.07,
+              "cache_write": 0.875,
+              "no_cache": 0.7
             },
             "output_tokens": {
-              "text": 5.0
+              "text": 3.5
             }
           },
           "provider": "worldrouter",
@@ -276,12 +276,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 0.35,
+              "cache_write": 4.375,
+              "no_cache": 3.5
             },
             "output_tokens": {
-              "text": 25.0
+              "text": 17.5
             }
           },
           "provider": "worldrouter",
@@ -390,12 +390,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 0.35,
+              "cache_write": 4.375,
+              "no_cache": 3.5
             },
             "output_tokens": {
-              "text": 25.0
+              "text": 17.5
             }
           },
           "provider": "worldrouter",
@@ -705,12 +705,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
+              "cache_read": 0.21,
+              "cache_write": 2.625,
+              "no_cache": 2.1
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 10.5
             }
           },
           "provider": "worldrouter",
@@ -1330,12 +1330,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.025,
-              "cache_write": 0.25,
-              "no_cache": 0.25
+              "cache_read": 0.0175,
+              "cache_write": 0.175,
+              "no_cache": 0.175
             },
             "output_tokens": {
-              "text": 1.5
+              "text": 1.05
             }
           },
           "provider": "worldrouter",
@@ -2784,12 +2784,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.075,
-              "cache_write": 0.75,
-              "no_cache": 0.75
+              "cache_read": 0.0525,
+              "cache_write": 0.525,
+              "no_cache": 0.525
             },
             "output_tokens": {
-              "text": 4.5
+              "text": 3.15
             }
           },
           "provider": "worldrouter",
