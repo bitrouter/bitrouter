@@ -9,9 +9,8 @@
 //!   YAML's glob patterns are expanded by the registry build, so bitrouter
 //!   reads concrete values and runs no glob engine).
 //! - `models.json` — the model view: one entry per canonical model. bitrouter
-//!   consumes only `data[].id` (the authoritative canonical vocabulary, used to
-//!   give the hosted gateway every model); the per-model `providers[]` reverse
-//!   index is for other consumers.
+//!   consumes `data[].id` as the authoritative canonical vocabulary; the
+//!   per-model `providers[]` reverse index is for other consumers.
 //!
 //! The structs below model only the fields bitrouter consumes; unknown fields
 //! are ignored (no `deny_unknown_fields`) so the registry can add fields
@@ -139,35 +138,6 @@ pub enum RegistryAccess {
     Private,
 }
 
-/// The upstream catalog feed a provider's models are synced/discovered from —
-/// mirrors the registry `auto_sync.feed`. A consumer reads this channel at
-/// runtime to pull the provider's FULL catalog (beyond the registry seed
-/// subset); explicit registry seed entries keep the highest route priority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AutoSyncFeed {
-    /// The public models.dev catalog (`https://models.dev/api.json`), keyed by
-    /// [`AutoSync::key`]. Carries pricing / capability metadata.
-    ModelsDev,
-    /// The provider's own `GET {url ?? api_base}/models` endpoint (ids only).
-    V1Models,
-}
-
-/// A provider's catalog feed — mirrors the registry `auto_sync` block.
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
-pub struct AutoSync {
-    /// Which feed the catalog comes from.
-    pub feed: AutoSyncFeed,
-    /// models.dev provider key (only meaningful for `models_dev`); defaults to
-    /// the provider name when absent.
-    #[serde(default)]
-    pub key: Option<String>,
-    /// Catalog base URL override (only meaningful for `v1_models`); defaults to
-    /// the provider's `api_base` when absent.
-    #[serde(default)]
-    pub url: Option<String>,
-}
-
 /// Outbound credential scheme declared by the registry — see the registry's
 /// `Auth`. Only public config (env/header/handler names + public params); never
 /// a secret. Maps onto the compiled-in [`AuthScheme`](crate::AuthScheme).
@@ -232,12 +202,10 @@ pub enum Billing {
     Subscription,
 }
 
-/// One provider entry from `providers.json` (the provider view). For a provider
-/// provider the source-YAML glob `api_protocol` / `rate_limits` are resolved
-/// onto each model (so the top-level globs are empty); for a runtime-discovered
-/// provider (one with an [`AutoSync`] feed and no explicit model entries) the
-/// provider-level `api_protocol` globs are kept here and applied to discovered
-/// models.
+/// One provider entry from `providers.json` (the provider view). Source-YAML
+/// glob `api_protocol` / `rate_limits` are resolved onto each model by the
+/// dist build, so consumers receive concrete per-model routing data and do no
+/// provider catalog discovery of their own.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryProvider {
     /// Provider id (equals the registry filename stem and the `name` field).
@@ -250,9 +218,9 @@ pub struct RegistryProvider {
     /// [`RequiredConfig::BaseUrl`] instead.
     #[serde(default)]
     pub api_base: Option<String>,
-    /// Provider-level wire-protocol globs (pattern → protocol set). Present only
-    /// for runtime-discovered providers (an [`AutoSync`] feed + no seed
-    /// models); empty for providers with explicit model entries (resolved onto each model instead).
+    /// Provider-level wire-protocol globs (pattern → protocol set). Kept for
+    /// backwards compatibility with older dist files and explicit gateway
+    /// providers; complete registry dist resolves protocols onto each model.
     #[serde(default)]
     pub api_protocol: Vec<BTreeMap<String, ProtocolSet>>,
     /// Per-protocol base-URL override, keyed by protocol name.
@@ -290,10 +258,6 @@ pub struct RegistryProvider {
     /// is absent (an older dist / cache). `None` when neither is present.
     #[serde(default)]
     pub byok: Option<bool>,
-    /// The provider's catalog feed, if any — the channel a consumer reads at
-    /// runtime to pull the FULL model catalog (see [`AutoSync`]).
-    #[serde(default)]
-    pub auto_sync: Option<AutoSync>,
     /// How a caller pays this provider (`usage_token` | `subscription`).
     #[serde(default)]
     pub billing: Billing,
@@ -322,25 +286,9 @@ impl RegistryProvider {
         self.access() != RegistryAccess::Private
     }
 
-    /// The catalog feed used for runtime full-catalog discovery, if declared.
-    pub fn discovery_feed(&self) -> Option<&AutoSync> {
-        self.auto_sync.as_ref()
-    }
-
     /// Whether this provider requires a user/deployment-supplied base URL.
     pub fn requires_base_url(&self) -> bool {
         self.required_config.contains(&RequiredConfig::BaseUrl)
-    }
-
-    /// Whether the OSS should probe `GET {url ?? api_base}/models` at startup to
-    /// pull this provider's catalog — true for a `v1_models` [`AutoSync`] feed
-    /// (the gateways). A `models_dev` feed is discovered from models.dev instead
-    /// (see the catalog fetch), so it does not set the SDK's `auto_discover`.
-    pub fn probes_v1_models(&self) -> bool {
-        matches!(
-            self.auto_sync.as_ref().map(|a| a.feed),
-            Some(AutoSyncFeed::V1Models)
-        )
     }
 
     /// The env var holding this provider's credential, or `None` when it does
@@ -562,13 +510,12 @@ mod tests {
         // Private providers are filtered out at merge.
         assert_eq!(env.data[2].access(), RegistryAccess::Private);
         assert!(!env.data[2].is_mergeable());
-        // The gateway is a v1_models runtime-discovered catalog with a local
-        // OAuth login — mergeable (the OSS logs in locally) and probes /models.
+        // Older dist/cache data may still carry `auto_sync`; consumers ignore
+        // it and route only the model entries present in dist.
         let copilot = &env.data[3];
         assert_eq!(copilot.access(), RegistryAccess::LocalOauth);
         assert!(copilot.is_mergeable());
-        assert!(copilot.probes_v1_models());
-        assert!(copilot.discovery_feed().is_some());
+        assert!(copilot.models.is_empty());
     }
 
     #[test]

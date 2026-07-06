@@ -237,10 +237,6 @@
       "access": "api_key",
       "api_base": "https://coding-intl.dashscope.aliyuncs.com/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "alibaba-coding-plan"
-      },
       "billing": "subscription",
       "byok": true,
       "community": false,
@@ -744,10 +740,6 @@
       "access": "api_key",
       "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "alibaba"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1044,9 +1036,6 @@
         "kind": "bearer"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1121,9 +1110,6 @@
         "kind": "header"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1314,10 +1300,6 @@
         "kind": "bearer"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "v1_models",
-        "url": "https://api.bitrouter.ai/v1"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1345,9 +1327,6 @@
       "access": "api_key",
       "api_base": "https://api.cerebras.ai/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1395,9 +1374,6 @@
       "access": "api_key",
       "api_base": "https://llm.chutes.ai/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": true,
@@ -1657,9 +1633,6 @@
       "access": "api_key",
       "api_base": "https://api.deepseek.com",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1749,9 +1722,6 @@
         }
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "subscription",
       "byok": false,
       "community": false,
@@ -1850,9 +1820,6 @@
         "kind": "header"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -1978,10 +1945,6 @@
       "access": "api_key",
       "api_base": "https://api.intelligence.io.solutions/api/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "io-net"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": true,
@@ -2192,9 +2155,6 @@
       "access": "api_key",
       "api_base": "https://api.minimax.io/anthropic/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -2297,9 +2257,6 @@
       "access": "api_key",
       "api_base": "https://api.minimaxi.com/anthropic/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -2402,9 +2359,6 @@
       "access": "api_key",
       "api_base": "https://api.moonshot.ai/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -2506,10 +2460,6 @@
       "access": "api_key",
       "api_base": "https://api.kimi.com/coding/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "kimi-for-coding"
-      },
       "billing": "subscription",
       "byok": true,
       "community": false,
@@ -2563,9 +2513,6 @@
         "kind": "bearer"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -2681,9 +2628,6 @@
         }
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "v1_models"
-      },
       "billing": "subscription",
       "byok": false,
       "community": false,
@@ -2743,9 +2687,6 @@
         "kind": "bearer"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "subscription",
       "byok": true,
       "community": false,
@@ -2867,10 +2808,6 @@
         "kind": "bearer"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "opencode"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -3215,6 +3152,20 @@
             }
           },
           "provider_model_id": "minimax-m3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-build-0.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider_model_id": "grok-build-0.1"
         }
       ],
       "name": "opencode-zen",
@@ -3232,9 +3183,6 @@
         "kind": "bearer"
       },
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -3926,6 +3874,42 @@
             }
           },
           "provider_model_id": "anthropic/claude-fable-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "x-ai/grok-4.20-multi-agent",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider_model_id": "x-ai/grok-4.20-multi-agent"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "x-ai/grok-build-0.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider_model_id": "x-ai/grok-build-0.1"
         }
       ],
       "name": "openrouter",
@@ -4002,10 +3986,6 @@
       "access": "api_key",
       "api_base": "https://api.stepfun.ai/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "stepfun-ai"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -4081,10 +4061,6 @@
       "access": "api_key",
       "api_base": "https://api.stepfun.com/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev",
-        "key": "stepfun-cn"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -5301,9 +5277,6 @@
       "access": "api_key",
       "api_base": "https://api.x.ai/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -5422,9 +5395,6 @@
       "access": "api_key",
       "api_base": "https://api.xiaomimimo.com/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -5773,9 +5743,6 @@
       "access": "api_key",
       "api_base": "https://api.z.ai/api/paas/v4",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -5873,9 +5840,6 @@
       "access": "api_key",
       "api_base": "https://api.z.ai/api/coding/paas/v4",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
       "billing": "subscription",
       "byok": true,
       "community": false,

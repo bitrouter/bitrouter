@@ -220,6 +220,7 @@ fn provider_dist_value(provider: &LoadedProvider) -> Result<Value> {
         .unwrap_or(Value::Array(Vec::new()));
     obj.remove("models");
     obj.remove("protocol_endpoints");
+    obj.remove("auto_sync");
     obj.insert("id".to_string(), Value::String(data.name.clone()));
     obj.insert(
         "required_config".to_string(),
@@ -934,9 +935,13 @@ fn append_models_to_provider(path: &Path, adds: &[ProviderModel]) -> Result<()> 
     if !raw.ends_with('\n') {
         raw.push('\n');
     }
+    let insert_at = models_insert_offset(&raw)
+        .with_context(|| format!("locating models list in {}", path.display()))?;
+    let mut append = String::new();
     for model in adds {
-        raw.push_str(&render_model_append(model));
+        append.push_str(&render_model_append(model));
     }
+    raw.insert_str(insert_at, &append);
     let parsed: ProviderFile = serde_saphyr::from_str(&raw)
         .with_context(|| format!("validating updated {}", path.display()))?;
     if parsed.name.is_empty() {
@@ -944,6 +949,33 @@ fn append_models_to_provider(path: &Path, adds: &[ProviderModel]) -> Result<()> 
     }
     fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+fn models_insert_offset(raw: &str) -> Result<usize> {
+    let mut offset = 0;
+    let mut in_models = false;
+    let mut insert_at = None;
+
+    for line in raw.split_inclusive('\n') {
+        let trimmed_eol = line.trim_end_matches(['\r', '\n']);
+        if in_models {
+            let is_top_level = !trimmed_eol.is_empty()
+                && !trimmed_eol.starts_with([' ', '\t'])
+                && (trimmed_eol.contains(':') || trimmed_eol.starts_with('#'));
+            if is_top_level {
+                insert_at = Some(offset);
+                break;
+            }
+        } else if trimmed_eol == "models:" {
+            in_models = true;
+        }
+        offset += line.len();
+    }
+
+    if !in_models {
+        bail!("provider file does not contain a models list");
+    }
+    Ok(insert_at.unwrap_or(raw.len()))
 }
 
 fn render_model_append(model: &ProviderModel) -> String {
@@ -1476,6 +1508,91 @@ status: active
             json!({ "messages": "https://api.acme.test/anthropic" })
         );
         assert!(provider.get("api_base").is_none());
+    }
+
+    #[test]
+    fn build_artifacts_strips_source_catalog_hints_from_public_dist() {
+        let root = test_root("strip-auto-sync");
+        write(
+            &root,
+            "registry/models/acme/test-model.yaml",
+            r#"
+id: acme/test-model
+name: "Acme: Test Model"
+input_modalities: [text]
+output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/test-model
+    provider_model_id: test-model
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: models_dev
+"#,
+        );
+
+        let artifacts = build_artifacts(&root).expect("builds registry dist");
+        let providers: Value = serde_json::from_str(&artifacts.providers).unwrap();
+        let provider = &providers["data"][0];
+
+        assert!(
+            provider.get("auto_sync").is_none(),
+            "public dist must not expose maintainer-only catalog sync hints"
+        );
+    }
+
+    #[test]
+    fn append_models_to_provider_inserts_inside_models_list() {
+        let root = test_root("append-model");
+        let provider_path = root.join("registry/providers/acme.yaml");
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: models_dev
+"#,
+        );
+        let add = ProviderModel {
+            id: "acme/two".to_string(),
+            provider_model_id: "two".to_string(),
+            api_protocol: None,
+            pricing: None,
+            rate_limits: None,
+            capabilities: Vec::new(),
+            deprecation_date: None,
+        };
+
+        append_models_to_provider(&provider_path, &[add]).expect("append keeps YAML valid");
+
+        let raw = fs::read_to_string(&provider_path).unwrap();
+        assert!(
+            raw.contains("  - id: acme/two\n    provider_model_id: two\nstatus: active"),
+            "new model is appended before the next top-level key: {raw}"
+        );
+        let parsed: ProviderFile = serde_saphyr::from_str(&raw).unwrap();
+        assert_eq!(parsed.models.len(), 2);
     }
 
     fn test_root(name: &str) -> PathBuf {

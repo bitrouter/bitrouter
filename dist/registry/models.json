@@ -4197,6 +4197,24 @@
       "providers": [
         {
           "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "x-ai/grok-4.20-multi-agent"
+        },
+        {
+          "api_protocol": [
             "responses",
             "openai"
           ],
@@ -4293,6 +4311,38 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "grok-build-0.1"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "x-ai/grok-build-0.1"
+        },
         {
           "api_protocol": [
             "responses",

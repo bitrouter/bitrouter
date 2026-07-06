@@ -128,9 +128,10 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
     }
 }
 
-/// Derive the wire-protocol mapping. A runtime-discovered provider carries
-/// provider-level globs (kept in the dist); a provider with explicit model entries's protocol was
-/// resolved onto its models, so reconstruct the mapping from them.
+/// Derive the wire-protocol mapping. Older dist files and explicitly
+/// configured gateway providers may carry provider-level globs; complete
+/// registry dist resolves protocol data onto each model, so reconstruct the
+/// mapping from those entries when the globs are absent.
 fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
     let mut globs: BTreeMap<String, ProtocolList> = BTreeMap::new();
     for entry in &p.api_protocol {
