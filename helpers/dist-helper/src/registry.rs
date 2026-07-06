@@ -12,7 +12,7 @@ pub fn validate(root: &Path) -> Result<()> {
     validate_loaded(&loaded)?;
     println!(
         "registry valid: {} canonical models, {} providers",
-        loaded.canonical.len(),
+        loaded.models().count(),
         loaded.providers.len()
     );
     Ok(())
@@ -87,7 +87,7 @@ async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bo
         return Ok(());
     }
     let catalog = load_models_dev_catalog().await?;
-    let resolve = canonical_resolver(loaded.canonical.iter().map(|m| m.id.as_str()));
+    let resolve = canonical_resolver(loaded.models().map(|m| m.id.as_str()));
     let providers_by_name: HashMap<&str, &LoadedProvider> = loaded
         .providers
         .iter()
@@ -178,7 +178,7 @@ async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bo
 }
 
 async fn sync_v1_models_loaded(root: &Path, loaded: &LoadedRegistry, write: bool) -> Result<()> {
-    let resolve = canonical_resolver(loaded.canonical.iter().map(|m| m.id.as_str()));
+    let resolve = canonical_resolver(loaded.models().map(|m| m.id.as_str()));
     let providers_by_name: HashMap<&str, &LoadedProvider> = loaded
         .providers
         .iter()
@@ -459,20 +459,20 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(out, "Canonical model source:")?;
     writeln!(
         out,
-        "- Canonical model IDs live in `registry/models/**/*.yaml`."
+        "- Canonical models live in `registry/models/<vendor>.yaml`, one file per vendor holding a YAML sequence of that vendor's models."
     )?;
     writeln!(
         out,
         "- Before adding a new canonical model, search existing files exactly with:"
     )?;
-    writeln!(out, "  `rg -n \"^id: \" registry/models`")?;
+    writeln!(out, "  `rg -n \"^- id: \" registry/models`")?;
     writeln!(
         out,
         "- Reuse an existing canonical ID when the upstream model is the same model."
     )?;
     writeln!(
         out,
-        "- Only create a new canonical model YAML when no existing canonical ID matches."
+        "- Only append a new canonical model entry when no existing canonical ID matches; add it to the existing vendor file, creating that vendor's file only if it does not yet exist."
     )?;
     writeln!(
         out,
@@ -627,7 +627,7 @@ fn build_artifacts(root: &Path) -> Result<Artifacts> {
         providers_for_model.sort_by(|a, b| a["provider"].as_str().cmp(&b["provider"].as_str()));
     }
 
-    let mut canonical = loaded.canonical.clone();
+    let mut canonical: Vec<CanonicalModel> = loaded.models().cloned().collect();
     canonical.sort_by(|a, b| a.id.cmp(&b.id));
     let mut models = Vec::with_capacity(canonical.len());
     for model in canonical {
@@ -781,8 +781,20 @@ fn sort_value(value: Value) -> Value {
 
 #[derive(Debug)]
 struct LoadedRegistry {
-    canonical: Vec<CanonicalModel>,
+    model_files: Vec<LoadedModelFile>,
     providers: Vec<LoadedProvider>,
+}
+
+#[derive(Debug)]
+struct LoadedModelFile {
+    path: PathBuf,
+    models: Vec<CanonicalModel>,
+}
+
+impl LoadedRegistry {
+    fn models(&self) -> impl Iterator<Item = &CanonicalModel> + '_ {
+        self.model_files.iter().flat_map(|file| file.models.iter())
+    }
 }
 
 #[derive(Debug)]
@@ -793,7 +805,7 @@ struct LoadedProvider {
 
 fn load_registry(root: &Path) -> Result<LoadedRegistry> {
     let registry = root.join("registry");
-    let canonical = load_canonical_models(&registry)?;
+    let model_files = load_canonical_models(&registry)?;
     let providers_dir = registry.join("providers");
     let mut providers = Vec::new();
     for entry in fs::read_dir(&providers_dir)
@@ -814,20 +826,21 @@ fn load_registry(root: &Path) -> Result<LoadedRegistry> {
     }
     providers.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(LoadedRegistry {
-        canonical,
+        model_files,
         providers,
     })
 }
 
-fn load_canonical_models(registry: &Path) -> Result<Vec<CanonicalModel>> {
+fn load_canonical_models(registry: &Path) -> Result<Vec<LoadedModelFile>> {
     let models_dir = registry.join("models");
     let mut files = Vec::new();
     collect_yaml_files(&models_dir, &mut files)?;
-    let mut models = Vec::with_capacity(files.len());
+    let mut out = Vec::with_capacity(files.len());
     for path in files {
-        models.push(read_yaml(&path)?);
+        let models: Vec<CanonicalModel> = read_yaml(&path)?;
+        out.push(LoadedModelFile { path, models });
     }
-    Ok(models)
+    Ok(out)
 }
 
 fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -859,20 +872,32 @@ fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
 fn validate_loaded(registry: &LoadedRegistry) -> Result<()> {
     let mut issues = Vec::new();
     let mut canonical_ids = HashSet::new();
-    for model in &registry.canonical {
-        if !valid_canonical_id(&model.id) {
-            issues.push(format!(
-                "registry/models: '{}' is not a lowercase '<org>/<model>' id",
-                model.id
-            ));
+    for model_file in &registry.model_files {
+        let file = path_label(&model_file.path);
+        let stem = model_file.path.file_stem().and_then(|s| s.to_str());
+        for model in &model_file.models {
+            if !valid_canonical_id(&model.id) {
+                issues.push(format!(
+                    "registry/models: '{}' is not a lowercase '<org>/<model>' id",
+                    model.id
+                ));
+            }
+            if !canonical_ids.insert(model.id.as_str()) {
+                issues.push(format!(
+                    "registry/models: duplicate canonical model '{}'",
+                    model.id
+                ));
+            }
+            if let Some((org, _)) = model.id.split_once('/')
+                && Some(org) != stem
+            {
+                issues.push(format!(
+                    "{file}: model '{}' belongs to vendor file '{org}.yaml'",
+                    model.id
+                ));
+            }
+            validate_canonical_model(model, &mut issues);
         }
-        if !canonical_ids.insert(model.id.as_str()) {
-            issues.push(format!(
-                "registry/models: duplicate canonical model '{}'",
-                model.id
-            ));
-        }
-        validate_canonical_model(model, &mut issues);
     }
 
     let mut provider_names = HashMap::new();
@@ -1007,6 +1032,29 @@ fn validate_provider<'a>(
                 "{file}: model '{}' has invalid deprecation_date '{}'",
                 model.id, date
             ));
+        }
+    }
+
+    match data.billing {
+        Billing::Subscription => {
+            for model in &data.models {
+                if model.pricing.is_some() {
+                    issues.push(format!(
+                        "{file}: subscription provider must not set per-token pricing (model '{}')",
+                        model.id
+                    ));
+                }
+            }
+        }
+        Billing::UsageToken => {
+            for model in &data.models {
+                if model.pricing.is_none() {
+                    issues.push(format!(
+                        "{file}: usage_token provider must set pricing for every model (model '{}')",
+                        model.id
+                    ));
+                }
+            }
         }
     }
 }
@@ -1913,16 +1961,70 @@ mod tests {
     }
 
     #[test]
+    fn load_canonical_models_reads_sequence_per_file() {
+        let root = test_root("model-sequence");
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+  - id: acme/two
+    provider_model_id: two
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+- id: acme/two
+  name: "Acme: Two"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads grouped model file");
+        let ids: Vec<_> = loaded.models().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["acme/one", "acme/two"]);
+        validate_loaded(&loaded).expect("grouped model file validates");
+    }
+
+    #[test]
     fn load_registry_reads_recursive_model_files() {
         let root = test_root("models-dir");
         write(
             &root,
-            "registry/models/acme/test-model.yaml",
+            "registry/models/acme.yaml",
             r#"
-id: acme/test-model
-name: "Acme: Test Model"
-input_modalities: [text]
-output_modalities: [text]
+- id: acme/test-model
+  name: "Acme: Test Model"
+  input_modalities: [text]
+  output_modalities: [text]
 "#,
         );
         write(
@@ -1939,6 +2041,11 @@ api_protocol:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 api_base: https://api.acme.test/v1
 "#,
@@ -1946,9 +2053,35 @@ api_base: https://api.acme.test/v1
 
         let loaded = load_registry(&root).expect("loads registry/models/**/*.yaml");
 
-        assert_eq!(loaded.canonical.len(), 1);
-        assert_eq!(loaded.canonical[0].id, "acme/test-model");
+        assert_eq!(loaded.models().count(), 1);
+        assert_eq!(
+            loaded.models().next().map(|m| m.id.as_str()),
+            Some("acme/test-model")
+        );
         validate_loaded(&loaded).expect("model file registry validates");
+    }
+
+    #[test]
+    fn model_id_org_must_match_filename() {
+        let root = test_root("org-stem-mismatch");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: other/model
+  name: "Other: Model"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("org/stem mismatch must fail validation");
+        assert!(
+            err.to_string()
+                .contains("belongs to vendor file 'other.yaml'"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1956,12 +2089,12 @@ api_base: https://api.acme.test/v1
         let root = test_root("required-config");
         write(
             &root,
-            "registry/models/acme/test-model.yaml",
+            "registry/models/acme.yaml",
             r#"
-id: acme/test-model
-name: "Acme: Test Model"
-input_modalities: [text]
-output_modalities: [text]
+- id: acme/test-model
+  name: "Acme: Test Model"
+  input_modalities: [text]
+  output_modalities: [text]
 "#,
         );
         write(
@@ -1986,6 +2119,11 @@ required_config:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 "#,
         );
@@ -2008,12 +2146,12 @@ status: active
         let root = test_root("strip-auto-sync");
         write(
             &root,
-            "registry/models/acme/test-model.yaml",
+            "registry/models/acme.yaml",
             r#"
-id: acme/test-model
-name: "Acme: Test Model"
-input_modalities: [text]
-output_modalities: [text]
+- id: acme/test-model
+  name: "Acme: Test Model"
+  input_modalities: [text]
+  output_modalities: [text]
 "#,
         );
         write(
@@ -2030,6 +2168,11 @@ api_protocol:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 api_base: https://api.acme.test/v1
 auto_sync:
@@ -2131,12 +2274,12 @@ auto_sync:
         let root = test_root("agentic-prompt");
         write(
             &root,
-            "registry/models/acme/test-model.yaml",
+            "registry/models/acme.yaml",
             r#"
-id: acme/test-model
-name: "Acme: Test Model"
-input_modalities: [text]
-output_modalities: [text]
+- id: acme/test-model
+  name: "Acme: Test Model"
+  input_modalities: [text]
+  output_modalities: [text]
 "#,
         );
         write(
@@ -2153,6 +2296,11 @@ api_protocol:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 api_base: https://api.acme.test/v1
 auto_sync:
@@ -2180,12 +2328,12 @@ auto_sync:
         let root = test_root("agentic-missing-urls");
         write(
             &root,
-            "registry/models/acme/test-model.yaml",
+            "registry/models/acme.yaml",
             r#"
-id: acme/test-model
-name: "Acme: Test Model"
-input_modalities: [text]
-output_modalities: [text]
+- id: acme/test-model
+  name: "Acme: Test Model"
+  input_modalities: [text]
+  output_modalities: [text]
 "#,
         );
         write(
@@ -2211,6 +2359,87 @@ auto_sync:
 
         let err = validate(&root).expect_err("agentic sync requires URLs");
         assert!(format!("{err:#}").contains("auto_sync.urls is required for agentic"));
+    }
+
+    #[test]
+    fn subscription_provider_must_not_price() {
+        let root = test_root("sub-priced");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+billing: subscription
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("subscription+pricing must fail");
+        assert!(
+            err.to_string().contains("subscription"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn usage_provider_must_price_every_model() {
+        let root = test_root("usage-unpriced");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("usage without pricing must fail");
+        assert!(err.to_string().contains("usage"), "unexpected error: {err}");
     }
 
     fn test_root(name: &str) -> PathBuf {

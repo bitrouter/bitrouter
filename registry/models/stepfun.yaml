@@ -1,0 +1,20 @@
+- id: stepfun/step-3.5-flash
+  name: 'StepFun: Step 3.5 Flash'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 16384
+  release_date: 2026-01-29
+  knowledge_cutoff: 2025-01
+  open_weights: true
+- id: stepfun/step-3.7-flash
+  name: 'StepFun: Step 3.7 Flash'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 256000
