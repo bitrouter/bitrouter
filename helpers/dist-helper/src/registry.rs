@@ -532,11 +532,7 @@ fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut Str
         out,
         "- `{}` (`{}`)",
         data.name,
-        provider
-            .path
-            .strip_prefix(root)
-            .unwrap_or(&provider.path)
-            .display()
+        slash_path(provider.path.strip_prefix(root).unwrap_or(&provider.path))
     )?;
     if let Some(display_name) = &data.display_name {
         writeln!(out, "  - display_name: {display_name}")?;
@@ -575,6 +571,13 @@ fn sync_writes_models(sync: &AutoSync) -> bool {
     sync.writes
         .as_ref()
         .is_none_or(|writes| writes.contains(&AutoSyncWrite::Models))
+}
+
+fn slash_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 struct Artifacts {
