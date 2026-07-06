@@ -1,0 +1,43 @@
+- id: x-ai/grok-4.20-multi-agent
+  name: 'xAI: Grok 4.20 Multi-Agent'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  open_weights: false
+  family: grok
+- id: x-ai/grok-4.20
+  name: 'xAI: Grok 4.20'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 131072
+  max_output_tokens: 4096
+  release_date: 2026-03-12
+  open_weights: false
+  family: grok
+- id: x-ai/grok-4.3
+  name: 'xAI: Grok 4.3'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 30000
+  release_date: 2026-05-01
+  open_weights: false
+  family: grok
+- id: x-ai/grok-build-0.1
+  name: 'xAI: Grok Build 0.1'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  open_weights: false
+  family: grok

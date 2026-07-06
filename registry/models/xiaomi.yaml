@@ -1,0 +1,65 @@
+- id: xiaomi/mimo-v2-flash
+  name: 'Xiaomi: MiMo V2 Flash'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 65536
+  max_output_tokens: 32768
+  release_date: 2025-12-16
+  knowledge_cutoff: 2024-12-01
+  open_weights: true
+  family: mimo
+- id: xiaomi/mimo-v2-omni
+  name: 'Xiaomi: MiMo V2 Omni'
+  description: Xiaomi MiMo V2 Omni — multimodal MiMo V2 tier.
+  input_modalities:
+  - text
+  - image
+  - audio
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 131072
+  release_date: 2026-03-18
+  knowledge_cutoff: 2024-12
+  open_weights: false
+  family: mimo
+- id: xiaomi/mimo-v2-pro
+  name: 'Xiaomi: MiMo V2 Pro'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-03-18
+  knowledge_cutoff: 2024-12
+  open_weights: false
+  family: mimo
+- id: xiaomi/mimo-v2.5-pro
+  name: 'Xiaomi: MiMo V2.5 Pro'
+  description: Xiaomi MiMo V2.5 Pro — high-capability tier of the MiMo V2.5 family.
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 32768
+  release_date: 2026-04-22
+  knowledge_cutoff: 2024-12
+  open_weights: true
+  family: mimo
+- id: xiaomi/mimo-v2.5
+  name: 'Xiaomi: MiMo V2.5'
+  description: Xiaomi MiMo V2.5 — standard tier of the MiMo V2.5 family.
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 32768
+  release_date: 2026-04-22
+  knowledge_cutoff: 2024-12
+  open_weights: true
+  family: mimo

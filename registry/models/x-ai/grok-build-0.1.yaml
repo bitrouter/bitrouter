@@ -1,9 +1,0 @@
-id: x-ai/grok-build-0.1
-name: 'xAI: Grok Build 0.1'
-input_modalities:
-- text
-output_modalities:
-- text
-max_input_tokens: 256000
-open_weights: false
-family: grok
