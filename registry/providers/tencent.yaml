@@ -105,7 +105,12 @@ models:
       - tools
   - id: moonshotai/kimi-k2.6
     provider_model_id: kimi-k2.6
-    # Served by TokenHub but absent from the Singapore price sheet — pricing TBD.
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.16
+      output_tokens:
+        text: 4
     capabilities:
       - reasoning
       - tools

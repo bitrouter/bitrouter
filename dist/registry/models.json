@@ -2367,15 +2367,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.16,
-              "no_cache": 0.95
-            },
-            "output_tokens": {
-              "text": 4.0
-            }
-          },
           "provider": "moonshotai_coding_plan",
           "provider_model_id": "kimi-for-coding",
           "rate_limits": {
@@ -2428,6 +2419,15 @@
             "reasoning",
             "tools"
           ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
           "provider": "tencent",
           "provider_model_id": "kimi-k2.6",
           "rate_limits": {
@@ -2443,6 +2443,15 @@
             "reasoning",
             "tools"
           ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
           "provider": "tencent_cn",
           "provider_model_id": "kimi-k2.6",
           "rate_limits": {
@@ -5011,15 +5020,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
-            },
-            "output_tokens": {
-              "text": 3.2
-            }
-          },
           "provider": "zai_coding_plan",
           "provider_model_id": "glm-5",
           "rate_limits": {
@@ -5225,15 +5225,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
-            }
-          },
           "provider": "zai_coding_plan",
           "provider_model_id": "glm-5.1",
           "rate_limits": {
@@ -5375,15 +5366,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
-            }
-          },
           "provider": "zai_coding_plan",
           "provider_model_id": "glm-5.2",
           "rate_limits": {
