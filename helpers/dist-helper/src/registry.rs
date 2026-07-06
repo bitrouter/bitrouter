@@ -2004,6 +2004,29 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn model_id_org_must_match_filename() {
+        let root = test_root("org-stem-mismatch");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: other/model
+  name: "Other: Model"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("org/stem mismatch must fail validation");
+        assert!(
+            err.to_string()
+                .contains("belongs to vendor file 'other.yaml'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn build_artifacts_emits_required_config_and_omits_unset_api_base() {
         let root = test_root("required-config");
         write(
