@@ -1,0 +1,12 @@
+id: moonshotai/kimi-k2.6
+name: 'Kimi: K2.6'
+input_modalities:
+- text
+output_modalities:
+- text
+max_input_tokens: 256000
+max_output_tokens: 8192
+release_date: 2026-05-13
+knowledge_cutoff: 2025-01
+open_weights: true
+family: kimi-k2

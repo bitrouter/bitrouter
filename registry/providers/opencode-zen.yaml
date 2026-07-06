@@ -212,7 +212,7 @@ status: active
 weight: 1
 community: false
 access: api_key
-billing: token
+billing: usage_token
 auth_scheme: x-api-key
 auth:
   kind: bearer

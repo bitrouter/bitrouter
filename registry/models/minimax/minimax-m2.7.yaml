@@ -1,0 +1,11 @@
+id: minimax/minimax-m2.7
+name: 'MiniMax: M2.7'
+input_modalities:
+- text
+output_modalities:
+- text
+max_input_tokens: 196608
+max_output_tokens: 196608
+release_date: 2026-03-18
+open_weights: true
+family: minimax

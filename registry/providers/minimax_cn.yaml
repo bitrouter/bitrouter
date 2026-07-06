@@ -1,0 +1,57 @@
+name: minimax_cn
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: MiniMax
+  privacy_policy_url: https://platform.minimaxi.com/protocol/privacy-policy
+  slug: minimax
+  status_page_url: https://status.minimaxi.com
+  terms_of_service_url: https://platform.minimaxi.com/protocol/terms-of-service
+api_protocol:
+  - "*": [anthropic, openai]
+protocol_endpoints:
+  openai: https://api.minimaxi.com/v1
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: minimax/minimax-m2.7
+    provider_model_id: MiniMax-M2.7
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+        cache_write: 0.375
+      output_tokens:
+        text: 1.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m2.5
+    provider_model_id: MiniMax-M2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+        cache_write: 0.375
+      output_tokens:
+        text: 1.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m3
+    provider_model_id: MiniMax-M3
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.12
+      output_tokens:
+        text: 2.4
+status: active
+weight: 1
+submitted_at: 2026-05-25
+api_base: https://api.minimaxi.com/anthropic/v1
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev

@@ -2,7 +2,9 @@ name: akashml
 metadata:
   headquarters: US
   name: AkashML
+  privacy_policy_url: https://akashml.com/privacy
   slug: akashml
+  terms_of_service_url: https://akashml.com/terms
 api_protocol:
   - "*": openai
 api_base: https://api.akashml.com/v1

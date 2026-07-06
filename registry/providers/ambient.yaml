@@ -6,10 +6,9 @@
 # - base URL `https://api.ambient.xyz/v1`; Chat Completions wire format
 #   (`POST /v1/chat/completions`); model list at `GET /v1/models`.
 #
-# Catalog source: models.dev (provider key `ambient`). The curation bot writes
-# back canonical `models` + `pricing` from that feed; consumers pull the full
-# live catalog from the same channel at runtime. Ambient also serves its own
-# `GET /v1/models` — see the `v1_models` alternative noted in the PR.
+# Catalog source: models.dev (provider key `ambient`). The seed entries below
+# are complemented by the same automatic catalog sync consumers use at runtime.
+# Ambient also serves its own `GET /v1/models`.
 name: ambient
 display_name: Ambient
 metadata:
@@ -32,9 +31,8 @@ auth:
 # `moonshotai/kimi-k2.7-code` (~1.7s TTFT, ~65 tok/s, standard OpenAI-compatible
 # streaming via `delta.content`). Pricing is from Ambient's live `GET /v1/models`
 # (USD per 1M tokens) — authoritative for billing and currently higher than the
-# models.dev feed. The daily `curate sync` is additive + idempotent: it leaves
-# this hand-set entry untouched and only attaches the other canonical models
-# Ambient serves from the same feed at runtime.
+# models.dev feed. Automatic sync leaves this hand-set entry untouched and
+# attaches other registry models Ambient serves from the same feed at runtime.
 models:
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: moonshotai/kimi-k2.7-code

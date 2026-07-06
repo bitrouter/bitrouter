@@ -1,13 +1,15 @@
 name: stepfun
 metadata:
   headquarters: SG
+  datacenters:
+    - US
   name: StepFun
   privacy_policy_url: https://platform.stepfun.ai/docs/en/agreement/userprivacy
   slug: stepfun
   terms_of_service_url: https://platform.stepfun.ai/docs/en/agreement/userservice
 api_base: https://api.stepfun.ai/v1
 api_protocol:
-  - "*": openai
+  - "*": [openai, anthropic]
 rate_limits:
   - "*":
       requests_per_minute: 60

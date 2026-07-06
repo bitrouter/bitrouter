@@ -1,0 +1,13 @@
+id: anthropic/claude-sonnet-4.5
+name: 'Anthropic: Claude Sonnet 4.5'
+input_modalities:
+- text
+- image
+output_modalities:
+- text
+max_input_tokens: 200000
+max_output_tokens: 64000
+release_date: 2025-09-29
+knowledge_cutoff: 2025-07-31
+open_weights: false
+family: claude-sonnet

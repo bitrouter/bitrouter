@@ -1,0 +1,10 @@
+id: x-ai/grok-4.20-multi-agent
+name: 'xAI: Grok 4.20 Multi-Agent'
+input_modalities:
+- text
+- image
+output_modalities:
+- text
+max_input_tokens: 1000000
+open_weights: false
+family: grok

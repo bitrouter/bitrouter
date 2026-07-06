@@ -1,0 +1,12 @@
+id: x-ai/grok-4.20
+name: 'xAI: Grok 4.20'
+input_modalities:
+- text
+- image
+output_modalities:
+- text
+max_input_tokens: 131072
+max_output_tokens: 4096
+release_date: 2026-03-12
+open_weights: false
+family: grok

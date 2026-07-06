@@ -6,8 +6,10 @@ metadata:
   slug: xiaomi
   terms_of_service_url: https://mimo.mi.com/docs/terms/user-agreement
 api_base: https://api.xiaomimimo.com/v1
+protocol_endpoints:
+  anthropic: https://api.xiaomimimo.com/anthropic
 api_protocol:
-  - "*": openai
+  - "*": [openai, responses, anthropic]
 rate_limits:
   - "*":
       requests_per_minute: 60
@@ -38,6 +40,7 @@ models:
       - tools
   - id: xiaomi/mimo-v2-pro
     provider_model_id: mimo-v2-pro
+    deprecation_date: 2026-06-30
     pricing:
       input_tokens:
         no_cache: 1
@@ -49,6 +52,7 @@ models:
       - tools
   - id: xiaomi/mimo-v2-omni
     provider_model_id: mimo-v2-omni
+    deprecation_date: 2026-06-30
     pricing:
       input_tokens:
         no_cache: 0.4
@@ -60,6 +64,7 @@ models:
       - tools
   - id: xiaomi/mimo-v2-flash
     provider_model_id: mimo-v2-flash
+    deprecation_date: 2026-06-30
     pricing:
       input_tokens:
         no_cache: 0.1

@@ -1,12 +1,16 @@
 name: moonshotai
 metadata:
-  headquarters: CN
+  headquarters: SG
+  datacenters:
+    - SG
   name: Moonshot AI
   privacy_policy_url: https://platform.kimi.ai/docs/agreement/userprivacy
   slug: moonshotai
   terms_of_service_url: https://platform.kimi.ai/docs/agreement/modeluse
 api_protocol:
-  - "*": openai
+  - "*": [openai, anthropic]
+protocol_endpoints:
+  anthropic: https://api.moonshot.ai/anthropic
 rate_limits:
   - "*":
       requests_per_minute: 60

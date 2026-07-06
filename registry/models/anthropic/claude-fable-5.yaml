@@ -1,0 +1,13 @@
+id: anthropic/claude-fable-5
+name: 'Anthropic: Claude Fable 5'
+input_modalities:
+- text
+- image
+output_modalities:
+- text
+max_input_tokens: 1000000
+max_output_tokens: 128000
+release_date: 2026-06-09
+knowledge_cutoff: 2026-01-31
+open_weights: false
+family: claude-fable

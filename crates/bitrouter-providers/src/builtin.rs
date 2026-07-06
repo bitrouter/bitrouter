@@ -64,10 +64,13 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
     let auth = p.auth.as_ref().ok_or_else(|| LoadError::Snapshot {
         message: format!("provider '{}' has no auth", p.name),
     })?;
+    let api_base = p.api_base.clone().ok_or_else(|| LoadError::Snapshot {
+        message: format!("provider '{}' has no fixed api_base", p.name),
+    })?;
     Ok(ProviderEntry {
         id: p.name.clone(),
         display_name: p.display_name.clone().unwrap_or_else(|| p.name.clone()),
-        api_base: p.api_base.clone(),
+        api_base,
         api_protocol: derive_protocol_mapping(p),
         protocol_endpoints: p.protocol_endpoints.clone().unwrap_or_default(),
         auth: map_auth(&p.name, auth)?,
@@ -126,7 +129,7 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
 }
 
 /// Derive the wire-protocol mapping. A runtime-discovered provider carries
-/// provider-level globs (kept in the dist); a curated provider's protocol was
+/// provider-level globs (kept in the dist); a provider with explicit model entries's protocol was
 /// resolved onto its models, so reconstruct the mapping from them.
 fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
     let mut globs: BTreeMap<String, ProtocolList> = BTreeMap::new();
@@ -294,7 +297,7 @@ mod tests {
 
     #[test]
     fn entry_from_registry_collapses_per_model_protocol_set() {
-        // A curated provider (no provider-level globs) whose models carry the
+        // A provider with explicit model entries (no provider-level globs) whose models carry the
         // ordered [openai, responses] set: the mapping is reconstructed from
         // the models, and the bearer env var + class are derived.
         let provider = reg(serde_json::json!({

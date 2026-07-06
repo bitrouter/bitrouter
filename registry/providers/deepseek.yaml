@@ -1,13 +1,17 @@
 name: deepseek
 metadata:
   headquarters: CN
+  datacenters:
+    - CN
   name: DeepSeek
   privacy_policy_url: https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html
   slug: deepseek
   terms_of_service_url: https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html
 api_base: https://api.deepseek.com
+protocol_endpoints:
+  anthropic: https://api.deepseek.com/anthropic
 api_protocol:
-  - "*": openai
+  - "*": [openai, anthropic]
 rate_limits:
   - "*":
       requests_per_minute: 60
