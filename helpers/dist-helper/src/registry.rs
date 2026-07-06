@@ -500,7 +500,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         "- For subscription providers, do not invent token pricing.\n"
     )?;
     writeln!(out, "Validation:")?;
-    writeln!(out, "After editing registry source YAML, run exactly:")?;
+    writeln!(
+        out,
+        "Always run this command before your final response, even if no source files changed:"
+    )?;
     writeln!(out, "`cargo run -p dist-helper -- registry validate`\n")?;
     writeln!(
         out,
@@ -519,6 +522,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         "- models skipped because canonical mapping or facts were uncertain"
     )?;
     writeln!(out, "- validation result")?;
+    writeln!(
+        out,
+        "- include the exact `registry valid:` output line from validation"
+    )?;
     Ok(out)
 }
 
@@ -2134,6 +2141,7 @@ auto_sync:
         assert!(prompt.contains("cargo run -p dist-helper -- registry validate"));
         assert!(prompt.contains("If the listed URLs are unreachable"));
         assert!(prompt.contains("Do not remove or edit provider `auto_sync`"));
+        assert!(prompt.contains("include the exact `registry valid:` output line"));
         assert!(!prompt.contains("canonical_models_json"));
     }
 
