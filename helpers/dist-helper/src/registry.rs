@@ -459,20 +459,20 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(out, "Canonical model source:")?;
     writeln!(
         out,
-        "- Canonical model IDs live in `registry/models/**/*.yaml`."
+        "- Canonical models live in `registry/models/<vendor>.yaml`, one file per vendor holding a YAML sequence of that vendor's models."
     )?;
     writeln!(
         out,
         "- Before adding a new canonical model, search existing files exactly with:"
     )?;
-    writeln!(out, "  `rg -n \"^id: \" registry/models`")?;
+    writeln!(out, "  `rg -n \"^- id: \" registry/models`")?;
     writeln!(
         out,
         "- Reuse an existing canonical ID when the upstream model is the same model."
     )?;
     writeln!(
         out,
-        "- Only create a new canonical model YAML when no existing canonical ID matches."
+        "- Only append a new canonical model entry when no existing canonical ID matches; add it to the existing vendor file, creating that vendor's file only if it does not yet exist."
     )?;
     writeln!(
         out,
