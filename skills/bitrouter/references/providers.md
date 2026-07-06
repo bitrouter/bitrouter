@@ -60,11 +60,11 @@ Rules:
   the env-var name. A `local_oauth` / `local_pkce` provider is not env-gated —
   it activates after `bitrouter providers login <provider>`.
 - **Full catalog via the sync channel.** A provider may declare an `auto_sync`
-  feed (the channel the registry itself curates from). BitRouter reads the same
-  channel to pull the provider's **full** catalog beyond the curated canonical
+  feed (the channel the registry itself syncs from). BitRouter reads the same
+  channel to pull the provider's **full** catalog beyond the registry seed
   subset: a `v1_models` feed (the gateways) is probed at `GET {api_base}/models`
   on startup; a `models_dev` feed pulls the provider's models from models.dev.
-  The curated canonical models keep the highest route priority.
+  The registry seed models keep the highest route priority.
 - **BitRouter Cloud is a normal public provider.** The public registry entry is
   still named `bitrouter`, but OSS treats it as BitRouter Cloud and discovers
   its cloud-owned model list from `/models`.

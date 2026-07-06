@@ -219,11 +219,24 @@ fn provider_dist_value(provider: &LoadedProvider) -> Result<Value> {
         .remove("rate_limits")
         .unwrap_or(Value::Array(Vec::new()));
     obj.remove("models");
+    obj.remove("protocol_endpoints");
     obj.insert("id".to_string(), Value::String(data.name.clone()));
+    obj.insert(
+        "required_config".to_string(),
+        serde_json::to_value(resolved_required_config(data))
+            .context("serializing required_config")?,
+    );
     obj.insert(
         "byok".to_string(),
         Value::Bool(data.access == Access::ApiKey),
     );
+    let protocol_endpoints = runtime_protocol_endpoints(data);
+    if !protocol_endpoints.is_empty() {
+        obj.insert(
+            "protocol_endpoints".to_string(),
+            serde_json::to_value(protocol_endpoints).context("serializing protocol_endpoints")?,
+        );
+    }
     if data.models.is_empty() {
         obj.insert("api_protocol".to_string(), api_protocol);
         obj.insert("rate_limits".to_string(), rate_limits);
@@ -232,6 +245,14 @@ fn provider_dist_value(provider: &LoadedProvider) -> Result<Value> {
         obj.insert("models".to_string(), Value::Array(resolved_models(data)?));
     }
     Ok(value)
+}
+
+fn runtime_protocol_endpoints(provider: &ProviderFile) -> BTreeMap<&'static str, String> {
+    provider
+        .protocol_endpoints
+        .iter()
+        .map(|(protocol, endpoint)| (protocol.runtime_key(), endpoint.clone()))
+        .collect()
 }
 
 fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
@@ -327,8 +348,7 @@ struct LoadedProvider {
 
 fn load_registry(root: &Path) -> Result<LoadedRegistry> {
     let registry = root.join("registry");
-    let canonical_path = registry.join("canonical.yaml");
-    let canonical: CanonicalFile = read_yaml(&canonical_path)?;
+    let canonical = load_canonical_models(&registry)?;
     let providers_dir = registry.join("providers");
     let mut providers = Vec::new();
     for entry in fs::read_dir(&providers_dir)
@@ -349,9 +369,41 @@ fn load_registry(root: &Path) -> Result<LoadedRegistry> {
     }
     providers.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(LoadedRegistry {
-        canonical: canonical.models,
+        canonical,
         providers,
     })
+}
+
+fn load_canonical_models(registry: &Path) -> Result<Vec<CanonicalModel>> {
+    let models_dir = registry.join("models");
+    let mut files = Vec::new();
+    collect_yaml_files(&models_dir, &mut files)?;
+    let mut models = Vec::with_capacity(files.len());
+    for path in files {
+        models.push(read_yaml(&path)?);
+    }
+    Ok(models)
+}
+
+fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_yaml_files(&path, files)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext == "yaml" || ext == "yml" {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(())
 }
 
 fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -365,13 +417,13 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<()> {
     for model in &registry.canonical {
         if !valid_canonical_id(&model.id) {
             issues.push(format!(
-                "registry/canonical.yaml: '{}' is not a lowercase '<org>/<model>' id",
+                "registry/models: '{}' is not a lowercase '<org>/<model>' id",
                 model.id
             ));
         }
         if !canonical_ids.insert(model.id.as_str()) {
             issues.push(format!(
-                "registry/canonical.yaml: duplicate canonical model '{}'",
+                "registry/models: duplicate canonical model '{}'",
                 model.id
             ));
         }
@@ -393,7 +445,7 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     for modality in &model.input_modalities {
         if !matches!(modality.as_str(), "text" | "image" | "audio") {
             issues.push(format!(
-                "registry/canonical.yaml: model '{}' has invalid input modality '{}'",
+                "registry/models: model '{}' has invalid input modality '{}'",
                 model.id, modality
             ));
         }
@@ -401,7 +453,7 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     for modality in &model.output_modalities {
         if !matches!(modality.as_str(), "text" | "audio") {
             issues.push(format!(
-                "registry/canonical.yaml: model '{}' has invalid output modality '{}'",
+                "registry/models: model '{}' has invalid output modality '{}'",
                 model.id, modality
             ));
         }
@@ -410,7 +462,7 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
         && !valid_yyyy_mm_dd(date)
     {
         issues.push(format!(
-            "registry/canonical.yaml: model '{}' has invalid release_date '{}'",
+            "registry/models: model '{}' has invalid release_date '{}'",
             model.id, date
         ));
     }
@@ -418,7 +470,7 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
         && !valid_yyyy_mm_or_dd(date)
     {
         issues.push(format!(
-            "registry/canonical.yaml: model '{}' has invalid knowledge_cutoff '{}'",
+            "registry/models: model '{}' has invalid knowledge_cutoff '{}'",
             model.id, date
         ));
     }
@@ -449,7 +501,18 @@ fn validate_provider<'a>(
             path_label(prior)
         ));
     }
-    validate_https(&data.api_base, &file, "api_base", issues);
+    if let Some(api_base) = &data.api_base {
+        validate_https(api_base, &file, "api_base", issues);
+    }
+    for (protocol, endpoint) in &data.protocol_endpoints {
+        validate_https(
+            endpoint,
+            &file,
+            &format!("protocol_endpoints.{}", protocol.source_key()),
+            issues,
+        );
+    }
+    validate_required_config(data, &file, issues);
     if let Some(url) = &data.doc_url {
         validate_https(url, &file, "doc_url", issues);
     }
@@ -482,7 +545,7 @@ fn validate_provider<'a>(
         }
         if !canonical_ids.contains(model.id.as_str()) {
             issues.push(format!(
-                "{file}: model '{}' (provider_model_id={}) is not declared in canonical.yaml",
+                "{file}: model '{}' (provider_model_id={}) is not declared in registry/models",
                 model.id, model.provider_model_id
             ));
         }
@@ -499,6 +562,33 @@ fn validate_provider<'a>(
                 "{file}: model '{}' has invalid deprecation_date '{}'",
                 model.id, date
             ));
+        }
+    }
+}
+
+fn resolved_required_config(provider: &ProviderFile) -> Vec<RequiredConfig> {
+    if !provider.required_config.is_empty() {
+        return provider.required_config.clone();
+    }
+    match provider.access {
+        Access::ApiKey => vec![RequiredConfig::ApiKey],
+        Access::LocalOauth => vec![RequiredConfig::LocalOauth],
+        Access::LocalPkce => vec![RequiredConfig::LocalPkce],
+        Access::Private => Vec::new(),
+    }
+}
+
+fn validate_required_config(provider: &ProviderFile, file: &str, issues: &mut Vec<String>) {
+    let required = resolved_required_config(provider);
+    if provider.api_base.is_none() && !required.contains(&RequiredConfig::BaseUrl) {
+        issues.push(format!(
+            "{file}: providers without a fixed api_base must require base_url"
+        ));
+    }
+    let mut seen = HashSet::new();
+    for item in &required {
+        if !seen.insert(*item) {
+            issues.push(format!("{file}: required_config contains duplicate item"));
         }
     }
 }
@@ -533,6 +623,13 @@ fn validate_metadata(metadata: &ProviderMetadata, file: &str, issues: &mut Vec<S
         issues.push(format!(
             "{file}: metadata.slug must be lowercase alphanumerics + hyphen"
         ));
+    }
+    for code in &metadata.datacenters {
+        if !valid_region_code(code) {
+            issues.push(format!(
+                "{file}: metadata.datacenters entries must be uppercase region codes"
+            ));
+        }
     }
     for (field, value) in [
         (
@@ -666,7 +763,7 @@ fn valid_canonical_id(id: &str) -> bool {
 fn valid_provider_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 fn valid_slug(value: &str, allow_dot_underscore: bool) -> bool {
@@ -689,6 +786,10 @@ fn valid_slug(value: &str, allow_dot_underscore: bool) -> bool {
             || c == '-'
             || (allow_dot_underscore && (c == '.' || c == '_'))
     })
+}
+
+fn valid_region_code(value: &str) -> bool {
+    value.len() == 2 && value.chars().all(|c| c.is_ascii_uppercase())
 }
 
 fn valid_yyyy_mm_dd(value: &str) -> bool {
@@ -884,12 +985,6 @@ fn dist_dir(root: &Path) -> PathBuf {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CanonicalFile {
-    models: Vec<CanonicalModel>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct CanonicalModel {
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -940,7 +1035,12 @@ struct ProviderFile {
     access: Access,
     #[serde(default)]
     billing: Billing,
-    api_base: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_base: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    protocol_endpoints: BTreeMap<ApiProtocol, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_config: Vec<RequiredConfig>,
     #[serde(default)]
     auth_scheme: AuthScheme,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -961,6 +1061,8 @@ fn default_weight() -> f64 {
 #[serde(deny_unknown_fields)]
 struct ProviderMetadata {
     headquarters: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    datacenters: Vec<String>,
     name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     privacy_policy_url: Option<String>,
@@ -988,13 +1090,33 @@ struct ProviderModel {
     deprecation_date: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ApiProtocol {
     Openai,
     Anthropic,
     Google,
     Responses,
+}
+
+impl ApiProtocol {
+    fn source_key(self) -> &'static str {
+        match self {
+            Self::Openai => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Google => "google",
+            Self::Responses => "responses",
+        }
+    }
+
+    fn runtime_key(self) -> &'static str {
+        match self {
+            Self::Openai => "chat_completions",
+            Self::Anthropic => "messages",
+            Self::Google => "generate_content",
+            Self::Responses => "responses",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1039,11 +1161,21 @@ enum Access {
     Private,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RequiredConfig {
+    ApiKey,
+    BaseUrl,
+    LocalOauth,
+    LocalPkce,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Billing {
     #[default]
-    Token,
+    #[serde(alias = "token")]
+    UsageToken,
     Subscription,
 }
 
@@ -1198,6 +1330,7 @@ struct ModelsDevCost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn canonical_resolver_matches_full_ids_and_unique_bare_slugs() {
@@ -1252,5 +1385,115 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(nested, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn load_registry_reads_recursive_model_files() {
+        let root = test_root("models-dir");
+        write(
+            &root,
+            "registry/models/acme/test-model.yaml",
+            r#"
+id: acme/test-model
+name: "Acme: Test Model"
+input_modalities: [text]
+output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/test-model
+    provider_model_id: test-model
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads registry/models/**/*.yaml");
+
+        assert_eq!(loaded.canonical.len(), 1);
+        assert_eq!(loaded.canonical[0].id, "acme/test-model");
+        validate_loaded(&loaded).expect("model file registry validates");
+    }
+
+    #[test]
+    fn build_artifacts_emits_required_config_and_omits_unset_api_base() {
+        let root = test_root("required-config");
+        write(
+            &root,
+            "registry/models/acme/test-model.yaml",
+            r#"
+id: acme/test-model
+name: "Acme: Test Model"
+input_modalities: [text]
+output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  datacenters: [US, EU]
+  name: Acme
+  slug: acme
+  privacy_policy_url: https://acme.test/privacy
+  terms_of_service_url: https://acme.test/terms
+api_protocol:
+  - "*": openai
+protocol_endpoints:
+  anthropic: https://api.acme.test/anthropic
+required_config:
+  - api_key
+  - base_url
+models:
+  - id: acme/test-model
+    provider_model_id: test-model
+status: active
+"#,
+        );
+
+        let artifacts = build_artifacts(&root).expect("builds provider without fixed api_base");
+        let providers: Value = serde_json::from_str(&artifacts.providers).unwrap();
+        let provider = &providers["data"][0];
+
+        assert_eq!(provider["required_config"], json!(["api_key", "base_url"]));
+        assert_eq!(provider["metadata"]["datacenters"], json!(["US", "EU"]));
+        assert_eq!(
+            provider["protocol_endpoints"],
+            json!({ "messages": "https://api.acme.test/anthropic" })
+        );
+        assert!(provider.get("api_base").is_none());
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "bitrouter-dist-helper-{name}-{}-{stamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(root.join("registry/providers")).unwrap();
+        root
+    }
+
+    fn write(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents.trim_start()).unwrap();
     }
 }

@@ -4,14 +4,16 @@
       "access": "api_key",
       "api_base": "https://api.akashml.com/v1",
       "auth_scheme": "x-api-key",
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": true,
       "id": "akashml",
       "metadata": {
         "headquarters": "US",
         "name": "AkashML",
-        "slug": "akashml"
+        "privacy_policy_url": "https://akashml.com/privacy",
+        "slug": "akashml",
+        "terms_of_service_url": "https://akashml.com/terms"
       },
       "models": [
         {
@@ -78,40 +80,47 @@
         }
       ],
       "name": "akashml",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-12",
       "weight": 1.0
     },
     {
       "access": "api_key",
-      "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "auth_scheme": "x-api-key",
-      "auto_sync": {
-        "feed": "models_dev"
-      },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
-      "id": "alibaba",
+      "display_name": "Alibaba Cloud Model Studio (China Beijing)",
+      "id": "alibaba_cn",
       "metadata": {
-        "headquarters": "SG",
+        "datacenters": [
+          "CN"
+        ],
+        "headquarters": "CN",
         "name": "Alibaba Cloud",
-        "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+        "privacy_policy_url": "https://terms.alicdn.com/legal-agreement/terms/c_platform_service_agreement/20231023143554936/20231023143554936.html",
         "slug": "alibaba-cloud",
-        "status_page_url": "https://status.alibabacloud.com",
-        "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+        "status_page_url": "https://status.aliyun.com",
+        "terms_of_service_url": "https://help.aliyun.com/zh/model-studio/related-agreements"
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 2.5
+              "no_cache": 1.65
             },
             "output_tokens": {
-              "text": 7.5
+              "text": 4.951
             }
           },
           "provider_model_id": "qwen3.7-max",
@@ -120,33 +129,29 @@
           }
         },
         {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.6-plus",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.05,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "qwen/qwen3.7-plus",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.826
+                },
+                "output_tokens": {
+                  "text": 3.301
+                }
+              }
+            ],
             "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
+              "no_cache": 0.276
             },
             "output_tokens": {
-              "text": 3.0
+              "text": 1.101
             }
           },
           "provider_model_id": "qwen3.7-plus",
@@ -155,15 +160,60 @@
           }
         },
         {
-          "api_protocol": "openai",
-          "id": "qwen/qwen3.6-flash",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-plus",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
             "input_tokens": {
-              "cache_write": 0.234375,
-              "no_cache": 0.1875
+              "no_cache": 0.276
             },
             "output_tokens": {
-              "text": 1.125
+              "text": 1.651
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-flash",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
             }
           },
           "provider_model_id": "qwen3.6-flash",
@@ -172,9 +222,15 @@
           }
         }
       ],
-      "name": "alibaba",
+      "name": "alibaba_cn",
+      "protocol_endpoints": {
+        "messages": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
-      "submitted_at": "2026-05-25",
+      "submitted_at": "2026-07-06",
       "weight": 1.0
     },
     {
@@ -182,13 +238,18 @@
       "api_base": "https://coding-intl.dashscope.aliyuncs.com/v1",
       "auth_scheme": "x-api-key",
       "auto_sync": {
-        "feed": "models_dev"
+        "feed": "models_dev",
+        "key": "alibaba-coding-plan"
       },
       "billing": "subscription",
       "byok": true,
       "community": false,
-      "id": "alibaba-coding-plan",
+      "display_name": "Alibaba Cloud Token Plan (Singapore)",
+      "id": "alibaba_coding_plan_sg",
       "metadata": {
+        "datacenters": [
+          "SG"
+        ],
         "headquarters": "SG",
         "name": "Alibaba Cloud",
         "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
@@ -200,15 +261,6 @@
         {
           "api_protocol": "openai",
           "id": "qwen/qwen3.7-max",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
           "provider_model_id": "qwen3.7-max",
           "rate_limits": {
             "requests_per_minute": 60
@@ -217,15 +269,6 @@
         {
           "api_protocol": "openai",
           "id": "qwen/qwen3.6-plus",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.05,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
           "provider_model_id": "qwen3.6-plus",
           "rate_limits": {
             "requests_per_minute": 60
@@ -272,9 +315,725 @@
           }
         }
       ],
-      "name": "alibaba-coding-plan",
+      "name": "alibaba_coding_plan_sg",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-06-05",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Alibaba Cloud Model Studio (Germany Frankfurt)",
+      "id": "alibaba_eu",
+      "metadata": {
+        "datacenters": [
+          "EU"
+        ],
+        "headquarters": "SG",
+        "name": "Alibaba Cloud",
+        "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+        "slug": "alibaba-cloud",
+        "status_page_url": "https://status.alibabacloud.com",
+        "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.7-max",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.65
+            },
+            "output_tokens": {
+              "text": 4.951
+            }
+          },
+          "provider_model_id": "qwen3.7-max",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.7-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.826
+                },
+                "output_tokens": {
+                  "text": 3.301
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.101
+            }
+          },
+          "provider_model_id": "qwen3.7-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.6-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.651
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.6-flash",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "alibaba_eu",
+      "required_config": [
+        "api_key",
+        "base_url"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Alibaba Cloud Model Studio (Hong Kong)",
+      "id": "alibaba_hk",
+      "metadata": {
+        "datacenters": [
+          "HK"
+        ],
+        "headquarters": "SG",
+        "name": "Alibaba Cloud",
+        "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+        "slug": "alibaba-cloud",
+        "status_page_url": "https://status.alibabacloud.com",
+        "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.7-max",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.65
+            },
+            "output_tokens": {
+              "text": 4.951
+            }
+          },
+          "provider_model_id": "qwen3.7-max",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.7-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.826
+                },
+                "output_tokens": {
+                  "text": 3.301
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.101
+            }
+          },
+          "provider_model_id": "qwen3.7-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.6-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.651
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.6-flash",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "alibaba_hk",
+      "required_config": [
+        "api_key",
+        "base_url"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Alibaba Cloud Model Studio (Japan Tokyo)",
+      "id": "alibaba_jp",
+      "metadata": {
+        "datacenters": [
+          "JP"
+        ],
+        "headquarters": "SG",
+        "name": "Alibaba Cloud",
+        "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+        "slug": "alibaba-cloud",
+        "status_page_url": "https://status.alibabacloud.com",
+        "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.7-max",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.65
+            },
+            "output_tokens": {
+              "text": 4.951
+            }
+          },
+          "provider_model_id": "qwen3.7-max",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.7-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.6
+            }
+          },
+          "provider_model_id": "qwen3.7-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.6-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.651
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "qwen/qwen3.6-flash",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "alibaba_jp",
+      "required_config": [
+        "api_key",
+        "base_url"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "auth_scheme": "x-api-key",
+      "auto_sync": {
+        "feed": "models_dev",
+        "key": "alibaba"
+      },
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Alibaba Cloud Model Studio (Singapore)",
+      "id": "alibaba_sg",
+      "metadata": {
+        "datacenters": [
+          "SG"
+        ],
+        "headquarters": "SG",
+        "name": "Alibaba Cloud",
+        "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+        "slug": "alibaba-cloud",
+        "status_page_url": "https://status.alibabacloud.com",
+        "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.7-max",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider_model_id": "qwen3.7-max",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.7-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.6
+            }
+          },
+          "provider_model_id": "qwen3.7-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 2.0
+                },
+                "output_tokens": {
+                  "text": 6.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-flash",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.0
+                },
+                "output_tokens": {
+                  "text": 4.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "alibaba_sg",
+      "protocol_endpoints": {
+        "messages": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1"
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-05-25",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Alibaba Cloud Model Studio (US Virginia)",
+      "id": "alibaba_us",
+      "metadata": {
+        "datacenters": [
+          "US"
+        ],
+        "headquarters": "SG",
+        "name": "Alibaba Cloud",
+        "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+        "slug": "alibaba-cloud",
+        "status_page_url": "https://status.alibabacloud.com",
+        "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.7-max",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider_model_id": "qwen3.7-max-us",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.7-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.6
+            }
+          },
+          "provider_model_id": "qwen3.7-plus-us",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-plus",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.651
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-flash",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "alibaba_us",
+      "protocol_endpoints": {
+        "messages": "https://dashscope-us.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1"
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
       "weight": 1.0
     },
     {
@@ -288,7 +1047,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "Ambient",
@@ -343,6 +1102,9 @@
         }
       ],
       "name": "ambient",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-06-23",
       "weight": 1.0
@@ -362,7 +1124,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "Anthropic",
@@ -532,6 +1294,9 @@
         }
       ],
       "name": "anthropic",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -553,7 +1318,7 @@
         "feed": "v1_models",
         "url": "https://api.bitrouter.ai/v1"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "BitRouter Cloud",
@@ -570,6 +1335,9 @@
       "models": [],
       "name": "bitrouter",
       "rate_limits": [],
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -580,7 +1348,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "cerebras",
@@ -616,6 +1384,9 @@
         }
       ],
       "name": "cerebras",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-06-16",
       "weight": 1.0
@@ -627,7 +1398,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": true,
       "id": "chutes",
@@ -789,6 +1560,9 @@
         }
       ],
       "name": "chutes",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -873,6 +1647,9 @@
         }
       ],
       "name": "claude-code",
+      "required_config": [
+        "local_oauth"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -883,11 +1660,14 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "deepseek",
       "metadata": {
+        "datacenters": [
+          "CN"
+        ],
         "headquarters": "CN",
         "name": "DeepSeek",
         "privacy_policy_url": "https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html",
@@ -896,7 +1676,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -917,7 +1700,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -939,6 +1725,12 @@
         }
       ],
       "name": "deepseek",
+      "protocol_endpoints": {
+        "messages": "https://api.deepseek.com/anthropic"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -1043,6 +1835,9 @@
         }
       ],
       "name": "github-copilot",
+      "required_config": [
+        "local_oauth"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -1058,7 +1853,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "Generate Content",
@@ -1075,7 +1870,10 @@
       },
       "models": [
         {
-          "api_protocol": "google",
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -1096,7 +1894,10 @@
           }
         },
         {
-          "api_protocol": "google",
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -1117,7 +1918,10 @@
           }
         },
         {
-          "api_protocol": "google",
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -1139,7 +1943,10 @@
           }
         },
         {
-          "api_protocol": "google",
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
           "id": "google/gemini-3.1-flash-lite-preview",
           "pricing": {
             "input_tokens": {
@@ -1157,6 +1964,12 @@
         }
       ],
       "name": "google",
+      "protocol_endpoints": {
+        "chat_completions": "https://generativelanguage.googleapis.com/v1beta/openai"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -1169,7 +1982,7 @@
         "feed": "models_dev",
         "key": "io-net"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": true,
       "id": "ionet",
@@ -1368,6 +2181,9 @@
         }
       ],
       "name": "ionet",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-12",
       "weight": 1.0
@@ -1379,11 +2195,14 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "minimax",
       "metadata": {
+        "datacenters": [
+          "SG"
+        ],
         "headquarters": "SG",
         "name": "MiniMax",
         "privacy_policy_url": "https://platform.minimax.io/protocol/privacy-policy",
@@ -1393,7 +2212,10 @@
       },
       "models": [
         {
-          "api_protocol": "anthropic",
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -1415,7 +2237,10 @@
           }
         },
         {
-          "api_protocol": "anthropic",
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -1437,7 +2262,10 @@
           }
         },
         {
-          "api_protocol": "anthropic",
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
           "id": "minimax/minimax-m3",
           "pricing": {
             "input_tokens": {
@@ -1455,6 +2283,117 @@
         }
       ],
       "name": "minimax",
+      "protocol_endpoints": {
+        "chat_completions": "https://api.minimax.io/v1"
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-05-25",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://api.minimaxi.com/anthropic/v1",
+      "auth_scheme": "x-api-key",
+      "auto_sync": {
+        "feed": "models_dev"
+      },
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "id": "minimax_cn",
+      "metadata": {
+        "datacenters": [
+          "CN"
+        ],
+        "headquarters": "CN",
+        "name": "MiniMax",
+        "privacy_policy_url": "https://platform.minimaxi.com/protocol/privacy-policy",
+        "slug": "minimax",
+        "status_page_url": "https://status.minimaxi.com",
+        "terms_of_service_url": "https://platform.minimaxi.com/protocol/terms-of-service"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "minimax/minimax-m2.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "MiniMax-M2.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "minimax/minimax-m2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "id": "minimax/minimax-m3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider_model_id": "MiniMax-M3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "minimax_cn",
+      "protocol_endpoints": {
+        "chat_completions": "https://api.minimaxi.com/v1"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -1466,12 +2405,15 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "moonshotai",
       "metadata": {
-        "headquarters": "CN",
+        "datacenters": [
+          "SG"
+        ],
+        "headquarters": "SG",
         "name": "Moonshot AI",
         "privacy_policy_url": "https://platform.kimi.ai/docs/agreement/userprivacy",
         "slug": "moonshotai",
@@ -1479,7 +2421,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "structured_outputs",
@@ -1501,7 +2446,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "structured_outputs",
@@ -1523,7 +2471,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
@@ -1541,6 +2492,12 @@
         }
       ],
       "name": "moonshotai",
+      "protocol_endpoints": {
+        "messages": "https://api.moonshot.ai/anthropic"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -1556,9 +2513,12 @@
       "billing": "subscription",
       "byok": true,
       "community": false,
-      "id": "moonshotai-coding-plan",
+      "id": "moonshotai_coding_plan",
       "metadata": {
-        "headquarters": "CN",
+        "datacenters": [
+          "SG"
+        ],
+        "headquarters": "SG",
         "name": "Moonshot AI",
         "privacy_policy_url": "https://platform.kimi.ai/docs/agreement/userprivacy",
         "slug": "moonshotai",
@@ -1587,7 +2547,10 @@
           }
         }
       ],
-      "name": "moonshotai-coding-plan",
+      "name": "moonshotai_coding_plan",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-06-05",
       "weight": 1.0
@@ -1603,7 +2566,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "OpenAI",
@@ -1696,6 +2659,9 @@
         }
       ],
       "name": "openai",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -1763,6 +2729,9 @@
         }
       ],
       "name": "openai-codex",
+      "required_config": [
+        "local_pkce"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -1884,6 +2853,9 @@
         }
       ],
       "name": "opencode-go",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -1899,7 +2871,7 @@
         "feed": "models_dev",
         "key": "opencode"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "opencode zen",
@@ -2246,6 +3218,9 @@
         }
       ],
       "name": "opencode-zen",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -2260,7 +3235,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "display_name": "OpenRouter",
@@ -2277,7 +3252,11 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
@@ -2291,7 +3270,11 @@
           "provider_model_id": "moonshotai/kimi-k2.7-code"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "moonshotai/kimi-k2.5",
           "pricing": {
             "input_tokens": {
@@ -2304,7 +3287,11 @@
           "provider_model_id": "moonshotai/kimi-k2.5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
@@ -2318,7 +3305,11 @@
           "provider_model_id": "moonshotai/kimi-k2.6"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "google/gemini-3.5-flash",
           "pricing": {
             "input_tokens": {
@@ -2333,7 +3324,11 @@
           "provider_model_id": "google/gemini-3.5-flash"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "google/gemini-3.1-pro-preview",
           "pricing": {
             "input_tokens": {
@@ -2348,7 +3343,11 @@
           "provider_model_id": "google/gemini-3.1-pro-preview"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "google/gemini-2.5-pro-preview",
           "pricing": {
             "input_tokens": {
@@ -2363,7 +3362,11 @@
           "provider_model_id": "google/gemini-2.5-pro-preview"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "google/gemini-3.1-flash-lite-preview",
           "pricing": {
             "input_tokens": {
@@ -2378,7 +3381,11 @@
           "provider_model_id": "google/gemini-3.1-flash-lite-preview"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "x-ai/grok-4.20",
           "pricing": {
             "input_tokens": {
@@ -2392,7 +3399,11 @@
           "provider_model_id": "x-ai/grok-4.20"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "x-ai/grok-4.3",
           "pricing": {
             "input_tokens": {
@@ -2406,7 +3417,11 @@
           "provider_model_id": "x-ai/grok-4.3"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "z-ai/glm-5.1",
           "pricing": {
             "input_tokens": {
@@ -2420,7 +3435,11 @@
           "provider_model_id": "z-ai/glm-5.1"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
@@ -2434,7 +3453,11 @@
           "provider_model_id": "z-ai/glm-5.2"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "z-ai/glm-5",
           "pricing": {
             "input_tokens": {
@@ -2448,7 +3471,11 @@
           "provider_model_id": "z-ai/glm-5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "openai/gpt-oss-120b",
           "pricing": {
             "input_tokens": {
@@ -2461,7 +3488,11 @@
           "provider_model_id": "openai/gpt-oss-120b"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "openai/gpt-5.4",
           "pricing": {
             "input_tokens": {
@@ -2475,7 +3506,11 @@
           "provider_model_id": "openai/gpt-5.4"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "openai/gpt-5.4-mini",
           "pricing": {
             "input_tokens": {
@@ -2489,7 +3524,11 @@
           "provider_model_id": "openai/gpt-5.4-mini"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "openai/gpt-5.5",
           "pricing": {
             "input_tokens": {
@@ -2503,7 +3542,11 @@
           "provider_model_id": "openai/gpt-5.5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "xiaomi/mimo-v2.5",
           "pricing": {
             "input_tokens": {
@@ -2517,7 +3560,11 @@
           "provider_model_id": "xiaomi/mimo-v2.5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "xiaomi/mimo-v2.5-pro",
           "pricing": {
             "input_tokens": {
@@ -2531,7 +3578,11 @@
           "provider_model_id": "xiaomi/mimo-v2.5-pro"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-sonnet-4.5",
           "pricing": {
             "input_tokens": {
@@ -2546,7 +3597,11 @@
           "provider_model_id": "anthropic/claude-sonnet-4.5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-haiku-4.5",
           "pricing": {
             "input_tokens": {
@@ -2561,7 +3616,11 @@
           "provider_model_id": "anthropic/claude-haiku-4.5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-opus-4.7",
           "pricing": {
             "input_tokens": {
@@ -2576,7 +3635,11 @@
           "provider_model_id": "anthropic/claude-opus-4.7"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-opus-4.8",
           "pricing": {
             "input_tokens": {
@@ -2591,7 +3654,11 @@
           "provider_model_id": "anthropic/claude-opus-4.8"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-sonnet-4.6",
           "pricing": {
             "input_tokens": {
@@ -2606,7 +3673,11 @@
           "provider_model_id": "anthropic/claude-sonnet-4.6"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-opus-4.6",
           "pricing": {
             "input_tokens": {
@@ -2621,7 +3692,11 @@
           "provider_model_id": "anthropic/claude-opus-4.6"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "stepfun/step-3.7-flash",
           "pricing": {
             "input_tokens": {
@@ -2635,7 +3710,11 @@
           "provider_model_id": "stepfun/step-3.7-flash"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "stepfun/step-3.5-flash",
           "pricing": {
             "input_tokens": {
@@ -2649,7 +3728,11 @@
           "provider_model_id": "stepfun/step-3.5-flash"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "qwen/qwen3.7-plus",
           "pricing": {
             "input_tokens": {
@@ -2664,7 +3747,11 @@
           "provider_model_id": "qwen/qwen3.7-plus"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
@@ -2679,7 +3766,11 @@
           "provider_model_id": "qwen/qwen3.7-max"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "qwen/qwen3.6-flash",
           "pricing": {
             "input_tokens": {
@@ -2693,7 +3784,11 @@
           "provider_model_id": "qwen/qwen3.6-flash"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "qwen/qwen3.6-plus",
           "pricing": {
             "input_tokens": {
@@ -2707,7 +3802,11 @@
           "provider_model_id": "qwen/qwen3.6-plus"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
@@ -2721,7 +3820,11 @@
           "provider_model_id": "deepseek/deepseek-v4-flash"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "deepseek/deepseek-v4-pro",
           "pricing": {
             "input_tokens": {
@@ -2735,7 +3838,11 @@
           "provider_model_id": "deepseek/deepseek-v4-pro"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "deepseek/deepseek-v3.2",
           "pricing": {
             "input_tokens": {
@@ -2748,7 +3855,11 @@
           "provider_model_id": "deepseek/deepseek-v3.2"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "minimax/minimax-m2.5",
           "pricing": {
             "input_tokens": {
@@ -2762,7 +3873,11 @@
           "provider_model_id": "minimax/minimax-m2.5"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "minimax/minimax-m3",
           "pricing": {
             "input_tokens": {
@@ -2776,7 +3891,11 @@
           "provider_model_id": "minimax/minimax-m3"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "minimax/minimax-m2.7",
           "pricing": {
             "input_tokens": {
@@ -2790,7 +3909,11 @@
           "provider_model_id": "minimax/minimax-m2.7"
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "id": "anthropic/claude-fable-5",
           "pricing": {
             "input_tokens": {
@@ -2806,6 +3929,12 @@
         }
       ],
       "name": "openrouter",
+      "protocol_endpoints": {
+        "messages": "https://openrouter.ai/api"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -2813,7 +3942,7 @@
       "access": "api_key",
       "api_base": "https://api.redpill.ai/v1",
       "auth_scheme": "x-api-key",
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": true,
       "id": "redpill",
@@ -2863,6 +3992,9 @@
         }
       ],
       "name": "redpill",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "weight": 1.0
     },
@@ -2874,11 +4006,14 @@
         "feed": "models_dev",
         "key": "stepfun-ai"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "stepfun",
       "metadata": {
+        "datacenters": [
+          "US"
+        ],
         "headquarters": "SG",
         "name": "StepFun",
         "privacy_policy_url": "https://platform.stepfun.ai/docs/en/agreement/userprivacy",
@@ -2887,7 +4022,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "structured_outputs"
           ],
@@ -2907,7 +4045,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -2929,19 +4070,220 @@
         }
       ],
       "name": "stepfun",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-06-01",
       "weight": 1.0
     },
     {
       "access": "api_key",
-      "api_base": "https://tokenhub-intl.tencentcloudmaas.com/v1",
+      "api_base": "https://api.stepfun.com/v1",
       "auth_scheme": "x-api-key",
-      "billing": "token",
+      "auto_sync": {
+        "feed": "models_dev",
+        "key": "stepfun-cn"
+      },
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "id": "stepfun_cn",
+      "metadata": {
+        "datacenters": [
+          "CN"
+        ],
+        "headquarters": "CN",
+        "name": "StepFun",
+        "privacy_policy_url": "https://platform.stepfun.com/docs/zh/agreement/userprivacy",
+        "slug": "stepfun",
+        "terms_of_service_url": "https://platform.stepfun.com/docs/zh/agreement/userservice"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "structured_outputs"
+          ],
+          "id": "stepfun/step-3.7-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.04,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.15
+            }
+          },
+          "provider_model_id": "step-3.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "stepfun/step-3.5-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.019,
+              "no_cache": 0.096
+            },
+            "output_tokens": {
+              "text": 0.288
+            }
+          },
+          "provider_model_id": "step-3.5-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "stepfun_cn",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-06-01",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://api.stepfun.ai/step_plan/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": true,
+      "community": false,
+      "display_name": "StepFun Step Plan",
+      "id": "stepfun_step_plan",
+      "metadata": {
+        "datacenters": [
+          "US"
+        ],
+        "headquarters": "SG",
+        "name": "StepFun",
+        "privacy_policy_url": "https://platform.stepfun.ai/docs/en/agreement/userprivacy",
+        "slug": "stepfun",
+        "terms_of_service_url": "https://platform.stepfun.ai/docs/en/agreement/userservice"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "structured_outputs"
+          ],
+          "id": "stepfun/step-3.7-flash",
+          "provider_model_id": "step-3.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "stepfun/step-3.5-flash",
+          "provider_model_id": "step-3.5-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "stepfun_step_plan",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://api.stepfun.com/step_plan/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": true,
+      "community": false,
+      "display_name": "StepFun Step Plan (China)",
+      "id": "stepfun_step_plan_cn",
+      "metadata": {
+        "datacenters": [
+          "CN"
+        ],
+        "headquarters": "CN",
+        "name": "StepFun",
+        "privacy_policy_url": "https://platform.stepfun.com/docs/zh/agreement/userprivacy",
+        "slug": "stepfun",
+        "terms_of_service_url": "https://platform.stepfun.com/docs/zh/agreement/userservice"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "structured_outputs"
+          ],
+          "id": "stepfun/step-3.7-flash",
+          "provider_model_id": "step-3.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "stepfun/step-3.5-flash",
+          "provider_model_id": "step-3.5-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "stepfun_step_plan_cn",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://tokenhub-intl.tencentmaas.com/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "tencent",
       "metadata": {
+        "datacenters": [
+          "SG"
+        ],
         "headquarters": "SG",
         "name": "Tencent Cloud",
         "privacy_policy_url": "https://www.tencentcloud.com/document/product/301/17345",
@@ -2951,7 +4293,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "structured_outputs",
@@ -2973,7 +4318,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -2994,7 +4342,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3015,7 +4366,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "structured_outputs",
@@ -3037,7 +4391,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3058,7 +4415,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3079,7 +4439,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "structured_outputs",
@@ -3101,7 +4464,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3113,7 +4479,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3134,7 +4503,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3155,7 +4527,11 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3189,6 +4565,309 @@
         }
       ],
       "name": "tencent",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-05-23",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://tokenhub.tencentmaas.com/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "id": "tencent_cn",
+      "metadata": {
+        "datacenters": [
+          "CN"
+        ],
+        "headquarters": "CN",
+        "name": "Tencent Cloud",
+        "privacy_policy_url": "https://cloud.tencent.com/document/product/301/11470",
+        "slug": "tencent-cloud",
+        "status_page_url": "https://status.cloud.tencent.com",
+        "terms_of_service_url": "https://cloud.tencent.com/document/product/301/1967"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v3.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.114,
+              "no_cache": 0.57
+            },
+            "output_tokens": {
+              "text": 1.71
+            }
+          },
+          "provider_model_id": "deepseek-v3.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "deepseek-v4-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v4-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.145,
+              "no_cache": 1.74
+            },
+            "output_tokens": {
+              "text": 3.48
+            }
+          },
+          "provider_model_id": "deepseek-v4-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "z-ai/glm-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider_model_id": "glm-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "glm-5.1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "glm-5.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "moonshotai/kimi-k2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider_model_id": "kimi-k2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "moonshotai/kimi-k2.6",
+          "provider_model_id": "kimi-k2.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "minimax/minimax-m2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "minimax-m2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "minimax/minimax-m2.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "minimax-m2.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "minimax/minimax-m3",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider_model_id": "minimax-m3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "tencent_cn",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-23",
       "weight": 1.0
@@ -3197,7 +4876,7 @@
       "access": "api_key",
       "api_base": "https://inference.tinfoil.sh/v1",
       "auth_scheme": "x-api-key",
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": true,
       "id": "tinfoil",
@@ -3275,6 +4954,9 @@
         }
       ],
       "name": "tinfoil",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-12",
       "weight": 1.0
@@ -3283,7 +4965,7 @@
       "access": "api_key",
       "api_base": "https://inference-api.worldrouter.ai/v1",
       "auth_scheme": "x-api-key",
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": true,
       "id": "worldrouter",
@@ -3608,6 +5290,9 @@
         }
       ],
       "name": "worldrouter",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-12",
       "weight": 1.0
@@ -3619,7 +5304,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "xai",
@@ -3633,7 +5318,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3654,7 +5342,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
           "capabilities": [
             "tools"
           ],
@@ -3674,7 +5365,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
           "capabilities": [
             "tools"
           ],
@@ -3693,7 +5387,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3714,6 +5411,9 @@
         }
       ],
       "name": "xai",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -3725,7 +5425,7 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "xiaomi",
@@ -3738,7 +5438,11 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3759,7 +5463,11 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3780,11 +5488,16 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "deprecation_date": "2026-06-30",
           "id": "xiaomi/mimo-v2-pro",
           "pricing": {
             "input_tokens": {
@@ -3801,11 +5514,16 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "deprecation_date": "2026-06-30",
           "id": "xiaomi/mimo-v2-omni",
           "pricing": {
             "input_tokens": {
@@ -3822,11 +5540,16 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "deprecation_date": "2026-06-30",
           "id": "xiaomi/mimo-v2-flash",
           "pricing": {
             "input_tokens": {
@@ -3844,8 +5567,206 @@
         }
       ],
       "name": "xiaomi",
+      "protocol_endpoints": {
+        "messages": "https://api.xiaomimimo.com/anthropic"
+      },
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://token-plan-ams.xiaomimimo.com/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": true,
+      "community": false,
+      "display_name": "Xiaomi MiMo Token Plan (Europe)",
+      "id": "xiaomi_token_plan_ams",
+      "metadata": {
+        "datacenters": [
+          "EU"
+        ],
+        "headquarters": "CN",
+        "name": "Xiaomi",
+        "privacy_policy_url": "https://mimo.mi.com/docs/terms/privacy-policy",
+        "slug": "xiaomi",
+        "terms_of_service_url": "https://mimo.mi.com/docs/terms/user-agreement"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2.5-pro",
+          "provider_model_id": "mimo-v2.5-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2.5",
+          "provider_model_id": "mimo-v2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "xiaomi_token_plan_ams",
+      "protocol_endpoints": {
+        "messages": "https://token-plan-ams.xiaomimimo.com/anthropic"
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://token-plan-cn.xiaomimimo.com/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": true,
+      "community": false,
+      "display_name": "Xiaomi MiMo Token Plan (China)",
+      "id": "xiaomi_token_plan_cn",
+      "metadata": {
+        "datacenters": [
+          "CN"
+        ],
+        "headquarters": "CN",
+        "name": "Xiaomi",
+        "privacy_policy_url": "https://mimo.mi.com/docs/terms/privacy-policy",
+        "slug": "xiaomi",
+        "terms_of_service_url": "https://mimo.mi.com/docs/terms/user-agreement"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2.5-pro",
+          "provider_model_id": "mimo-v2.5-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2.5",
+          "provider_model_id": "mimo-v2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "xiaomi_token_plan_cn",
+      "protocol_endpoints": {
+        "messages": "https://token-plan-cn.xiaomimimo.com/anthropic"
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": true,
+      "community": false,
+      "display_name": "Xiaomi MiMo Token Plan (Singapore)",
+      "id": "xiaomi_token_plan_sgp",
+      "metadata": {
+        "datacenters": [
+          "SG"
+        ],
+        "headquarters": "CN",
+        "name": "Xiaomi",
+        "privacy_policy_url": "https://mimo.mi.com/docs/terms/privacy-policy",
+        "slug": "xiaomi",
+        "terms_of_service_url": "https://mimo.mi.com/docs/terms/user-agreement"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2.5-pro",
+          "provider_model_id": "mimo-v2.5-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2.5",
+          "provider_model_id": "mimo-v2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "xiaomi_token_plan_sgp",
+      "protocol_endpoints": {
+        "messages": "https://token-plan-sgp.xiaomimimo.com/anthropic"
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-06",
       "weight": 1.0
     },
     {
@@ -3855,12 +5776,12 @@
       "auto_sync": {
         "feed": "models_dev"
       },
-      "billing": "token",
+      "billing": "usage_token",
       "byok": true,
       "community": false,
       "id": "zai",
       "metadata": {
-        "headquarters": "CN",
+        "headquarters": "SG",
         "name": "Z.ai",
         "privacy_policy_url": "https://docs.z.ai/legal-agreement/privacy-policy",
         "slug": "zai",
@@ -3868,7 +5789,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3889,7 +5813,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3910,7 +5837,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3932,6 +5862,9 @@
         }
       ],
       "name": "zai",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-05-25",
       "weight": 1.0
@@ -3946,9 +5879,9 @@
       "billing": "subscription",
       "byok": true,
       "community": false,
-      "id": "zai-coding-plan",
+      "id": "zai_coding_plan",
       "metadata": {
-        "headquarters": "CN",
+        "headquarters": "SG",
         "name": "Z.ai",
         "privacy_policy_url": "https://docs.z.ai/legal-agreement/privacy-policy",
         "slug": "zai",
@@ -3956,7 +5889,10 @@
       },
       "models": [
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3977,7 +5913,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -3998,7 +5937,10 @@
           }
         },
         {
-          "api_protocol": "openai",
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
           "capabilities": [
             "reasoning",
             "tools"
@@ -4019,7 +5961,10 @@
           }
         }
       ],
-      "name": "zai-coding-plan",
+      "name": "zai_coding_plan",
+      "required_config": [
+        "api_key"
+      ],
       "status": "active",
       "submitted_at": "2026-06-05",
       "weight": 1.0

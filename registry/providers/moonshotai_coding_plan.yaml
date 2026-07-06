@@ -1,6 +1,8 @@
-name: moonshotai-coding-plan
+name: moonshotai_coding_plan
 metadata:
-  headquarters: CN
+  headquarters: SG
+  datacenters:
+    - SG
   name: Moonshot AI
   privacy_policy_url: https://platform.kimi.ai/docs/agreement/userprivacy
   slug: moonshotai

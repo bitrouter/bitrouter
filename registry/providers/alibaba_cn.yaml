@@ -1,0 +1,70 @@
+name: alibaba_cn
+display_name: Alibaba Cloud Model Studio (China Beijing)
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: Alibaba Cloud
+  privacy_policy_url: https://terms.alicdn.com/legal-agreement/terms/c_platform_service_agreement/20231023143554936/20231023143554936.html
+  slug: alibaba-cloud
+  status_page_url: https://status.aliyun.com
+  terms_of_service_url: https://help.aliyun.com/zh/model-studio/related-agreements
+api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+protocol_endpoints:
+  anthropic: https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1
+api_protocol:
+  - "*": [openai, responses, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: qwen/qwen3.7-max
+    provider_model_id: qwen3.7-max
+    pricing:
+      input_tokens:
+        no_cache: 1.65
+      output_tokens:
+        text: 4.951
+  - id: qwen/qwen3.7-plus
+    provider_model_id: qwen3.7-plus
+    pricing:
+      input_tokens:
+        no_cache: 0.276
+      output_tokens:
+        text: 1.101
+      context_tiers:
+        - above_input_tokens: 256000
+          input_tokens:
+            no_cache: 0.826
+          output_tokens:
+            text: 3.301
+  - id: qwen/qwen3.6-plus
+    provider_model_id: qwen3.6-plus
+    pricing:
+      input_tokens:
+        no_cache: 0.276
+      output_tokens:
+        text: 1.651
+      context_tiers:
+        - above_input_tokens: 256000
+          input_tokens:
+            no_cache: 1.101
+          output_tokens:
+            text: 6.602
+  - id: qwen/qwen3.6-flash
+    provider_model_id: qwen3.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.165
+      output_tokens:
+        text: 0.99
+      context_tiers:
+        - above_input_tokens: 256000
+          input_tokens:
+            no_cache: 0.66
+          output_tokens:
+            text: 3.961
+status: active
+weight: 1
+submitted_at: 2026-07-06
+auth_scheme: x-api-key

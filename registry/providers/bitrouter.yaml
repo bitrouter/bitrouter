@@ -8,7 +8,7 @@ metadata:
   terms_of_service_url: https://bitrouter.ai/legal/terms
 kind: cloud
 access: api_key
-billing: token
+billing: usage_token
 api_base: https://api.bitrouter.ai/v1
 doc_url: https://docs.bitrouter.ai
 api_protocol:

@@ -1,0 +1,11 @@
+id: qwen/qwen3.7-max
+name: 'Qwen: Qwen3.7 Max'
+input_modalities:
+- text
+output_modalities:
+- text
+max_input_tokens: 1000000
+max_output_tokens: 65536
+release_date: 2026-05-21
+open_weights: false
+family: qwen3.7-max

@@ -1,0 +1,13 @@
+id: anthropic/claude-haiku-4.5
+name: 'Anthropic: Claude Haiku 4.5'
+input_modalities:
+- text
+- image
+output_modalities:
+- text
+max_input_tokens: 200000
+max_output_tokens: 8192
+release_date: 2025-10-15
+knowledge_cutoff: 2025-02-28
+open_weights: false
+family: claude-haiku

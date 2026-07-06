@@ -1,0 +1,9 @@
+id: stepfun/step-3.7-flash
+name: 'StepFun: Step 3.7 Flash'
+input_modalities:
+- text
+- image
+output_modalities:
+- text
+max_input_tokens: 256000
+max_output_tokens: 256000

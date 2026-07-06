@@ -1,9 +1,9 @@
 //! The public model catalog at <https://models.dev/api.json>.
 //!
 //! A provider may declare a `models_dev` auto-sync feed: the channel the
-//! registry itself curates from. The OSS reads the SAME channel at runtime to
-//! pull that provider's FULL catalog (beyond the curated canonical subset) and
-//! merge the non-curated models in — the curated canonical models keep the
+//! registry itself syncs from. The OSS reads the SAME channel at runtime to
+//! pull that provider's FULL catalog (beyond the registry seed catalog) and
+//! merge the non-explicit model entries in — the registry seed models keep the
 //! highest route priority. (A `v1_models` feed is discovered from the
 //! provider's own `/models` endpoint instead, via the SDK's `auto_discover`.)
 //!

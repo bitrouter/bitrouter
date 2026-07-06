@@ -1,13 +1,13 @@
-name: zai-coding-plan
+name: zai_coding_plan
 metadata:
-  headquarters: CN
+  headquarters: SG
   name: Z.ai
   privacy_policy_url: https://docs.z.ai/legal-agreement/privacy-policy
   slug: zai
   terms_of_service_url: https://docs.z.ai/legal-agreement/terms-of-use
 billing: subscription
 api_protocol:
-  - "*": openai
+  - "*": [openai, anthropic]
 rate_limits:
   - "*":
       requests_per_minute: 60

@@ -1,8 +1,8 @@
 //! Fetch the public model catalog from <https://models.dev/api.json>.
 //!
 //! Used to enrich a `models_dev` auto-sync provider's catalog with its FULL
-//! model set (beyond the registry-curated canonical subset). Best-effort: a
-//! failure leaves the curated models in place (see the catalog apply step).
+//! model set (beyond the registry seed catalog). Best-effort: a
+//! failure leaves the explicit model entries in place (see the catalog apply step).
 
 use crate::catalog::types::Catalog;
 

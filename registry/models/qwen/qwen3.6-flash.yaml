@@ -1,0 +1,14 @@
+id: qwen/qwen3.6-flash
+name: 'Qwen: Qwen3.6 Flash'
+description: Alibaba Qwen3.6 Flash — Alibaba's fast, low-latency tier in the Qwen3.6
+  family.
+input_modalities:
+- text
+output_modalities:
+- text
+max_input_tokens: 1000000
+max_output_tokens: 65536
+release_date: 2026-04-02
+knowledge_cutoff: 2025-04
+open_weights: false
+family: qwen3.6

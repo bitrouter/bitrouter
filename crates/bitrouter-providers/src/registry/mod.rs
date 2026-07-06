@@ -4,7 +4,7 @@
 //! The compiled-in [`crate::ProviderEntry`] answers "how do we talk to provider
 //! X" (auth + URL shape, rarely changing). This module answers "which providers
 //! exist, which canonical models does each serve, and at what price" — data
-//! that changes weekly and is curated in the public registry rather than
+//! that changes weekly and is published in the public registry rather than
 //! shipped in the binary.
 //!
 //! ## Source

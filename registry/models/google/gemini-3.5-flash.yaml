@@ -1,0 +1,14 @@
+id: google/gemini-3.5-flash
+name: 'Google: Gemini 3.5 Flash'
+input_modalities:
+- text
+- image
+- audio
+output_modalities:
+- text
+max_input_tokens: 1048576
+max_output_tokens: 65536
+release_date: 2026-05-19
+knowledge_cutoff: 2025-01
+open_weights: false
+family: gemini-flash

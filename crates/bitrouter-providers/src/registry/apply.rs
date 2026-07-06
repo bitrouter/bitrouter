@@ -127,11 +127,13 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         if existing.models.is_empty() {
             existing.models = build_models(provider);
         }
-        if existing.api_base.is_empty() {
-            existing.api_base = provider.api_base.clone();
+        if existing.api_base.is_empty()
+            && let Some(api_base) = &provider.api_base
+        {
+            existing.api_base = api_base.clone();
         }
         // Provider-level protocol globs (the gateways) — used by discovered
-        // models, which carry no per-model protocol. Curated providers have no
+        // models, which carry no per-model protocol. Providers with explicit model entries have no
         // provider-level globs (resolved per-model), so this is skipped for them.
         if existing.api_protocol.is_empty()
             && let Some(map) = &protocol_map
@@ -141,10 +143,10 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         if existing.protocol_endpoints.is_empty() {
             existing.protocol_endpoints = protocol_endpoints(provider);
         }
-        // Runtime-discovered gateway (a `v1_models` feed, no curated models):
+        // Runtime-discovered gateway (a `v1_models` feed, no explicit model entries):
         // probe `/models` so an explicitly-listed gateway populates its catalog
         // the same way a zero-config one does. Never flip it off if the user set
-        // it, and never when curated models are present.
+        // it, and never when explicit model entries are present.
         if provider.probes_v1_models() && existing.models.is_empty() && !existing.auto_discover {
             existing.auto_discover = true;
         }
@@ -176,12 +178,15 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     let Some(api_key) = env_lookup(&var).filter(|v| !v.is_empty()) else {
         return;
     };
+    let Some(api_base) = provider.api_base.clone() else {
+        return;
+    };
     let models = build_models(provider);
-    // A `v1_models` gateway has no curated models — probe `/models` at startup.
+    // A `v1_models` gateway has no explicit model entries — probe `/models` at startup.
     let auto_discover = models.is_empty() && provider.probes_v1_models();
     let entry = ProviderConfig {
         api_key,
-        api_base: provider.api_base.clone(),
+        api_base,
         api_protocol: protocol_map.unwrap_or_default(),
         protocol_endpoints: protocol_endpoints(provider),
         models,
@@ -215,7 +220,7 @@ fn classify(provider: &RegistryProvider) -> ProviderClass {
 }
 
 /// The provider-level wire-protocol globs as the SDK's [`PatternMap`], or `None`
-/// when the provider declares none (a curated provider, whose protocol is
+/// when the provider declares none (a provider with explicit model entries, whose protocol is
 /// resolved onto each model instead). Longest-match precedence is the SDK's.
 fn provider_protocol_map(provider: &RegistryProvider) -> Option<PatternMap<ProtocolList>> {
     if provider.api_protocol.is_empty() {
@@ -298,19 +303,19 @@ fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
 
 /// Enrich `models_dev` auto-sync providers with their FULL models.dev catalog.
 ///
-/// Improvement-1 "full catalog beyond canonical" for the `models_dev` feed: the
-/// registry curates these providers FROM models.dev, and the OSS reads the same
+/// Full-catalog sync for the `models_dev` feed: the
+/// registry syncs these providers from models.dev, and the OSS reads the same
 /// channel at runtime to pull the rest of the catalog. For each public,
 /// `models_dev`-feed provider that the registry merge placed into `config`, add
 /// every models.dev model whose native id is not already represented — neither
-/// as one of the provider's existing OSS model ids nor as a curated model's
-/// `provider_model_id`. That keeps the curated canonical entries at the highest
+/// as one of the provider's existing OSS model ids nor as a registry seed model's
+/// `provider_model_id`. That keeps the registry seed entries at the highest
 /// route priority and never duplicates an upstream model the registry already
-/// curates. (`v1_models` feeds discover via the SDK's `/models` probe instead.)
+/// syncs. (`v1_models` feeds discover via the SDK's `/models` probe instead.)
 ///
 /// No-op when `inherit_defaults` / `registry.enabled` is false. Idempotent (the
 /// "already represented" set guards re-runs) and best-effort (an absent catalog
-/// or provider key simply leaves the curated models in place).
+/// or provider key simply leaves the explicit model entries in place).
 pub fn apply_catalog(config: &mut Config, data: &RegistryData, catalog: &Catalog) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
@@ -332,7 +337,7 @@ pub fn apply_catalog(config: &mut Config, data: &RegistryData, catalog: &Catalog
             continue;
         };
         // Canonical priority: never add an id already present as an OSS model id
-        // or as a curated model's upstream id.
+        // or as a registry seed model's upstream id.
         let mut represented: std::collections::HashSet<String> = entry
             .models
             .iter()
@@ -385,6 +390,7 @@ mod tests {
     use crate::registry::types::{
         AutoSync, CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet,
         RegistryAccess, RegistryAuth, RegistryAuthKind, RegistryModel, RegistryProtocol,
+        RequiredConfig,
     };
     use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
@@ -392,7 +398,7 @@ mod tests {
         RegistryProvider {
             name: name.to_string(),
             display_name: None,
-            api_base: format!("https://{name}.example/v1"),
+            api_base: Some(format!("https://{name}.example/v1")),
             api_protocol: Vec::new(),
             protocol_endpoints: None,
             models: vec![RegistryModel {
@@ -411,12 +417,13 @@ mod tests {
             status: "active".to_string(),
             kind: None,
             auth: None,
+            required_config: Vec::new(),
             doc_url: None,
             community: false,
             access: Some(RegistryAccess::ApiKey),
             byok: Some(true),
             auto_sync: None,
-            billing: Billing::Token,
+            billing: Billing::UsageToken,
         }
     }
 
@@ -460,10 +467,10 @@ mod tests {
     fn classifies_by_community_and_billing() {
         let mut first_party = provider("zai");
         first_party.community = false;
-        first_party.billing = Billing::Token;
+        first_party.billing = Billing::UsageToken;
         assert_eq!(classify(&first_party), ProviderClass::FirstPartyApi);
 
-        let mut sub = provider("zai-coding-plan");
+        let mut sub = provider("zai_coding_plan");
         sub.billing = Billing::Subscription;
         assert_eq!(classify(&sub), ProviderClass::FirstPartySubscription);
 
@@ -541,6 +548,21 @@ mod tests {
             assert!(
                 !config.providers.contains_key("regabsentprov"),
                 "no credential ⇒ provider must not be activated"
+            );
+        });
+    }
+
+    #[test]
+    fn provider_requiring_base_url_is_not_auto_inserted_from_env_key_only() {
+        with_env("WORKSPACEPROV_API_KEY", Some("sk-test"), || {
+            let mut config = Config::default();
+            let mut p = provider("workspaceprov");
+            p.api_base = None;
+            p.required_config = vec![RequiredConfig::ApiKey, RequiredConfig::BaseUrl];
+            apply_registry(&mut config, &data_with(vec![p], vec![]));
+            assert!(
+                !config.providers.contains_key("workspaceprov"),
+                "a provider that requires base_url must not be auto-added from the API key alone"
             );
         });
     }
@@ -631,7 +653,7 @@ mod tests {
         with_env("GATEWAYPROV_API_KEY", Some("sk-test"), || {
             let mut config = Config::default();
             let mut p = provider("gatewayprov");
-            p.models = Vec::new(); // a gateway curates no models
+            p.models = Vec::new(); // a gateway has no seed model entries
             p.auto_sync = Some(AutoSync {
                 feed: AutoSyncFeed::V1Models,
                 key: None,
@@ -644,7 +666,7 @@ mod tests {
                 .expect("v1_models gateway with a credential is merged");
             assert!(
                 merged.auto_discover,
-                "a v1_models gateway with no curated models must probe /models"
+                "a v1_models gateway with no explicit model entries must probe /models"
             );
         });
     }
@@ -677,10 +699,10 @@ mod tests {
     }
 
     #[test]
-    fn models_dev_catalog_enriches_beyond_canonical() {
+    fn models_dev_catalog_enriches_beyond_registry_seed() {
         with_env("DEEPSEEK_API_KEY", Some("sk-test"), || {
             let mut config = Config::default();
-            let mut p = provider("deepseek"); // curated: deepseek/deepseek-v3.2 → deepseek-v3.2
+            let mut p = provider("deepseek"); // seed: deepseek/deepseek-v3.2 → deepseek-v3.2
             p.auto_sync = Some(AutoSync {
                 feed: AutoSyncFeed::ModelsDev,
                 key: None,
@@ -688,7 +710,7 @@ mod tests {
             });
             let data = data_with(vec![p], vec!["deepseek/deepseek-v3.2"]);
             apply_registry(&mut config, &data);
-            // The catalog re-lists the curated upstream id (must NOT duplicate)
+            // The catalog re-lists the seed upstream id (must NOT duplicate)
             // plus a genuinely new model (must be added, with pricing).
             let catalog = catalog_with(
                 "deepseek",
@@ -703,15 +725,15 @@ mod tests {
             let ids: Vec<&str> = entry.models.iter().map(|m| m.id.as_str()).collect();
             assert!(
                 ids.contains(&"deepseek/deepseek-v3.2"),
-                "curated canonical model is kept (highest priority)"
+                "registry seed model is kept (highest priority)"
             );
             assert!(
                 ids.contains(&"deepseek-coder"),
-                "a non-curated models.dev model is added (full catalog)"
+                "a non-seed models.dev model is added (full catalog)"
             );
             assert!(
                 !ids.contains(&"deepseek-v3.2"),
-                "the curated model's upstream id is not re-added as a native duplicate"
+                "the seed model's upstream id is not re-added as a native duplicate"
             );
             let coder = entry
                 .models
@@ -794,7 +816,7 @@ mod tests {
         let mut bitrouter = provider(BITROUTER_CLOUD_ID);
         bitrouter.display_name = Some("BitRouter Cloud".to_string());
         bitrouter.kind = Some(crate::registry::types::RegistryKind::Cloud);
-        bitrouter.api_base = "https://api.bitrouter.ai/v1".to_string();
+        bitrouter.api_base = Some("https://api.bitrouter.ai/v1".to_string());
         bitrouter.models = Vec::new();
         bitrouter.auto_sync = Some(AutoSync {
             feed: AutoSyncFeed::V1Models,
@@ -823,7 +845,7 @@ mod tests {
         );
         assert!(
             cloud.models.is_empty(),
-            "OSS must not fill BitRouter Cloud from the registry canonical list"
+            "OSS must not fill BitRouter Cloud from registry seed entries"
         );
         assert!(
             cloud.active,

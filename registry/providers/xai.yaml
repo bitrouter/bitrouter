@@ -8,7 +8,7 @@ metadata:
   terms_of_service_url: https://x.ai/legal/terms-of-service
 api_base: https://api.x.ai/v1
 api_protocol:
-  - "*": openai
+  - "*": [responses, openai]
 rate_limits:
   - "*":
       requests_per_minute: 60

@@ -1,6 +1,8 @@
 name: tencent
 metadata:
   headquarters: SG
+  datacenters:
+    - SG
   name: Tencent Cloud
   privacy_policy_url: https://www.tencentcloud.com/document/product/301/17345
   slug: tencent-cloud
@@ -10,11 +12,12 @@ metadata:
 # compatible model marketplace re-serving DeepSeek / GLM / Kimi / MiniMax.
 # Bearer-token auth (OpenAI transport). Prices below are the Singapore-station
 # USD-per-1M-token rates. Manual provider (no auto_sync): TokenHub's catalog is
-# curated here from the vendor's published model + price list.
+# recorded here from the vendor's published model + price list.
 # Official: https://www.tencentcloud.com/ (TI / MaaS TokenHub)
 api_protocol:
-  - "*": openai
-api_base: https://tokenhub-intl.tencentcloudmaas.com/v1
+  - minimax/minimax-m3: [openai, responses, anthropic]
+  - "*": [openai, anthropic]
+api_base: https://tokenhub-intl.tencentmaas.com/v1
 rate_limits:
   - "*":
       requests_per_minute: 60
@@ -130,6 +133,7 @@ models:
       - tools
   - id: minimax/minimax-m3
     provider_model_id: minimax-m3
+    api_protocol: [openai, responses, anthropic]
     # Context-tiered: inputs above 512k tokens bill at double the base rate
     # (step function — the bracket's rate applies to the whole request).
     pricing:

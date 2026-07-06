@@ -1,0 +1,12 @@
+id: xiaomi/mimo-v2-pro
+name: 'Xiaomi: MiMo V2 Pro'
+input_modalities:
+- text
+output_modalities:
+- text
+max_input_tokens: 1048576
+max_output_tokens: 131072
+release_date: 2026-03-18
+knowledge_cutoff: 2024-12
+open_weights: false
+family: mimo

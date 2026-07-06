@@ -11,7 +11,9 @@ kind: gateway
 api_base: https://openrouter.ai/api/v1
 doc_url: https://openrouter.ai/docs/api-reference/overview
 api_protocol:
-  - "*": openai
+  - "*": [openai, responses, anthropic]
+protocol_endpoints:
+  anthropic: https://openrouter.ai/api
 rate_limits: []
 models:
   - id: moonshotai/kimi-k2.7-code
@@ -324,7 +326,7 @@ status: active
 weight: 1
 community: false
 access: api_key
-billing: token
+billing: usage_token
 auth_scheme: x-api-key
 auth:
   kind: bearer

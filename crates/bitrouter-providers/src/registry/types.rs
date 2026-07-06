@@ -141,8 +141,8 @@ pub enum RegistryAccess {
 
 /// The upstream catalog feed a provider's models are synced/discovered from —
 /// mirrors the registry `auto_sync.feed`. A consumer reads this channel at
-/// runtime to pull the provider's FULL catalog (beyond the curated canonical
-/// subset); the canonical list keeps the highest route priority.
+/// runtime to pull the provider's FULL catalog (beyond the registry seed
+/// subset); explicit registry seed entries keep the highest route priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoSyncFeed {
@@ -206,21 +206,36 @@ pub struct RegistryAuth {
     pub params: Option<BTreeMap<String, serde_json::Value>>,
 }
 
+/// Extra user/cloud configuration a provider needs before it can be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredConfig {
+    /// A provider API key.
+    ApiKey,
+    /// A full upstream base URL supplied by the user or cloud deployment.
+    BaseUrl,
+    /// A locally logged-in OAuth account.
+    LocalOauth,
+    /// A locally logged-in OAuth+PKCE account.
+    LocalPkce,
+}
+
 /// How a caller pays a provider — mirrors the registry `billing` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Billing {
     /// Pay-as-you-go, metered per token (the default).
     #[default]
-    Token,
+    #[serde(alias = "token")]
+    UsageToken,
     /// Flat-rate plan (e.g. a first-party coding plan).
     Subscription,
 }
 
-/// One provider entry from `providers.json` (the provider view). For a curated
+/// One provider entry from `providers.json` (the provider view). For a provider
 /// provider the source-YAML glob `api_protocol` / `rate_limits` are resolved
 /// onto each model (so the top-level globs are empty); for a runtime-discovered
-/// provider (one with an [`AutoSync`] feed and no curated models) the
+/// provider (one with an [`AutoSync`] feed and no explicit model entries) the
 /// provider-level `api_protocol` globs are kept here and applied to discovered
 /// models.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
@@ -230,11 +245,14 @@ pub struct RegistryProvider {
     /// Human-readable display name (UI only), if declared.
     #[serde(default)]
     pub display_name: Option<String>,
-    /// The provider's public upstream base URL (HTTPS).
-    pub api_base: String,
+    /// The provider's public upstream base URL (HTTPS), when fixed. Providers
+    /// whose endpoint is workspace/subscription-specific omit this and declare
+    /// [`RequiredConfig::BaseUrl`] instead.
+    #[serde(default)]
+    pub api_base: Option<String>,
     /// Provider-level wire-protocol globs (pattern → protocol set). Present only
-    /// for runtime-discovered providers (an [`AutoSync`] feed + no curated
-    /// models); empty for curated providers (resolved onto each model instead).
+    /// for runtime-discovered providers (an [`AutoSync`] feed + no seed
+    /// models); empty for providers with explicit model entries (resolved onto each model instead).
     #[serde(default)]
     pub api_protocol: Vec<BTreeMap<String, ProtocolSet>>,
     /// Per-protocol base-URL override, keyed by protocol name.
@@ -252,6 +270,9 @@ pub struct RegistryProvider {
     /// Structured auth declaration, if the registry knows the scheme.
     #[serde(default)]
     pub auth: Option<RegistryAuth>,
+    /// User/cloud configuration required before this provider is usable.
+    #[serde(default)]
+    pub required_config: Vec<RequiredConfig>,
     /// Link to the provider's official API documentation, if declared.
     #[serde(default)]
     pub doc_url: Option<String>,
@@ -273,7 +294,7 @@ pub struct RegistryProvider {
     /// runtime to pull the FULL model catalog (see [`AutoSync`]).
     #[serde(default)]
     pub auto_sync: Option<AutoSync>,
-    /// How a caller pays this provider (`token` | `subscription`).
+    /// How a caller pays this provider (`usage_token` | `subscription`).
     #[serde(default)]
     pub billing: Billing,
 }
@@ -304,6 +325,11 @@ impl RegistryProvider {
     /// The catalog feed used for runtime full-catalog discovery, if declared.
     pub fn discovery_feed(&self) -> Option<&AutoSync> {
         self.auto_sync.as_ref()
+    }
+
+    /// Whether this provider requires a user/deployment-supplied base URL.
+    pub fn requires_base_url(&self) -> bool {
+        self.required_config.contains(&RequiredConfig::BaseUrl)
     }
 
     /// Whether the OSS should probe `GET {url ?? api_base}/models` at startup to
@@ -441,7 +467,7 @@ mod tests {
                 "name": "anthropic",
                 "api_base": "https://api.anthropic.com/v1",
                 "auth_scheme": "x-api-key",
-                "billing": "token",
+                "billing": "usage_token",
                 "access": "api_key",
                 "byok": true,
                 "community": false,
@@ -463,8 +489,8 @@ mod tests {
                 ]
             },
             {
-                "id": "zai-coding-plan",
-                "name": "zai-coding-plan",
+                "id": "zai_coding_plan",
+                "name": "zai_coding_plan",
                 "api_base": "https://api.z.ai/api/coding/paas/v4",
                 "billing": "subscription",
                 "status": "active",
@@ -514,7 +540,7 @@ mod tests {
         assert_eq!(anthropic.access(), RegistryAccess::ApiKey);
         assert!(anthropic.is_mergeable());
         assert!(!anthropic.community);
-        assert_eq!(anthropic.billing, Billing::Token);
+        assert_eq!(anthropic.billing, Billing::UsageToken);
         let m = &anthropic.models[0];
         assert_eq!(m.id, "anthropic/claude-sonnet-4.6");
         assert_eq!(m.provider_model_id, "claude-sonnet-4-6");
@@ -546,6 +572,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_legacy_token_billing_alias() {
+        let provider: RegistryProvider = serde_json::from_str(
+            r#"{
+                "name": "legacy",
+                "api_base": "https://legacy.test/v1",
+                "billing": "token",
+                "status": "active",
+                "models": []
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(provider.billing, Billing::UsageToken);
+    }
+
+    #[test]
     fn parses_models_envelope() {
         let env: Envelope<CanonicalModel> = serde_json::from_str(MODELS_FIXTURE).unwrap();
         assert_eq!(env.data.len(), 2);
@@ -562,6 +604,24 @@ mod tests {
         } ] }"#;
         let env: Envelope<RegistryProvider> = serde_json::from_str(src).unwrap();
         assert_eq!(env.data[0].name, "x");
+    }
+
+    #[test]
+    fn parses_required_config_provider_without_fixed_api_base() {
+        let src = r#"{ "data": [ {
+            "name": "workspace-provider",
+            "status": "active",
+            "required_config": ["api_key", "base_url"],
+            "models": []
+        } ] }"#;
+        let env: Envelope<RegistryProvider> = serde_json::from_str(src).unwrap();
+        let provider = &env.data[0];
+        assert_eq!(provider.name, "workspace-provider");
+        assert_eq!(provider.api_base.as_deref(), None);
+        assert_eq!(
+            provider.required_config,
+            vec![RequiredConfig::ApiKey, RequiredConfig::BaseUrl]
+        );
     }
 
     #[test]
