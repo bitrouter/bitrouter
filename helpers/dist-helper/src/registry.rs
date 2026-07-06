@@ -1034,6 +1034,29 @@ fn validate_provider<'a>(
             ));
         }
     }
+
+    match data.billing {
+        Billing::Subscription => {
+            for model in &data.models {
+                if model.pricing.is_some() {
+                    issues.push(format!(
+                        "{file}: subscription provider must not set per-token pricing (model '{}')",
+                        model.id
+                    ));
+                }
+            }
+        }
+        Billing::UsageToken => {
+            for model in &data.models {
+                if model.pricing.is_none() {
+                    issues.push(format!(
+                        "{file}: usage_token provider must set pricing for every model (model '{}')",
+                        model.id
+                    ));
+                }
+            }
+        }
+    }
 }
 
 fn resolved_required_config(provider: &ProviderFile) -> Vec<RequiredConfig> {
@@ -1988,6 +2011,11 @@ api_protocol:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 api_base: https://api.acme.test/v1
 "#,
@@ -2061,6 +2089,11 @@ required_config:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 "#,
         );
@@ -2105,6 +2138,11 @@ api_protocol:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 api_base: https://api.acme.test/v1
 auto_sync:
@@ -2228,6 +2266,11 @@ api_protocol:
 models:
   - id: acme/test-model
     provider_model_id: test-model
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
 status: active
 api_base: https://api.acme.test/v1
 auto_sync:
@@ -2286,6 +2329,87 @@ auto_sync:
 
         let err = validate(&root).expect_err("agentic sync requires URLs");
         assert!(format!("{err:#}").contains("auto_sync.urls is required for agentic"));
+    }
+
+    #[test]
+    fn subscription_provider_must_not_price() {
+        let root = test_root("sub-priced");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+billing: subscription
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("subscription+pricing must fail");
+        assert!(
+            err.to_string().contains("subscription"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn usage_provider_must_price_every_model() {
+        let root = test_root("usage-unpriced");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("usage without pricing must fail");
+        assert!(err.to_string().contains("usage"), "unexpected error: {err}");
     }
 
     fn test_root(name: &str) -> PathBuf {
