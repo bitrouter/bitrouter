@@ -29,7 +29,7 @@ claude
 ```
 
 <Callout type="info">
-**本地代理不需要密钥。** 本地代理对回环（loopback）请求无需鉴权即可接受，因此 `ANTHROPIC_AUTH_TOKEN` 可以是任意占位符。对于 **Cloud**，把 `ANTHROPIC_BASE_URL` 设为 `https://api.bitrouter.ai`，并用你的 BitRouter 密钥（来自 `bitrouter auth login` 或控制台）作为 token。
+**本地代理不需要密钥。** 本地代理对回环（loopback）请求无需鉴权即可接受，因此 `ANTHROPIC_AUTH_TOKEN` 可以是任意占位符。对于 **Cloud**，把 `ANTHROPIC_BASE_URL` 设为 `https://api.bitrouter.ai`，并用你的 BitRouter 密钥（来自 `bitrouter cloud login` 或控制台）作为 token。
 </Callout>
 
 更喜欢用文件配置？把同样的值放进 `.claude/settings.json`，这样就能按项目生效而无需手动 export：

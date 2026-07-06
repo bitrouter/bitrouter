@@ -828,9 +828,9 @@ fn home_dir() -> Option<PathBuf> {
 
 /// Ensure `agent`'s binary is installed — locating it on `PATH` (+
 /// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bitrouter spawn` and `bitrouter login
-/// anthropic` (which needs the `claude` CLI to sign the user in) so both go
-/// through one detect-and-install path.
+/// and return its path. Shared by `bitrouter spawn` and
+/// `bitrouter providers login claude-code` (which needs the `claude` CLI to
+/// sign the user in) so both go through one detect-and-install path.
 pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
     let spec = agent.spec();
     match resolve_binary(spec.binary) {

@@ -6,7 +6,7 @@ sourceHash: d13266c9cc32a83fe7b97c37ae8d00fd6ebd116673c84b9b10de0f3432b3f1db
 
 本指南将在一分钟内让 BitRouter 为你的 Agent 提供路由。BitRouter 有两种部署模式，每种模式都有两种接入方式：
 
-- **BitRouter Cloud（默认）。** 托管端点 `cloud.bitrouter.ai`。无需管理密钥；支持 Agent 原生 x402/MPP 按请求付费，也可叠加 BYOK 使用。
+- **BitRouter Cloud（默认）。** 托管端点 `api.bitrouter.ai`。无需管理密钥；支持 Agent 原生 x402/MPP 按请求付费，也可叠加 BYOK 使用。
 - **本地代理。** 单一二进制运行于本机，BYOK 使用你自己的提供商密钥。零基础设施依赖。
 
 两种模式都可通过 **Agent Skills**（让你的 Agent 自行安装与配置）或 **BitRouter CLI / TUI**（交互式向导）完成接入。两者均默认使用 Cloud；按一个键即可切换为本地模式。

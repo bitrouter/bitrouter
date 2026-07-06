@@ -6,7 +6,7 @@ sourceHash: d13266c9cc32a83fe7b97c37ae8d00fd6ebd116673c84b9b10de0f3432b3f1db
 
 This guide gets BitRouter routing for your agent in under a minute. There are two deployment modes — and two ways to onboard either mode:
 
-- **BitRouter Cloud (default).** Hosted endpoint at `cloud.bitrouter.ai`. No keys to manage; agent-native x402/MPP pay-per-use, or BYOK on top.
+- **BitRouter Cloud (default).** Hosted endpoint at `api.bitrouter.ai`. No keys to manage; agent-native x402/MPP pay-per-use, or BYOK on top.
 - **Local proxy.** Single binary on your machine, BYOK with your own provider keys. Zero infrastructure dependencies.
 
 Both modes onboard through **Agent Skills** (let your agent install and configure itself) or the **BitRouter CLI / TUI** (interactive wizard). Both default to Cloud; switch to local with a single keypress.

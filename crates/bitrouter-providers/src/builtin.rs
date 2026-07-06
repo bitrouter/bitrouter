@@ -83,7 +83,7 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
 /// `oauth::registry` holds their client config), but device-code providers
 /// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
 /// `token_endpoint` / `scope` ONLY here, so dropping them breaks
-/// `bitrouter login github-copilot`. JSON values that TOML cannot represent
+/// `bitrouter providers login github-copilot`. JSON values that TOML cannot represent
 /// (e.g. `null`) are skipped — login then surfaces a clear "missing param".
 fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
     let missing = |field: &str| LoadError::Snapshot {

@@ -2,7 +2,7 @@
 //!
 //! Distinct from the `openai` provider: this targets
 //! `chatgpt.com/backend-api/codex` (Responses-only) using an OAuth access
-//! token minted by the `bitrouter login openai-codex` flow against
+//! token minted by the `bitrouter providers login openai-codex` flow against
 //! `auth.openai.com`. The ChatGPT subscription credential does **not**
 //! authenticate to `api.openai.com`, so a separate provider id is the
 //! cleanest model.
@@ -158,7 +158,7 @@ impl OpenAiCodexAuthApplier {
                 status: 401,
                 message: format!(
                     "no openai-codex credential for label '{label}' — \
-                     run `bitrouter login openai-codex`"
+                     run `bitrouter providers login openai-codex`"
                 ),
             })?;
         let token = stored
@@ -214,7 +214,7 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
         AuthCodeError::OAuthError { error, description } => BitrouterError::Upstream {
             status: 401,
             message: format!(
-                "openai-codex OAuth refresh failed ({error}{}). Re-run `bitrouter login openai-codex`.",
+                "openai-codex OAuth refresh failed ({error}{}). Re-run `bitrouter providers login openai-codex`.",
                 description.map(|d| format!(": {d}")).unwrap_or_default()
             ),
         },
@@ -563,7 +563,7 @@ mod tests {
         let err = applier.apply(req, &codex_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter login openai-codex"),
+            msg.contains("bitrouter providers login openai-codex"),
             "expected helpful hint, got: {msg}"
         );
     }

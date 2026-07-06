@@ -71,31 +71,31 @@ This is fiddly to script — recommend pointing the user at <https://bitrouter.a
 - Cross-`alg` forgery (wallet `iss` with `EdDSA`, or thumbprint `iss` with `SOL_EDDSA`) is rejected before signature verification, so don't try to "fix" mismatches by changing the header.
 - Balance lives in a Mongo `charge_balances` collection keyed by wallet — separate from the Stripe-credit Postgres path.
 
-## D. Headless CLI (`bitrouter auth login`) — recommended for terminal-first users
+## D. Headless CLI (`bitrouter cloud login`) — recommended for terminal-first users
 
-This is the seam between Local and Cloud, closed by `bitrouter auth login` (landed in v1, see also `references/cli.md`).
+This is the seam between Local and Cloud, closed by `bitrouter cloud login` (see also `references/cli.md`).
 
 ### Sign in
 
 ```bash
-bitrouter auth login
+bitrouter cloud login
 # Open this URL in your browser:
-#   https://api.bitrouter.ai/oauth/device?user_code=ABCD-EFGH
+#   https://cloud.bitrouter.ai/oauth/device?user_code=ABCD-EFGH
 # Waiting for authorization (the code expires in 600s)…
 ```
 
 Mechanism: RFC 8628 device-authorization grant against the AS advertised at `https://api.bitrouter.ai/.well-known/oauth-authorization-server`. The CLI polls the token endpoint, exchanges the device code for an access + refresh token pair, and persists both to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Every subsequent call auto-refreshes within 60 s of access-token expiry — sign in once per machine.
 
-Override the AS for a self-hosted deployment: `bitrouter auth login --oauth-as https://my-self-hosted.example.com`.
+Override the AS for a self-hosted deployment: `bitrouter cloud login --oauth-as https://my-self-hosted.example.com`.
 
 Sensitive scopes are off the default grant set — opt in at login time:
 
 ```bash
-# To use `bitrouter cloud billing checkout` and/or `bitrouter cloud oauth-client …`:
-bitrouter auth login --scope "inference:invoke usage:read keys:read keys:write \
+# To use `bitrouter cloud billing checkout`:
+bitrouter cloud login --scope "inference:invoke usage:read keys:read keys:write \
                               billing:read billing:write \
                               policy:read policy:write byok:read byok:write \
-                              account:read clients:read clients:write"
+                              namespace:read"
 ```
 
 ### Auto-enable for the local daemon
@@ -131,7 +131,7 @@ Every leaf accepts `--json` for raw response output. See `references/cli.md` for
 ### Sign out
 
 ```bash
-bitrouter auth logout
+bitrouter cloud logout
 ```
 
 Runs an RFC 7009 best-effort revoke at the AS, then deletes the local credentials file. Idempotent — re-running with no credentials present is a no-op.

@@ -14,7 +14,7 @@ LiteLLM is a Python SDK and self-hosted proxy for unifying access to 100+ LLM pr
 |---|---|---|
 | **Runtime** | Python | Rust (single static binary) |
 | **Production deps** | Postgres + Redis + Docker/K8s | None |
-| **Deployment modes** | Self-hosted only | Local binary **or** hosted (`cloud.bitrouter.ai`) — same OpenAI-compatible endpoint |
+| **Deployment modes** | Self-hosted only | Local binary **or** hosted (`api.bitrouter.ai`) — same OpenAI-compatible endpoint |
 | **Agentic auth & payment** | None | x402 / MPP autonomous payment (cloud mode) |
 | **Design focus** | All-in-one LLM gateway: admin UI, virtual keys, budgets, with agent gateways added alongside | Agent-first proxy: MCP / ACP / Skills, agent firewall, agentic payment as the core surface |
 | **Agent protocol surface** | MCP, A2A, Skills, CLI — bolted onto the horizontal gateway | MCP, ACP, Skills, CLI — the product, not an add-on |
@@ -24,7 +24,7 @@ LiteLLM is a Python SDK and self-hosted proxy for unifying access to 100+ LLM pr
 
 ### 1. Cloud and local share the same surface
 
-With LiteLLM, the proxy is something you operate. With BitRouter, **the hosted cloud and local binary expose the same OpenAI-compatible endpoint** — you can start local during development, then point at `cloud.bitrouter.ai` for production (or vice versa) without changing client code. The CLI, the wizard, and Agent Skills all work in either mode; toggle with one keypress in the setup TUI. See the [Quick Start](/docs/get-started/quickstart) for both flows.
+With LiteLLM, the proxy is something you operate. With BitRouter, **the hosted cloud and local binary expose the same OpenAI-compatible endpoint** — you can start local during development, then point at `api.bitrouter.ai` for production (or vice versa) without changing client code. The CLI, the wizard, and Agent Skills all work in either mode; toggle with one keypress in the setup TUI. See the [Quick Start](/docs/get-started/quickstart) for both flows.
 
 This matters when your agent should *pay per request* without you provisioning keys for it — Cloud mode supports [x402 / MPP autonomous payments](/docs/features/payment), which LiteLLM has no equivalent for.
 
@@ -65,7 +65,7 @@ response = completion(
 import openai
 
 # Local: `bitrouter` (BYOK via env vars) — see /docs/get-started/quickstart
-# Cloud: base_url="https://cloud.bitrouter.ai/v1", api_key=$BITROUTER_API_KEY
+# Cloud: base_url="https://api.bitrouter.ai/v1", api_key=$BITROUTER_API_KEY
 client = openai.OpenAI(
     base_url="http://127.0.0.1:4356/v1",
     api_key="not-used-in-local-byok",
@@ -109,7 +109,7 @@ bitrouter
 </Tab>
 </Tabs>
 
-To skip the local proxy entirely, point clients at `https://cloud.bitrouter.ai/v1` with a BitRouter API key — no binary, no infra. Same endpoint shape.
+To skip the local proxy entirely, point clients at `https://api.bitrouter.ai/v1` with a BitRouter API key — no binary, no infra. Same endpoint shape.
 
 ## Feature mapping
 
@@ -145,7 +145,7 @@ To set expectations honestly: BitRouter does not ship a built-in admin UI for te
 **Migration**
 - [ ] Install the BitRouter CLI ([Quick Start](/docs/get-started/quickstart))
 - [ ] Export provider keys, or paste them into the cloud dashboard (sealed-box encrypted)
-- [ ] Update client `base_url` to `http://127.0.0.1:4356/v1` (local) or `https://cloud.bitrouter.ai/v1` (cloud)
+- [ ] Update client `base_url` to `http://127.0.0.1:4356/v1` (local) or `https://api.bitrouter.ai/v1` (cloud)
 - [ ] Verify with a sample request
 - [ ] Decommission Postgres / Redis if local-only setup is sufficient
 </Callout>

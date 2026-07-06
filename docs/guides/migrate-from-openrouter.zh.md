@@ -25,14 +25,14 @@ sourceHash: f8824812608f57f3f8a2d74827c279aeae1739971c7822f1722d2555fa60d3cb
 
 **方式 A：无界面 CLI（推荐）**
 
-安装 CLI 并登录——`bitrouter auth login` 通过 RFC 8628 设备码流程在浏览器中打开授权页，授权后会将 OAuth 凭证（自动续期）保存到 `$XDG_DATA_HOME/bitrouter/account-credentials.json`。此后通过 `bitrouter` provider 的每次请求都会自动携带凭证——无需在配置中写入 API 密钥：
+安装 CLI 并登录——`bitrouter cloud login` 通过 RFC 8628 设备码流程在浏览器中打开授权页，授权后会将 OAuth 凭证（自动续期）保存到 `$XDG_DATA_HOME/bitrouter/account-credentials.json`。此后通过 `bitrouter` provider 的每次请求都会自动携带凭证——无需在配置中写入 API 密钥：
 
 ```bash
 npm install -g bitrouter
-bitrouter auth login
+bitrouter cloud login
 ```
 
-使用 `bitrouter auth whoami` 查看本机会话；使用 `bitrouter cloud --help` 管理账户级资源（API 密钥、用量、计费、策略、BYOK、OAuth 客户端）。
+使用 `bitrouter cloud whoami` 查看本机会话；使用 `bitrouter cloud --help` 管理账户级资源（API 密钥、用量、计费、策略、BYOK）。
 
 **方式 B：控制台**
 

@@ -267,7 +267,7 @@ enum Command {
         agent_args: Vec<String>,
     },
     /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
-    /// billing, policies, BYOK, OAuth clients. Start with `cloud login`.
+    /// billing, policies, and BYOK. Start with `cloud login`.
     Cloud {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
@@ -532,14 +532,14 @@ enum ProviderAction {
     },
     /// Log in to an upstream provider — interactive credential setup.
     ///
-    /// Per-provider methods are auto-derived from the catalog: `anthropic`
-    /// prompts for subscription (browser PKCE) or API-key paste;
-    /// `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the GitHub
-    /// device flow; everything else accepts a pasted API key. Logging in to
-    /// the built-in `bitrouter` provider runs the same cloud sign-in as
+    /// Per-provider methods are auto-derived from the catalog: `claude-code`
+    /// adopts the live Claude Code session; `anthropic` accepts an API-key
+    /// paste; `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the
+    /// GitHub device flow; everything else accepts a pasted API key. Logging
+    /// in to the built-in `bitrouter` provider runs the same cloud sign-in as
     /// `bitrouter cloud login`.
     Login {
-        /// Provider id (e.g. `anthropic`, `openai-codex`, `bitrouter`).
+        /// Provider id (e.g. `claude-code`, `openai-codex`, `bitrouter`).
         provider: String,
         /// Account label this credential is stored under (default `default`).
         /// Ignored for the `bitrouter` provider (it uses the cloud credential).

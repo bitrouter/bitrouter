@@ -15,34 +15,43 @@ You run it as a daemon and control its lifecycle:
 - `bitrouter serve` — run the router in the foreground.
 - `bitrouter start` / `stop` / `status` — manage it as a background daemon.
 
-Past those daemon control commands, v1 ships two cloud-facing surfaces: `bitrouter auth …` for OAuth sign-in, and `bitrouter cloud …` for everything you can do once signed in.
+Past those daemon control commands, v1 uses `bitrouter cloud …` for OAuth sign-in and account operations.
 
 ## Sign in to BitRouter Cloud
 
-`bitrouter auth login` runs the RFC 8628 Device Authorization Grant against the configured authorization server, prints an approval URL, and persists the resulting access + refresh tokens under `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode `0600` on Unix). The token is refreshed automatically within 60 s of expiry — you sign in once per machine.
+`bitrouter cloud login` runs the RFC 8628 Device Authorization Grant against the configured authorization server, prints an approval URL, and persists the resulting access + refresh tokens under `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode `0600` on Unix). The browser approval page lets you pick the workspace this CLI session is bound to. To switch workspaces, run `bitrouter cloud login` again and choose the target workspace. The token is refreshed automatically within 60 s of expiry — you sign in once per machine.
 
 ```bash
-bitrouter auth login
+bitrouter cloud login
 # Open this URL in your browser:
 #   https://cloud.bitrouter.ai/oauth/device?user_code=ABCD-EFGH
 # Waiting for authorization (the code expires in 600s)…
 ```
 
-The default authorization server is `https://api.bitrouter.ai`. Override with `--oauth-as <URL>` (or `BITROUTER_OAUTH_AS`) for a self-hosted deployment. The default scope set covers inference plus the read/write sides of keys, usage, billing-read, policy, BYOK, and account-read — opt in to the sensitive scopes (`billing:write`, `account:write`, `clients:read`, `clients:write`) by passing `--scope "<existing> clients:write"` at login time.
+The default authorization server is `https://api.bitrouter.ai`. Override with `--oauth-as <URL>` (or `BITROUTER_OAUTH_AS`) for a self-hosted deployment. The default scope set covers `inference:invoke`, `usage:read`, `keys:read`/`keys:write`, `billing:read`, `policy:read`/`policy:write`, `byok:read`/`byok:write`, and `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in via `--scope`.
 
-Inspect the local session with `bitrouter auth whoami` — it reads the credentials file directly and never hits the network. Sign out (best-effort revoke at the AS plus delete the local file) with `bitrouter auth logout`.
+Inspect the local session with `bitrouter cloud whoami` — it reads the credentials file directly and never hits the network. Sign out (best-effort revoke at the AS plus delete the local file) with `bitrouter cloud logout`.
 
 <Callout type="info">
-After `bitrouter auth login`, the `bitrouter` provider is auto-enabled in zero-config mode — every model your account is entitled to is routable as `bitrouter:<model-id>` with no further setup.
+After `bitrouter cloud login`, the `bitrouter` provider is auto-enabled in zero-config mode — every model your account is entitled to is routable as `bitrouter:<model-id>` with no further setup.
 </Callout>
 
 ## Manage your account: `bitrouter cloud`
 
-Every leaf accepts `--json` for raw response output; the default is a `systemctl`-style key:value block (single resource) or a small table (lists). When the server returns a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter auth login --scope "<current> <s>"` hint.
+Every leaf accepts `--json` for raw response output; the default is a `systemctl`-style key:value block (single resource) or a small table (lists). When the server returns a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint.
 
 ### `bitrouter cloud whoami`
 
 Identity stored on this machine plus the `/v1/*` base URL the CLI will target. Offline read.
+
+### `bitrouter cloud namespace` — workspaces
+
+```bash
+bitrouter cloud namespace list      # all workspaces; active one marked
+bitrouter cloud namespace current   # offline — reads local credential
+```
+
+The credential is namespace-baked: keys, usage, and policies are scoped to the workspace chosen at login. `current` prints `(no namespace — run \`bitrouter cloud login\`)` when the local credential predates namespace binding.
 
 ### `bitrouter cloud keys` — API keys
 
@@ -113,21 +122,6 @@ bitrouter cloud byok delete <provider>
 ```
 
 Ciphertext must be sealed against the cloud's current X25519 public key before submission — the server only stores already-encrypted bytes. Fetch the current public key from `GET /v1/byok/encryption-pubkey` before sealing.
-
-### `bitrouter cloud oauth-client` — OAuth client registrations
-
-```bash
-bitrouter cloud oauth-client list
-bitrouter cloud oauth-client register \
-  --name "my-agent" --type confidential \
-  --grant authorization_code --grant refresh_token \
-  --scope inference:invoke --scope policy:read \
-  --redirect-uri https://my-agent.example.com/cb
-bitrouter cloud oauth-client update <client-id> --name "renamed"
-bitrouter cloud oauth-client delete <client-id>
-```
-
-Requires the `clients:read` / `clients:write` scopes — not in the default set. The freshly minted `client_secret` for confidential clients is returned exactly once in the `register` response.
 
 ## Other ways to drive BitRouter
 

@@ -122,7 +122,7 @@ bitrouter start                 # proxy running at http://localhost:4356
 **Or sign in to BitRouter Cloud** — one OAuth account covers every model, no upstream provider keys:
 
 ```bash
-bitrouter auth login            # RFC 8628 device flow against api.bitrouter.ai
+bitrouter cloud login           # RFC 8628 device flow against api.bitrouter.ai
 bitrouter start                 # `bitrouter` provider auto-enables once signed in
 ```
 
@@ -203,7 +203,7 @@ The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/r
 
 - [`CLI.md`](CLI.md) — full CLI reference with flags and examples
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
-- [`docs/`](docs/) — guides and recipes (e.g. [Claude Code on your subscription](docs/claude-code-subscription.md))
+- [`docs/`](docs/) — guides and recipes (e.g. [Claude Code on your subscription](docs/integrations/claude-subscription.md))
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)

@@ -47,7 +47,7 @@ sourceHash: 90a1b5a2af25e5fe3408474b108b5de98300d306800452813d8c56ab31f27d29
 预设按命名空间隔离。可在控制台 **Settings → Routing Presets** 中创建，或使用管理 API：
 
 ```bash
-curl -X POST http://127.0.0.1:4356/v1/namespaces/{nsid}/routing-presets \
+curl -X POST https://api.bitrouter.ai/v1/namespaces/{nsid}/routing-presets \
   -H "Authorization: Bearer $BRK_KEY" \
   -H "Content-Type: application/json" \
   -d '{

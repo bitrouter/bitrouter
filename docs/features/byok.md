@@ -18,7 +18,7 @@ When you self-host or run the binary locally there is no upload step: set provid
 ```bash
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
-export GOOGLE_API_KEY=AIza...
+export GEMINI_API_KEY=AIza...
 bitrouter
 ```
 
@@ -26,24 +26,24 @@ BitRouter detects keys at startup and exposes only the providers whose keys are 
 
 ### Recognized variables
 
-| Provider | Preferred name | Passthrough fallback |
-| --- | --- | --- |
-| OpenAI | `BITROUTER_OPENAI_API_KEY` | `OPENAI_API_KEY` |
-| Anthropic | `BITROUTER_ANTHROPIC_API_KEY` | `ANTHROPIC_API_KEY` |
-| Google | `BITROUTER_GOOGLE_API_KEY` | `GOOGLE_API_KEY`, `GEMINI_API_KEY` |
-| Custom (registry-listed) | `BITROUTER_<PROVIDER_ID>_API_KEY` | — |
+| Provider | Variable |
+| --- | --- |
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Google | `GEMINI_API_KEY` |
+| Custom (registry-listed) | `<PROVIDER_ID>_API_KEY` |
 
-The `BITROUTER_*` variants take precedence over the passthrough names — useful when your shell already has `OPENAI_API_KEY` set for a different tool and you want BitRouter to use a different account.
+Registry-listed custom providers use the uppercase provider id with hyphens converted to underscores.
 
-For a custom provider registered as `id: my-provider` in the [registry](/docs/guides/register-as-a-provider), set `BITROUTER_MY_PROVIDER_API_KEY` (uppercased, hyphens become underscores).
+For a custom provider registered as `id: my-provider` in the [registry](/docs/guides/register-as-a-provider), set `MY_PROVIDER_API_KEY`. To use a different variable name, declare the provider explicitly in `bitrouter.yaml` with `api_key: ${MY_VAR}`.
 
 <Callout type="info">
-**Key rotation is live.** BitRouter watches the environment of its parent process; updating a key (re-export and `kill -HUP $(pgrep bitrouter)`) takes effect on the next request without restart.
+**Key rotation is live.** Re-export the key and run `bitrouter reload`; the CLI forwards current provider API keys to the running daemon without a restart.
 </Callout>
 
 ## On BitRouter Cloud
 
-On `cloud.bitrouter.ai`, your provider key is encrypted **client-side** against the node's X25519 sealed-box public key before submission. The node never sees plaintext on the write path; ciphertext is decrypted in-memory at request time and never logged.
+On BitRouter Cloud, your provider key is encrypted **client-side** against the node's X25519 sealed-box public key before submission. The node never sees plaintext on the write path; ciphertext is decrypted in-memory at request time and never logged.
 
 The flow:
 
@@ -64,7 +64,7 @@ import sodium from 'libsodium-wrappers';
 await sodium.ready;
 
 const meta = await fetch(
-  'https://cloud.bitrouter.ai/v1/byok/encryption-pubkey'
+  'https://api.bitrouter.ai/v1/byok/encryption-pubkey'
 ).then(r => r.json());
 
 const ciphertext = sodium.crypto_box_seal(
@@ -83,7 +83,7 @@ const ciphertextB64 = sodium.to_base64(ciphertext, sodium.base64_variants.ORIGIN
 import os, base64, requests
 from nacl.public import PublicKey, SealedBox
 
-meta = requests.get('https://cloud.bitrouter.ai/v1/byok/encryption-pubkey').json()
+meta = requests.get('https://api.bitrouter.ai/v1/byok/encryption-pubkey').json()
 pubkey = PublicKey(base64.b64decode(meta['public_key']))
 ciphertext = SealedBox(pubkey).encrypt(os.environ['OPENAI_API_KEY'].encode())
 
@@ -100,7 +100,7 @@ payload = {
 <Tab value="Shell">
 
 ```bash
-META=$(curl -s https://cloud.bitrouter.ai/v1/byok/encryption-pubkey)
+META=$(curl -s https://api.bitrouter.ai/v1/byok/encryption-pubkey)
 PUBKEY=$(echo "$META" | jq -r .public_key)
 KEK_ID=$(echo "$META" | jq -r .kek_id)
 
@@ -130,4 +130,4 @@ If a node's `kek_id` rotates (we re-key every 90 days), the previous key is reta
 
 ## Custom providers
 
-BYOK works for any provider listed in the [registry](/docs/guides/register-as-a-provider) that declares `byok` in its manifest's `payment.modes`. The provider field in the encryption submission must match the registry `id` exactly. Local-mode env-var detection follows the `BITROUTER_<PROVIDER_ID>_API_KEY` convention.
+BYOK works for any provider listed in the [registry](/docs/guides/register-as-a-provider) that declares `byok` in its manifest's `payment.modes`. The provider field in the encryption submission must match the registry `id` exactly. Local-mode env-var detection follows the `<PROVIDER_ID>_API_KEY` convention, uppercased with hyphens converted to underscores.

@@ -64,7 +64,7 @@ bitrouter start
 Sign in to a BitRouter Cloud account from the terminal — one account covers every model the hosted network offers, with no upstream provider keys required:
 
 ```bash
-bitrouter auth login    # RFC 8628 device flow against api.bitrouter.ai
+bitrouter cloud login   # RFC 8628 device flow against api.bitrouter.ai
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
 
@@ -142,7 +142,7 @@ Cloud provides managed billing (one wallet, per-request, failed requests not cha
 Cloud is not a different binary — it's an account you attach:
 
 ```bash
-bitrouter auth login
+bitrouter cloud login
 # Opens a browser to sign in and pick a workspace.
 # Your local binary now routes Cloud-managed models alongside your BYOK keys.
 ```

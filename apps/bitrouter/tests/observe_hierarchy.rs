@@ -39,7 +39,9 @@ const POLL_INTERVAL_MS: u64 = 50;
 fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-
+    // Keep the assertion independent of the developer/CI shell's RUST_LOG.
+    // A warn-level filter would drop the HTTP ingress info span before the
+    // tracing-opentelemetry bridge can export it.
     let env_filter = tracing_subscriber::EnvFilter::new("info");
     tracing_subscriber::registry()
         .with(env_filter)
