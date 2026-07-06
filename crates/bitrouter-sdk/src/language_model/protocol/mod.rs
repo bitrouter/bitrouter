@@ -31,19 +31,24 @@
 //! - role mapping is **total** — an unknown role is an error, not a silent
 //!   downgrade to `user` (v0 #454-4).
 //!
-//! ## Adding an outbound-only provider
+//! ## Adding a provider with a non-standard wire (the `Custom` escape hatch)
 //!
-//! Platform-specific providers (AWS Bedrock, Azure OpenAI, Vertex AI, …) need
-//! their own wire format + auth + URL conventions but the SDK never serves
-//! their protocol back to clients. To add one — typically in its own crate
-//! (`bitrouter-bedrock`, `bitrouter-azure-openai`, …):
+//! The big platform clouds — AWS Bedrock, Azure OpenAI — speak one of the four
+//! built-in protocols over HTTP+JSON+SSE and differ only in auth + base URL, so
+//! they are plain registry providers (Bearer/Header auth), **not** custom
+//! protocols. Bedrock reaches its OpenAI/Responses/Messages `bedrock-mantle`
+//! endpoints; Azure its `/openai/v1` surface.
+//!
+//! [`ApiProtocol::Custom`] exists for the rare provider whose wire an existing
+//! [`OutboundAdapter`] cannot decode (e.g. a binary event-stream framing owned
+//! by a vendor SDK, like Bedrock's native Converse API). No built-in provider
+//! needs it today. To add such a provider — typically in its own crate:
 //!
 //! 1. Pick a unique protocol name and use
-//!    [`ApiProtocol::Custom`]`("bedrock-claude".into())` to identify it.
+//!    [`ApiProtocol::Custom`]`("my-wire".into())` to identify it.
 //! 2. Implement [`OutboundAdapter`] for the wire-format conversion. Its
 //!    `protocol()` method returns the same `ApiProtocol::Custom` value.
-//! 3. Implement [`Transport`] for the URL shape and authentication scheme
-//!    (e.g. AWS SigV4 signing for Bedrock).
+//! 3. Implement [`Transport`] for the URL shape and authentication scheme.
 //! 4. Register both with [`OutboundDispatch`] before building the executor:
 //!
 //! ```ignore
@@ -53,8 +58,8 @@
 //!
 //! let mut dispatch = OutboundDispatch::builtin();
 //! dispatch.register(
-//!     Arc::new(BedrockClaudeAdapter::new()),
-//!     Arc::new(BedrockTransport::new(region, credentials)),
+//!     Arc::new(MyWireAdapter::new()),
+//!     Arc::new(MyWireTransport::new(/* … */)),
 //! );
 //! let executor = HttpExecutor::with_dispatch(HttpTimeouts::default(), dispatch)?;
 //! # Ok::<(), bitrouter_sdk::BitrouterError>(())
@@ -62,8 +67,8 @@
 //!
 //! Clients still call BitRouter using one of the four built-in inbound
 //! protocols; the routing table directs the request to a target whose
-//! `api_protocol` is `ApiProtocol::Custom("bedrock-claude")`, and the
-//! executor dispatches through the registered adapter + transport.
+//! `api_protocol` is `ApiProtocol::Custom("my-wire")`, and the executor
+//! dispatches through the registered adapter + transport.
 
 use std::collections::HashMap;
 use std::sync::Arc;

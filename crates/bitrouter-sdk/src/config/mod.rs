@@ -692,6 +692,11 @@ pub struct VariantConfig {
 /// Replace every `${VAR}` reference with the value resolved by `lookup`, an
 /// unresolved variable being an error (config F8: `${VAR}` substitution).
 ///
+/// A `${VAR:-default}` reference uses `default` when `VAR` is unset instead of
+/// erroring — so a registry `api_base` can carry a fallback (e.g.
+/// `${AWS_REGION:-us-east-1}`). The `:-` split is on its first occurrence; a
+/// bare `${VAR}` is unchanged (real env names never contain `:-`).
+///
 /// Substitution is **YAML-comment-aware**: a `${VAR}` that falls inside a `#`
 /// comment is left literal and never looked up — so a commented-out example
 /// (e.g. the `bitrouter init` starter config) that references an unset variable
@@ -740,12 +745,24 @@ where
             let after_brace = &input[idx + 2..];
             match after_brace.find('}') {
                 Some(rel) => {
-                    let name = &after_brace[..rel];
-                    let value = lookup(name).ok_or_else(|| {
-                        BitrouterError::bad_request(format!(
-                            "config references undefined environment variable '{name}'"
-                        ))
-                    })?;
+                    let token = &after_brace[..rel];
+                    // `${VAR:-default}` falls back to `default` when `VAR` is
+                    // unset; a bare `${VAR}` still errors on an unset variable.
+                    let (name, default) = match token.split_once(":-") {
+                        Some((n, d)) => (n, Some(d)),
+                        None => (token, None),
+                    };
+                    let value = match lookup(name) {
+                        Some(v) => v,
+                        None => match default {
+                            Some(d) => d.to_string(),
+                            None => {
+                                return Err(BitrouterError::bad_request(format!(
+                                    "config references undefined environment variable '{name}'"
+                                )));
+                            }
+                        },
+                    };
                     out.push_str(&value);
                     // Advance the iterator past `{name}` (up to and including `}`).
                     let resume = idx + 2 + rel + 1;

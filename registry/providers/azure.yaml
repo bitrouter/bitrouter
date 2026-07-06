@@ -1,0 +1,147 @@
+name: azure
+display_name: Azure OpenAI
+metadata:
+  headquarters: US
+  name: Microsoft Azure
+  privacy_policy_url: https://privacy.microsoft.com/privacystatement
+  slug: azure
+  status_page_url: https://azure.status.microsoft
+  terms_of_service_url: https://azure.microsoft.com/support/legal/
+kind: first_party
+# Azure OpenAI via its OpenAI-compatible `/openai/v1` surface (Chat Completions
+# + Responses) over SSE. Set AZURE_OPENAI_RESOURCE to your resource name and
+# AZURE_OPENAI_API_KEY to a key. The v1 surface is OpenAI-SDK compatible and
+# accepts the key as a bearer token (exactly what the OpenAI SDK sends), so no
+# `api-version` query or per-deployment path is needed — and a Microsoft Entra
+# ID (AAD) access token works in the same `Authorization: Bearer` slot. If the
+# resource var is unset, the provider drops out of routing (no valid base URL).
+api_protocol:
+  - "*": [openai, responses]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+api_base: https://${AZURE_OPENAI_RESOURCE}.openai.azure.com/openai/v1
+doc_url: https://learn.microsoft.com/azure/ai-services/openai/reference-preview
+auth:
+  kind: bearer
+  env: AZURE_OPENAI_API_KEY
+status: active
+weight: 1
+submitted_at: 2026-07-06
+models:
+  - id: anthropic/claude-fable-5
+    provider_model_id: claude-fable-5
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: anthropic/claude-haiku-4.5
+    provider_model_id: claude-haiku-4-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 5
+  - id: anthropic/claude-opus-4.6
+    provider_model_id: claude-opus-4-6
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: anthropic/claude-opus-4.8
+    provider_model_id: claude-opus-4-8
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: anthropic/claude-sonnet-4.5
+    provider_model_id: claude-sonnet-4-5
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+  - id: anthropic/claude-sonnet-4.6
+    provider_model_id: claude-sonnet-4-6
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.58
+      output_tokens:
+        text: 1.68
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.19
+      output_tokens:
+        text: 0.51
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+      output_tokens:
+        text: 3.48
+  - id: openai/gpt-5.4
+    provider_model_id: gpt-5.4
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15
+  - id: openai/gpt-5.4-mini
+    provider_model_id: gpt-5.4-mini
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 4.5
+  - id: openai/gpt-5.5
+    provider_model_id: gpt-5.5
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+      output_tokens:
+        text: 30
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 3
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+      output_tokens:
+        text: 4
+auto_sync:
+  feed: models_dev
+  key: azure

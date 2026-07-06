@@ -30,6 +30,33 @@ fn env_substitution_errors_on_undefined() {
 }
 
 #[test]
+fn env_substitution_uses_default_when_var_unset() {
+    // `${VAR:-default}` falls back to the default when the var is unset...
+    let out = substitute_with(
+        "https://bedrock-mantle.${AWS_REGION:-us-east-1}.api.aws/v1",
+        |_| None,
+    )
+    .unwrap();
+    assert_eq!(out, "https://bedrock-mantle.us-east-1.api.aws/v1");
+    // ...but the set value still wins over the default.
+    let out = substitute_with("${AWS_REGION:-us-east-1}", |n| {
+        (n == "AWS_REGION").then(|| "eu-west-1".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "eu-west-1");
+    // A default containing hyphens is preserved (split is on the first `:-`).
+    let out = substitute_with("${X:-a-b-c}", |_| None).unwrap();
+    assert_eq!(out, "a-b-c");
+    // A bare `${VAR}` (no `:-`) still errors when unset.
+    assert_eq!(
+        substitute_with("${AZURE_OPENAI_RESOURCE}", |_| None)
+            .unwrap_err()
+            .status(),
+        400
+    );
+}
+
+#[test]
 fn env_substitution_handles_multiple_and_literals() {
     let out = substitute_with("a=${A} b=${B} c", |n| Some(format!("<{n}>"))).unwrap();
     assert_eq!(out, "a=<A> b=<B> c");
