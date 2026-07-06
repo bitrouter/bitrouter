@@ -50,6 +50,8 @@ enum RegistryCommand {
         #[arg(long)]
         write: bool,
     },
+    /// Render the prompt used by the headless agentic registry sync step.
+    AgenticPrompt,
 }
 
 #[tokio::main]
@@ -71,7 +73,11 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Registry { command } => match command {
             RegistryCommand::Validate => registry::validate(&root),
             RegistryCommand::Build { check } => registry::build(&root, check),
-            RegistryCommand::Sync { write } => registry::sync_models_dev(&root, write).await,
+            RegistryCommand::Sync { write } => registry::sync(&root, write).await,
+            RegistryCommand::AgenticPrompt => {
+                print!("{}", registry::agentic_prompt(&root)?);
+                Ok(())
+            }
         },
         Command::Check => {
             schema::generate(&root, true)?;

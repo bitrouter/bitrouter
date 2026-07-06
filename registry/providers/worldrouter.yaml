@@ -189,3 +189,10 @@ weight: 1
 submitted_at: 2026-05-12
 auth_scheme: x-api-key
 community: true
+auto_sync:
+  feed: agentic
+  urls:
+    - https://router.worldclaw.ai/models
+    - https://router.worldclaw.ai/docs/api
+    - https://router.worldclaw.ai/faq
+    - https://worldclaw.ai/

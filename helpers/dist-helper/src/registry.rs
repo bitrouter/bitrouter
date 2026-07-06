@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,9 +51,41 @@ pub fn build(root: &Path, check: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn sync_models_dev(root: &Path, write: bool) -> Result<()> {
-    let loaded = load_registry(root)?;
+pub async fn sync(root: &Path, write: bool) -> Result<()> {
+    let mut loaded = load_registry(root)?;
     validate_loaded(&loaded)?;
+    sync_models_dev_loaded(root, &loaded, write).await?;
+    if write {
+        loaded = load_registry(root)?;
+        validate_loaded(&loaded)?;
+    }
+    sync_v1_models_loaded(root, &loaded, write).await?;
+    if write {
+        validate(root)?;
+        println!("\nsynced registry source data");
+    }
+    Ok(())
+}
+
+async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bool) -> Result<()> {
+    if !loaded.providers.iter().any(|provider| {
+        provider
+            .data
+            .auto_sync
+            .as_ref()
+            .is_some_and(|sync| sync.feed == AutoSyncFeed::ModelsDev && sync_writes_models(sync))
+    }) {
+        println!(
+            "\nregistry sync - {} - keyless models.dev catalog attach",
+            if write { "WRITE" } else { "dry-run" }
+        );
+        println!("attach 0 model(s) across 0 provider(s)");
+        println!("  (no models.dev providers configured)");
+        if !write {
+            println!("\n(dry run - pass --write to apply)");
+        }
+        return Ok(());
+    }
     let catalog = load_models_dev_catalog().await?;
     let resolve = canonical_resolver(loaded.canonical.iter().map(|m| m.id.as_str()));
     let providers_by_name: HashMap<&str, &LoadedProvider> = loaded
@@ -67,6 +100,9 @@ pub async fn sync_models_dev(root: &Path, write: bool) -> Result<()> {
             continue;
         };
         if sync.feed != AutoSyncFeed::ModelsDev {
+            continue;
+        }
+        if !sync_writes_models(sync) {
             continue;
         }
         let key = sync.key.as_deref().unwrap_or(&provider.data.name);
@@ -138,9 +174,407 @@ pub async fn sync_models_dev(root: &Path, write: bool) -> Result<()> {
             .context("sync plan referenced an unknown provider")?;
         append_models_to_provider(&loaded_provider.path, &adds)?;
     }
-    validate(root)?;
-    println!("\nsynced registry source data");
     Ok(())
+}
+
+async fn sync_v1_models_loaded(root: &Path, loaded: &LoadedRegistry, write: bool) -> Result<()> {
+    let resolve = canonical_resolver(loaded.canonical.iter().map(|m| m.id.as_str()));
+    let providers_by_name: HashMap<&str, &LoadedProvider> = loaded
+        .providers
+        .iter()
+        .map(|p| (p.data.name.as_str(), p))
+        .collect();
+    let mut attaches: BTreeMap<String, Vec<ProviderModel>> = BTreeMap::new();
+    let mut unresolved: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut skipped = Vec::new();
+
+    for provider in &loaded.providers {
+        let Some(sync) = &provider.data.auto_sync else {
+            continue;
+        };
+        if sync.feed != AutoSyncFeed::V1Models || !sync_writes_models(sync) {
+            continue;
+        }
+        let Some(url) = v1_models_url(&provider.data) else {
+            skipped.push(format!(
+                "{}: no auto_sync.url or api_base for v1_models",
+                provider.data.name
+            ));
+            continue;
+        };
+        let Some(headers) = v1_auth_headers(&provider.data) else {
+            skipped.push(format!(
+                "{}: credential unavailable for v1_models",
+                provider.data.name
+            ));
+            continue;
+        };
+        let body = fetch_v1_models(&url, headers)
+            .await
+            .with_context(|| format!("syncing {} from {url}", provider.data.name))?;
+        let plan = v1_models_plan_for_provider(&provider.data, &body, &resolve)
+            .with_context(|| format!("planning v1_models sync for {}", provider.data.name))?;
+        if !plan.adds.is_empty() {
+            attaches.insert(provider.data.name.clone(), plan.adds);
+        }
+        if !plan.unresolved.is_empty() {
+            unresolved.insert(provider.data.name.clone(), plan.unresolved);
+        }
+    }
+
+    let total: usize = attaches.values().map(Vec::len).sum();
+    println!(
+        "\nregistry sync - {} - OpenAI-compatible /models attach",
+        if write { "WRITE" } else { "dry-run" }
+    );
+    println!(
+        "attach {total} model(s) across {} provider(s)",
+        attaches.len()
+    );
+    for (provider, models) in &attaches {
+        for model in models {
+            println!(
+                "  + {provider} <- {} ({})",
+                model.id, model.provider_model_id
+            );
+        }
+    }
+    if !unresolved.is_empty() {
+        println!("unresolved upstream model ids (no canonical model match):");
+        for (provider, models) in &unresolved {
+            for model in models {
+                println!("  ? {provider} <- {model}");
+            }
+        }
+    }
+    for item in &skipped {
+        eprintln!("  {item} - skipped");
+    }
+    if total == 0 {
+        println!("  (nothing to attach)");
+    }
+    if !write {
+        println!("\n(dry run - pass --write to apply)");
+        return Ok(());
+    }
+
+    for (provider, adds) in attaches {
+        let loaded_provider = providers_by_name
+            .get(provider.as_str())
+            .context("sync plan referenced an unknown provider")?;
+        append_models_to_provider(&loaded_provider.path, &adds)?;
+    }
+    validate(root)?;
+    Ok(())
+}
+
+struct V1ModelsPlan {
+    adds: Vec<ProviderModel>,
+    unresolved: Vec<String>,
+}
+
+fn v1_models_plan_for_provider(
+    provider: &ProviderFile,
+    body: &str,
+    resolve: &impl Fn(&str) -> Option<String>,
+) -> Result<V1ModelsPlan> {
+    let catalog: V1ModelsResponse =
+        serde_json::from_str(body).context("parsing OpenAI-compatible /models response")?;
+    let have: HashSet<&str> = provider.models.iter().map(|m| m.id.as_str()).collect();
+    let mut staged = HashSet::new();
+    let mut unresolved_seen = HashSet::new();
+    let mut adds = Vec::new();
+    let mut unresolved = Vec::new();
+
+    for model in catalog.data {
+        let Some(canonical_id) = resolve(&model.id) else {
+            if unresolved_seen.insert(model.id.clone()) {
+                unresolved.push(model.id);
+            }
+            continue;
+        };
+        if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
+            continue;
+        }
+        adds.push(ProviderModel {
+            id: canonical_id,
+            provider_model_id: model.id,
+            api_protocol: None,
+            pricing: None,
+            rate_limits: None,
+            capabilities: Vec::new(),
+            deprecation_date: None,
+        });
+    }
+    Ok(V1ModelsPlan { adds, unresolved })
+}
+
+fn v1_models_url(provider: &ProviderFile) -> Option<String> {
+    let sync = provider.auto_sync.as_ref()?;
+    let raw = sync.url.as_deref().or(provider.api_base.as_deref())?;
+    let trimmed = raw.trim_end_matches('/');
+    if trimmed.ends_with("/models") {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("{trimmed}/models"))
+    }
+}
+
+fn v1_auth_headers(provider: &ProviderFile) -> Option<Vec<(String, String)>> {
+    let Some(auth) = &provider.auth else {
+        return Some(Vec::new());
+    };
+    match auth.kind {
+        AuthKind::Bearer => {
+            let env = auth.env.as_ref()?;
+            let token = nonempty_env(env)?;
+            Some(vec![(
+                "Authorization".to_string(),
+                format!("Bearer {token}"),
+            )])
+        }
+        AuthKind::Header => {
+            let env = auth.env.as_ref()?;
+            let header = auth.header.as_ref()?;
+            let value = nonempty_env(env)?;
+            Some(vec![(header.clone(), value)])
+        }
+        AuthKind::Oauth | AuthKind::Native => None,
+    }
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+async fn fetch_v1_models(url: &str, headers: Vec<(String, String)>) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("dist-helper/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("building v1_models HTTP client")?;
+    let mut request = client.get(url);
+    for (key, value) in headers {
+        request = request.header(key, value);
+    }
+    request
+        .send()
+        .await
+        .context("fetching /models catalog")?
+        .error_for_status()
+        .context("/models returned an error")?
+        .text()
+        .await
+        .context("reading /models response")
+}
+
+#[derive(Debug, Deserialize)]
+struct V1ModelsResponse {
+    data: Vec<V1Model>,
+}
+
+#[derive(Debug, Deserialize)]
+struct V1Model {
+    id: String,
+}
+
+pub fn agentic_prompt(root: &Path) -> Result<String> {
+    let loaded = load_registry(root)?;
+    validate_loaded(&loaded)?;
+    let providers: Vec<_> = loaded
+        .providers
+        .iter()
+        .filter(|provider| {
+            provider
+                .data
+                .auto_sync
+                .as_ref()
+                .is_some_and(|sync| sync.feed == AutoSyncFeed::Agentic)
+        })
+        .collect();
+
+    let mut out = String::new();
+    writeln!(
+        out,
+        "You are running inside the bitrouter OSS repository.\n"
+    )?;
+    writeln!(out, "Goal:")?;
+    writeln!(
+        out,
+        "Update the public model registry source files for the agentic-sync providers listed below.\n"
+    )?;
+    writeln!(out, "Hard rules:")?;
+    writeln!(
+        out,
+        "- Only edit files under `registry/providers/` and `registry/models/`."
+    )?;
+    writeln!(out, "- Do not edit `dist/`; it will be regenerated later.")?;
+    writeln!(
+        out,
+        "- Do not edit Rust code, workflows, docs, Cargo files, or unrelated files."
+    )?;
+    writeln!(
+        out,
+        "- This is not curation. Include all public production models supported by each provider."
+    )?;
+    writeln!(
+        out,
+        "- Preserve existing provider IDs and canonical model IDs."
+    )?;
+    writeln!(
+        out,
+        "- Do not remove or edit provider `auto_sync` configuration."
+    )?;
+    writeln!(
+        out,
+        "- Do not delete existing model entries unless the linked official source clearly says the model is removed or unavailable."
+    )?;
+    writeln!(
+        out,
+        "- If a model is uncertain, keep it and mention the uncertainty in your final response.\n"
+    )?;
+    writeln!(
+        out,
+        "- If the listed URLs are unreachable, make no model catalog changes for that provider and report it as skipped."
+    )?;
+    writeln!(
+        out,
+        "- Do not revert existing worktree changes; only make the required registry catalog edits."
+    )?;
+    writeln!(
+        out,
+        "- Do not infer provider catalog changes from `dist/` artifacts or helper source code.\n"
+    )?;
+    writeln!(out, "Providers to sync:\n")?;
+    if providers.is_empty() {
+        writeln!(
+            out,
+            "(No `auto_sync.feed: agentic` providers are configured.)\n"
+        )?;
+    } else {
+        for provider in providers {
+            render_agentic_provider(root, provider, &mut out)?;
+        }
+        writeln!(out)?;
+    }
+    writeln!(out, "Canonical model source:")?;
+    writeln!(
+        out,
+        "- Canonical model IDs live in `registry/models/**/*.yaml`."
+    )?;
+    writeln!(
+        out,
+        "- Before adding a new canonical model, search existing files exactly with:"
+    )?;
+    writeln!(out, "  `rg -n \"^id: \" registry/models`")?;
+    writeln!(
+        out,
+        "- Reuse an existing canonical ID when the upstream model is the same model."
+    )?;
+    writeln!(
+        out,
+        "- Only create a new canonical model YAML when no existing canonical ID matches."
+    )?;
+    writeln!(
+        out,
+        "- Use lowercase `<org>/<model>` IDs and omit metadata that cannot be verified.\n"
+    )?;
+    writeln!(out, "Provider model rules:")?;
+    writeln!(
+        out,
+        "- Set `provider_model_id` to the exact upstream model id."
+    )?;
+    writeln!(
+        out,
+        "- Set `api_protocol` only when the model differs from provider-level defaults."
+    )?;
+    writeln!(
+        out,
+        "- Add `capabilities` only when clearly documented: tools, reasoning, structured_outputs, image_input, audio_input, video_input, file_input, image_output, audio_output, web_search, logprobs."
+    )?;
+    writeln!(
+        out,
+        "- For usage-token providers, add pricing when the linked source documents it."
+    )?;
+    writeln!(
+        out,
+        "- For subscription providers, do not invent token pricing.\n"
+    )?;
+    writeln!(out, "Validation:")?;
+    writeln!(out, "After editing registry source YAML, run exactly:")?;
+    writeln!(out, "`cargo run -p dist-helper -- registry validate`\n")?;
+    writeln!(
+        out,
+        "If validation fails, fix the YAML and rerun exactly the same command."
+    )?;
+    writeln!(out, "Do not run `cargo run -p dist-helper -- check`.")?;
+    writeln!(
+        out,
+        "Do not edit `dist/`; the workflow regenerates dist after this agent exits.\n"
+    )?;
+    writeln!(out, "Final response must summarize:")?;
+    writeln!(out, "- providers changed")?;
+    writeln!(out, "- models added or updated")?;
+    writeln!(
+        out,
+        "- models skipped because canonical mapping or facts were uncertain"
+    )?;
+    writeln!(out, "- validation result")?;
+    Ok(out)
+}
+
+fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut String) -> Result<()> {
+    let data = &provider.data;
+    let sync = data
+        .auto_sync
+        .as_ref()
+        .context("agentic provider missing auto_sync")?;
+    writeln!(
+        out,
+        "- `{}` (`{}`)",
+        data.name,
+        provider
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&provider.path)
+            .display()
+    )?;
+    if let Some(display_name) = &data.display_name {
+        writeln!(out, "  - display_name: {display_name}")?;
+    }
+    writeln!(
+        out,
+        "  - status: {:?}; billing: {:?}; access: {:?}; model_count: {}",
+        data.status,
+        data.billing,
+        data.access,
+        data.models.len()
+    )?;
+    if let Some(api_base) = &data.api_base {
+        writeln!(out, "  - api_base: {api_base}")?;
+    }
+    if !sync.writes.as_ref().is_none_or(Vec::is_empty) {
+        let writes: Vec<_> = sync
+            .writes
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .map(|write| format!("{write:?}"))
+            .collect();
+        writeln!(out, "  - writes: {}", writes.join(", "))?;
+    } else {
+        writeln!(out, "  - writes: models, pricing")?;
+    }
+    writeln!(out, "  - urls:")?;
+    for url in sync.urls.as_deref().unwrap_or_default() {
+        writeln!(out, "    - {url}")?;
+    }
+    Ok(())
+}
+
+fn sync_writes_models(sync: &AutoSync) -> bool {
+    sync.writes
+        .as_ref()
+        .is_none_or(|writes| writes.contains(&AutoSyncWrite::Models))
 }
 
 struct Artifacts {
@@ -684,6 +1118,22 @@ fn validate_auto_sync(sync: Option<&AutoSync>, file: &str, issues: &mut Vec<Stri
             issues.push(format!("{file}: auto_sync.url is only valid for v1_models"));
         }
         validate_https(url, file, "auto_sync.url", issues);
+    }
+    if let Some(urls) = &sync.urls {
+        if sync.feed != AutoSyncFeed::Agentic {
+            issues.push(format!("{file}: auto_sync.urls is only valid for agentic"));
+        }
+        if urls.is_empty() {
+            issues.push(format!(
+                "{file}: auto_sync.urls must contain at least one URL"
+            ));
+        }
+        for url in urls {
+            validate_https(url, file, "auto_sync.urls", issues);
+        }
+    }
+    if sync.feed == AutoSyncFeed::Agentic && sync.urls.as_ref().is_none_or(Vec::is_empty) {
+        issues.push(format!("{file}: auto_sync.urls is required for agentic"));
     }
 }
 
@@ -1262,6 +1712,8 @@ struct AutoSync {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    urls: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     writes: Option<Vec<AutoSyncWrite>>,
 }
 
@@ -1270,6 +1722,7 @@ struct AutoSync {
 enum AutoSyncFeed {
     ModelsDev,
     V1Models,
+    Agentic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1593,6 +2046,130 @@ auto_sync:
         );
         let parsed: ProviderFile = serde_saphyr::from_str(&raw).unwrap();
         assert_eq!(parsed.models.len(), 2);
+    }
+
+    #[test]
+    fn v1_models_catalog_attaches_known_canonical_models_only() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: openai/gpt-5.5
+    provider_model_id: gpt-5.5
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: v1_models
+"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver(["openai/gpt-5.5", "anthropic/claude-sonnet-4.6"]);
+        let body = r#"
+{
+  "object": "list",
+  "data": [
+    { "id": "gpt-5.5", "object": "model" },
+    { "id": "claude-sonnet-4-6", "object": "model" },
+    { "id": "not-yet-canonical", "object": "model" }
+  ]
+}
+"#;
+
+        let plan = v1_models_plan_for_provider(&provider, body, &resolve).unwrap();
+
+        assert_eq!(plan.unresolved, vec!["not-yet-canonical"]);
+        assert_eq!(plan.adds.len(), 1);
+        assert_eq!(plan.adds[0].id, "anthropic/claude-sonnet-4.6");
+        assert_eq!(plan.adds[0].provider_model_id, "claude-sonnet-4-6");
+        assert!(plan.adds[0].pricing.is_none());
+    }
+
+    #[test]
+    fn agentic_sync_requires_urls_and_renders_task_prompt() {
+        let root = test_root("agentic-prompt");
+        write(
+            &root,
+            "registry/models/acme/test-model.yaml",
+            r#"
+id: acme/test-model
+name: "Acme: Test Model"
+input_modalities: [text]
+output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/test-model
+    provider_model_id: test-model
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: agentic
+  urls:
+    - https://docs.acme.test/models
+    - https://docs.acme.test/pricing
+"#,
+        );
+
+        validate(&root).expect("agentic sync with URLs validates");
+        let prompt = agentic_prompt(&root).expect("renders agentic sync prompt");
+
+        assert!(prompt.contains("- `acme` (`registry/providers/acme.yaml`)"));
+        assert!(prompt.contains("https://docs.acme.test/models"));
+        assert!(prompt.contains("cargo run -p dist-helper -- registry validate"));
+        assert!(prompt.contains("If the listed URLs are unreachable"));
+        assert!(prompt.contains("Do not remove or edit provider `auto_sync`"));
+        assert!(!prompt.contains("canonical_models_json"));
+    }
+
+    #[test]
+    fn agentic_sync_without_urls_is_invalid() {
+        let root = test_root("agentic-missing-urls");
+        write(
+            &root,
+            "registry/models/acme/test-model.yaml",
+            r#"
+id: acme/test-model
+name: "Acme: Test Model"
+input_modalities: [text]
+output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/test-model
+    provider_model_id: test-model
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: agentic
+"#,
+        );
+
+        let err = validate(&root).expect_err("agentic sync requires URLs");
+        assert!(format!("{err:#}").contains("auto_sync.urls is required for agentic"));
     }
 
     fn test_root(name: &str) -> PathBuf {

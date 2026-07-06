@@ -15,6 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code
 
 jobs:
   sync:
@@ -27,9 +28,45 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Sync source registry data
+      - name: Sync deterministic registry feeds
         run: |
           cargo run -p dist-helper -- registry sync --write
+
+      - uses: actions/setup-node@v4
+
+      - name: Sync agentic registry feeds
+        env:
+          BITROUTER_API_KEY: ${{ secrets.BITROUTER_API_KEY }}
+        run: |
+          cargo run -p dist-helper -- registry agentic-prompt > target/registry-agentic-sync.md
+          if ! grep -q '^- `' target/registry-agentic-sync.md; then
+            echo "no agentic registry providers configured"
+            exit 0
+          fi
+          if [ -z "${BITROUTER_API_KEY:-}" ]; then
+            echo "::warning::BITROUTER_API_KEY is not set; skipping agentic registry sync"
+            exit 0
+          fi
+
+          npm install -g @openai/codex
+          export CODEX_HOME="${RUNNER_TEMP}/codex-home"
+          mkdir -p "$CODEX_HOME"
+          codex --search -a never exec \
+            --ignore-user-config \
+            --ignore-rules \
+            --ephemeral \
+            -C "$GITHUB_WORKSPACE" \
+            -m "$AGENTIC_SYNC_MODEL" \
+            -c 'model_provider="bitrouter"' \
+            -c 'model_providers.bitrouter.name="BitRouter"' \
+            -c 'model_providers.bitrouter.base_url="https://api.bitrouter.ai/v1"' \
+            -c 'model_providers.bitrouter.wire_api="responses"' \
+            -c 'model_providers.bitrouter.env_key="BITROUTER_API_KEY"' \
+            -s workspace-write \
+            - < target/registry-agentic-sync.md
+
+      - name: Build and check registry dist
+        run: |
           cargo run -p dist-helper -- registry build
           cargo run -p dist-helper -- check
 
@@ -51,6 +88,8 @@ jobs:
           ## Validation
 
           - `cargo run -p dist-helper -- registry sync --write`
+          - `cargo run -p dist-helper -- registry agentic-prompt`
+          - `codex --search exec ... < target/registry-agentic-sync.md`
           - `cargo run -p dist-helper -- registry build`
           - `cargo run -p dist-helper -- check`
           EOF
