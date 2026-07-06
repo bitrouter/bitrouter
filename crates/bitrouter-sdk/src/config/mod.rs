@@ -73,7 +73,7 @@ pub struct Config {
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
-    /// Provider-registry integration: whether to fetch + merge the registry's
+    /// Public registry integration: whether to fetch + merge the registry's
     /// BYOK providers, where to fetch it from, and the provider-class priority
     /// ladder used to order the auto-cascade.
     pub registry: RegistryConfig,
@@ -99,14 +99,13 @@ impl Default for Config {
     }
 }
 
-/// Default base URL for the provider-registry `dist/` artifacts — the raw files
-/// on the registry's `main` branch (`providers.json` + `canonical.json` live
-/// under it). The single source of truth for the registry location; the
+/// Default base URL for the public registry distribution artifacts — the raw
+/// files on bitrouter OSS `main` under `dist/registry/`. The
 /// `bitrouter-providers` fetch layer reads it through [`RegistryConfig`].
 pub const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist";
+    "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry";
 
-/// Runtime provider-registry integration settings — the top-level `registry:`
+/// Runtime public registry integration settings — the top-level `registry:`
 /// block in `bitrouter.yaml`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -381,7 +380,7 @@ pub struct ProviderConfig {
     pub accounts: Vec<ProviderAccount>,
     /// How the per-account targets are ordered when `accounts` is set.
     pub account_strategy: AccountStrategy,
-    /// Routing-preference class. Set by the provider-registry merge (or
+    /// Routing-preference class. Set by the public registry merge (or
     /// directly in config), then mapped to a numeric rank via
     /// [`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider
     /// sorts after every classed one in the auto-cascade (Strategy 3). Plain

@@ -1,0 +1,1256 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+
+pub fn validate(root: &Path) -> Result<()> {
+    let loaded = load_registry(root)?;
+    validate_loaded(&loaded)?;
+    println!(
+        "registry valid: {} canonical models, {} providers",
+        loaded.canonical.len(),
+        loaded.providers.len()
+    );
+    Ok(())
+}
+
+pub fn build(root: &Path, check: bool) -> Result<()> {
+    let artifacts = build_artifacts(root)?;
+    let providers_path = dist_dir(root).join("providers.json");
+    let models_path = dist_dir(root).join("models.json");
+    if check {
+        let current_providers = fs::read_to_string(&providers_path)
+            .with_context(|| format!("reading {}", providers_path.display()))?;
+        let current_models = fs::read_to_string(&models_path)
+            .with_context(|| format!("reading {}", models_path.display()))?;
+        if current_providers != artifacts.providers || current_models != artifacts.models {
+            bail!(
+                "registry dist is stale - run `cargo run -p dist-helper -- registry build` and commit dist/registry"
+            );
+        }
+        println!(
+            "registry dist is up to date: {} providers, {} canonical models",
+            artifacts.provider_count, artifacts.model_count
+        );
+        return Ok(());
+    }
+    fs::create_dir_all(dist_dir(root))
+        .with_context(|| format!("creating {}", dist_dir(root).display()))?;
+    fs::write(&providers_path, artifacts.providers)
+        .with_context(|| format!("writing {}", providers_path.display()))?;
+    fs::write(&models_path, artifacts.models)
+        .with_context(|| format!("writing {}", models_path.display()))?;
+    println!(
+        "wrote dist/registry/providers.json - {} providers; dist/registry/models.json - {} canonical models",
+        artifacts.provider_count, artifacts.model_count
+    );
+    Ok(())
+}
+
+pub async fn sync_models_dev(root: &Path, write: bool) -> Result<()> {
+    let loaded = load_registry(root)?;
+    validate_loaded(&loaded)?;
+    let catalog = load_models_dev_catalog().await?;
+    let resolve = canonical_resolver(loaded.canonical.iter().map(|m| m.id.as_str()));
+    let providers_by_name: HashMap<&str, &LoadedProvider> = loaded
+        .providers
+        .iter()
+        .map(|p| (p.data.name.as_str(), p))
+        .collect();
+    let mut attaches: BTreeMap<String, Vec<ProviderModel>> = BTreeMap::new();
+
+    for provider in &loaded.providers {
+        let Some(sync) = &provider.data.auto_sync else {
+            continue;
+        };
+        if sync.feed != AutoSyncFeed::ModelsDev {
+            continue;
+        }
+        let key = sync.key.as_deref().unwrap_or(&provider.data.name);
+        let Some(models) = catalog.providers.get(key) else {
+            eprintln!(
+                "  {} (models.dev:{key}): no catalog - skipped",
+                provider.data.name
+            );
+            continue;
+        };
+        let have: HashSet<&str> = provider.data.models.iter().map(|m| m.id.as_str()).collect();
+        let mut staged = HashSet::new();
+        let subscription = provider.data.billing == Billing::Subscription;
+        for (model_id, model) in &models.models {
+            let Some(canonical_id) = resolve(model_id) else {
+                continue;
+            };
+            if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
+                continue;
+            }
+            let pricing = if subscription {
+                None
+            } else {
+                pricing_from_cost(model.cost.as_ref())
+            };
+            attaches
+                .entry(provider.data.name.clone())
+                .or_default()
+                .push(ProviderModel {
+                    id: canonical_id,
+                    provider_model_id: model_id.clone(),
+                    api_protocol: None,
+                    pricing,
+                    rate_limits: None,
+                    capabilities: Vec::new(),
+                    deprecation_date: None,
+                });
+        }
+    }
+
+    let total: usize = attaches.values().map(Vec::len).sum();
+    println!(
+        "\nregistry sync - {} - keyless models.dev catalog attach",
+        if write { "WRITE" } else { "dry-run" }
+    );
+    println!(
+        "attach {total} model(s) across {} provider(s)",
+        attaches.len()
+    );
+    for (provider, models) in &attaches {
+        for model in models {
+            println!(
+                "  + {provider} <- {} ({})",
+                model.id, model.provider_model_id
+            );
+        }
+    }
+    if total == 0 {
+        println!("  (nothing to attach)");
+    }
+    if !write {
+        println!("\n(dry run - pass --write to apply)");
+        return Ok(());
+    }
+
+    for (provider, adds) in attaches {
+        let loaded_provider = providers_by_name
+            .get(provider.as_str())
+            .context("sync plan referenced an unknown provider")?;
+        append_models_to_provider(&loaded_provider.path, &adds)?;
+    }
+    validate(root)?;
+    println!("\nsynced registry source data");
+    Ok(())
+}
+
+struct Artifacts {
+    providers: String,
+    models: String,
+    provider_count: usize,
+    model_count: usize,
+}
+
+fn build_artifacts(root: &Path) -> Result<Artifacts> {
+    let loaded = load_registry(root)?;
+    validate_loaded(&loaded)?;
+    let mut providers: Vec<Value> = loaded
+        .providers
+        .iter()
+        .map(provider_dist_value)
+        .collect::<Result<Vec<_>>>()?;
+    providers.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+
+    let mut served_by: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for provider in &loaded.providers {
+        for model in resolved_models(&provider.data)? {
+            let mut entry = model.clone();
+            let id = entry
+                .as_object_mut()
+                .and_then(|obj| obj.remove("id"))
+                .and_then(|v| v.as_str().map(ToOwned::to_owned))
+                .context("resolved model missing id")?;
+            entry
+                .as_object_mut()
+                .context("resolved model must be an object")?
+                .insert(
+                    "provider".to_string(),
+                    Value::String(provider.data.name.clone()),
+                );
+            served_by.entry(id).or_default().push(entry);
+        }
+    }
+    for providers_for_model in served_by.values_mut() {
+        providers_for_model.sort_by(|a, b| a["provider"].as_str().cmp(&b["provider"].as_str()));
+    }
+
+    let mut canonical = loaded.canonical.clone();
+    canonical.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut models = Vec::with_capacity(canonical.len());
+    for model in canonical {
+        let mut value = serde_json::to_value(&model).context("serializing canonical model")?;
+        value
+            .as_object_mut()
+            .context("canonical model must serialize as object")?
+            .insert(
+                "providers".to_string(),
+                Value::Array(served_by.remove(&model.id).unwrap_or_default()),
+            );
+        models.push(value);
+    }
+
+    Ok(Artifacts {
+        provider_count: providers.len(),
+        model_count: models.len(),
+        providers: serialize_data(providers)?,
+        models: serialize_data(models)?,
+    })
+}
+
+fn provider_dist_value(provider: &LoadedProvider) -> Result<Value> {
+    let data = &provider.data;
+    let mut value = serde_json::to_value(data).context("serializing provider")?;
+    let obj = value
+        .as_object_mut()
+        .context("provider must serialize as object")?;
+    let api_protocol = obj
+        .remove("api_protocol")
+        .unwrap_or(Value::Array(Vec::new()));
+    let rate_limits = obj
+        .remove("rate_limits")
+        .unwrap_or(Value::Array(Vec::new()));
+    obj.remove("models");
+    obj.insert("id".to_string(), Value::String(data.name.clone()));
+    obj.insert(
+        "byok".to_string(),
+        Value::Bool(data.access == Access::ApiKey),
+    );
+    if data.models.is_empty() {
+        obj.insert("api_protocol".to_string(), api_protocol);
+        obj.insert("rate_limits".to_string(), rate_limits);
+        obj.insert("models".to_string(), Value::Array(Vec::new()));
+    } else {
+        obj.insert("models".to_string(), Value::Array(resolved_models(data)?));
+    }
+    Ok(value)
+}
+
+fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
+    provider
+        .models
+        .iter()
+        .map(|model| {
+            let api_protocol = model
+                .api_protocol
+                .clone()
+                .or_else(|| resolve_pattern(&provider.api_protocol, &model.id))
+                .unwrap_or(ProtocolList::One(ApiProtocol::Openai));
+            let rate_limits = model
+                .rate_limits
+                .clone()
+                .or_else(|| resolve_pattern(&provider.rate_limits, &model.id));
+            let mut obj = Map::new();
+            obj.insert("id".to_string(), Value::String(model.id.clone()));
+            obj.insert(
+                "provider_model_id".to_string(),
+                Value::String(model.provider_model_id.clone()),
+            );
+            obj.insert(
+                "api_protocol".to_string(),
+                serde_json::to_value(api_protocol).context("serializing api_protocol")?,
+            );
+            if let Some(pricing) = &model.pricing {
+                obj.insert(
+                    "pricing".to_string(),
+                    serde_json::to_value(pricing).context("serializing pricing")?,
+                );
+            }
+            if !model.capabilities.is_empty() {
+                obj.insert(
+                    "capabilities".to_string(),
+                    serde_json::to_value(&model.capabilities)
+                        .context("serializing capabilities")?,
+                );
+            }
+            if let Some(rate_limits) = rate_limits {
+                obj.insert(
+                    "rate_limits".to_string(),
+                    serde_json::to_value(rate_limits).context("serializing rate_limits")?,
+                );
+            }
+            if let Some(deprecation_date) = &model.deprecation_date {
+                obj.insert(
+                    "deprecation_date".to_string(),
+                    Value::String(deprecation_date.clone()),
+                );
+            }
+            Ok(Value::Object(obj))
+        })
+        .collect()
+}
+
+fn serialize_data(data: Vec<Value>) -> Result<String> {
+    let value = sort_value(json!({ "data": data }));
+    let mut out = serde_json::to_string_pretty(&value).context("formatting dist JSON")?;
+    out.push('\n');
+    Ok(out)
+}
+
+fn sort_value(value: Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.into_iter().map(sort_value).collect()),
+        Value::Object(obj) => {
+            let mut sorted = Map::new();
+            let mut keys: Vec<_> = obj.keys().cloned().collect();
+            keys.sort();
+            for key in keys {
+                if let Some(value) = obj.get(&key) {
+                    sorted.insert(key, sort_value(value.clone()));
+                }
+            }
+            Value::Object(sorted)
+        }
+        other => other,
+    }
+}
+
+#[derive(Debug)]
+struct LoadedRegistry {
+    canonical: Vec<CanonicalModel>,
+    providers: Vec<LoadedProvider>,
+}
+
+#[derive(Debug)]
+struct LoadedProvider {
+    path: PathBuf,
+    data: ProviderFile,
+}
+
+fn load_registry(root: &Path) -> Result<LoadedRegistry> {
+    let registry = root.join("registry");
+    let canonical_path = registry.join("canonical.yaml");
+    let canonical: CanonicalFile = read_yaml(&canonical_path)?;
+    let providers_dir = registry.join("providers");
+    let mut providers = Vec::new();
+    for entry in fs::read_dir(&providers_dir)
+        .with_context(|| format!("reading {}", providers_dir.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext != "yaml" && ext != "yml" {
+            continue;
+        }
+        let data = read_yaml(&path)?;
+        providers.push(LoadedProvider { path, data });
+    }
+    providers.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(LoadedRegistry {
+        canonical: canonical.models,
+        providers,
+    })
+}
+
+fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_saphyr::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn validate_loaded(registry: &LoadedRegistry) -> Result<()> {
+    let mut issues = Vec::new();
+    let mut canonical_ids = HashSet::new();
+    for model in &registry.canonical {
+        if !valid_canonical_id(&model.id) {
+            issues.push(format!(
+                "registry/canonical.yaml: '{}' is not a lowercase '<org>/<model>' id",
+                model.id
+            ));
+        }
+        if !canonical_ids.insert(model.id.as_str()) {
+            issues.push(format!(
+                "registry/canonical.yaml: duplicate canonical model '{}'",
+                model.id
+            ));
+        }
+        validate_canonical_model(model, &mut issues);
+    }
+
+    let mut provider_names = HashMap::new();
+    for provider in &registry.providers {
+        validate_provider(provider, &canonical_ids, &mut provider_names, &mut issues);
+    }
+
+    if !issues.is_empty() {
+        bail!("registry validation failed:\n  - {}", issues.join("\n  - "));
+    }
+    Ok(())
+}
+
+fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
+    for modality in &model.input_modalities {
+        if !matches!(modality.as_str(), "text" | "image" | "audio") {
+            issues.push(format!(
+                "registry/canonical.yaml: model '{}' has invalid input modality '{}'",
+                model.id, modality
+            ));
+        }
+    }
+    for modality in &model.output_modalities {
+        if !matches!(modality.as_str(), "text" | "audio") {
+            issues.push(format!(
+                "registry/canonical.yaml: model '{}' has invalid output modality '{}'",
+                model.id, modality
+            ));
+        }
+    }
+    if let Some(date) = &model.release_date
+        && !valid_yyyy_mm_dd(date)
+    {
+        issues.push(format!(
+            "registry/canonical.yaml: model '{}' has invalid release_date '{}'",
+            model.id, date
+        ));
+    }
+    if let Some(date) = &model.knowledge_cutoff
+        && !valid_yyyy_mm_or_dd(date)
+    {
+        issues.push(format!(
+            "registry/canonical.yaml: model '{}' has invalid knowledge_cutoff '{}'",
+            model.id, date
+        ));
+    }
+}
+
+fn validate_provider<'a>(
+    provider: &'a LoadedProvider,
+    canonical_ids: &HashSet<&str>,
+    provider_names: &mut HashMap<&'a str, &'a Path>,
+    issues: &mut Vec<String>,
+) {
+    let data = &provider.data;
+    let file = path_label(&provider.path);
+    if !valid_provider_name(&data.name) {
+        issues.push(format!("{file}: invalid provider name '{}'", data.name));
+    }
+    let expected = format!("{}.yaml", data.name);
+    if provider.path.file_name().and_then(|f| f.to_str()) != Some(expected.as_str()) {
+        issues.push(format!(
+            "{file}: filename does not match provider name '{}' (expected {expected})",
+            data.name
+        ));
+    }
+    if let Some(prior) = provider_names.insert(&data.name, &provider.path) {
+        issues.push(format!(
+            "{file}: provider name '{}' is also declared in {}",
+            data.name,
+            path_label(prior)
+        ));
+    }
+    validate_https(&data.api_base, &file, "api_base", issues);
+    if let Some(url) = &data.doc_url {
+        validate_https(url, &file, "doc_url", issues);
+    }
+    if let Some(metadata) = &data.metadata {
+        validate_metadata(metadata, &file, issues);
+    }
+    validate_pattern_entries(&data.api_protocol, &file, "api_protocol", issues);
+    validate_pattern_entries(&data.rate_limits, &file, "rate_limits", issues);
+    validate_auth(data.auth.as_ref(), &file, issues);
+    validate_auto_sync(data.auto_sync.as_ref(), &file, issues);
+
+    if data.status == ProviderStatus::Active
+        && data.models.is_empty()
+        && data.auto_sync.is_none()
+        && !matches!(data.access, Access::LocalOauth | Access::LocalPkce)
+    {
+        issues.push(format!(
+            "{file}: provider '{}' is active but declares no models",
+            data.name
+        ));
+    }
+
+    let mut seen_models = HashSet::new();
+    for model in &data.models {
+        if !seen_models.insert(model.id.as_str()) {
+            issues.push(format!(
+                "{file}: provider '{}' declares model '{}' twice",
+                data.name, model.id
+            ));
+        }
+        if !canonical_ids.contains(model.id.as_str()) {
+            issues.push(format!(
+                "{file}: model '{}' (provider_model_id={}) is not declared in canonical.yaml",
+                model.id, model.provider_model_id
+            ));
+        }
+        if let Some(protocols) = &model.api_protocol {
+            validate_protocol_list(protocols, &file, "models.api_protocol", issues);
+        }
+        if let Some(pricing) = &model.pricing {
+            validate_pricing(pricing, &file, &model.id, issues);
+        }
+        if let Some(date) = &model.deprecation_date
+            && !valid_yyyy_mm_dd(date)
+        {
+            issues.push(format!(
+                "{file}: model '{}' has invalid deprecation_date '{}'",
+                model.id, date
+            ));
+        }
+    }
+}
+
+fn validate_pattern_entries<T>(
+    entries: &[BTreeMap<String, T>],
+    file: &str,
+    field: &str,
+    issues: &mut Vec<String>,
+) {
+    for (i, entry) in entries.iter().enumerate() {
+        if entry.len() != 1 {
+            issues.push(format!(
+                "{file}: {field}[{i}] must contain exactly one pattern"
+            ));
+        }
+    }
+}
+
+fn validate_metadata(metadata: &ProviderMetadata, file: &str, issues: &mut Vec<String>) {
+    if metadata.headquarters.len() != 2
+        || !metadata
+            .headquarters
+            .chars()
+            .all(|c| c.is_ascii_uppercase())
+    {
+        issues.push(format!(
+            "{file}: metadata.headquarters must be an ISO alpha-2 country code"
+        ));
+    }
+    if !valid_slug(&metadata.slug, false) {
+        issues.push(format!(
+            "{file}: metadata.slug must be lowercase alphanumerics + hyphen"
+        ));
+    }
+    for (field, value) in [
+        (
+            "metadata.privacy_policy_url",
+            metadata.privacy_policy_url.as_ref(),
+        ),
+        (
+            "metadata.status_page_url",
+            metadata.status_page_url.as_ref(),
+        ),
+        (
+            "metadata.terms_of_service_url",
+            metadata.terms_of_service_url.as_ref(),
+        ),
+    ] {
+        if let Some(url) = value {
+            validate_https(url, file, field, issues);
+        }
+    }
+}
+
+fn validate_auth(auth: Option<&Auth>, file: &str, issues: &mut Vec<String>) {
+    let Some(auth) = auth else {
+        return;
+    };
+    match auth.kind {
+        AuthKind::Bearer if auth.env.is_none() => {
+            issues.push(format!("{file}: bearer auth requires env"));
+        }
+        AuthKind::Header if auth.env.is_none() || auth.header.is_none() => {
+            issues.push(format!("{file}: header auth requires env and header"));
+        }
+        AuthKind::Oauth | AuthKind::Native if auth.handler.is_none() => {
+            issues.push(format!("{file}: {:?} auth requires handler", auth.kind));
+        }
+        _ => {}
+    }
+}
+
+fn validate_auto_sync(sync: Option<&AutoSync>, file: &str, issues: &mut Vec<String>) {
+    let Some(sync) = sync else {
+        return;
+    };
+    if sync.key.is_some() && sync.feed != AutoSyncFeed::ModelsDev {
+        issues.push(format!(
+            "{file}: auto_sync.key is only valid for models_dev"
+        ));
+    }
+    if let Some(url) = &sync.url {
+        if sync.feed != AutoSyncFeed::V1Models {
+            issues.push(format!("{file}: auto_sync.url is only valid for v1_models"));
+        }
+        validate_https(url, file, "auto_sync.url", issues);
+    }
+}
+
+fn validate_pricing(pricing: &ModelPricing, file: &str, model_id: &str, issues: &mut Vec<String>) {
+    if pricing.context_tiers.is_empty() {
+        return;
+    }
+    if pricing
+        .input_tokens
+        .as_ref()
+        .and_then(|p| p.no_cache)
+        .is_none()
+        || pricing
+            .output_tokens
+            .as_ref()
+            .and_then(|p| p.text)
+            .is_none()
+    {
+        issues.push(format!(
+            "{file}: model '{model_id}' context_tiers require base input_tokens.no_cache and output_tokens.text"
+        ));
+    }
+    let mut prev = None;
+    for tier in &pricing.context_tiers {
+        if let Some(p) = prev
+            && tier.above_input_tokens <= p
+        {
+            issues.push(format!(
+                "{file}: model '{model_id}' context_tiers must strictly increase"
+            ));
+        }
+        prev = Some(tier.above_input_tokens);
+        if tier
+            .input_tokens
+            .as_ref()
+            .and_then(|p| p.no_cache)
+            .is_none()
+            || tier.output_tokens.as_ref().and_then(|p| p.text).is_none()
+        {
+            issues.push(format!(
+                "{file}: model '{model_id}' context tier must set no_cache and text rates"
+            ));
+        }
+    }
+}
+
+fn validate_protocol_list(
+    protocols: &ProtocolList,
+    file: &str,
+    field: &str,
+    issues: &mut Vec<String>,
+) {
+    if matches!(protocols, ProtocolList::Many(v) if v.is_empty()) {
+        issues.push(format!("{file}: {field} must not be an empty protocol set"));
+    }
+}
+
+fn validate_https(url: &str, file: &str, field: &str, issues: &mut Vec<String>) {
+    if !url.starts_with("https://") || reqwest::Url::parse(url).is_err() {
+        issues.push(format!("{file}: {field} must be an HTTPS URL"));
+    }
+}
+
+fn path_label(path: &Path) -> String {
+    path.strip_prefix(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn valid_canonical_id(id: &str) -> bool {
+    let Some((org, model)) = id.split_once('/') else {
+        return false;
+    };
+    !model.contains('/') && valid_slug(org, true) && valid_slug(model, true)
+}
+
+fn valid_provider_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn valid_slug(value: &str, allow_dot_underscore: bool) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let Some(last) = value.chars().last() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
+        return false;
+    }
+    value.chars().all(|c| {
+        c.is_ascii_lowercase()
+            || c.is_ascii_digit()
+            || c == '-'
+            || (allow_dot_underscore && (c == '.' || c == '_'))
+    })
+}
+
+fn valid_yyyy_mm_dd(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .chars()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+fn valid_yyyy_mm_or_dd(value: &str) -> bool {
+    (value.len() == 7 && value.as_bytes()[4] == b'-' || valid_yyyy_mm_dd(value))
+        && value
+            .chars()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+fn resolve_pattern<T: Clone>(entries: &[BTreeMap<String, T>], id: &str) -> Option<T> {
+    let mut best: Option<(usize, &T)> = None;
+    for entry in entries {
+        let Some((pattern, value)) = entry.iter().next() else {
+            continue;
+        };
+        if !pattern_matches(pattern, id) {
+            continue;
+        }
+        let weight = pattern_specificity(pattern);
+        if best.is_none_or(|(current, _)| weight > current) {
+            best = Some((weight, value));
+        }
+    }
+    best.map(|(_, value)| value.clone())
+}
+
+fn pattern_matches(pattern: &str, id: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return id.starts_with(prefix);
+    }
+    pattern == id
+}
+
+fn pattern_specificity(pattern: &str) -> usize {
+    if pattern == "*" {
+        0
+    } else if let Some(prefix) = pattern.strip_suffix('*') {
+        prefix.len() + 1
+    } else {
+        pattern.len() + 2
+    }
+}
+
+fn canonical_resolver<'a>(
+    canonical_ids: impl IntoIterator<Item = &'a str>,
+) -> impl Fn(&str) -> Option<String> {
+    let mut by_full = HashMap::new();
+    let mut by_slug: HashMap<String, Option<String>> = HashMap::new();
+    for id in canonical_ids {
+        by_full.insert(norm(id), id.to_string());
+        let slug = norm(id.split_once('/').map(|(_, slug)| slug).unwrap_or(id));
+        by_slug
+            .entry(slug)
+            .and_modify(|value| *value = None)
+            .or_insert_with(|| Some(id.to_string()));
+    }
+    move |model_id| {
+        if let Some(full) = by_full.get(&norm(model_id)) {
+            return Some(full.clone());
+        }
+        if model_id.contains('/') {
+            return None;
+        }
+        by_slug.get(&norm(model_id)).cloned().flatten()
+    }
+}
+
+fn norm(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+async fn load_models_dev_catalog() -> Result<ModelsDevCatalog> {
+    let body = reqwest::Client::builder()
+        .user_agent(concat!("dist-helper/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("building models.dev HTTP client")?
+        .get("https://models.dev/api.json")
+        .send()
+        .await
+        .context("fetching models.dev catalog")?
+        .error_for_status()
+        .context("models.dev returned an error")?
+        .text()
+        .await
+        .context("reading models.dev response")?;
+    serde_json::from_str(&body).context("parsing models.dev catalog")
+}
+
+fn pricing_from_cost(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
+    let cost = cost?;
+    let input = InputTokenPricing {
+        no_cache: clean_cost(cost.input),
+        cache_read: clean_cost(cost.cache_read),
+        cache_write: clean_cost(cost.cache_write),
+    };
+    let output = OutputTokenPricing {
+        text: clean_cost(cost.output),
+        reasoning: None,
+    };
+    if input.no_cache.is_none()
+        && input.cache_read.is_none()
+        && input.cache_write.is_none()
+        && output.text.is_none()
+    {
+        return None;
+    }
+    Some(ModelPricing {
+        input_tokens: Some(input),
+        output_tokens: Some(output),
+        context_tiers: Vec::new(),
+    })
+}
+
+fn clean_cost(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn append_models_to_provider(path: &Path, adds: &[ProviderModel]) -> Result<()> {
+    let mut raw =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    if raw.contains("models: []") {
+        raw = raw.replacen("models: []", "models:", 1);
+    }
+    if !raw.ends_with('\n') {
+        raw.push('\n');
+    }
+    for model in adds {
+        raw.push_str(&render_model_append(model));
+    }
+    let parsed: ProviderFile = serde_saphyr::from_str(&raw)
+        .with_context(|| format!("validating updated {}", path.display()))?;
+    if parsed.name.is_empty() {
+        bail!("updated provider file has empty name: {}", path.display());
+    }
+    fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn render_model_append(model: &ProviderModel) -> String {
+    let mut out = format!(
+        "  - id: {}\n    provider_model_id: {}\n",
+        model.id, model.provider_model_id
+    );
+    if let Some(pricing) = &model.pricing {
+        out.push_str("    pricing:\n");
+        if let Some(input) = &pricing.input_tokens
+            && (input.no_cache.is_some()
+                || input.cache_read.is_some()
+                || input.cache_write.is_some())
+        {
+            out.push_str("      input_tokens:\n");
+            if let Some(v) = input.no_cache {
+                out.push_str(&format!("        no_cache: {v}\n"));
+            }
+            if let Some(v) = input.cache_read {
+                out.push_str(&format!("        cache_read: {v}\n"));
+            }
+            if let Some(v) = input.cache_write {
+                out.push_str(&format!("        cache_write: {v}\n"));
+            }
+        }
+        if let Some(output) = &pricing.output_tokens
+            && let Some(v) = output.text
+        {
+            out.push_str("      output_tokens:\n");
+            out.push_str(&format!("        text: {v}\n"));
+        }
+    }
+    out
+}
+
+fn dist_dir(root: &Path) -> PathBuf {
+    root.join("dist").join("registry")
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalFile {
+    models: Vec<CanonicalModel>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalModel {
+    id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    input_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    knowledge_cutoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderFile {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata: Option<ProviderMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    api_protocol: Vec<BTreeMap<String, ProtocolList>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rate_limits: Vec<BTreeMap<String, RateLimits>>,
+    models: Vec<ProviderModel>,
+    status: ProviderStatus,
+    #[serde(default = "default_weight")]
+    weight: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    submitted_at: Option<String>,
+    #[serde(default)]
+    community: bool,
+    #[serde(default)]
+    access: Access,
+    #[serde(default)]
+    billing: Billing,
+    api_base: String,
+    #[serde(default)]
+    auth_scheme: AuthScheme,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<Auth>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<ProviderKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    doc_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_sync: Option<AutoSync>,
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderMetadata {
+    headquarters: String,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    privacy_policy_url: Option<String>,
+    slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status_page_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terms_of_service_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderModel {
+    id: String,
+    provider_model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_protocol: Option<ProtocolList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pricing: Option<ModelPricing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rate_limits: Option<RateLimits>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    capabilities: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deprecation_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ApiProtocol {
+    Openai,
+    Anthropic,
+    Google,
+    Responses,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+enum ProtocolList {
+    One(ApiProtocol),
+    Many(Vec<ApiProtocol>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Capability {
+    StructuredOutputs,
+    Tools,
+    Reasoning,
+    WebSearch,
+    Logprobs,
+    ImageInput,
+    AudioInput,
+    VideoInput,
+    FileInput,
+    ImageOutput,
+    AudioOutput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ProviderStatus {
+    Active,
+    Staging,
+    Suspended,
+    Withdrawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Access {
+    #[default]
+    ApiKey,
+    LocalOauth,
+    LocalPkce,
+    Private,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Billing {
+    #[default]
+    Token,
+    Subscription,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum AuthScheme {
+    #[default]
+    XApiKey,
+    Bearer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderKind {
+    FirstParty,
+    Gateway,
+    Cloud,
+    ThirdParty,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Auth {
+    kind: AuthKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra_headers: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handler: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    params: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthKind {
+    Bearer,
+    Header,
+    Oauth,
+    Native,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AutoSync {
+    feed: AutoSyncFeed,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writes: Option<Vec<AutoSyncWrite>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AutoSyncFeed {
+    ModelsDev,
+    V1Models,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AutoSyncWrite {
+    Models,
+    Pricing,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RateLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requests_per_minute: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tokens_per_minute: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ModelPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<InputTokenPricing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_tokens: Option<OutputTokenPricing>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    context_tiers: Vec<ContextTier>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InputTokenPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    no_cache: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_read: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_write: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OutputTokenPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ContextTier {
+    above_input_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<InputTokenPricing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_tokens: Option<OutputTokenPricing>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevCatalog {
+    #[serde(flatten)]
+    providers: BTreeMap<String, ModelsDevProvider>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevProvider {
+    #[serde(default)]
+    models: BTreeMap<String, ModelsDevModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevModel {
+    #[serde(default)]
+    cost: Option<ModelsDevCost>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevCost {
+    #[serde(default)]
+    input: Option<f64>,
+    #[serde(default)]
+    output: Option<f64>,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_resolver_matches_full_ids_and_unique_bare_slugs() {
+        let resolve =
+            canonical_resolver(["anthropic/claude-sonnet-4.6", "openai/gpt-5.5", "x/gpt-5.5"]);
+        assert_eq!(
+            resolve("claude-sonnet-4-6").as_deref(),
+            Some("anthropic/claude-sonnet-4.6")
+        );
+        assert_eq!(
+            resolve("anthropic/claude-sonnet-4.6").as_deref(),
+            Some("anthropic/claude-sonnet-4.6")
+        );
+        assert_eq!(resolve("gpt-5.5"), None, "ambiguous bare slug");
+        assert_eq!(resolve("other/claude-sonnet-4-6"), None);
+    }
+
+    #[test]
+    fn resolved_pattern_uses_longest_match() {
+        let entries = vec![
+            BTreeMap::from([("*".to_string(), 1)]),
+            BTreeMap::from([("anthropic/*".to_string(), 2)]),
+            BTreeMap::from([("anthropic/claude-sonnet-4.6".to_string(), 3)]),
+        ];
+        assert_eq!(
+            resolve_pattern(&entries, "anthropic/claude-sonnet-4.6"),
+            Some(3)
+        );
+        assert_eq!(
+            resolve_pattern(&entries, "anthropic/claude-haiku-4.5"),
+            Some(2)
+        );
+        assert_eq!(resolve_pattern(&entries, "openai/gpt-5.5"), Some(1));
+    }
+
+    #[test]
+    fn serialize_data_sorts_object_keys_recursively() {
+        let json = serialize_data(vec![json!({"z": 1, "a": {"b": 2, "a": 1}})]).unwrap();
+        assert!(json.ends_with("}\n"));
+        let parsed: Value = serde_json::from_str(&json).unwrap();
+        let keys: Vec<_> = parsed["data"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(keys, vec!["a", "z"]);
+        let nested: Vec<_> = parsed["data"][0]["a"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(nested, vec!["a", "b"]);
+    }
+}

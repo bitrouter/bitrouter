@@ -21,7 +21,7 @@ bitrouter start         # the `bitrouter` provider auto-enables once signed in
 
 ## Providers
 
-Every model above is served by one or more **registered providers**. Membership lives in the public, open-source [provider-registry](https://github.com/bitrouter/provider-registry) — anyone can [register a provider](/docs/guides/register-as-a-provider). The list refreshes from the registry continuously, so a newly-merged provider shows up within minutes.
+Every model above is served by one or more **registered providers**. Membership lives in the public, open-source [registry](https://github.com/bitrouter/bitrouter/tree/main/registry) — anyone can [register a provider](/docs/guides/register-as-a-provider). The list refreshes from the registry continuously, so a newly-merged provider shows up within minutes.
 
 <ProvidersTable />
 

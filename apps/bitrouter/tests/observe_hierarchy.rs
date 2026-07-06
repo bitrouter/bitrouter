@@ -31,11 +31,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const ASYNC_WAIT_BUDGET_MS: u64 = 5_000;
 const POLL_INTERVAL_MS: u64 = 50;
 
-/// Install the same tracing subscriber stack the real binary's `serve`
-/// command installs after the exporter is built: fmt + the OTel bridge
-/// layer parameterised on the exporter's SDK tracer. One-shot per
-/// process — but this is a dedicated test binary, so it runs exactly
-/// once.
+/// Install the same fmt + OTel bridge layers the real binary's `serve`
+/// command installs after the exporter is built. Keep this test's filter
+/// fixed at `info` so external `RUST_LOG` settings cannot suppress the
+/// INFO-level HTTP SERVER span being asserted below. One-shot per process —
+/// but this is a dedicated test binary, so it runs exactly once.
 fn install_tracing_subscriber(exporter: &bitrouter_observe::otel::OtelExporter) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -131,11 +131,11 @@ async fn e2e_server_span_parents_chat_via_tracing_opentelemetry_bridge() {
         .respond_with(ResponseTemplate::new(200))
         .mount(&otlp_collector)
         .await;
-    let otlp_endpoint = format!("{}/v1/traces", otlp_collector.uri());
 
     // ── minimal config with OTel wired, auth + policy + guardrails off.
     //    Metric export is off (nested `otel:` block — the only form that
     //    carries the knob) so the collector receives only trace bodies. ──
+    let otlp_traces = format!("{}/v1/traces", otlp_collector.uri());
     let yaml = format!(
         r#"
 server:
@@ -162,7 +162,7 @@ plugins:
         enabled: false
 "#,
         upstream = upstream.uri(),
-        otlp = otlp_endpoint,
+        otlp = otlp_traces,
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
@@ -202,6 +202,8 @@ plugins:
         .await;
     resp.assert_status_ok();
     let _ = resp.text();
+    drop(resp);
+    drop(server);
 
     // ── flush + decode ──
     wait_for_otlp(&otlp_collector).await;
@@ -214,13 +216,28 @@ plugins:
     );
 
     use opentelemetry_proto::tonic::trace::v1::span::SpanKind as ProtoKind;
+    let span_summary = || {
+        spans
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}:{} parent={:?} span={:?}",
+                    s.name, s.kind, s.parent_span_id, s.span_id
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let server_span = spans
         .iter()
         .find(|s| s.kind == ProtoKind::Server as i32)
-        .expect(
-            "tower-http TraceLayer + tracing-opentelemetry bridge must emit a SERVER span \
-             at HTTP ingress",
-        );
+        .unwrap_or_else(|| {
+            panic!(
+                "tower-http TraceLayer + tracing-opentelemetry bridge must emit a SERVER span \
+                 at HTTP ingress; exported spans: {}",
+                span_summary()
+            )
+        });
     let chat_span = spans
         .iter()
         .find(|s| s.name == "chat test-model" && s.kind == ProtoKind::Internal as i32)

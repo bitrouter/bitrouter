@@ -140,7 +140,7 @@ Runs an RFC 7009 best-effort revoke at the AS, then deletes the local credential
 
 - **No provider keys to manage.** One `brk_*` instead of `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` + `GEMINI_API_KEY` + …
 - **One bill.** Stripe credits for fiat, x402 wallet for crypto. No reconciling N upstream invoices.
-- **Curated registry.** Cloud uses a pinned `provider-registry` baked into the deploy image, so model availability and protocol routing match what the playground previews.
+- **Curated registry.** Cloud uses a pinned public registry baked into the deploy image, so model availability and protocol routing match what the playground previews.
 - **No daemon to keep alive.** No `bitrouter status`, no `~/.bitrouter/`, no log rotation.
 
 ## What Local does for the user that Cloud doesn't

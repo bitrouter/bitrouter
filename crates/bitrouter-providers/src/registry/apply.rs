@@ -1,4 +1,4 @@
-//! Merge provider-registry data into a parsed [`Config`].
+//! Merge public registry data into a parsed [`Config`].
 //!
 //! [`apply_registry`] is the bridge from "what the registry says exists" to
 //! "what this bitrouter instance will route to". Its job is the subsystem's
@@ -6,14 +6,15 @@
 //! it. The rules (from the feature's principles):
 //!
 //! 1. Route a *canonical* model id to a provider that provides it.
-//! 2. Merge every **public** registry provider — never `private` ones
-//!    (`access: private`, the pooled `bitrouter` provider among them). Public
+//! 2. Merge every **public** registry provider — never `private` ones. Public
 //!    `local_oauth` / `local_pkce` providers ARE merged (the OSS authenticates
 //!    them with a local login); only the activation credential differs.
-//! 3. The built-in `bitrouter` provider is the hosted gateway and serves
-//!    **every** canonical model.
+//! 3. The public `bitrouter` provider is the hosted BitRouter Cloud gateway and
+//!    discovers the cloud-owned model list from `/models`; OSS does not infer
+//!    that it serves every registry canonical model.
 //! 4. Providers carry a [`ProviderClass`]; the auto-cascade orders by it.
-//! 5. A provider is activated **only if its credentials are present**.
+//! 5. A provider is activated **only if its credentials are present**, except
+//!    BitRouter Cloud which may authenticate through the local OAuth flow.
 //!
 //! Precedence is conservative: the merge never overwrites a field the user set
 //! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
@@ -32,13 +33,11 @@ use crate::catalog::types::{Catalog, CatalogCost};
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    AutoSyncFeed, Billing, RegistryData, RegistryPricing, RegistryProvider, RegistryRateLimits,
+    AutoSyncFeed, Billing, RegistryData, RegistryKind, RegistryPricing, RegistryProvider,
+    RegistryRateLimits,
 };
 
-/// The provider id of the hosted bitrouter gateway. The pooled registry entry
-/// of the same name is `access: private` and so is filtered out of the merge —
-/// the gateway is served by the compiled-in [`ProviderEntry`](crate::ProviderEntry)
-/// of this id instead, and serves the whole canonical list.
+/// The provider id of the hosted BitRouter Cloud gateway.
 const BITROUTER_CLOUD_ID: &str = "bitrouter";
 
 /// Fetch the registry (honouring [`RegistryConfig`]) and return it, or `None`.
@@ -55,7 +54,7 @@ pub async fn load_or_cached(registry: &RegistryConfig) -> Option<RegistryData> {
     let cache = match DiskCache::default_path() {
         Ok(c) => Some(c),
         Err(e) => {
-            tracing::warn!(error = %e, "provider-registry cache dir unresolved; fetching without cache");
+            tracing::warn!(error = %e, "registry cache dir unresolved; fetching without cache");
             None
         }
     };
@@ -70,12 +69,12 @@ pub async fn load_or_cached(registry: &RegistryConfig) -> Option<RegistryData> {
             if let Some(cache) = &cache
                 && let Err(e) = cache.write(&data)
             {
-                tracing::warn!(error = %e, "failed to write provider-registry cache");
+                tracing::warn!(error = %e, "failed to write registry cache");
             }
             Some(data)
         }
         Err(e) => {
-            tracing::warn!(error = %e, "provider-registry fetch failed; using cached data if any");
+            tracing::warn!(error = %e, "registry fetch failed; using cached data if any");
             cache.and_then(|c| c.read_any().ok().flatten())
         }
     }
@@ -100,47 +99,12 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
-    apply_cloud_all_canonical(config, data);
     for provider in &data.providers {
-        // Principle #2: merge every public, active registry provider. The pooled
-        // `bitrouter` entry is `access: private`, so it's filtered here even
-        // before the id guard below.
-        if !provider.is_active() || !provider.is_mergeable() || provider.name == BITROUTER_CLOUD_ID
-        {
+        // Principle #2: merge every public, active registry provider.
+        if !provider.is_active() || !provider.is_mergeable() {
             continue;
         }
         merge_provider(config, provider);
-    }
-}
-
-/// Principle #3: the hosted gateway serves every canonical model. When the
-/// built-in `bitrouter` provider is present (added by the env-var / sign-in
-/// zero-config path or written by the user), give it one entry per canonical id
-/// and stop it auto-discovering — the canonical list is authoritative. Presence
-/// is the credential signal (the zero-config paths only add it when
-/// credentialed); routing still gates on the provider's own `active` flag.
-fn apply_cloud_all_canonical(config: &mut Config, data: &RegistryData) {
-    let Some(cloud) = config.providers.get_mut(BITROUTER_CLOUD_ID) else {
-        return;
-    };
-    if cloud.class.is_none() {
-        cloud.class = Some(ProviderClass::BitrouterCloud);
-    }
-    if cloud.models.is_empty() && !data.canonical.is_empty() {
-        cloud.models = data
-            .canonical
-            .iter()
-            .map(|m| ProviderModel {
-                id: m.id.clone(),
-                // The gateway accepts canonical ids directly — no translation.
-                provider_model_id: None,
-                api_protocol: None,
-                rate_limits: None,
-                pricing: None,
-            })
-            .collect();
-        // We filled the catalog from the canonical list; don't probe `/models`.
-        cloud.auto_discover = false;
     }
 }
 
@@ -196,7 +160,8 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         {
             match env_lookup(&var).filter(|v| !v.is_empty()) {
                 Some(key) => existing.api_key = key,
-                None => existing.active = false,
+                None if id != BITROUTER_CLOUD_ID => existing.active = false,
+                None => {}
             }
         }
         return;
@@ -231,12 +196,21 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
 /// Classify a registry provider into a routing-preference [`ProviderClass`].
 /// Community resellers are third-party; first-party providers split by billing.
 fn classify(provider: &RegistryProvider) -> ProviderClass {
-    if provider.community {
-        ProviderClass::ThirdPartyApi
-    } else if provider.billing == Billing::Subscription {
-        ProviderClass::FirstPartySubscription
+    match provider.kind.unwrap_or(if provider.community {
+        RegistryKind::ThirdParty
     } else {
-        ProviderClass::FirstPartyApi
+        RegistryKind::FirstParty
+    }) {
+        RegistryKind::Cloud => ProviderClass::BitrouterCloud,
+        RegistryKind::Gateway => ProviderClass::GatewaySubscription,
+        RegistryKind::ThirdParty => ProviderClass::ThirdPartyApi,
+        RegistryKind::FirstParty => {
+            if provider.billing == Billing::Subscription {
+                ProviderClass::FirstPartySubscription
+            } else {
+                ProviderClass::FirstPartyApi
+            }
+        }
     }
 }
 
@@ -460,7 +434,10 @@ mod tests {
     fn with_env<R>(key: &str, value: Option<&str>, f: impl FnOnce() -> R) -> R {
         use std::sync::{Mutex, OnceLock};
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _g = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _g = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let prev = std::env::var(key).ok();
         // SAFETY: the test process owns its env; the mutex serialises access.
         unsafe {
@@ -808,27 +785,49 @@ mod tests {
     }
 
     #[test]
-    fn bitrouter_cloud_serves_every_canonical_model() {
+    fn bitrouter_cloud_is_merged_from_public_registry_and_discovers_models() {
         let mut config = Config::default();
         // The hosted gateway is present (as the env/sign-in path would add it).
         config
             .providers
             .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
+        let mut bitrouter = provider(BITROUTER_CLOUD_ID);
+        bitrouter.display_name = Some("BitRouter Cloud".to_string());
+        bitrouter.kind = Some(crate::registry::types::RegistryKind::Cloud);
+        bitrouter.api_base = "https://api.bitrouter.ai/v1".to_string();
+        bitrouter.models = Vec::new();
+        bitrouter.auto_sync = Some(AutoSync {
+            feed: AutoSyncFeed::V1Models,
+            key: None,
+            url: Some("https://api.bitrouter.ai/v1".to_string()),
+        });
+        bitrouter.auth = Some(RegistryAuth {
+            kind: RegistryAuthKind::Bearer,
+            env: Some("BITROUTER_API_KEY".to_string()),
+            header: None,
+            extra_headers: None,
+            handler: None,
+            params: None,
+        });
         let data = data_with(
-            vec![],
+            vec![bitrouter],
             vec!["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"],
         );
         apply_registry(&mut config, &data);
         let cloud = &config.providers[BITROUTER_CLOUD_ID];
         assert_eq!(cloud.class, Some(ProviderClass::BitrouterCloud));
+        assert_eq!(cloud.api_base, "https://api.bitrouter.ai/v1");
         assert!(
-            !cloud.auto_discover,
-            "filled from canonical, no /models probe"
+            cloud.auto_discover,
+            "public BitRouter Cloud provider should discover its cloud-owned catalog"
         );
-        let ids: Vec<&str> = cloud.models.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            vec!["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"]
+        assert!(
+            cloud.models.is_empty(),
+            "OSS must not fill BitRouter Cloud from the registry canonical list"
+        );
+        assert!(
+            cloud.active,
+            "a configured BitRouter Cloud provider may authenticate via OAuth, not only BITROUTER_API_KEY"
         );
     }
 
@@ -870,7 +869,8 @@ mod tests {
                 vec!["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"],
             );
             let mut config = Config::default();
-            // Include the hosted cloud so the all-canonical fill is exercised twice.
+            // Include hosted cloud so a reload does not synthesize canonical
+            // models for it; cloud discovers its own catalog from /models.
             config
                 .providers
                 .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
@@ -884,9 +884,9 @@ mod tests {
             assert_eq!(
                 config.providers[BITROUTER_CLOUD_ID].models.len(),
                 cloud_models,
-                "re-running must not duplicate the canonical catalog"
+                "re-running must not mutate the cloud catalog"
             );
-            assert_eq!(cloud_models, 2);
+            assert_eq!(cloud_models, 0);
         });
     }
 }

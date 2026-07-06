@@ -79,11 +79,11 @@ jobs:
           [ -z "$branch" ] && exit 0
           git fetch origin "$branch"
           git checkout "$branch"
-          cargo xtask generate-schema
-          git diff --quiet schemas/ && exit 0
+          cargo run -p dist-helper -- generate-schema
+          git diff --quiet dist/schema/ && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add schemas/bitrouter.config.schema.json
+          git add dist/schema/bitrouter.config.schema.json
           git commit -m "chore: update config schema \$id for release"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "$branch"

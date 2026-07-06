@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=../schemas/bitrouter.config.schema.json
+# yaml-language-server: $schema=../dist/schema/bitrouter.config.schema.json
 #
 # Example bitrouter.yaml — a committed, version-controlled IaC config.
 #

@@ -1,0 +1,54 @@
+name: alibaba
+metadata:
+  headquarters: SG
+  name: Alibaba Cloud
+  privacy_policy_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy
+  slug: alibaba-cloud
+  status_page_url: https://status.alibabacloud.com
+  terms_of_service_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use
+api_protocol:
+  - "*": openai
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: qwen/qwen3.7-max
+    provider_model_id: qwen3.7-max
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.5
+      output_tokens:
+        text: 7.5
+  - id: qwen/qwen3.6-plus
+    provider_model_id: qwen3.6-plus
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+      output_tokens:
+        text: 3
+  - id: qwen/qwen3.7-plus
+    provider_model_id: qwen3.7-plus
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
+      output_tokens:
+        text: 3
+  - id: qwen/qwen3.6-flash
+    provider_model_id: qwen3.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.1875
+        cache_write: 0.234375
+      output_tokens:
+        text: 1.125
+status: active
+weight: 1
+submitted_at: 2026-05-25
+api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev

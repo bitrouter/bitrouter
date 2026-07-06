@@ -1,0 +1,153 @@
+name: tencent
+metadata:
+  headquarters: SG
+  name: Tencent Cloud
+  privacy_policy_url: https://www.tencentcloud.com/document/product/301/17345
+  slug: tencent-cloud
+  status_page_url: https://status.tencentcloud.com
+  terms_of_service_url: https://www.tencentcloud.com/document/product/301/9248
+# Tencent Cloud "TokenHub" international (Singapore station) — an OpenAI-
+# compatible model marketplace re-serving DeepSeek / GLM / Kimi / MiniMax.
+# Bearer-token auth (OpenAI transport). Prices below are the Singapore-station
+# USD-per-1M-token rates. Manual provider (no auto_sync): TokenHub's catalog is
+# curated here from the vendor's published model + price list.
+# Official: https://www.tencentcloud.com/ (TI / MaaS TokenHub)
+api_protocol:
+  - "*": openai
+api_base: https://tokenhub-intl.tencentcloudmaas.com/v1
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.57
+        cache_read: 0.114
+      output_tokens:
+        text: 1.71
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+    capabilities:
+      - reasoning
+      - tools
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+        cache_read: 0.145
+      output_tokens:
+        text: 3.48
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.2
+      output_tokens:
+        text: 3.2
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    # Singapore station prices GLM-5.2 at the GLM-5.1 rate.
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.1
+      output_tokens:
+        text: 3.0
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    # Served by TokenHub but absent from the Singapore price sheet — pricing TBD.
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 1.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m2.7
+    provider_model_id: minimax-m2.7
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m3
+    provider_model_id: minimax-m3
+    # Context-tiered: inputs above 512k tokens bill at double the base rate
+    # (step function — the bracket's rate applies to the whole request).
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.12
+      output_tokens:
+        text: 2.4
+      context_tiers:
+        - above_input_tokens: 512000
+          input_tokens:
+            no_cache: 1.2
+            cache_read: 0.24
+          output_tokens:
+            text: 4.8
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-05-23

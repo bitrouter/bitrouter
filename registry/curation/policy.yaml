@@ -1,0 +1,55 @@
+# Declarative curation policy for the automated onboarding / planned-deprecation
+# pipeline. Edit THIS FILE — not the script — to tune what gets onboarded, what
+# gets queued for deprecation, and what is never touched.
+#
+# Today this is consumed only by `bun run curate`, a READ-ONLY dry-run reporter:
+# it mutates nothing and opens no PR. The GitHub Action that turns this into bot
+# PRs is a later phase.
+
+ranking:
+  source: https://artificialanalysis.ai/api/v2/data/llms/models
+  # score = intelligence_weight * intelligence_index + coding_weight * coding_index.
+  # A canonical model is "kept" if its best AA variant ranks within top_n by this
+  # score. Tightened from 100 → 75 (cutoff ~33.4): admits only genuinely top-tier
+  # models and trims the long mid-tier tail. Override per-run with `--top-n=N`.
+  intelligence_weight: 0.5
+  coding_weight: 0.5
+  top_n: 75
+
+deprecation:
+  # A model that falls out of the kept set is queued, not deleted: its provider
+  # attachments get deprecation_date = today + grace_days. If it returns to the
+  # kept set within the window the date is cleared; only after it lapses is
+  # removal proposed. The grace window is also the debounce against transient
+  # rank dips, so no separate "strikes" state file is needed.
+  grace_days: 60
+
+# Safety cap: `curate apply` never onboards more than this many canonical models
+# in a single run (guards against a bad AA response flooding the registry).
+max_onboard_per_run: 8
+
+# Canonical-id globs that are NEVER auto-deprecated. Matched against OUR canonical
+# ids (not AA slugs), so protection holds even when the AA -> canonical mapping is
+# imperfect. These are the high-volume / utility tiers we always want available
+# regardless of AA rank — e.g. claude-haiku, which AA ranks ~outside the top 100.
+protected:
+  - "anthropic/claude-haiku-*"
+  - "anthropic/claude-sonnet-*"
+  - "anthropic/claude-opus-*"
+  - "openai/gpt-5*-mini"
+  - "openai/gpt-5*-nano"
+  - "google/gemini-*-flash*"
+
+# AA model_creator.slug -> our canonical org. AA groups some families under the
+# lab rather than the model org. Used by the deterministic mechanical fallback
+# (a pure slug normalization) and by `curate suggest`.
+org_aliases:
+  alibaba: qwen
+  xai: x-ai
+  zai: z-ai
+  kimi: moonshotai
+
+# Per-AA-model judgments (word-order flips, suffix drift, variant collapse,
+# deliberate ignores) live in curation/crosswalk/aa.yaml, keyed on AA's stable
+# UUID — NOT here. That file is the cache the pure resolver reads; this file is
+# only knobs + the org map. `curate suggest` proposes crosswalk additions.

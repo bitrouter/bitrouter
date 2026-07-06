@@ -760,7 +760,7 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
 /// Validation runs the real parse path — deserialization, `${VAR}`
 /// substitution, `derives` resolution, and the upstream-URL (SSRF) gate. It
 /// does **not** load the JSON Schema (that artifact is for IDE autocomplete and
-/// the `xtask` drift check); structural validation here is what `serde` +
+/// the generated-dist drift check); structural validation here is what `serde` +
 /// `serde-saphyr` enforce.
 ///
 /// To validate without secrets present, any *unset* `${VAR}` is substituted
@@ -983,10 +983,9 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // the registry merge so the merge fills the inserted provider's
     // `api_base` / `api_protocol` / auth from the fetched registry entry.
     bitrouter::claude_code::enable_if_logged_in(&mut cfg);
-    // Fetch + merge the provider registry (BYOK providers + the canonical model
-    // catalog) before assembly, so the daemon routes every credentialed
-    // provider's canonical models. Best-effort and cache-backed; a no-op when
-    // disabled or unreachable with no cache.
+    // Fetch + merge the public provider registry before assembly, so the daemon
+    // routes every credentialed provider's registered models. Best-effort and
+    // cache-backed; a no-op when disabled or unreachable with no cache.
     bitrouter::merge_registry_into(&mut cfg).await;
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
