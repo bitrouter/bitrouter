@@ -562,18 +562,6 @@ pub async fn merge_registry_into(config: &mut Config) {
         return;
     };
     bitrouter_providers::registry::apply::apply_registry(config, &data);
-    // Best-effort: pull the FULL catalog for `models_dev` auto-sync providers
-    // from models.dev (beyond the registry seed catalog the registry ships).
-    // A fetch failure leaves the explicit model entries in place — they already
-    // route — so this never blocks startup on an offline host.
-    match bitrouter_providers::catalog::fetch::fetch_catalog().await {
-        Ok(catalog) => {
-            bitrouter_providers::registry::apply::apply_catalog(config, &data, &catalog);
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "models.dev catalog fetch failed; using explicit model entries only");
-        }
-    }
     bitrouter_providers::apply_builtin_defaults(config);
 }
 

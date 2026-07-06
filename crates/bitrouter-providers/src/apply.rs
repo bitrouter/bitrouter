@@ -43,8 +43,8 @@ pub fn zero_config() -> Config {
     config.inherit_defaults = true;
     for entry in builtin::all() {
         // Only env-var-credentialed compiled-in built-ins (today: the cloud
-        // gateway). The public registry merge supplies metadata and enables
-        // runtime discovery for its cloud-owned catalog.
+        // gateway). The public registry merge supplies metadata and explicit
+        // model entries from the resolved dist artifacts.
         let Some(env_var) = entry.auth.env_var() else {
             continue;
         };

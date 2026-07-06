@@ -1,0 +1,75 @@
+name: Registry Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: registry-sync
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sync:
+    name: sync source registry feeds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Sync source registry data
+        run: |
+          cargo run -p dist-helper -- registry sync --write
+          cargo run -p dist-helper -- registry build
+          cargo run -p dist-helper -- check
+
+      - name: Open registry sync PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: automation/registry-sync
+        run: |
+          if git diff --quiet -- registry dist/registry; then
+            echo "registry source and dist are already up to date"
+            exit 0
+          fi
+
+          cat > /tmp/registry-sync-pr.md <<'EOF'
+          ## What changed
+
+          Automated source registry sync from provider `auto_sync` feeds.
+
+          ## Validation
+
+          - `cargo run -p dist-helper -- registry sync --write`
+          - `cargo run -p dist-helper -- registry build`
+          - `cargo run -p dist-helper -- check`
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add registry dist/registry
+          git commit -m "chore: sync registry catalog"
+          git push --force-with-lease origin "HEAD:${BRANCH}"
+
+          pr_number="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
+          if [ -n "${pr_number}" ]; then
+            gh pr edit "${pr_number}" \
+              --title "chore: sync registry catalog" \
+              --body-file /tmp/registry-sync-pr.md
+          else
+            gh pr create \
+              --base main \
+              --head "${BRANCH}" \
+              --title "chore: sync registry catalog" \
+              --body-file /tmp/registry-sync-pr.md
+          fi

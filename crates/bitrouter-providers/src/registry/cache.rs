@@ -180,7 +180,6 @@ mod tests {
                 community: false,
                 access: Some(RegistryAccess::ApiKey),
                 byok: Some(true),
-                auto_sync: None,
                 billing: Default::default(),
             }],
             canonical: vec![CanonicalModel {

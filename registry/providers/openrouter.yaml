@@ -322,6 +322,22 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
+  - id: x-ai/grok-4.20-multi-agent
+    provider_model_id: x-ai/grok-4.20-multi-agent
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+  - id: x-ai/grok-build-0.1
+    provider_model_id: x-ai/grok-build-0.1
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 2
 status: active
 weight: 1
 community: false
