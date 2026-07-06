@@ -55,6 +55,7 @@ jobs:
             --ignore-user-config \
             --ignore-rules \
             --ephemeral \
+            --output-last-message target/registry-agentic-result.md \
             -C "$GITHUB_WORKSPACE" \
             -m "$AGENTIC_SYNC_MODEL" \
             -c 'model_provider="bitrouter"' \
@@ -62,8 +63,13 @@ jobs:
             -c 'model_providers.bitrouter.base_url="https://api.bitrouter.ai/v1"' \
             -c 'model_providers.bitrouter.wire_api="responses"' \
             -c 'model_providers.bitrouter.env_key="BITROUTER_API_KEY"' \
-            -s workspace-write \
+            -s danger-full-access \
             - < target/registry-agentic-sync.md
+          if ! grep -q 'registry valid:' target/registry-agentic-result.md; then
+            echo "::error::agentic registry sync did not report successful validation"
+            cat target/registry-agentic-result.md
+            exit 1
+          fi
 
       - name: Build and check registry dist
         run: |
