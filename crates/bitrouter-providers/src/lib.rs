@@ -8,7 +8,8 @@
 //! gateway, kept as a TOML (`providers/bitrouter.toml`) because its id shadows
 //! the registry's pool entry (see [`builtin`]). The same registry mapping is
 //! reused for a fetched provider on demand via [`builtin::entry_from_registry`]
-//! (e.g. `bitrouter login` resolving an OAuth handler + its public params).
+//! (e.g. `bitrouter providers login` resolving an OAuth handler + its public
+//! params).
 //!
 //! ## Where a new provider lives — `AuthApplier` vs `Executor`
 //!

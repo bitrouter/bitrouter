@@ -20,11 +20,11 @@ sourceHash: 7be29fb8987333cd00928957202cd1263655a3e44205aef251f6c3d22aebfc2b
 
 | 来源 | 认证方式 | 在哪里配置 |
 | --- | --- | --- |
-| **订阅**（Claude、Codex） | OAuth——用你套餐自带的登录 | `bitrouter login <provider>`（无需密钥，无需 yaml） |
+| **订阅**（Claude、Codex） | OAuth——用你套餐自带的登录 | `bitrouter providers login <provider>`（无需密钥，无需 yaml） |
 | **聚合器 / 托管服务**（OpenRouter 等） | 自带 API 密钥 | `bitrouter.yaml` 中的一个 provider 块 |
 | **自托管**（Ollama、vLLM） | 通常无需认证——回环地址 | `bitrouter.yaml` 中的一个 provider 块 |
 
-订阅完全跳过 `bitrouter.yaml`：`bitrouter providers login anthropic` 或 `bitrouter providers login openai-codex` 会运行该套餐的 OAuth 流程，并保存可刷新的 token，供 BitRouter 在请求时附加使用。其余所有来源都是一个 provider 块——一个 `api_base`、一个可选的 `api_key`，以及该来源提供的模型列表。
+订阅完全跳过 `bitrouter.yaml`：`bitrouter providers login claude-code` 或 `bitrouter providers login openai-codex` 会保存可刷新的订阅凭据，供 BitRouter 在请求时附加使用。其余所有来源都是一个 provider 块——一个 `api_base`、一个可选的 `api_key`，以及该来源提供的模型列表。
 
 ```yaml
 # bitrouter.yaml
@@ -48,7 +48,7 @@ providers:
 bitrouter init
 ```
 
-这会写出一份带注释、`skip_auth: true` 的配置，可直接填入 provider 块。用 `-c <path>` 可以写到其他位置，然后按你所用来源的对应文档页填好该块。（订阅类来源不需要任何配置——只需 `bitrouter login`。）
+这会写出一份带注释、`skip_auth: true` 的配置，可直接填入 provider 块。用 `-c <path>` 可以写到其他位置，然后按你所用来源的对应文档页填好该块。（订阅类来源不需要任何配置——只需 `bitrouter providers login <provider>`。）
 
 ## 启动 BitRouter 并发送请求
 

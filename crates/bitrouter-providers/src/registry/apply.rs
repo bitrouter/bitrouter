@@ -203,8 +203,8 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     }
 
     // Not in the config. OAuth / native providers are never auto-added (they
-    // need a local `bitrouter login`); an env-keyed provider is auto-added only
-    // when its credential is present (principle #5).
+    // need a local `bitrouter providers login`); an env-keyed provider is
+    // auto-added only when its credential is present (principle #5).
     let Some(var) = provider.env_credential_var() else {
         return;
     };

@@ -100,7 +100,7 @@ export OPENAI_API_KEY=sk-...
 bitrouter reload
 
 # B) for github-copilot, run the device flow
-bitrouter login github-copilot
+bitrouter providers login github-copilot
 bitrouter reload
 ```
 
@@ -128,7 +128,7 @@ export OPENAI_API_KEY=sk-new-...
 bitrouter reload          # re-pushes provider env vars into daemon
 ```
 
-`reload` snapshots every env-var-credentialed built-in's value from your shell and hands them to the daemon. SIGHUP to the daemon pid is the alternative. If neither picks up the new value, restart: `bitrouter restart`.
+`reload` snapshots every env-var-credentialed provider's value from your shell and hands them to the daemon. SIGHUP reloads daemon-side config, but it cannot forward newly exported shell variables. If `bitrouter reload` does not pick up the new value, restart: `bitrouter restart`.
 
 ## Symptom: MCP / ACP not working
 
@@ -162,9 +162,9 @@ Compare to a direct upstream call. If `/health` is fast but completions are slow
 └── bitrouter.log          # stdout+stderr of the detached daemon
 ```
 
-Per-provider OAuth tokens (github-copilot today) live under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The BitRouter Cloud session created by `bitrouter auth login` lives at `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). On macOS both default to `~/Library/Application Support/bitrouter/`.
+Per-provider OAuth tokens (github-copilot today) live under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The BitRouter Cloud session created by `bitrouter cloud login` lives at `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). On macOS both default to `~/Library/Application Support/bitrouter/`.
 
-If `bitrouter auth whoami` shows an expired token and the refresh exchange fails (network outage, server-side revocation), the fix is to re-run `bitrouter auth login`. Re-login is idempotent — it overwrites the existing credentials file in place.
+If `bitrouter cloud whoami` shows an expired token and the refresh exchange fails (network outage, server-side revocation), the fix is to re-run `bitrouter cloud login`. Re-login is idempotent — it overwrites the existing credentials file in place.
 
 ## Clean reset
 

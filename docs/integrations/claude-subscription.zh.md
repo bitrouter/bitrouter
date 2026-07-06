@@ -4,26 +4,26 @@ description: 让你的 Claude Pro 或 Max 套餐经 BitRouter 路由——OAuth 
 sourceHash: 2ede6363832e91c518560ddcd0a44a5e496bb5fbf021f60d8675abdf75a194fa
 ---
 
-已经在付费用 Claude Pro 或 Max？把这份套餐当作一个模型来源来用。`bitrouter providers login anthropic` 会运行与 Claude Code 相同的 OAuth 流程，保存一个可自动刷新的 token，并把它附加到每一个发往 `anthropic` 供应商的请求上——这样你的订阅用量就能覆盖这些 token，也无需管理 `ANTHROPIC_API_KEY`。
+已经在付费用 Claude Pro 或 Max？把这份套餐当作一个模型来源来用。`bitrouter providers login claude-code` 会采用本机 Claude Code 会话，保存一个可自动刷新的凭据，并把它附加到路由至 `claude-code` 供应商的请求上——这样你的订阅用量就能覆盖这些 token，也无需管理 `ANTHROPIC_API_KEY`。
 
 <Callout type="info">
-**这是订阅，不是 API 密钥。** 这是 OAuth 路径——它会计入你的 Claude 套餐用量。如果你更想按 token 付费、使用 Anthropic API 密钥，跳过登录步骤，直接在环境变量中设置 `ANTHROPIC_API_KEY` 即可；同一个 `anthropic` 供应商会自动识别它。
+**这是订阅，不是 API 密钥。** 这是 OAuth 路径——它会计入你的 Claude 套餐用量。如果你更想按 token 付费、使用 Anthropic API 密钥，跳过登录步骤，直接在环境变量中设置 `ANTHROPIC_API_KEY` 即可；单独的 `anthropic` 供应商会自动识别它。
 </Callout>
 
 ## 登录
 
 ```bash
-bitrouter providers login anthropic
+bitrouter providers login claude-code
 ```
 
-这会在浏览器中打开 Anthropic 的授权页面（PKCE 流程），授权后会把凭据保存到 `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`。该 token 会自动刷新——只需登录一次。如需稍后检查或移除：
+当本机已有 Claude Code 会话时，这会直接复用该会话；如有需要，也会驱动 Claude Code 自己的登录流程。凭据保存到 `$XDG_DATA_HOME/bitrouter/oauth-tokens.json` 并自动刷新——只需登录一次。如需稍后移除：
 
 ```bash
-bitrouter providers logout anthropic        # 移除已保存的凭据
+bitrouter providers logout claude-code      # 移除已保存的凭据
 ```
 
 <Callout type="warn">
-**每次请求只用一种鉴权方式。** 一次请求要么用你的 OAuth 订阅，要么用 API 密钥，二者不会同时生效。如果存在已保存的登录态，它优先生效；否则 BitRouter 回退到 `ANTHROPIC_API_KEY`。运行 `bitrouter providers logout anthropic` 即可切回按密钥计费。
+**每次请求只用一种鉴权方式。** 路由到 `claude-code:<model>` 的请求使用你的 OAuth 订阅；路由到 `anthropic` 供应商的请求使用 `ANTHROPIC_API_KEY`。运行 `bitrouter providers logout claude-code` 即可移除订阅路由。
 </Callout>
 
 ### 多账号
@@ -31,19 +31,19 @@ bitrouter providers logout anthropic        # 移除已保存的凭据
 每个凭据都以 `(provider, label)` 为键。传入 `--label` 即可让多个 Claude 账号并存：
 
 ```bash
-bitrouter providers login anthropic --label work
-bitrouter providers login anthropic --label personal
+bitrouter providers login claude-code --label work
+bitrouter providers login claude-code --label personal
 ```
 
 ## 路由到它
 
-无需任何 `bitrouter.yaml` 配置块——`anthropic` 供应商是内置的，已保存的凭据会在请求时被自动发现。用注册表 id 来指定 Claude 模型：
+无需任何 `bitrouter.yaml` 配置块——当已保存凭据存在时，`claude-code` 供应商会自动启用。通过显式订阅供应商路由来指定 Claude 模型：
 
 ```bash
-bitrouter route anthropic:claude-sonnet-4-6
+bitrouter route claude-code:claude-sonnet-4-6
 ```
 
-然后[启动 BitRouter 并发送请求](/docs/integrations/models#start-bitrouter-and-send-a-request)。使用带供应商前缀的 id `anthropic:claude-sonnet-4-6` 可以把请求固定到你的订阅上；使用裸模型名则让 BitRouter 在所有激活的来源间级联尝试。
+然后[启动 BitRouter 并发送请求](/docs/integrations/models#start-bitrouter-and-send-a-request)。使用显式 id `claude-code:claude-sonnet-4-6` 可以把请求固定到你的订阅上；也可以使用下方 Claude Code 运行容器流程，让 BitRouter 识别真正的 Claude Code 流量，并把裸 Claude 模型名改写到订阅供应商。
 
 ## 让 Claude Code 经 BitRouter 运行（附带遥测）
 

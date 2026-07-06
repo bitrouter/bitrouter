@@ -263,7 +263,7 @@ bitrouter cloud whoami
 | --- | --- | --- |
 | `--oauth-as` | `https://api.bitrouter.ai` (env: `BITROUTER_OAUTH_AS`) | Authorization server base URL — override only for a self-hosted deployment |
 | `--client-id` | `bitrouter-cli` (env: `BITROUTER_OAUTH_CLIENT_ID`) | Public OAuth client id |
-| `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive scopes (`billing:write`, `clients:read`/`write`, `user:write`) are opt-in. |
+| `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in. |
 
 Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). `whoami` answers from the local file with no network call; it also prints the bound namespace.
 
@@ -287,9 +287,9 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami). Sign in first, then call any subcommand.
+`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call any subcommand.
 
-The credential is **namespace-baked** — keys, usage, policies, and OAuth clients are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
+The credential is **namespace-baked** — keys, usage, and policies are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
 
 Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, the CLI prints a copy-pasteable re-login hint that appends the missing scope to your current set.
 
@@ -310,7 +310,7 @@ bitrouter cloud namespace list    [--json]
 bitrouter cloud namespace current [--json]
 ```
 
-`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bitrouter auth login\`)`.
+`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bitrouter cloud login\`)`.
 
 ### `bitrouter cloud keys`
 
@@ -344,7 +344,7 @@ bitrouter cloud billing balance [--json]
 bitrouter cloud billing checkout --amount-cents <N> [--json]
 ```
 
-`checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter auth login` to request it.
+`checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter cloud login` to request it.
 
 ### `bitrouter cloud policy`
 
@@ -395,17 +395,6 @@ User-level — not workspace-scoped; BYOK provider keys are account-wide. The cl
 bitrouter cloud byok list [--json]
 bitrouter cloud byok set    --provider <ID> --ciphertext-b64 <B64> --kek-id <ID> --key-prefix <PREFIX> [--api-base <URL>] [--json]
 bitrouter cloud byok delete <PROVIDER> [--json]
-```
-
-### `bitrouter cloud oauth-client`
-
-Manage OAuth client registrations on your account. Requires `clients:read` / `clients:write`, both opt-in — request them via `bitrouter auth login --scope "<existing> clients:read clients:write"`.
-
-```
-bitrouter cloud oauth-client list [--json]
-bitrouter cloud oauth-client register --name <NAME> --type <confidential|public> --grant <GRANT> [--grant <GRANT> …] [--scope <SCOPE> …] [--redirect-uri <URI> …] [--json]
-bitrouter cloud oauth-client update <CLIENT_ID> [--name <NAME>] [--grant <GRANT> …] [--scope <SCOPE> …] [--redirect-uri <URI> …] [--json]
-bitrouter cloud oauth-client delete <CLIENT_ID> [--json]
 ```
 
 ## Skills
@@ -463,5 +452,3 @@ bitrouter skills update [<NAME>] [-g|--global] [--registry <URL>] [-n|--namespac
 ```
 
 Re-installs installed skills from a namespace's registry hub to their latest version (`-n/--namespace <NSID>` required; all installed skills, or just `<NAME>`). Skills absent from the registry are skipped; a per-skill failure is reported without aborting the rest.
-
-Grant types: `authorization_code`, `refresh_token`, `urn:ietf:params:oauth:grant-type:device_code`. For confidential clients, the freshly minted `client_secret` is returned exactly once in the `register` response.
