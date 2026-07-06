@@ -178,7 +178,7 @@ BitRouter routes to a *model*, not a provider. Each open-weight family below is 
 | MiMo V2               | Xiaomi   |
 | Step 3.5              | StepFun  |
 
-Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [public registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
+Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
 
 **Want to add a provider?** Open an issue or submit a PR. **Interested in a first-party integration?** Email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
 
