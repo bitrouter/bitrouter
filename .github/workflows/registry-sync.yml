@@ -22,9 +22,17 @@ jobs:
     name: sync source registry feeds
     runs-on: ubuntu-latest
     steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
         with:
           ref: main
+          token: ${{ steps.generate-token.outputs.token }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
@@ -87,7 +95,7 @@ jobs:
 
       - name: Open registry sync PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           BRANCH: automation/registry-sync
         run: |
           if git diff --quiet -- registry dist/registry; then
@@ -109,8 +117,8 @@ jobs:
           - `cargo run -p dist-helper -- check`
           EOF
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "bitrouter-automation[bot]"
+          git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
           git add registry dist/registry
           git commit -m "chore: sync registry catalog"
           remote_ref="$(git ls-remote --heads origin "${BRANCH}")"

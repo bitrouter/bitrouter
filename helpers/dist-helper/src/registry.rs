@@ -562,6 +562,23 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         out,
         "- For subscription providers, do not invent token pricing.\n"
     )?;
+    writeln!(out, "Pricing unit rules:")?;
+    writeln!(
+        out,
+        "- Registry pricing values are USD per 1 million tokens unless the schema field explicitly says otherwise."
+    )?;
+    writeln!(
+        out,
+        "- Credits, points, coins, or other provider-internal units are not USD. Find and cite the provider's conversion to USD before using them."
+    )?;
+    writeln!(
+        out,
+        "- If the source only exposes provider-internal units and no USD conversion can be confirmed, do not copy provider-internal unit numbers into pricing. Preserve existing pricing for existing entries; skip new usage-token models whose pricing cannot be converted and report them as uncertain."
+    )?;
+    writeln!(
+        out,
+        "- Before broad pricing rewrites, compare at least one existing model's current registry price against the source number. Large uniform multipliers usually mean a unit conversion is missing; re-check the source instead of applying the raw numbers.\n"
+    )?;
     writeln!(out, "Validation:")?;
     writeln!(
         out,
@@ -587,6 +604,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(
         out,
         "- models skipped because canonical mapping or facts were uncertain"
+    )?;
+    writeln!(
+        out,
+        "- pricing units and conversions used, especially for credits/points/coins"
     )?;
     writeln!(out, "- validation result")?;
     writeln!(
@@ -2442,6 +2463,9 @@ auto_sync:
         assert!(prompt.contains("re-check pricing for every provider model"));
         assert!(prompt.contains("leave pricing unchanged only when it cannot be confirmed"));
         assert!(prompt.contains("preserve `pricing` in all pre-existing model entries exactly"));
+        assert!(prompt.contains("Registry pricing values are USD per 1 million tokens"));
+        assert!(prompt.contains("Credits, points, coins, or other provider-internal units"));
+        assert!(prompt.contains("do not copy provider-internal unit numbers into pricing"));
         assert!(prompt.contains("include the exact `registry valid:` output line"));
         assert!(!prompt.contains("canonical_models_json"));
         assert!(!prompt.contains("; model_count: 1"));
@@ -2477,6 +2501,15 @@ auto_sync:
 
         assert!(workflow.contains(r#"cron: "0 22 * * *""#));
         assert!(workflow.contains("AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code"));
+        assert!(workflow.contains("uses: actions/create-github-app-token@v2"));
+        assert!(workflow.contains("app-id: ${{ secrets.APP_ID }}"));
+        assert!(workflow.contains("private-key: ${{ secrets.APP_PRIVATE_KEY }}"));
+        assert!(workflow.contains("token: ${{ steps.generate-token.outputs.token }}"));
+        assert!(workflow.contains("GH_TOKEN: ${{ steps.generate-token.outputs.token }}"));
+        assert!(workflow.contains(r#"git config user.name "bitrouter-automation[bot]""#));
+        assert!(workflow.contains(
+            r#"git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com""#
+        ));
     }
 
     #[test]
