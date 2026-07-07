@@ -1,6 +1,6 @@
 name: minimax
 metadata:
-  headquarters: SG
+  headquarters: CN
   datacenters:
     - SG
   name: MiniMax

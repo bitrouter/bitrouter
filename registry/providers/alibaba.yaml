@@ -1,7 +1,7 @@
 name: alibaba
 display_name: Alibaba Cloud Model Studio (International)
 metadata:
-  headquarters: SG
+  headquarters: CN
   datacenters:
     - SG
   name: Alibaba Cloud

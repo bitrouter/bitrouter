@@ -110,7 +110,11 @@ datacenter. A vendor gets more than one file only along two orthogonal axes:
   carries the semantics regardless.
 
 The name equals the filename stem and the env-var root (`{NAME}_API_KEY`); use
-lowercase region codes.
+lowercase region codes. In `metadata`, `headquarters` is the home country of the
+company behind the brand — **identical across all of that brand's variants** —
+while `datacenters` is where the specific variant serves from (so a Chinese
+vendor's international endpoint is `headquarters: CN` with `datacenters: [SG]`,
+not `headquarters: SG`).
 
 The validator (`cargo run -p dist-helper -- registry validate`) enforces:
 

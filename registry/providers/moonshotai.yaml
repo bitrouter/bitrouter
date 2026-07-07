@@ -1,6 +1,6 @@
 name: moonshotai
 metadata:
-  headquarters: SG
+  headquarters: CN
   datacenters:
     - SG
   name: Moonshot AI

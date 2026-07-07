@@ -100,7 +100,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Alibaba Cloud",
         "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
         "slug": "alibaba-cloud",
@@ -392,7 +392,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Alibaba Cloud",
         "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
         "slug": "alibaba-cloud",
@@ -987,7 +987,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "BytePlus",
         "slug": "byteplus"
       },
@@ -2142,7 +2142,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "MiniMax",
         "privacy_policy_url": "https://platform.minimax.io/protocol/privacy-policy",
         "slug": "minimax",
@@ -2346,7 +2346,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Moonshot AI",
         "privacy_policy_url": "https://platform.kimi.ai/docs/agreement/userprivacy",
         "slug": "moonshotai",
@@ -2447,7 +2447,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Moonshot AI",
         "privacy_policy_url": "https://platform.kimi.ai/docs/agreement/userprivacy",
         "slug": "moonshotai",
@@ -5002,7 +5002,7 @@
         "datacenters": [
           "US"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "StepFun",
         "privacy_policy_url": "https://platform.stepfun.ai/docs/en/agreement/userprivacy",
         "slug": "stepfun",
@@ -5153,7 +5153,7 @@
         "datacenters": [
           "US"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "StepFun",
         "privacy_policy_url": "https://platform.stepfun.ai/docs/en/agreement/userprivacy",
         "slug": "stepfun",
@@ -5417,7 +5417,7 @@
         "datacenters": [
           "SG"
         ],
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Tencent Cloud",
         "privacy_policy_url": "https://www.tencentcloud.com/document/product/301/17345",
         "slug": "tencent-cloud",
@@ -6980,7 +6980,7 @@
       "community": false,
       "id": "zai",
       "metadata": {
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Z.ai",
         "privacy_policy_url": "https://docs.z.ai/legal-agreement/privacy-policy",
         "slug": "zai",
@@ -7077,7 +7077,7 @@
       "community": false,
       "id": "zai_coding_plan",
       "metadata": {
-        "headquarters": "SG",
+        "headquarters": "CN",
         "name": "Z.ai",
         "privacy_policy_url": "https://docs.z.ai/legal-agreement/privacy-policy",
         "slug": "zai",
