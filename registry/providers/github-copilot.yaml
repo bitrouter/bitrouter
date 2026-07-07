@@ -49,6 +49,8 @@ models:
     provider_model_id: gpt-5.5
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: kimi-k2.7-code
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
 status: active
 weight: 1
 community: false

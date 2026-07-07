@@ -338,6 +338,107 @@ models:
         cache_read: 0.2
       output_tokens:
         text: 2
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: anthropic/claude-sonnet-5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: inclusionai/ling-2.6-1t
+    provider_model_id: inclusionai/ling-2.6-1t
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.015
+      output_tokens:
+        text: 0.625
+  - id: inclusionai/ling-2.6-flash
+    provider_model_id: inclusionai/ling-2.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.01
+        cache_read: 0.002
+      output_tokens:
+        text: 0.03
+  - id: inclusionai/ring-2.6-1t
+    provider_model_id: inclusionai/ring-2.6-1t
+    pricing:
+      input_tokens:
+        no_cache: 0.075
+        cache_read: 0.015
+      output_tokens:
+        text: 0.625
+  - id: nex-agi/nex-n2-pro
+    provider_model_id: nex-agi/nex-n2-pro
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 1
+  - id: nvidia/nemotron-3-super-120b-a12b
+    provider_model_id: nvidia/nemotron-3-super-120b-a12b
+    pricing:
+      input_tokens:
+        no_cache: 0.08
+      output_tokens:
+        text: 0.45
+  - id: nvidia/nemotron-3-ultra-550b-a55b
+    provider_model_id: nvidia/nemotron-3-ultra-550b-a55b
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.1
+      output_tokens:
+        text: 2.2
+  - id: qwen/qwen3.5-122b-a10b
+    provider_model_id: qwen/qwen3.5-122b-a10b
+    pricing:
+      input_tokens:
+        no_cache: 0.26
+      output_tokens:
+        text: 2.08
+  - id: qwen/qwen3.5-27b
+    provider_model_id: qwen/qwen3.5-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.195
+      output_tokens:
+        text: 1.56
+  - id: qwen/qwen3.6-27b
+    provider_model_id: qwen/qwen3.6-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.285
+        cache_read: 0.15
+      output_tokens:
+        text: 2.4
+  - id: qwen/qwen3.6-35b-a3b
+    provider_model_id: qwen/qwen3.6-35b-a3b
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 1
+  - id: tencent/hy3
+    provider_model_id: tencent/hy3
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.035
+      output_tokens:
+        text: 0.58
+  - id: z-ai/glm-4.7
+    provider_model_id: z-ai/glm-4.7
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 1.75
 status: active
 weight: 1
 community: false
