@@ -295,6 +295,12 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     let Some(obj) = body.as_object_mut() else {
         return;
     };
+    // The ChatGPT/Codex backend rejects this public Responses parameter even
+    // when it came from an OpenAI Chat Completions `max_tokens` request.
+    obj.remove("max_output_tokens");
+    // Hermes asks Chat Completions streams to include a final usage chunk, but
+    // the ChatGPT/Codex backend rejects `stream_options.include_usage`.
+    obj.remove("stream_options");
     obj.insert("store".to_string(), Value::Bool(false));
     match obj.get_mut("include") {
         Some(Value::Array(items)) => {
@@ -500,11 +506,19 @@ mod tests {
         let path = tmp_store_path();
         let applier = OpenAiCodexAuthApplier::new(&path).unwrap();
         // include absent → created with the reasoning item; store forced false.
-        let mut body = serde_json::json!({ "model": "gpt-5-codex", "input": [] });
+        // `max_output_tokens` is stripped because ChatGPT/Codex rejects it.
+        let mut body = serde_json::json!({
+            "model": "gpt-5-codex",
+            "input": [],
+            "max_output_tokens": 16,
+            "stream_options": {"include_usage": true}
+        });
         applier
             .prepare_body(&mut body, &codex_target(None))
             .await
             .unwrap();
+        assert!(body.get("max_output_tokens").is_none());
+        assert!(body.get("stream_options").is_none());
         assert_eq!(body["store"], serde_json::json!(false));
         assert_eq!(
             body["include"],
