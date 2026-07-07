@@ -1,0 +1,52 @@
+# SCAFFOLD — UNVERIFIED. status: staging (does not route until a human verifies
+# and flips to active). Researched 2026-07 from Baidu AI Cloud Qianfan intl docs
+# (intl.cloud.baidu.com). Baidu Qianfan — INTERNATIONAL endpoint, billed in USD,
+# on a separate intl console (console.bce.baidu.com/qianfan/intl). Same Bearer
+# API-key auth (bce-v3/ALTAK-...) as the China endpoint. The CHINA sibling is a
+# separate provider `qianfan_cn` (qianfan.baidubce.com/v2, RMB).
+# PRICING: USD per 1M tokens, from Baidu's ERNIE 4.5 / X1 launch pricing + ERNIE
+# 5.1 — these are announcement figures, NOT a live-console read.
+# VERIFY BEFORE ACTIVATING:
+#   - Exact intl model-id strings (intl curl samples use `ernie-4.0-turbo-8k`
+#     style suffixes; the base ids/prices below need confirming per SKU).
+#   - The intl catalog is a subset of China's and also serves DeepSeek / Kimi /
+#     MiniMax / GLM in USD — add those once their intl prices are confirmed.
+#   - Provider name `qianfan` → env QIANFAN_API_KEY.
+name: qianfan
+display_name: Baidu Qianfan (International)
+metadata:
+  headquarters: CN
+  name: Baidu AI Cloud
+  privacy_policy_url: https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en
+  slug: qianfan
+  terms_of_service_url: https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en
+api_base: https://api.baiduqianfan.ai/v1
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: cloud
+models:
+  - id: baidu/ernie-4.5
+    provider_model_id: ernie-4.5
+    pricing:
+      input_tokens:
+        no_cache: 0.55
+      output_tokens:
+        text: 2.2
+  - id: baidu/ernie-x1
+    provider_model_id: ernie-x1
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 1.1
+  - id: baidu/ernie-5.1
+    provider_model_id: ernie-5.1
+    pricing:
+      input_tokens:
+        no_cache: 0.59
+      output_tokens:
+        text: 2.65
+status: staging
+weight: 1
+submitted_at: 2026-07-07

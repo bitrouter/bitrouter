@@ -1,17 +1,17 @@
-name: xiaomi_token_plan_ams
-display_name: Xiaomi MiMo Token Plan (Europe)
+name: xiaomi_token_plan
+display_name: Xiaomi MiMo Token Plan (International)
 metadata:
   headquarters: CN
   datacenters:
-    - EU
+    - SG
   name: Xiaomi
   privacy_policy_url: https://mimo.mi.com/docs/terms/privacy-policy
   slug: xiaomi
   terms_of_service_url: https://mimo.mi.com/docs/terms/user-agreement
 billing: subscription
-api_base: https://token-plan-ams.xiaomimimo.com/v1
+api_base: https://token-plan-sgp.xiaomimimo.com/v1
 protocol_endpoints:
-  anthropic: https://token-plan-ams.xiaomimimo.com/anthropic
+  anthropic: https://token-plan-sgp.xiaomimimo.com/anthropic
 api_protocol:
   - "*": [openai, responses, anthropic]
 rate_limits:

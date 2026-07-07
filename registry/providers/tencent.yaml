@@ -1,6 +1,6 @@
 name: tencent
 metadata:
-  headquarters: SG
+  headquarters: CN
   datacenters:
     - SG
   name: Tencent Cloud
