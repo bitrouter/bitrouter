@@ -191,6 +191,8 @@ auth_scheme: x-api-key
 community: true
 auto_sync:
   feed: agentic
+  writes:
+    - models
   urls:
     - https://router.worldclaw.ai/models
     - https://router.worldclaw.ai/docs/api

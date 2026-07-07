@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -444,6 +445,14 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         out,
         "- Do not infer provider catalog changes from `dist/` artifacts or helper source code.\n"
     )?;
+    writeln!(
+        out,
+        "- Do not use YAML serializers, formatters, or full-file rewrites. Preserve comments, ordering, quoting, and indentation; edit the smallest necessary YAML ranges."
+    )?;
+    writeln!(
+        out,
+        "- The current source model count is context only, not a limit. Add every public production model from the linked source that maps to an existing canonical model ID.\n"
+    )?;
     writeln!(out, "Providers to sync:\n")?;
     if providers.is_empty() {
         writeln!(
@@ -493,7 +502,15 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     )?;
     writeln!(
         out,
-        "- For usage-token providers, add pricing when the linked source documents it."
+        "- Only modify data classes listed in the provider `writes` line."
+    )?;
+    writeln!(
+        out,
+        "- If `writes` does not include `pricing`, preserve all existing `pricing` fields exactly."
+    )?;
+    writeln!(
+        out,
+        "- If `writes` includes `pricing`, add or update pricing only when the linked source documents it."
     )?;
     writeln!(
         out,
@@ -546,7 +563,7 @@ fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut Str
     }
     writeln!(
         out,
-        "  - status: {:?}; billing: {:?}; access: {:?}; model_count: {}",
+        "  - status: {:?}; billing: {:?}; access: {:?}; existing_model_count: {} (current source count, not a limit)",
         data.status,
         data.billing,
         data.access,
@@ -561,11 +578,11 @@ fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut Str
             .as_ref()
             .into_iter()
             .flatten()
-            .map(|write| format!("{write:?}"))
+            .map(|write| write.source_key())
             .collect();
         writeln!(out, "  - writes: {}", writes.join(", "))?;
     } else {
-        writeln!(out, "  - writes: models, pricing")?;
+        writeln!(out, "  - writes: models")?;
     }
     writeln!(out, "  - urls:")?;
     for url in sync.urls.as_deref().unwrap_or_default() {
@@ -585,6 +602,60 @@ fn slash_path(path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+pub fn agentic_diff_check(root: &Path, max_provider_deletions: usize) -> Result<()> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "diff",
+            "--numstat",
+            "--",
+            "registry/providers",
+            "registry/models",
+        ])
+        .output()
+        .context("running git diff --numstat for agentic registry sync")?;
+    if !output.status.success() {
+        bail!(
+            "git diff --numstat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let issues = agentic_diff_issues_from_numstat(&stdout, max_provider_deletions);
+    if !issues.is_empty() {
+        bail!("{}", issues.join("\n"));
+    }
+    println!("agentic registry diff check passed");
+    Ok(())
+}
+
+fn agentic_diff_issues_from_numstat(numstat: &str, max_provider_deletions: usize) -> Vec<String> {
+    let mut issues = Vec::new();
+    for line in numstat.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let _additions = parts.next();
+        let Some(deletions) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        if !path.starts_with("registry/providers/") {
+            continue;
+        }
+        let Ok(deletions) = deletions.parse::<usize>() else {
+            continue;
+        };
+        if deletions > max_provider_deletions {
+            issues.push(format!(
+                "{path}: agentic sync rewrote too much provider YAML ({deletions} deleted lines; max {max_provider_deletions}). Preserve formatting and make narrower edits."
+            ));
+        }
+    }
+    issues
 }
 
 struct Artifacts {
@@ -1742,6 +1813,15 @@ enum AutoSyncWrite {
     Pricing,
 }
 
+impl AutoSyncWrite {
+    fn source_key(self) -> &'static str {
+        match self {
+            Self::Models => "models",
+            Self::Pricing => "pricing",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RateLimits {
@@ -2141,8 +2221,26 @@ auto_sync:
         assert!(prompt.contains("cargo run -p dist-helper -- registry validate"));
         assert!(prompt.contains("If the listed URLs are unreachable"));
         assert!(prompt.contains("Do not remove or edit provider `auto_sync`"));
+        assert!(prompt.contains("current source count, not a limit"));
+        assert!(prompt.contains("existing_model_count: 1"));
+        assert!(prompt.contains("Do not use YAML serializers"));
         assert!(prompt.contains("include the exact `registry valid:` output line"));
         assert!(!prompt.contains("canonical_models_json"));
+        assert!(!prompt.contains("; model_count: 1"));
+    }
+
+    #[test]
+    fn agentic_diff_check_rejects_large_provider_rewrites() {
+        let issues = agentic_diff_issues_from_numstat(
+            "12\t179\tregistry/providers/worldrouter.yaml\n\
+             70\t0\tregistry/providers/another.yaml\n\
+             12\t179\tregistry/models/anthropic/example.yaml\n",
+            80,
+        );
+
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("registry/providers/worldrouter.yaml"));
+        assert!(issues[0].contains("179 deleted lines"));
     }
 
     #[test]
