@@ -4892,7 +4892,7 @@
             "reasoning",
             "tools"
           ],
-          "provider": "xiaomi_token_plan_ams",
+          "provider": "xiaomi_token_plan",
           "provider_model_id": "mimo-v2.5",
           "rate_limits": {
             "requests_per_minute": 60
@@ -4924,7 +4924,7 @@
             "reasoning",
             "tools"
           ],
-          "provider": "xiaomi_token_plan_sgp",
+          "provider": "xiaomi_token_plan_eu",
           "provider_model_id": "mimo-v2.5",
           "rate_limits": {
             "requests_per_minute": 60
@@ -5029,7 +5029,7 @@
             "reasoning",
             "tools"
           ],
-          "provider": "xiaomi_token_plan_ams",
+          "provider": "xiaomi_token_plan",
           "provider_model_id": "mimo-v2.5-pro",
           "rate_limits": {
             "requests_per_minute": 60
@@ -5061,7 +5061,7 @@
             "reasoning",
             "tools"
           ],
-          "provider": "xiaomi_token_plan_sgp",
+          "provider": "xiaomi_token_plan_eu",
           "provider_model_id": "mimo-v2.5-pro",
           "rate_limits": {
             "requests_per_minute": 60

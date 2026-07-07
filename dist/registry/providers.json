@@ -6781,16 +6781,16 @@
     },
     {
       "access": "api_key",
-      "api_base": "https://token-plan-ams.xiaomimimo.com/v1",
+      "api_base": "https://token-plan-sgp.xiaomimimo.com/v1",
       "auth_scheme": "x-api-key",
       "billing": "subscription",
       "byok": true,
       "community": false,
-      "display_name": "Xiaomi MiMo Token Plan (Europe)",
-      "id": "xiaomi_token_plan_ams",
+      "display_name": "Xiaomi MiMo Token Plan (International)",
+      "id": "xiaomi_token_plan",
       "metadata": {
         "datacenters": [
-          "EU"
+          "SG"
         ],
         "headquarters": "CN",
         "name": "Xiaomi",
@@ -6832,9 +6832,9 @@
           }
         }
       ],
-      "name": "xiaomi_token_plan_ams",
+      "name": "xiaomi_token_plan",
       "protocol_endpoints": {
-        "messages": "https://token-plan-ams.xiaomimimo.com/anthropic"
+        "messages": "https://token-plan-sgp.xiaomimimo.com/anthropic"
       },
       "required_config": [
         "api_key"
@@ -6909,16 +6909,16 @@
     },
     {
       "access": "api_key",
-      "api_base": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "api_base": "https://token-plan-ams.xiaomimimo.com/v1",
       "auth_scheme": "x-api-key",
       "billing": "subscription",
       "byok": true,
       "community": false,
-      "display_name": "Xiaomi MiMo Token Plan (Singapore)",
-      "id": "xiaomi_token_plan_sgp",
+      "display_name": "Xiaomi MiMo Token Plan (Europe)",
+      "id": "xiaomi_token_plan_eu",
       "metadata": {
         "datacenters": [
-          "SG"
+          "EU"
         ],
         "headquarters": "CN",
         "name": "Xiaomi",
@@ -6960,9 +6960,9 @@
           }
         }
       ],
-      "name": "xiaomi_token_plan_sgp",
+      "name": "xiaomi_token_plan_eu",
       "protocol_endpoints": {
-        "messages": "https://token-plan-sgp.xiaomimimo.com/anthropic"
+        "messages": "https://token-plan-ams.xiaomimimo.com/anthropic"
       },
       "required_config": [
         "api_key"
