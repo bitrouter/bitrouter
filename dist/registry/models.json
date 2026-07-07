@@ -3018,25 +3018,6 @@
       "release_date": "2026-02-23"
     },
     {
-      "description": "Qwen3.5 open-source native vision-language flagship MoE (397B total, 17B active).",
-      "family": "qwen3.5",
-      "id": "qwen/qwen3.5-397b-a17b",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-04",
-      "max_input_tokens": 262144,
-      "max_output_tokens": 65536,
-      "name": "Qwen: Qwen3.5 397B-A17B",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-02-16"
-    },
-    {
       "description": "Qwen3.6 open-source native vision-language model (27B).",
       "family": "qwen3.6",
       "id": "qwen/qwen3.6-27b",
