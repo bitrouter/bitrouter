@@ -83,6 +83,35 @@ Source lives in two places; `dist/registry/` is generated — never hand-edit it
   beyond the curated catalog** (BYOK / BYO-subscription extras) — those are
   allowed and surface as non-failing *advisories*, not errors.
 
+### Provider variants — one file per distinct endpoint
+
+A provider file is **one routable endpoint with its own commercial terms**, not a
+datacenter. A vendor gets more than one file only along two orthogonal axes:
+
+- **Entity / region.** The default is *global* — **no suffix**. "International"
+  is a commercial tier (USD, global signup), **not** a geography, so it never
+  gets a suffix. Add a suffixed variant only when the vendor exposes a genuinely
+  distinct public endpoint with distinct commercial or legal terms — a different
+  base URL **and** a different currency, account/KYC, or data-residency
+  jurisdiction. A different datacenter for the *same* product (latency only) is
+  **not** a variant.
+  - `_cn` — mainland China: separate legal entity, RMB, mainland real-name
+    account, non-interchangeable keys. This is the one geographic split that is
+    near-universal among Chinese vendors and always a distinct endpoint.
+  - Other region suffixes (`_eu`, `_us`, `_apac`, …) are allowed **only** when
+    such an endpoint really exists (e.g. a dedicated EU-residency host). Most
+    providers will only ever have the default and maybe `_cn`. Do not reserve
+    region slots the vendor doesn't offer, and do not split one product across
+    per-city gateways (this is why Alibaba's endpoint-less `_hk`/`_jp`/`_eu`
+    entries were removed).
+- **Billing.** Independent of region: `usage_token` (the default) vs
+  `subscription` (a flat-rate plan). Prefer the plan's real product name when it
+  has one (`claude-code`, not `anthropic_coding_plan`); the `billing:` field
+  carries the semantics regardless.
+
+The name equals the filename stem and the env-var root (`{NAME}_API_KEY`); use
+lowercase region codes.
+
 The validator (`cargo run -p dist-helper -- registry validate`) enforces:
 
 - Model ids and provider model ids are lowercase `<org>/<model>`.

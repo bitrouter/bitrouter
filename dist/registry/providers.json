@@ -386,8 +386,8 @@
       "billing": "subscription",
       "byok": true,
       "community": false,
-      "display_name": "Alibaba Cloud Token Plan (Singapore)",
-      "id": "alibaba_coding_plan_sg",
+      "display_name": "Alibaba Cloud Coding Plan (International)",
+      "id": "alibaba_coding_plan",
       "metadata": {
         "datacenters": [
           "SG"
@@ -457,7 +457,7 @@
           }
         }
       ],
-      "name": "alibaba_coding_plan_sg",
+      "name": "alibaba_coding_plan",
       "required_config": [
         "api_key"
       ],

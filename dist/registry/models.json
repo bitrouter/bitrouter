@@ -1942,7 +1942,7 @@
         },
         {
           "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
+          "provider": "alibaba_coding_plan",
           "provider_model_id": "MiniMax-M2.5",
           "rate_limits": {
             "requests_per_minute": 60
@@ -2547,7 +2547,7 @@
       "providers": [
         {
           "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
+          "provider": "alibaba_coding_plan",
           "provider_model_id": "kimi-k2.5",
           "rate_limits": {
             "requests_per_minute": 60
@@ -3907,7 +3907,7 @@
         },
         {
           "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
+          "provider": "alibaba_coding_plan",
           "provider_model_id": "qwen3.6-flash",
           "rate_limits": {
             "requests_per_minute": 60
@@ -3990,7 +3990,7 @@
         },
         {
           "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
+          "provider": "alibaba_coding_plan",
           "provider_model_id": "qwen3.7-max",
           "rate_limits": {
             "requests_per_minute": 60
@@ -4144,7 +4144,7 @@
         },
         {
           "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
+          "provider": "alibaba_coding_plan",
           "provider_model_id": "qwen3.7-plus",
           "rate_limits": {
             "requests_per_minute": 60
@@ -5117,7 +5117,7 @@
       "providers": [
         {
           "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
+          "provider": "alibaba_coding_plan",
           "provider_model_id": "glm-5",
           "rate_limits": {
             "requests_per_minute": 60
