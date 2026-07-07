@@ -514,6 +514,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     )?;
     writeln!(
         out,
+        "- When `writes` includes `pricing`, re-check pricing for every provider model against the linked source. Update confirmed changes; leave pricing unchanged only when it cannot be confirmed."
+    )?;
+    writeln!(
+        out,
         "- If `writes` does not include `pricing`, preserve `pricing` in all pre-existing model entries exactly; do not recalculate, normalize, or remove it."
     )?;
     writeln!(
@@ -586,7 +590,7 @@ fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut Str
             .collect();
         writeln!(out, "  - writes: {}", writes.join(", "))?;
     } else {
-        writeln!(out, "  - writes: models")?;
+        writeln!(out, "  - writes: models, pricing")?;
     }
     writeln!(out, "  - urls:")?;
     for url in sync.urls.as_deref().unwrap_or_default() {
@@ -2227,10 +2231,13 @@ auto_sync:
         assert!(prompt.contains("Do not remove or edit provider `auto_sync`"));
         assert!(prompt.contains("current source count, not a limit"));
         assert!(prompt.contains("existing_model_count: 1"));
+        assert!(prompt.contains("writes: models, pricing"));
         assert!(prompt.contains("Do not use YAML serializers"));
         assert!(
             prompt.contains("A newly added provider model entry may include its own `pricing`")
         );
+        assert!(prompt.contains("re-check pricing for every provider model"));
+        assert!(prompt.contains("leave pricing unchanged only when it cannot be confirmed"));
         assert!(prompt.contains("preserve `pricing` in all pre-existing model entries exactly"));
         assert!(prompt.contains("include the exact `registry valid:` output line"));
         assert!(!prompt.contains("canonical_models_json"));
