@@ -2912,6 +2912,24 @@
     },
     {
       "family": "qwen3.5",
+      "id": "qwen/qwen3.5-flash",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2025-04",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.5 Flash",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-02-23"
+    },
+    {
+      "family": "qwen3.5",
       "id": "qwen/qwen3.5-plus",
       "input_modalities": [
         "text",
@@ -2945,6 +2963,234 @@
       ],
       "providers": [],
       "release_date": "2026-04-22"
+    },
+    {
+      "family": "qwen3.6",
+      "id": "qwen/qwen3.6-flash",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2025-04",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.6 Flash",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "alibaba_coding_plan_sg",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider": "alibaba_eu",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider": "alibaba_hk",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider": "alibaba_jp",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.0
+                },
+                "output_tokens": {
+                  "text": 4.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "alibaba_sg",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.66
+                },
+                "output_tokens": {
+                  "text": 3.961
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider": "alibaba_us",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_write": 0.234375,
+              "no_cache": 0.1875
+            },
+            "output_tokens": {
+              "text": 1.125
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.6-flash"
+        }
+      ],
+      "release_date": "2026-04-27"
     },
     {
       "family": "qwen3.6",

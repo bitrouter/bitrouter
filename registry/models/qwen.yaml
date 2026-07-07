@@ -46,6 +46,19 @@
   release_date: 2026-04-13
   open_weights: false
   family: qwen3.6
+- id: qwen/qwen3.6-flash
+  name: 'Qwen: Qwen3.6 Flash'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 65536
+  release_date: 2026-04-27
+  knowledge_cutoff: 2025-04
+  open_weights: false
+  family: qwen3.6
 - id: qwen/qwen3.6-27b
   name: 'Qwen: Qwen3.6 27B'
   description: Qwen3.6 open-source native vision-language model (27B).
@@ -69,6 +82,19 @@
   max_input_tokens: 1000000
   max_output_tokens: 65536
   release_date: 2026-04-22
+  knowledge_cutoff: 2025-04
+  open_weights: false
+  family: qwen3.5
+- id: qwen/qwen3.5-flash
+  name: 'Qwen: Qwen3.5 Flash'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 65536
+  release_date: 2026-02-23
   knowledge_cutoff: 2025-04
   open_weights: false
   family: qwen3.5
