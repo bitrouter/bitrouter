@@ -30,4 +30,4 @@ sourceHash: 85f397c71e014e6dec7bcdb24119abf335a484362d4dccf2cb2e10df212a475d
 
 ## 第一次用 BitRouter？
 
-先看[快速开始](/docs/get-started/quickstart)把代理跑起来，再回来把你的运行时指向它。
+先看[快速开始](/docs/get-started/configuration)把代理跑起来，再回来把你的运行时指向它。

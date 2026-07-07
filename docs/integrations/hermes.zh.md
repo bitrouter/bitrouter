@@ -8,7 +8,7 @@ Hermes 是 Nous Research 出品的自我改进 Agent。它支持自定义的 Ope
 
 ## 前置条件
 
-- BitRouter 正在运行——本地代理 `http://127.0.0.1:4356`，或 [BitRouter Cloud](/docs/get-started/quickstart)（`https://api.bitrouter.ai`）。
+- BitRouter 正在运行——本地代理 `http://127.0.0.1:4356`，或 [BitRouter Cloud](/docs/get-started/configuration)（`https://api.bitrouter.ai`）。
 - 已安装 Hermes。安装方法见 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)。
 
 ## 把 Hermes 指向 BitRouter

@@ -9,9 +9,9 @@ sourceHash: 8c7accdceb945d6dfd258bdc9d2e9117263e3bc41481462feb3e65831502810b
 This is the **production** path for running BitRouter on your own infrastructure:
 a committed config file, real provider keys, the router running as a managed
 daemon, metrics export, and basic hardening. If you just want it running in 60
-seconds, start with [Installation](/docs/get-started/self-hosted-and-cloud) — this guide
+seconds, start with [Configuration](/docs/get-started/configuration) — this guide
 picks up where that leaves off. Deciding between self-host and the hosted product?
-See [Self-host vs Cloud](/docs/get-started/self-hosted-and-cloud).
+See [Self-host or Cloud?](/docs/get-started/faqs#self-host-or-cloud).
 
 The router listens on `127.0.0.1:4356` by default — loopback only, until you
 explicitly choose otherwise.
@@ -201,8 +201,8 @@ per-request attribution, and per-backend export configs.
 ## Next steps
 
 <Cards>
-  <Card title="Installation" href="/docs/get-started/self-hosted-and-cloud" description="The 60-second local install, if you skipped it." />
-  <Card title="Self-host vs Cloud" href="/docs/get-started/self-hosted-and-cloud" description="Pick the deployment model that fits." />
+  <Card title="Configuration" href="/docs/get-started/configuration" description="The 60-second local install, if you skipped it." />
+  <Card title="Self-host vs Cloud" href="/docs/get-started/faqs#self-host-or-cloud" description="Pick the deployment model that fits." />
   <Card title="OpenTelemetry" href="/docs/features/opentelemetry" description="OTLP trace + metric export and per-request attribution." />
   <Card title="Guardrails" href="/docs/features/guardrails" description="Content firewall for requests and responses." />
 </Cards>

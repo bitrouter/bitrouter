@@ -8,7 +8,7 @@ Claude Code 会和一个 Anthropic Messages 端点对话。把它指向 BitRoute
 
 ## 前置条件
 
-- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/quickstart)（`https://api.bitrouter.ai`）。
+- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/configuration)（`https://api.bitrouter.ai`）。
 - 已安装 Claude Code：
 
   ```bash

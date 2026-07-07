@@ -105,7 +105,7 @@ curl https://api.bitrouter.ai/v1/chat/completions \
 ## 下一步
 
 <Cards>
-  <Card title="快速开始" href="/docs/get-started/quickstart" description="一分钟内运行 BitRouter" />
+  <Card title="快速开始" href="/docs/get-started/configuration" description="一分钟内运行 BitRouter" />
   <Card title="配置" href="/docs/features/presets" description="高级路由和配置选项" />
   <Card title="集成" href="/docs/integrations" description="特定代理的集成指南" />
   <Card title="API 参考" href="/docs/reference" description="完整的 API 文档" />

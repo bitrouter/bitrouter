@@ -8,7 +8,7 @@ OpenCode 通过 `opencode.json` 并借助 AI SDK 注册供应商。把 BitRouter
 
 ## 前置条件
 
-- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/quickstart)，地址为 `https://api.bitrouter.ai`。
+- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/configuration)，地址为 `https://api.bitrouter.ai`。
 - 已安装 OpenCode：
 
   ```bash

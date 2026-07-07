@@ -36,7 +36,7 @@ curl http://127.0.0.1:4356/v1/chat/completions \
 
 - **不带后缀即均衡默认。** 不加后缀等价于 `:balanced`，与你现在得到的路由逐字节一致。变体只会对已有候选供应商**重新排序**，绝不改变哪些供应商有资格。
 - **偏置是激进的。** 一个 profile 会把所选维度的权重压得很高，另两个维度仅作平手裁决之用；因此 `:cost` 会挑出真正最便宜的供应商，而不是“稍微便宜一点”。需要综合评分时，请用 `:balanced`（或不加后缀）。
-- **未知后缀不是 profile。** 只有 `cost`、`latency`、`throughput`、`balanced` 会被识别为 profile。其他任何写法——比如 `openai/gpt-4o:fast`——都会被当作模型 ID 的一部分，从而以普通的“未知模型” `404` 失败，而非被静默改路由。（这与把 `openai:gpt-4o` 这类 `provider:model` ID 原样保留是同一条规则。）另一个被识别的后缀 [`:discount`](/docs/get-started/models) 会路由到 BitRouter 的自托管折扣供应商——并非路由 profile——并被单独处理。
+- **未知后缀不是 profile。** 只有 `cost`、`latency`、`throughput`、`balanced` 会被识别为 profile。其他任何写法——比如 `openai/gpt-4o:fast`——都会被当作模型 ID 的一部分，从而以普通的“未知模型” `404` 失败，而非被静默改路由。（这与把 `openai:gpt-4o` 这类 `provider:model` ID 原样保留是同一条规则。）另一个被识别的后缀 [`:discount`](/docs/get-started/supported-models) 会路由到 BitRouter 的自托管折扣供应商——并非路由 profile——并被单独处理。
 - **仅在 ≥2 个供应商时才有意义。** 只由单一供应商承载的模型，加不加后缀路由结果都一样。
 
 <Callout type="info">
@@ -51,7 +51,7 @@ curl http://127.0.0.1:4356/v1/chat/completions \
 moonshotai/kimi-k2.6:discount     # 路由到自托管折扣供应商
 ```
 
-由于它固定供应商、而非对候选供应商重新排序，`:discount` **不是**路由 profile，也不与 `:cost` / `:latency` / `:throughput` 有意义地组合。开放模型即使不加该后缀也默认立享 25% 折扣；该后缀会强制使用折扣的自托管供应来源，账户上的定制折扣也在此生效。完整行为见[折扣模型](/docs/get-started/models)——包括面向开源项目的最高 50% 定制折扣。
+由于它固定供应商、而非对候选供应商重新排序，`:discount` **不是**路由 profile，也不与 `:cost` / `:latency` / `:throughput` 有意义地组合。开放模型即使不加该后缀也默认立享 25% 折扣；该后缀会强制使用折扣的自托管供应来源，账户上的定制折扣也在此生效。完整行为见[折扣模型](/docs/get-started/supported-models)——包括面向开源项目的最高 50% 定制折扣。
 
 ## 变体绝不改变鉴权
 
