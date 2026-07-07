@@ -2472,6 +2472,14 @@ auto_sync:
     }
 
     #[test]
+    fn registry_sync_workflow_uses_agentic_defaults() {
+        let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
+
+        assert!(workflow.contains(r#"cron: "0 22 * * *""#));
+        assert!(workflow.contains("AGENTIC_SYNC_MODEL: glm-5.2"));
+    }
+
+    #[test]
     fn agentic_sync_without_urls_is_invalid() {
         let root = test_root("agentic-missing-urls");
         write(

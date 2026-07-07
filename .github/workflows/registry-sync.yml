@@ -3,7 +3,7 @@ name: Registry Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "0 22 * * *"
 
 permissions:
   contents: write
@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code
+  AGENTIC_SYNC_MODEL: glm-5.2
 
 jobs:
   sync:
