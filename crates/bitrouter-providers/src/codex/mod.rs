@@ -200,8 +200,74 @@ impl OpenAiCodexAuthApplier {
         Ok(())
     }
 
+    async fn refresh_token_after_unauthorized(
+        &self,
+        label: &str,
+        rejected_access_token: Option<&str>,
+    ) -> Result<bool> {
+        let gate = self.refresh_gate(label);
+        let _guard = gate.lock().await;
+        let store = CredentialStore::load(&self.store_path).map_err(|e| {
+            BitrouterError::internal(format!(
+                "reading credential store at {} before Codex auth recovery: {e}",
+                self.store_path.display()
+            ))
+        })?;
+        let stored = store
+            .get_any(PROVIDER_ID, label)
+            .ok_or_else(|| BitrouterError::Upstream {
+                status: 401,
+                message: format!(
+                    "no openai-codex credential for label '{label}' — \
+                     run `bitrouter login openai-codex`"
+                ),
+            })?;
+        let token = stored
+            .as_oauth()
+            .cloned()
+            .ok_or_else(|| BitrouterError::Upstream {
+                status: 401,
+                message: format!(
+                    "openai-codex credential for '{label}' is an API key — \
+                     this provider only accepts subscription OAuth tokens"
+                ),
+            })?;
+
+        // Match Codex CLI's recovery shape: after a 401, first re-read the
+        // on-disk session in case another process already refreshed it.
+        if rejected_access_token.is_some_and(|rejected| token.access_token != rejected)
+            && !needs_refresh(&token)
+        {
+            self.store_in_cache(label, &token);
+            return Ok(true);
+        }
+
+        let refreshed = refresh(
+            &self.refresh_client,
+            &self.token_endpoint,
+            &self.client_id,
+            &token,
+        )
+        .await
+        .map_err(refresh_to_bitrouter_error)?;
+        self.persist_refreshed(label, refreshed.clone())?;
+        self.store_in_cache(label, &refreshed);
+        Ok(true)
+    }
+
     fn label_for<'a>(&self, target: &'a RoutingTarget) -> &'a str {
         target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
+    }
+}
+
+fn bearer_access_token(value: Option<&HeaderValue>) -> Option<&str> {
+    let value = value?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    if scheme.eq_ignore_ascii_case("bearer") {
+        let token = token.trim();
+        (!token.is_empty()).then_some(token)
+    } else {
+        None
     }
 }
 
@@ -275,6 +341,16 @@ impl AuthApplier for OpenAiCodexAuthApplier {
         // shape — no credential branch required.
         shape_codex_responses_body(body);
         Ok(())
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        target: &RoutingTarget,
+        rejected_authorization: Option<&HeaderValue>,
+    ) -> Result<bool> {
+        let label = self.label_for(target);
+        self.refresh_token_after_unauthorized(label, bearer_access_token(rejected_authorization))
+            .await
     }
 }
 
@@ -498,6 +574,127 @@ mod tests {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_recovery_rereads_rotated_disk_token_before_refresh() {
+        let path = tmp_store_path();
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set(
+                    PROVIDER_ID,
+                    DEFAULT_LABEL,
+                    Credential::from_oauth_token(OAuthToken {
+                        access_token: "old-access".into(),
+                        expires_at: 0,
+                        refresh_token: Some("RT-old".into()),
+                    }),
+                )
+                .unwrap();
+        }
+        let applier = OpenAiCodexAuthApplier::with_client_and_endpoint(
+            &path,
+            reqwest::Client::new(),
+            "client-1",
+            "http://insecure.example.com/oauth/token",
+        );
+
+        let first = applier
+            .apply(
+                reqwest::Client::new()
+                    .post("https://chatgpt.com/backend-api/codex/responses")
+                    .build()
+                    .unwrap(),
+                &codex_target(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer old-access")
+        );
+
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set(
+                    PROVIDER_ID,
+                    DEFAULT_LABEL,
+                    Credential::from_oauth_token(OAuthToken {
+                        access_token: "new-access".into(),
+                        expires_at: 0,
+                        refresh_token: Some("RT-new".into()),
+                    }),
+                )
+                .unwrap();
+        }
+
+        assert!(
+            applier
+                .refresh_after_unauthorized(
+                    &codex_target(None),
+                    Some(&HeaderValue::from_static("Bearer old-access")),
+                )
+                .await
+                .unwrap()
+        );
+        let second = applier
+            .apply(
+                reqwest::Client::new()
+                    .post("https://chatgpt.com/backend-api/codex/responses")
+                    .build()
+                    .unwrap(),
+                &codex_target(None),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            second
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer new-access")
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_recovery_refreshes_when_disk_token_matches_rejected_token() {
+        let path = tmp_store_path();
+        {
+            let mut store = CredentialStore::load(&path).unwrap();
+            store
+                .set(
+                    PROVIDER_ID,
+                    DEFAULT_LABEL,
+                    Credential::from_oauth_token(OAuthToken {
+                        access_token: "old-access".into(),
+                        expires_at: 0,
+                        refresh_token: Some("RT-old".into()),
+                    }),
+                )
+                .unwrap();
+        }
+        let applier = OpenAiCodexAuthApplier::with_client_and_endpoint(
+            &path,
+            reqwest::Client::new(),
+            "client-1",
+            "http://insecure.example.com/oauth/token",
+        );
+        let err = applier
+            .refresh_after_unauthorized(
+                &codex_target(None),
+                Some(&HeaderValue::from_static("Bearer old-access")),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("OAuth refresh"),
+            "expected a refresh error proving the refresh path ran, got: {err}"
         );
     }
 

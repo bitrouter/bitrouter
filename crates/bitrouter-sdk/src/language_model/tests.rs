@@ -956,6 +956,228 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
     }
 }
 
+struct AuthRecoveryApplier {
+    refreshes: Arc<AtomicUsize>,
+    seen_rejected_auth: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl AuthApplier for AuthRecoveryApplier {
+    async fn apply(
+        &self,
+        mut request: reqwest::Request,
+        _target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
+            "stale"
+        } else {
+            "fresh"
+        };
+        request.headers_mut().insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        Ok(request)
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        _target: &RoutingTarget,
+        rejected_authorization: Option<&reqwest::header::HeaderValue>,
+    ) -> Result<bool> {
+        if let Some(value) = rejected_authorization.and_then(|v| v.to_str().ok()) {
+            self.seen_rejected_auth
+                .lock()
+                .unwrap()
+                .push(value.to_string());
+        }
+        self.refreshes.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
+fn spawn_auth_retry_server(
+    responses: Vec<(&'static str, &'static str)>,
+    seen_auths: Arc<std::sync::Mutex<Vec<String>>>,
+) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for (status, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0_u8; 1024];
+            let header_end = loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break bytes.len();
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(pos) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+            let header_text = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = header_text
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let total_len = header_end + content_length;
+            while bytes.len() < total_len {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+            }
+            let request = String::from_utf8_lossy(&bytes[..header_end]);
+            let auth = request
+                .lines()
+                .find_map(|line| line.strip_prefix("authorization: "))
+                .or_else(|| {
+                    request
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Authorization: "))
+                })
+                .unwrap_or("")
+                .to_string();
+            seen_auths.lock().unwrap().push(auth);
+            let content_type = if body.starts_with("data: ") {
+                "text/event-stream"
+            } else {
+                "application/json"
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    format!("http://{addr}")
+}
+
+fn auth_retry_target(api_base: String) -> RoutingTarget {
+    RoutingTarget {
+        provider_name: "retry-provider".into(),
+        service_id: "test-model".into(),
+        api_base,
+        api_key: String::new(),
+        api_protocol: ApiProtocol::ChatCompletions,
+        account_label: None,
+        api_key_override: None,
+        api_base_override: None,
+        auth_scheme: Default::default(),
+    }
+}
+
+fn auth_retry_executor(
+    refreshes: Arc<AtomicUsize>,
+    rejected: Arc<std::sync::Mutex<Vec<String>>>,
+) -> HttpExecutor {
+    let mut auth = AuthAppliers::new();
+    auth.register(
+        "retry-provider",
+        Arc::new(AuthRecoveryApplier {
+            refreshes,
+            seen_rejected_auth: rejected,
+        }),
+    );
+    HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)
+        .expect("executor")
+}
+
+#[tokio::test]
+async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once() {
+    let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let api_base = spawn_auth_retry_server(
+        vec![
+            (
+                "401 Unauthorized",
+                r#"{"error":{"code":"token_revoked","message":"revoked"}}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+            ),
+        ],
+        seen_auths.clone(),
+    );
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let rejected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let executor = auth_retry_executor(refreshes.clone(), rejected.clone());
+    let target = auth_retry_target(api_base);
+    let req = request();
+    let ctx = PipelineContext::new(req.clone());
+
+    let result = executor.execute(&target, &req.prompt, &ctx).await.unwrap();
+
+    assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *seen_auths.lock().unwrap(),
+        vec!["Bearer stale".to_string(), "Bearer fresh".to_string()]
+    );
+    assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
+    match result.result.content.as_slice() {
+        [Content::Text { text, .. }] => assert_eq!(text, "ok"),
+        other => panic!("expected one text block, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn http_executor_refreshes_auth_and_retries_streaming_401_once() {
+    let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stream_body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let api_base = spawn_auth_retry_server(
+        vec![
+            (
+                "401 Unauthorized",
+                r#"{"error":{"code":"token_revoked","message":"revoked"}}"#,
+            ),
+            ("200 OK", stream_body),
+        ],
+        seen_auths.clone(),
+    );
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let rejected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let executor = auth_retry_executor(refreshes.clone(), rejected.clone());
+    let target = auth_retry_target(api_base);
+    let req = stream_request();
+    let ctx = PipelineContext::new(req.clone());
+
+    let mut stream = executor
+        .execute_stream(&target, &req.prompt, &ctx)
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while let Some(part) = stream.next().await {
+        if let StreamPart::TextDelta { text: delta } = part.unwrap() {
+            text.push_str(&delta);
+        }
+    }
+
+    assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *seen_auths.lock().unwrap(),
+        vec!["Bearer stale".to_string(), "Bearer fresh".to_string()]
+    );
+    assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
+    assert_eq!(text, "ok");
+}
+
 // ===== non-streaming client-disconnect billing (OpenRouter parity) =====
 
 /// An executor whose `execute` blocks on a gate until the test releases it, so

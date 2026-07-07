@@ -318,6 +318,40 @@ impl HttpExecutor {
         Ok(())
     }
 
+    async fn build_authenticated_request(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        target: &RoutingTarget,
+        transport: &Arc<dyn crate::language_model::protocol::Transport>,
+        ctx: &PipelineContext,
+        trace_headers: Option<&http::HeaderMap>,
+    ) -> Result<reqwest::Request> {
+        let mut request = self
+            .client
+            .post(url)
+            .json(body)
+            .build()
+            .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
+        forward_inbound_anthropic_beta(&mut request, target, ctx);
+        let mut request = self.apply_auth(request, target, transport).await?;
+        merge_outbound_trace_headers(&mut request, trace_headers);
+        Ok(request)
+    }
+
+    async fn refresh_auth_after_unauthorized(
+        &self,
+        target: &RoutingTarget,
+        rejected_authorization: Option<&reqwest::header::HeaderValue>,
+    ) -> Result<bool> {
+        let Some(applier) = self.auth_appliers.lookup(&target.provider_name) else {
+            return Ok(false);
+        };
+        applier
+            .refresh_after_unauthorized(target, rejected_authorization)
+            .await
+    }
+
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
         BitrouterError::internal(format!(
             "no outbound dispatch registered for protocol '{}' (target provider '{}'); \
@@ -354,8 +388,8 @@ impl HttpExecutor {
 /// only ever names W3C trace headers, which auth appliers never touch.
 ///
 /// Spec: <https://www.w3.org/TR/trace-context/>
-fn merge_outbound_trace_headers(request: &mut reqwest::Request, ctx: &PipelineContext) {
-    let Some(headers) = ctx.take_outbound_trace_headers() else {
+fn merge_outbound_trace_headers(request: &mut reqwest::Request, headers: Option<&http::HeaderMap>) {
+    let Some(headers) = headers else {
         return;
     };
     let dest = request.headers_mut();
@@ -416,40 +450,59 @@ impl Executor for HttpExecutor {
         let mut body = adapter.render_request(&upstream_prompt)?;
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, false);
+        let trace_headers = ctx.take_outbound_trace_headers();
 
         let started = Instant::now();
-        let mut request = self
-            .client
-            .post(&url)
-            .json(&body)
-            .build()
-            .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        forward_inbound_anthropic_beta(&mut request, target, ctx);
-        let mut request = self.apply_auth(request, target, transport).await?;
-        merge_outbound_trace_headers(&mut request, ctx);
-        let response = self.client.execute(request).await.map_err(|e| {
-            if e.is_timeout() {
-                BitrouterError::UpstreamTimeout
-            } else {
-                BitrouterError::Upstream {
-                    status: 502,
-                    message: format!("request to {} failed: {e}", target.provider_name),
+        let mut attempted_auth_refresh = false;
+        let text = loop {
+            let request = self
+                .build_authenticated_request(
+                    &url,
+                    &body,
+                    target,
+                    transport,
+                    ctx,
+                    trace_headers.as_ref(),
+                )
+                .await?;
+            let rejected_authorization = request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .cloned();
+            let response = self.client.execute(request).await.map_err(|e| {
+                if e.is_timeout() {
+                    BitrouterError::UpstreamTimeout
+                } else {
+                    BitrouterError::Upstream {
+                        status: 502,
+                        message: format!("request to {} failed: {e}", target.provider_name),
+                    }
                 }
-            }
-        })?;
-
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| BitrouterError::Upstream {
-                status: 502,
-                message: format!("reading upstream body: {e}"),
             })?;
 
-        if !status.is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .map_err(|e| BitrouterError::Upstream {
+                    status: 502,
+                    message: format!("reading upstream body: {e}"),
+                })?;
+
+            if status.is_success() {
+                break text;
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && !attempted_auth_refresh
+                && self
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
+                    .await?
+            {
+                attempted_auth_refresh = true;
+                continue;
+            }
             return Err(classify_upstream_error(status.as_u16(), &text));
-        }
+        };
 
         let json: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| BitrouterError::Upstream {
@@ -489,32 +542,51 @@ impl Executor for HttpExecutor {
         let mut body = adapter.render_request(&upstream_prompt)?;
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, true);
+        let trace_headers = ctx.take_outbound_trace_headers();
 
-        let mut request = self
-            .client
-            .post(&url)
-            .json(&body)
-            .build()
-            .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        forward_inbound_anthropic_beta(&mut request, target, ctx);
-        let mut request = self.apply_auth(request, target, transport).await?;
-        merge_outbound_trace_headers(&mut request, ctx);
-        let response = self.client.execute(request).await.map_err(|e| {
-            if e.is_timeout() {
-                BitrouterError::UpstreamTimeout
-            } else {
-                BitrouterError::Upstream {
-                    status: 502,
-                    message: format!("stream request to {} failed: {e}", target.provider_name),
+        let mut attempted_auth_refresh = false;
+        let response = loop {
+            let request = self
+                .build_authenticated_request(
+                    &url,
+                    &body,
+                    target,
+                    transport,
+                    ctx,
+                    trace_headers.as_ref(),
+                )
+                .await?;
+            let rejected_authorization = request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .cloned();
+            let response = self.client.execute(request).await.map_err(|e| {
+                if e.is_timeout() {
+                    BitrouterError::UpstreamTimeout
+                } else {
+                    BitrouterError::Upstream {
+                        status: 502,
+                        message: format!("stream request to {} failed: {e}", target.provider_name),
+                    }
                 }
-            }
-        })?;
+            })?;
 
-        let status = response.status();
-        if !status.is_success() {
+            let status = response.status();
+            if status.is_success() {
+                break response;
+            }
             let text = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && !attempted_auth_refresh
+                && self
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
+                    .await?
+            {
+                attempted_auth_refresh = true;
+                continue;
+            }
             return Err(classify_upstream_error(status.as_u16(), &text));
-        }
+        };
 
         // Parse the upstream SSE byte stream into canonical stream parts via
         // the protocol's stateful decoder.
