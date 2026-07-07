@@ -30,7 +30,7 @@
 //!   custom code.
 //! - **`Executor`-shaped** (its own crate). The provider replaces the
 //!   entire request path — reserved for the rare case where the wire is
-//!   *not* HTTP+JSON+SSE that an existing [`OutboundAdapter`] can decode
+//!   *not* HTTP+JSON+SSE that an existing `OutboundAdapter` can decode
 //!   (e.g. a vendor SDK owning a binary event-stream framing). **There are
 //!   no built-in providers in this slot today** — it exists as an escape
 //!   hatch, not a template. (Bedrock's native Converse API is such a wire,
