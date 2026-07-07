@@ -54,6 +54,12 @@ models:
   - id: openai/gpt-5.4-mini
     provider_model_id: gpt-5.4-mini
     capabilities: [reasoning, tools]
+  # ChatGPT Pro only (research preview). Plus/Business seats cannot reach it;
+  # for those users the runtime v1_models probe simply won't return it. Not in
+  # the curated registry/models catalog — rides as a subscription extra.
+  - id: openai/gpt-5.3-codex-spark
+    provider_model_id: gpt-5.3-codex-spark
+    capabilities: [reasoning, tools]
 status: active
 auto_sync:
   feed: v1_models

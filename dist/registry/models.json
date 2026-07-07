@@ -116,6 +116,11 @@
           }
         },
         {
+          "api_protocol": "anthropic",
+          "provider": "claude-code",
+          "provider_model_id": "claude-haiku-4-5"
+        },
+        {
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "claude-haiku-4.5"
@@ -1441,6 +1446,18 @@
         },
         {
           "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "google-ai-subscription",
+          "provider_model_id": "gemini-3.1-pro-preview"
+        },
+        {
+          "api_protocol": [
             "openai",
             "responses",
             "anthropic"
@@ -1529,6 +1546,18 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "google-ai-subscription",
+          "provider_model_id": "gemini-3.5-flash"
         },
         {
           "api_protocol": "openai",
@@ -4074,6 +4103,17 @@
           "provider_model_id": "x-ai/grok-4.20"
         },
         {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.20-0309-non-reasoning"
+        },
+        {
           "api_protocol": "openai",
           "capabilities": [
             "reasoning",
@@ -4163,6 +4203,18 @@
             "reasoning",
             "tools"
           ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.20-multi-agent-0309"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "pricing": {
             "input_tokens": {
               "no_cache": 1.25
@@ -4211,6 +4263,18 @@
           },
           "provider": "openrouter",
           "provider_model_id": "x-ai/grok-4.3"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.3"
         },
         {
           "api_protocol": [
@@ -4283,6 +4347,17 @@
           },
           "provider": "openrouter",
           "provider_model_id": "x-ai/grok-build-0.1"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-build-0.1"
         },
         {
           "api_protocol": [

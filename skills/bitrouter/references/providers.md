@@ -19,7 +19,9 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
 | `claude-code` | — (local OAuth) | Claude Code session | `bitrouter providers login claude-code`; Claude Pro/Max subscription provider, distinct from `anthropic` API-key billing |
 | `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex`; includes Pro-only `gpt-5.3-codex-spark` |
+| `supergrok` | — (local PKCE) | SuperGrok subscription | xAI SuperGrok / X Premium+, distinct from `xai` API-key billing — **OAuth handler not yet implemented** |
+| `google-ai-subscription` | — (local OAuth) | Google AI subscription | Antigravity route (Gemini + `gpt-oss-120b`), distinct from `google` API-key billing — **OAuth handler + endpoint not yet finalized** |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 

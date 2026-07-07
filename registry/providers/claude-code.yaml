@@ -49,6 +49,9 @@ models:
   - id: anthropic/claude-fable-5
     provider_model_id: claude-fable-5
     capabilities: []
+  - id: anthropic/claude-haiku-4.5
+    provider_model_id: claude-haiku-4-5
+    capabilities: []
 status: active
 weight: 1
 community: false

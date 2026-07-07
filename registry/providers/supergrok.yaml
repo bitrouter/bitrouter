@@ -1,0 +1,52 @@
+# xAI SuperGrok — subscription route (SuperGrok / X Premium+), OAuth-only.
+#
+# NOT the same as `xai`: that entry is the BYOK, per-token API-key route. This
+# entry is the flat-rate SuperGrok subscription reached through the Grok Build
+# CLI's OAuth login, so it carries NO per-token `pricing` (billing:
+# subscription). The model catalog mirrors `xai` (same xAI backend); the plan
+# is what changes, not the models.
+#
+# NOTE: `handler: grok` is not yet implemented in apps/bitrouter — this is a
+# registry-source stub so the provider is catalog-visible. `providers login
+# supergrok` will not work until the OAuth handler lands.
+name: supergrok
+display_name: SuperGrok (subscription)
+metadata:
+  headquarters: US
+  name: xAI
+  privacy_policy_url: https://x.ai/legal/privacy-policy
+  slug: xai
+  status_page_url: https://status.x.ai
+  terms_of_service_url: https://x.ai/legal/terms-of-service
+kind: first_party
+billing: subscription
+access: local_pkce
+api_base: https://api.x.ai/v1
+api_protocol:
+  - "*": [responses, openai]
+# Catalog mirrors `xai` (registry/providers/xai.yaml); no pricing under a
+# flat-rate subscription.
+models:
+  - id: x-ai/grok-4.3
+    provider_model_id: grok-4.3
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.20
+    provider_model_id: grok-4.20-0309-non-reasoning
+    capabilities:
+      - tools
+  - id: x-ai/grok-build-0.1
+    provider_model_id: grok-build-0.1
+    capabilities:
+      - tools
+  - id: x-ai/grok-4.20-multi-agent
+    provider_model_id: grok-4.20-multi-agent-0309
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+auth:
+  kind: oauth
+  handler: grok
