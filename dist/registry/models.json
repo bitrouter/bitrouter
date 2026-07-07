@@ -1564,24 +1564,6 @@
       "release_date": "2026-05-19"
     },
     {
-      "description": "Google Gemma 4 31B — open-weight instruction-tuned vision-language model.",
-      "family": "gemma",
-      "id": "google/gemma-4-31b",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 40960,
-      "name": "Google: Gemma 4 31B",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-04-02"
-    },
-    {
       "family": "ling",
       "id": "inclusionai/ling-2.6-1t",
       "input_modalities": [
@@ -1981,6 +1963,41 @@
         }
       ],
       "release_date": "2026-06-01"
+    },
+    {
+      "family": "mistral-medium",
+      "id": "mistralai/mistral-medium-3-5",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "name": "Mistral Medium 3.5",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-30"
+    },
+    {
+      "family": "mistral-small",
+      "id": "mistralai/mistral-small-4",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2025-06",
+      "max_input_tokens": 256000,
+      "max_output_tokens": 65536,
+      "name": "Mistral Small 4",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-03-16"
     },
     {
       "family": "kimi-k2",
@@ -2892,80 +2909,6 @@
         }
       ],
       "release_date": "2026-04-23"
-    },
-    {
-      "description": "OpenAI's open-weight 120B (MoE) reasoning model with configurable reasoning effort.",
-      "family": "gpt-oss",
-      "id": "openai/gpt-oss-120b",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 32768,
-      "name": "OpenAI: gpt-oss-120b",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 0.69
-            }
-          },
-          "provider": "cerebras",
-          "provider_model_id": "gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "cache_write": 0.08,
-              "no_cache": 0.04
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "openai/gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.039
-            },
-            "output_tokens": {
-              "text": 0.18
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "openai/gpt-oss-120b"
-        }
-      ],
-      "release_date": "2025-08-05"
     },
     {
       "description": "Qwen3.5 open-source native vision-language model (27B).",
