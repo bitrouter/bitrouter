@@ -77,6 +77,24 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-fable-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 95.0,
+              "cache_write": 1187.5,
+              "no_cache": 950.0
+            },
+            "output_tokens": {
+              "text": 4750.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "claude-fable-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-06-09"
@@ -173,12 +191,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 7.0,
+              "cache_write": 87.5,
+              "no_cache": 70.0
             },
             "output_tokens": {
-              "text": 5.0
+              "text": 350.0
             }
           },
           "provider": "worldrouter",
@@ -286,12 +304,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 35.0,
+              "cache_write": 437.5,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 25.0
+              "text": 1750.0
             }
           },
           "provider": "worldrouter",
@@ -400,12 +418,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 35.0,
+              "cache_write": 437.5,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 25.0
+              "text": 1750.0
             }
           },
           "provider": "worldrouter",
@@ -503,6 +521,24 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-opus-4.8"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 35.0,
+              "cache_write": 437.5,
+              "no_cache": 350.0
+            },
+            "output_tokens": {
+              "text": 1750.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "claude-opus-4-8",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-05-28"
@@ -624,12 +660,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
+              "cache_read": 21.0,
+              "cache_write": 262.5,
+              "no_cache": 210.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 1050.0
             }
           },
           "provider": "worldrouter",
@@ -660,6 +696,24 @@
       "providers": [
         {
           "api_protocol": "anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "anthropic",
+          "provider_model_id": "claude-sonnet-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "anthropic",
           "capabilities": [
             "reasoning",
             "structured_outputs",
@@ -668,6 +722,45 @@
           ],
           "provider": "claude-code",
           "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-sonnet-5"
         }
       ],
       "release_date": "2026-06-30"
@@ -810,6 +903,23 @@
             }
           },
           "provider": "tencent_cn",
+          "provider_model_id": "deepseek-v3.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 30.0,
+              "no_cache": 35.0
+            },
+            "output_tokens": {
+              "text": 105.0
+            }
+          },
+          "provider": "worldrouter",
           "provider_model_id": "deepseek-v3.2",
           "rate_limits": {
             "requests_per_minute": 60
@@ -983,6 +1093,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.96,
+              "cache_write": 9.8,
+              "no_cache": 9.8
+            },
+            "output_tokens": {
+              "text": 19.6
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "deepseek-v4-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-04-24"
@@ -1152,6 +1280,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.15,
+              "cache_write": 121.8,
+              "no_cache": 121.8
+            },
+            "output_tokens": {
+              "text": 243.6
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "deepseek-v4-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-04-24"
@@ -1231,12 +1377,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.025,
-              "cache_write": 0.25,
-              "no_cache": 0.25
+              "cache_read": 1.75,
+              "cache_write": 17.5,
+              "no_cache": 17.5
             },
             "output_tokens": {
-              "text": 1.5
+              "text": 105.0
             }
           },
           "provider": "worldrouter",
@@ -1333,12 +1479,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.28,
-              "cache_write": 2.8,
-              "no_cache": 2.8
+              "cache_read": 28.0,
+              "cache_write": 280.0,
+              "no_cache": 280.0
             },
             "output_tokens": {
-              "text": 12.6
+              "text": 1260.0
             }
           },
           "provider": "worldrouter",
@@ -1459,7 +1605,24 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.99
+            },
+            "output_tokens": {
+              "text": 1.49
+            }
+          },
+          "provider": "cerebras",
+          "provider_model_id": "gemma-4-31b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "release_date": "2026-04-02"
     },
     {
@@ -1475,7 +1638,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.625
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "inclusionai/ling-2.6-1t"
+        }
+      ],
       "release_date": "2026-04-23"
     },
     {
@@ -1491,7 +1673,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.002,
+              "no_cache": 0.01
+            },
+            "output_tokens": {
+              "text": 0.03
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "inclusionai/ling-2.6-flash"
+        }
+      ],
       "release_date": "2026-04-24"
     },
     {
@@ -1507,7 +1708,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.625
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "inclusionai/ring-2.6-1t"
+        }
+      ],
       "release_date": "2026-05-08"
     },
     {
@@ -1745,6 +1965,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.2,
+              "cache_write": 26.25,
+              "no_cache": 21.0
+            },
+            "output_tokens": {
+              "text": 84.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-02-12"
@@ -1894,6 +2132,24 @@
           },
           "provider": "tencent_cn",
           "provider_model_id": "minimax-m2.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.2,
+              "cache_write": 26.25,
+              "no_cache": 21.0
+            },
+            "output_tokens": {
+              "text": 84.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "MiniMax-M2.7",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -2063,6 +2319,23 @@
           },
           "provider": "tencent_cn",
           "provider_model_id": "minimax-m3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 12.0,
+              "no_cache": 60.0
+            },
+            "output_tokens": {
+              "text": 240.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "MiniMax-M3",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -2241,6 +2514,24 @@
             }
           },
           "provider": "tencent_cn",
+          "provider_model_id": "kimi-k2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 7.0,
+              "cache_write": 42.0,
+              "no_cache": 42.0
+            },
+            "output_tokens": {
+              "text": 210.0
+            }
+          },
+          "provider": "worldrouter",
           "provider_model_id": "kimi-k2.5",
           "rate_limits": {
             "requests_per_minute": 60
@@ -2485,6 +2776,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 11.2,
+              "cache_write": 66.5,
+              "no_cache": 66.5
+            },
+            "output_tokens": {
+              "text": 280.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "kimi-k2.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-05-13"
@@ -2606,7 +2915,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "nex-agi/nex-n2-pro"
+        }
+      ],
       "release_date": "2026-06-08"
     },
     {
@@ -2623,7 +2951,43 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.08
+            },
+            "output_tokens": {
+              "text": 0.45
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 9.0,
+              "cache_write": 9.0,
+              "no_cache": 9.0
+            },
+            "output_tokens": {
+              "text": 45.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "nemotron-3-super-120b-a12b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "release_date": "2026-03-11"
     },
     {
@@ -2639,7 +3003,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
+        }
+      ],
       "release_date": "2026-06-04"
     },
     {
@@ -2738,12 +3121,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.35,
-              "cache_write": 3.5,
-              "no_cache": 3.5
+              "cache_read": 35.0,
+              "cache_write": 350.0,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 15.75
+              "text": 1575.0
             }
           },
           "provider": "worldrouter",
@@ -2851,12 +3234,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.075,
-              "cache_write": 0.75,
-              "no_cache": 0.75
+              "cache_read": 5.25,
+              "cache_write": 52.5,
+              "no_cache": 52.5
             },
             "output_tokens": {
-              "text": 4.5
+              "text": 315.0
             }
           },
           "provider": "worldrouter",
@@ -2964,12 +3347,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.7,
-              "cache_write": 7.0,
-              "no_cache": 7.0
+              "cache_read": 70.0,
+              "cache_write": 700.0,
+              "no_cache": 700.0
             },
             "output_tokens": {
-              "text": 31.5
+              "text": 3150.0
             }
           },
           "provider": "worldrouter",
@@ -2996,7 +3379,45 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "alibaba_sg",
+          "provider_model_id": "qwen3.5-122b-a10b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.26
+            },
+            "output_tokens": {
+              "text": 2.08
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-122b-a10b"
+        }
+      ],
       "release_date": "2026-02-23"
     },
     {
@@ -3014,7 +3435,63 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider": "alibaba_sg",
+          "provider_model_id": "qwen3.5-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.195
+            },
+            "output_tokens": {
+              "text": 1.56
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.5-27b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 30.0,
+              "cache_write": 30.0,
+              "no_cache": 30.0
+            },
+            "output_tokens": {
+              "text": 240.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "qwen3.5-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "release_date": "2026-02-23"
     },
     {
@@ -3032,7 +3509,46 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.6
+            }
+          },
+          "provider": "alibaba_sg",
+          "provider_model_id": "qwen3.6-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 0.285
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.6-27b"
+        }
+      ],
       "release_date": "2026-04-22"
     },
     {
@@ -3050,7 +3566,45 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.248
+            },
+            "output_tokens": {
+              "text": 1.485
+            }
+          },
+          "provider": "alibaba_sg",
+          "provider_model_id": "qwen3.6-35b-a3b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.6-35b-a3b"
+        }
+      ],
       "release_date": "2026-04-17"
     },
     {
@@ -3790,6 +4344,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.0,
+              "cache_write": 10.0,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "step-3.5-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-01-29"
@@ -3915,7 +4487,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.035,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.58
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "tencent/hy3"
+        }
+      ],
       "release_date": "2026-07-06"
     },
     {
@@ -4280,12 +4871,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.16,
-              "cache_write": 0.8,
-              "no_cache": 0.8
+              "cache_read": 16.0,
+              "cache_write": 80.0,
+              "no_cache": 80.0
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 400.0
             }
           },
           "provider": "worldrouter",
@@ -4417,12 +5008,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.4,
-              "cache_write": 2.0,
-              "no_cache": 2.0
+              "cache_read": 40.0,
+              "cache_write": 200.0,
+              "no_cache": 200.0
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 600.0
             }
           },
           "provider": "worldrouter",
@@ -4520,7 +5111,105 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "provider": "alibaba_coding_plan_sg",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0,
+              "cache_write": 0.0,
+              "no_cache": 2.25
+            },
+            "output_tokens": {
+              "text": 2.75
+            }
+          },
+          "provider": "cerebras",
+          "provider_model_id": "zai-glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "glm-4.7"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.08,
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.75
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 8.0,
+              "cache_write": 40.0,
+              "no_cache": 40.0
+            },
+            "output_tokens": {
+              "text": 175.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 0.0,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "zai",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "release_date": "2025-12-23"
     },
     {
@@ -4668,6 +5357,24 @@
             }
           },
           "provider": "tencent_cn",
+          "provider_model_id": "glm-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 11.0,
+              "cache_write": 55.0,
+              "no_cache": 55.0
+            },
+            "output_tokens": {
+              "text": 176.0
+            }
+          },
+          "provider": "worldrouter",
           "provider_model_id": "glm-5",
           "rate_limits": {
             "requests_per_minute": 60
@@ -4879,6 +5586,24 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 14.3,
+              "cache_write": 77.0,
+              "no_cache": 77.0
+            },
+            "output_tokens": {
+              "text": 242.0
+            }
+          },
+          "provider": "worldrouter",
+          "provider_model_id": "glm-5.1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": [
             "openai",
             "anthropic"
@@ -5014,6 +5739,24 @@
             }
           },
           "provider": "tencent_cn",
+          "provider_model_id": "glm-5.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 18.2,
+              "cache_write": 98.0,
+              "no_cache": 98.0
+            },
+            "output_tokens": {
+              "text": 308.0
+            }
+          },
+          "provider": "worldrouter",
           "provider_model_id": "glm-5.2",
           "rate_limits": {
             "requests_per_minute": 60

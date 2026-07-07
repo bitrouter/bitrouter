@@ -309,6 +309,14 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.7",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "alibaba_coding_plan_sg",
@@ -869,6 +877,86 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.5-122b-a10b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider_model_id": "qwen3.5-122b-a10b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.5-27b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider_model_id": "qwen3.5-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-27b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.6
+            }
+          },
+          "provider_model_id": "qwen3.6-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-35b-a3b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.248
+            },
+            "output_tokens": {
+              "text": 1.485
+            }
+          },
+          "provider_model_id": "qwen3.6-35b-a3b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "alibaba_sg",
@@ -1277,6 +1365,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "anthropic",
+          "id": "anthropic/claude-sonnet-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "claude-sonnet-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "anthropic",
@@ -1357,6 +1463,40 @@
             }
           },
           "provider_model_id": "gpt-oss-120b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemma-4-31b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.99
+            },
+            "output_tokens": {
+              "text": 1.49
+            }
+          },
+          "provider_model_id": "gemma-4-31b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0,
+              "cache_write": 0.0,
+              "no_cache": 2.25
+            },
+            "output_tokens": {
+              "text": 2.75
+            }
+          },
+          "provider_model_id": "zai-glm-4.7",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -1813,6 +1953,11 @@
           "api_protocol": "openai",
           "id": "moonshotai/kimi-k2.7-code",
           "provider_model_id": "kimi-k2.7-code"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-sonnet-5",
+          "provider_model_id": "claude-sonnet-5"
         }
       ],
       "name": "github-copilot",
@@ -3237,6 +3382,35 @@
             }
           },
           "provider_model_id": "grok-build-0.1"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-sonnet-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider_model_id": "glm-4.7"
         }
       ],
       "name": "opencode-zen",
@@ -3981,6 +4155,237 @@
             }
           },
           "provider_model_id": "x-ai/grok-build-0.1"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "anthropic/claude-sonnet-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "anthropic/claude-sonnet-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "inclusionai/ling-2.6-1t",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.625
+            }
+          },
+          "provider_model_id": "inclusionai/ling-2.6-1t"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "inclusionai/ling-2.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.002,
+              "no_cache": 0.01
+            },
+            "output_tokens": {
+              "text": 0.03
+            }
+          },
+          "provider_model_id": "inclusionai/ling-2.6-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "inclusionai/ring-2.6-1t",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.625
+            }
+          },
+          "provider_model_id": "inclusionai/ring-2.6-1t"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "nex-agi/nex-n2-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider_model_id": "nex-agi/nex-n2-pro"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.08
+            },
+            "output_tokens": {
+              "text": 0.45
+            }
+          },
+          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.5-122b-a10b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.26
+            },
+            "output_tokens": {
+              "text": 2.08
+            }
+          },
+          "provider_model_id": "qwen/qwen3.5-122b-a10b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.5-27b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.195
+            },
+            "output_tokens": {
+              "text": 1.56
+            }
+          },
+          "provider_model_id": "qwen/qwen3.5-27b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-27b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 0.285
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider_model_id": "qwen/qwen3.6-27b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.6-35b-a3b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider_model_id": "qwen/qwen3.6-35b-a3b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "tencent/hy3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.035,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.58
+            }
+          },
+          "provider_model_id": "tencent/hy3"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "z-ai/glm-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.08,
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.75
+            }
+          },
+          "provider_model_id": "z-ai/glm-4.7"
         }
       ],
       "name": "openrouter",
@@ -5122,22 +5527,41 @@
       "models": [
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "anthropic/claude-sonnet-4.6",
+          "id": "anthropic/claude-fable-5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
+              "cache_read": 95.0,
+              "cache_write": 1187.5,
+              "no_cache": 950.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 4750.0
             }
           },
-          "provider_model_id": "claude-sonnet-4-6",
+          "provider_model_id": "claude-fable-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "anthropic/claude-haiku-4.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 7.0,
+              "cache_write": 87.5,
+              "no_cache": 70.0
+            },
+            "output_tokens": {
+              "text": 350.0
+            }
+          },
+          "provider_model_id": "claude-haiku-4-5",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5151,12 +5575,12 @@
           "id": "anthropic/claude-opus-4.6",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 35.0,
+              "cache_write": 437.5,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 25.0
+              "text": 1750.0
             }
           },
           "provider_model_id": "claude-opus-4-6",
@@ -5174,12 +5598,12 @@
           "id": "anthropic/claude-opus-4.7",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 35.0,
+              "cache_write": 437.5,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 25.0
+              "text": 1750.0
             }
           },
           "provider_model_id": "claude-opus-4-7",
@@ -5189,23 +5613,333 @@
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "id": "anthropic/claude-haiku-4.5",
+          "id": "anthropic/claude-opus-4.8",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 35.0,
+              "cache_write": 437.5,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 5.0
+              "text": 1750.0
             }
           },
-          "provider_model_id": "claude-haiku-4-5",
+          "provider_model_id": "claude-opus-4-8",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "anthropic/claude-sonnet-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 21.0,
+              "cache_write": 262.5,
+              "no_cache": 210.0
+            },
+            "output_tokens": {
+              "text": 1050.0
+            }
+          },
+          "provider_model_id": "claude-sonnet-4-6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "baidu/ernie-5.0",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 98.0
+            },
+            "output_tokens": {
+              "text": 392.0
+            }
+          },
+          "provider_model_id": "ernie-5.0",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "bytedance/seedance-2.0",
+          "pricing": {
+            "output_tokens": {
+              "text": 752.2
+            }
+          },
+          "provider_model_id": "seedance-2.0",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "bytedance/seedance-2.0-asset",
+          "pricing": {
+            "output_tokens": {
+              "text": 789.81
+            }
+          },
+          "provider_model_id": "seedance-2.0-asset",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "bytedance/seedance-2.0-asset-fast",
+          "pricing": {
+            "output_tokens": {
+              "text": 572.985
+            }
+          },
+          "provider_model_id": "seedance-2.0-asset-fast",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "bytedance/seedance-2.0-fast",
+          "pricing": {
+            "output_tokens": {
+              "text": 545.7
+            }
+          },
+          "provider_model_id": "seedance-2.0-fast",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "byteplus/seedance-2.0-asset-fast-official",
+          "pricing": {
+            "output_tokens": {
+              "text": 777.7175
+            }
+          },
+          "provider_model_id": "seedance-2.0-asset-fast-official",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "byteplus/seedance-2.0-asset-official",
+          "pricing": {
+            "output_tokens": {
+              "text": 1071.885
+            }
+          },
+          "provider_model_id": "seedance-2.0-asset-official",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "byteplus/seedance-2.0-fast-official",
+          "pricing": {
+            "output_tokens": {
+              "text": 740.5024
+            }
+          },
+          "provider_model_id": "seedance-2.0-fast-official",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "byteplus/seedance-2.0-official",
+          "pricing": {
+            "output_tokens": {
+              "text": 1020.5413
+            }
+          },
+          "provider_model_id": "seedance-2.0-official",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-chat-v3-0324",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 13.5,
+              "cache_write": 20.0,
+              "no_cache": 20.0
+            },
+            "output_tokens": {
+              "text": 77.0
+            }
+          },
+          "provider_model_id": "deepseek-chat-v3-0324",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-chat-v3.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 15.0,
+              "cache_write": 15.0,
+              "no_cache": 15.0
+            },
+            "output_tokens": {
+              "text": 75.0
+            }
+          },
+          "provider_model_id": "deepseek-chat-v3.1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v3.1-terminus",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 13.0,
+              "cache_write": 21.0,
+              "no_cache": 21.0
+            },
+            "output_tokens": {
+              "text": 79.0
+            }
+          },
+          "provider_model_id": "deepseek-v3.1-terminus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v3.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 30.0,
+              "no_cache": 35.0
+            },
+            "output_tokens": {
+              "text": 105.0
+            }
+          },
+          "provider_model_id": "deepseek-v3.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v3.2-exp",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 27.0,
+              "cache_write": 27.0,
+              "no_cache": 27.0
+            },
+            "output_tokens": {
+              "text": 41.0
+            }
+          },
+          "provider_model_id": "deepseek-v3.2-exp",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.96,
+              "cache_write": 9.8,
+              "no_cache": 9.8
+            },
+            "output_tokens": {
+              "text": 19.6
+            }
+          },
+          "provider_model_id": "deepseek-v4-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.15,
+              "cache_write": 121.8,
+              "no_cache": 121.8
+            },
+            "output_tokens": {
+              "text": 243.6
+            }
+          },
+          "provider_model_id": "deepseek-v4-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-2.5-flash-image",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 22.5
+            },
+            "output_tokens": {
+              "text": 2250.0
+            }
+          },
+          "provider_model_id": "gemini-2.5-flash-image",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-3-pro-image-preview",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 15.0
+            },
+            "output_tokens": {
+              "text": 9000.0
+            }
+          },
+          "provider_model_id": "gemini-3-pro-image-preview",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemini-3.1-flash-image-preview",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 37.5
+            },
+            "output_tokens": {
+              "text": 4500.0
+            }
+          },
+          "provider_model_id": "gemini-3.1-flash-image-preview",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5217,18 +5951,364 @@
             "structured_outputs",
             "tools"
           ],
-          "id": "openai/gpt-5.5",
+          "id": "google/gemini-3.1-flash-lite-preview",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.7,
-              "cache_write": 7.0,
-              "no_cache": 7.0
+              "cache_read": 1.75,
+              "cache_write": 17.5,
+              "no_cache": 17.5
             },
             "output_tokens": {
-              "text": 31.5
+              "text": 105.0
             }
           },
-          "provider_model_id": "gpt-5.5",
+          "provider_model_id": "gemini-3.1-flash-lite-preview",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "google/gemini-3.1-pro-preview",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 28.0,
+              "cache_write": 280.0,
+              "no_cache": 280.0
+            },
+            "output_tokens": {
+              "text": 1260.0
+            }
+          },
+          "provider_model_id": "gemini-3.1-pro-preview",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemma-3-12b-it",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.0,
+              "cache_write": 4.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 13.0
+            }
+          },
+          "provider_model_id": "gemma-3-12b-it",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemma-3-27b-it",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 8.0,
+              "cache_write": 8.0,
+              "no_cache": 8.0
+            },
+            "output_tokens": {
+              "text": 16.0
+            }
+          },
+          "provider_model_id": "gemma-3-27b-it",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemma-4-26b-a4b-it",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 13.0,
+              "cache_write": 13.0,
+              "no_cache": 13.0
+            },
+            "output_tokens": {
+              "text": 40.0
+            }
+          },
+          "provider_model_id": "gemma-4-26b-a4b-it",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "google/gemma-4-31b-it",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 13.0,
+              "cache_write": 13.0,
+              "no_cache": 13.0
+            },
+            "output_tokens": {
+              "text": 38.0
+            }
+          },
+          "provider_model_id": "gemma-4-31b-it",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "meta/llama-3.1-8b-instruct",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 2.0,
+              "cache_write": 2.0,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider_model_id": "llama-3.1-8b-instruct",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "meta/llama-3.1-70b-instruct",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 40.0,
+              "cache_write": 40.0,
+              "no_cache": 40.0
+            },
+            "output_tokens": {
+              "text": 40.0
+            }
+          },
+          "provider_model_id": "llama-3.1-70b-instruct",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "meta/llama-3.3-70b-instruct",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.0,
+              "cache_write": 10.0,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 32.0
+            }
+          },
+          "provider_model_id": "llama-3.3-70b-instruct",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "meta/llama-4-maverick",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 15.0,
+              "cache_write": 15.0,
+              "no_cache": 15.0
+            },
+            "output_tokens": {
+              "text": 60.0
+            }
+          },
+          "provider_model_id": "llama-4-maverick",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.2,
+              "cache_write": 26.25,
+              "no_cache": 21.0
+            },
+            "output_tokens": {
+              "text": 84.0
+            }
+          },
+          "provider_model_id": "MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m2.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.2,
+              "cache_write": 26.25,
+              "no_cache": 21.0
+            },
+            "output_tokens": {
+              "text": 84.0
+            }
+          },
+          "provider_model_id": "MiniMax-M2.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m2.7-highspeed",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 6.0,
+              "cache_write": 37.5,
+              "no_cache": 60.0
+            },
+            "output_tokens": {
+              "text": 240.0
+            }
+          },
+          "provider_model_id": "MiniMax-M2.7-highspeed",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 12.0,
+              "no_cache": 60.0
+            },
+            "output_tokens": {
+              "text": 240.0
+            }
+          },
+          "provider_model_id": "MiniMax-M3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "mistral/mistral-nemo",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 2.0,
+              "cache_write": 2.0,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
+          "provider_model_id": "mistral-nemo",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "mistral/mistral-small-3.2-24b-instruct",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 7.5,
+              "cache_write": 7.5,
+              "no_cache": 7.5
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "mistral-small-3.2-24b-instruct",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 7.0,
+              "cache_write": 42.0,
+              "no_cache": 42.0
+            },
+            "output_tokens": {
+              "text": 210.0
+            }
+          },
+          "provider_model_id": "kimi-k2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 11.2,
+              "cache_write": 66.5,
+              "no_cache": 66.5
+            },
+            "output_tokens": {
+              "text": 280.0
+            }
+          },
+          "provider_model_id": "kimi-k2.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nvidia/nemotron-3-nano-30b-a3b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 5.0,
+              "cache_write": 5.0,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "nemotron-3-nano-30b-a3b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 9.0,
+              "cache_write": 9.0,
+              "no_cache": 9.0
+            },
+            "output_tokens": {
+              "text": 45.0
+            }
+          },
+          "provider_model_id": "nemotron-3-super-120b-a12b",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5243,12 +6323,12 @@
           "id": "openai/gpt-5.4",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.35,
-              "cache_write": 3.5,
-              "no_cache": 3.5
+              "cache_read": 35.0,
+              "cache_write": 350.0,
+              "no_cache": 350.0
             },
             "output_tokens": {
-              "text": 15.75
+              "text": 1575.0
             }
           },
           "provider_model_id": "gpt-5.4",
@@ -5266,12 +6346,12 @@
           "id": "openai/gpt-5.4-mini",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.075,
-              "cache_write": 0.75,
-              "no_cache": 0.75
+              "cache_read": 5.25,
+              "cache_write": 52.5,
+              "no_cache": 52.5
             },
             "output_tokens": {
-              "text": 4.5
+              "text": 315.0
             }
           },
           "provider_model_id": "gpt-5.4-mini",
@@ -5286,41 +6366,420 @@
             "structured_outputs",
             "tools"
           ],
-          "id": "google/gemini-3.1-pro-preview",
+          "id": "openai/gpt-5.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.28,
-              "cache_write": 2.8,
-              "no_cache": 2.8
+              "cache_read": 70.0,
+              "cache_write": 700.0,
+              "no_cache": 700.0
             },
             "output_tokens": {
-              "text": 12.6
+              "text": 3150.0
             }
           },
-          "provider_model_id": "gemini-3.1-pro-preview",
+          "provider_model_id": "gpt-5.5",
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "id": "google/gemini-3.1-flash-lite-preview",
+          "id": "openai/gpt-image-2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.025,
-              "cache_write": 0.25,
-              "no_cache": 0.25
+              "no_cache": 600.0
             },
             "output_tokens": {
-              "text": 1.5
+              "text": 2250.0
             }
           },
-          "provider_model_id": "gemini-3.1-flash-lite-preview",
+          "provider_model_id": "gpt-image-2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-oss-20b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 3.0,
+              "cache_write": 3.0,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 14.0
+            }
+          },
+          "provider_model_id": "gpt-oss-20b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-oss-120b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 3.9,
+              "cache_write": 3.9,
+              "no_cache": 3.9
+            },
+            "output_tokens": {
+              "text": 19.0
+            }
+          },
+          "provider_model_id": "gpt-oss-120b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "pixverse/pixverse-c1",
+          "pricing": {
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider_model_id": "pixverse-c1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "pixverse/pixverse-v6",
+          "pricing": {
+            "output_tokens": {
+              "text": 4.5
+            }
+          },
+          "provider_model_id": "pixverse-v6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-235b-a22b-2507",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.0,
+              "cache_write": 10.0,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 60.0
+            }
+          },
+          "provider_model_id": "qwen3-235b-a22b-2507",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-30b-a3b-instruct-2507",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 9.0,
+              "cache_write": 9.0,
+              "no_cache": 9.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider_model_id": "qwen3-30b-a3b-instruct-2507",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-32b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.0,
+              "cache_write": 8.0,
+              "no_cache": 8.0
+            },
+            "output_tokens": {
+              "text": 24.0
+            }
+          },
+          "provider_model_id": "qwen3-32b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-coder",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 22.0,
+              "cache_write": 22.0,
+              "no_cache": 22.0
+            },
+            "output_tokens": {
+              "text": 180.0
+            }
+          },
+          "provider_model_id": "qwen3-coder",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-coder-next",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 9.0,
+              "cache_write": 14.0,
+              "no_cache": 14.0
+            },
+            "output_tokens": {
+              "text": 80.0
+            }
+          },
+          "provider_model_id": "qwen3-coder-next",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-coder-plus",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 20.076,
+              "cache_write": 250.95,
+              "no_cache": 200.76
+            },
+            "output_tokens": {
+              "text": 2006.97
+            }
+          },
+          "provider_model_id": "qwen3-coder-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-next-80b-a3b-instruct",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 9.0,
+              "cache_write": 9.0,
+              "no_cache": 9.0
+            },
+            "output_tokens": {
+              "text": 110.0
+            }
+          },
+          "provider_model_id": "qwen3-next-80b-a3b-instruct",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3-vl-235b-a22b-instruct",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 11.0,
+              "cache_write": 20.0,
+              "no_cache": 20.0
+            },
+            "output_tokens": {
+              "text": 88.0
+            }
+          },
+          "provider_model_id": "qwen3-vl-235b-a22b-instruct",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-27b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 30.0,
+              "cache_write": 30.0,
+              "no_cache": 30.0
+            },
+            "output_tokens": {
+              "text": 240.0
+            }
+          },
+          "provider_model_id": "qwen3.5-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-35b-a3b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 25.0,
+              "cache_write": 25.0,
+              "no_cache": 25.0
+            },
+            "output_tokens": {
+              "text": 200.0
+            }
+          },
+          "provider_model_id": "qwen3.5-35b-a3b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-397b-a17b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 19.5,
+              "cache_write": 39.0,
+              "no_cache": 39.0
+            },
+            "output_tokens": {
+              "text": 234.0
+            }
+          },
+          "provider_model_id": "qwen3.5-397b-a17b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-9b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.0,
+              "cache_write": 10.0,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "qwen3.5-9b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.204,
+              "cache_write": 15.05,
+              "no_cache": 12.04
+            },
+            "output_tokens": {
+              "text": 120.4
+            }
+          },
+          "provider_model_id": "qwen3.5-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-flash-02-23",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 40.0
+            }
+          },
+          "provider_model_id": "qwen3.5-flash-02-23",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-plus",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 4.011,
+              "cache_write": 50.1375,
+              "no_cache": 40.11
+            },
+            "output_tokens": {
+              "text": 240.8
+            }
+          },
+          "provider_model_id": "qwen3.5-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-plus-02-15",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 5.0,
+              "cache_write": 62.5,
+              "no_cache": 50.0
+            },
+            "output_tokens": {
+              "text": 300.0
+            }
+          },
+          "provider_model_id": "qwen3.5-plus-02-15",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.6-plus",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 7.707,
+              "cache_write": 96.3375,
+              "no_cache": 77.07
+            },
+            "output_tokens": {
+              "text": 462.14
+            }
+          },
+          "provider_model_id": "qwen3.6-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "stepfun/step-3.5-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 10.0,
+              "cache_write": 10.0,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider_model_id": "step-3.5-flash",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5350,18 +6809,22 @@
         },
         {
           "api_protocol": "openai",
-          "id": "qwen/qwen3.6-plus",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "xiaomi/mimo-v2-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.07707,
-              "cache_write": 0.963375,
-              "no_cache": 0.7707
+              "cache_read": 4.5,
+              "cache_write": 9.0,
+              "no_cache": 9.0
             },
             "output_tokens": {
-              "text": 4.6214
+              "text": 29.0
             }
           },
-          "provider_model_id": "qwen3.6-plus",
+          "provider_model_id": "mimo-v2-flash",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5375,12 +6838,12 @@
           "id": "xiaomi/mimo-v2.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.16,
-              "cache_write": 0.8,
-              "no_cache": 0.8
+              "cache_read": 16.0,
+              "cache_write": 80.0,
+              "no_cache": 80.0
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 400.0
             }
           },
           "provider_model_id": "mimo-v2.5",
@@ -5397,12 +6860,12 @@
           "id": "xiaomi/mimo-v2.5-pro",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.4,
-              "cache_write": 2.0,
-              "no_cache": 2.0
+              "cache_read": 40.0,
+              "cache_write": 200.0,
+              "no_cache": 200.0
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 600.0
             }
           },
           "provider_model_id": "mimo-v2.5-pro",
@@ -5412,21 +6875,126 @@
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "xiaomi/mimo-v2-flash",
+          "id": "z-ai/glm-4.5-air",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.09
+              "cache_read": 2.5,
+              "cache_write": 13.0,
+              "no_cache": 13.0
             },
             "output_tokens": {
-              "text": 0.29
+              "text": 85.0
             }
           },
-          "provider_model_id": "mimo-v2-flash",
+          "provider_model_id": "glm-4.5-air",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 39.0,
+              "cache_write": 39.0,
+              "no_cache": 39.0
+            },
+            "output_tokens": {
+              "text": 190.0
+            }
+          },
+          "provider_model_id": "glm-4.6",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 8.0,
+              "cache_write": 40.0,
+              "no_cache": 40.0
+            },
+            "output_tokens": {
+              "text": 175.0
+            }
+          },
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.7-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.0,
+              "cache_write": 6.0,
+              "no_cache": 6.0
+            },
+            "output_tokens": {
+              "text": 40.0
+            }
+          },
+          "provider_model_id": "glm-4.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 11.0,
+              "cache_write": 55.0,
+              "no_cache": 55.0
+            },
+            "output_tokens": {
+              "text": 176.0
+            }
+          },
+          "provider_model_id": "glm-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 14.3,
+              "cache_write": 77.0,
+              "no_cache": 77.0
+            },
+            "output_tokens": {
+              "text": 242.0
+            }
+          },
+          "provider_model_id": "glm-5.1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 18.2,
+              "cache_write": 98.0,
+              "no_cache": 98.0
+            },
+            "output_tokens": {
+              "text": 308.0
+            }
+          },
+          "provider_model_id": "glm-5.2",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -5990,6 +7558,27 @@
             }
           },
           "provider_model_id": "glm-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "id": "z-ai/glm-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 0.0,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider_model_id": "glm-4.7",
           "rate_limits": {
             "requests_per_minute": 60
           }
