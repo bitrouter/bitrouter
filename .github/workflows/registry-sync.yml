@@ -113,7 +113,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add registry dist/registry
           git commit -m "chore: sync registry catalog"
-          git push --force-with-lease origin "HEAD:${BRANCH}"
+          remote_ref="$(git ls-remote --heads origin "${BRANCH}")"
+          remote_sha="$(printf '%s\n' "${remote_ref}" | awk '{print $1}')"
+          if [ -n "${remote_sha}" ]; then
+            git push --force-with-lease="refs/heads/${BRANCH}:${remote_sha}" origin "HEAD:${BRANCH}"
+          else
+            git push origin "HEAD:${BRANCH}"
+          fi
 
           pr_number="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
           if [ -n "${pr_number}" ]; then
