@@ -9,12 +9,21 @@ use serde_json::{Map, Value, json};
 
 pub fn validate(root: &Path) -> Result<()> {
     let loaded = load_registry(root)?;
-    validate_loaded(&loaded)?;
+    let advisories = validate_loaded(&loaded)?;
     println!(
         "registry valid: {} canonical models, {} providers",
         loaded.models().count(),
         loaded.providers.len()
     );
+    if !advisories.is_empty() {
+        println!(
+            "note: {} provider model(s) not in curated registry/models (BYOK / BYO-subscription extras):",
+            advisories.len()
+        );
+        for advisory in &advisories {
+            println!("  - {advisory}");
+        }
+    }
     Ok(())
 }
 
@@ -459,24 +468,16 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(out, "Canonical model source:")?;
     writeln!(
         out,
-        "- Canonical models live in `registry/models/<vendor>.yaml`, one file per vendor holding a YAML sequence of that vendor's models."
+        "- `registry/models/<vendor>.yaml` is the CURATED catalog of models BitRouter blesses by default (one file per vendor, a YAML sequence). It is maintainer-owned: do NOT create, edit, or delete canonical model entries during sync — only provider files change here."
     )?;
     writeln!(
         out,
-        "- Before adding a new canonical model, search existing files exactly with:"
+        "- When a provider serves a model already in the catalog, reuse its exact canonical ID so it links. Search existing IDs with:"
     )?;
     writeln!(out, "  `rg -n \"^- id: \" registry/models`")?;
     writeln!(
         out,
-        "- Reuse an existing canonical ID when the upstream model is the same model."
-    )?;
-    writeln!(
-        out,
-        "- Only append a new canonical model entry when no existing canonical ID matches; add it to the existing vendor file, creating that vendor's file only if it does not yet exist."
-    )?;
-    writeln!(
-        out,
-        "- Use lowercase `<org>/<model>` IDs and omit metadata that cannot be verified.\n"
+        "- A provider MAY also serve models that are not in the catalog; give them a lowercase `<org>/<model>` ID. These are allowed (reported as non-failing advisories), so do not add a canonical entry for them.\n"
     )?;
     writeln!(out, "Provider model rules:")?;
     writeln!(
@@ -508,6 +509,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(
         out,
         "If validation fails, fix the YAML and rerun exactly the same command."
+    )?;
+    writeln!(
+        out,
+        "Advisory notes about provider models not in the curated catalog are expected and are NOT failures — do not add canonical entries to silence them."
     )?;
     writeln!(out, "Do not run `cargo run -p dist-helper -- check`.")?;
     writeln!(
@@ -869,8 +874,9 @@ fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     serde_saphyr::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
-fn validate_loaded(registry: &LoadedRegistry) -> Result<()> {
+fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
     let mut issues = Vec::new();
+    let mut advisories = Vec::new();
     let mut canonical_ids = HashSet::new();
     for model_file in &registry.model_files {
         let file = path_label(&model_file.path);
@@ -902,13 +908,20 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<()> {
 
     let mut provider_names = HashMap::new();
     for provider in &registry.providers {
-        validate_provider(provider, &canonical_ids, &mut provider_names, &mut issues);
+        validate_provider(
+            provider,
+            &canonical_ids,
+            &mut provider_names,
+            &mut issues,
+            &mut advisories,
+        );
     }
 
     if !issues.is_empty() {
         bail!("registry validation failed:\n  - {}", issues.join("\n  - "));
     }
-    Ok(())
+    advisories.sort();
+    Ok(advisories)
 }
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
@@ -951,6 +964,7 @@ fn validate_provider<'a>(
     canonical_ids: &HashSet<&str>,
     provider_names: &mut HashMap<&'a str, &'a Path>,
     issues: &mut Vec<String>,
+    advisories: &mut Vec<String>,
 ) {
     let data = &provider.data;
     let file = path_label(&provider.path);
@@ -1013,9 +1027,18 @@ fn validate_provider<'a>(
                 data.name, model.id
             ));
         }
-        if !canonical_ids.contains(model.id.as_str()) {
+        // A provider may serve models beyond the curated `registry/models`
+        // catalog (BYOK / BYO-subscription extras). The id must still be a
+        // well-formed `<org>/<model>`; non-canonical ids are surfaced as a
+        // non-failing advisory (typo-catch + curation backlog).
+        if !valid_canonical_id(&model.id) {
             issues.push(format!(
-                "{file}: model '{}' (provider_model_id={}) is not declared in registry/models",
+                "{file}: model '{}' (provider_model_id={}) is not a valid lowercase '<org>/<model>' id",
+                model.id, model.provider_model_id
+            ));
+        } else if !canonical_ids.contains(model.id.as_str()) {
+            advisories.push(format!(
+                "{file}: {} (provider_model_id={}) not in curated registry/models",
                 model.id, model.provider_model_id
             ));
         }
@@ -2410,6 +2433,110 @@ api_base: https://api.acme.test/v1
         let loaded = load_registry(&root).expect("loads");
         let err = validate_loaded(&loaded).expect_err("usage without pricing must fail");
         assert!(err.to_string().contains("usage"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn provider_may_list_non_canonical_model_as_advisory() {
+        let root = test_root("byok-advisory");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        // `acme/byok-extra` is well-formed but NOT in the curated catalog.
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+  - id: acme/byok-extra
+    provider_model_id: byok-extra
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root).expect("loads");
+        let advisories = validate_loaded(&loaded).expect("non-canonical provider model is allowed");
+        assert!(
+            advisories.iter().any(|a| a.contains("acme/byok-extra")),
+            "expected an advisory for acme/byok-extra, got: {advisories:?}"
+        );
+    }
+
+    #[test]
+    fn provider_malformed_model_id_is_invalid() {
+        let root = test_root("byok-malformed");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/one
+  name: "Acme: One"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        // Uppercase org is not a valid lowercase `<org>/<model>` id.
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/one
+    provider_model_id: one
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+  - id: Acme/Bad-Id
+    provider_model_id: bad
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+      output_tokens:
+        text: 2.0
+status: active
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("malformed provider model id must fail");
+        assert!(
+            err.to_string().contains("valid lowercase"),
+            "unexpected error: {err}"
+        );
     }
 
     fn test_root(name: &str) -> PathBuf {
