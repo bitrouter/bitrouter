@@ -3080,6 +3080,37 @@
               {
                 "above_input_tokens": 256000,
                 "input_tokens": {
+                  "no_cache": 1.0
+                },
+                "output_tokens": {
+                  "text": 4.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
                   "no_cache": 0.66
                 },
                 "output_tokens": {
@@ -3103,158 +3134,6 @@
         {
           "api_protocol": "openai",
           "provider": "alibaba_coding_plan_sg",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.0
-                },
-                "output_tokens": {
-                  "text": 4.0
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.5
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_us",
           "provider_model_id": "qwen3.6-flash",
           "rate_limits": {
             "requests_per_minute": 60
@@ -3303,6 +3182,26 @@
           ],
           "pricing": {
             "input_tokens": {
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.7-max",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
               "no_cache": 1.65
             },
             "output_tokens": {
@@ -3319,103 +3218,6 @@
           "api_protocol": "openai",
           "provider": "alibaba_coding_plan_sg",
           "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "alibaba_us",
-          "provider_model_id": "qwen3.7-max-us",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -3474,6 +3276,37 @@
               {
                 "above_input_tokens": 256000,
                 "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.6
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.7-plus",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
                   "no_cache": 0.826
                 },
                 "output_tokens": {
@@ -3498,158 +3331,6 @@
           "api_protocol": "openai",
           "provider": "alibaba_coding_plan_sg",
           "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.101
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.101
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.6
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.6
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.6
-            }
-          },
-          "provider": "alibaba_us",
-          "provider_model_id": "qwen3.7-plus-us",
           "rate_limits": {
             "requests_per_minute": 60
           }
