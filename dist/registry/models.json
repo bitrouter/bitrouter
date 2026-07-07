@@ -782,7 +782,7 @@
               "text": 0.42
             }
           },
-          "provider": "qianfan",
+          "provider": "qianfan_cn",
           "provider_model_id": "deepseek-v3.2"
         },
         {
@@ -1213,7 +1213,7 @@
               "text": 3.33
             }
           },
-          "provider": "qianfan",
+          "provider": "qianfan_cn",
           "provider_model_id": "deepseek-v4-pro"
         },
         {
@@ -2706,7 +2706,7 @@
               "text": 3.75
             }
           },
-          "provider": "qianfan",
+          "provider": "qianfan_cn",
           "provider_model_id": "kimi-k2.6"
         },
         {

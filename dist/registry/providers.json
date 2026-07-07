@@ -974,6 +974,48 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "auth_scheme": "bearer",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "BytePlus ModelArk",
+      "doc_url": "https://docs.byteplus.com/en/docs/ModelArk",
+      "id": "byteplus",
+      "kind": "cloud",
+      "metadata": {
+        "datacenters": [
+          "SG"
+        ],
+        "headquarters": "SG",
+        "name": "BytePlus",
+        "slug": "byteplus"
+      },
+      "models": [
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v3.1",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.56
+            },
+            "output_tokens": {
+              "text": 1.68
+            }
+          },
+          "provider_model_id": "deepseek-v3.1"
+        }
+      ],
+      "name": "byteplus",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "staging",
+      "submitted_at": "2026-07-07",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://api.cerebras.ai/v1",
       "auth_scheme": "x-api-key",
       "billing": "usage_token",
@@ -3644,13 +3686,79 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.baiduqianfan.ai/v1",
+      "auth_scheme": "bearer",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Baidu Qianfan (International)",
+      "id": "qianfan",
+      "kind": "cloud",
+      "metadata": {
+        "headquarters": "CN",
+        "name": "Baidu AI Cloud",
+        "privacy_policy_url": "https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en",
+        "slug": "qianfan",
+        "terms_of_service_url": "https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en"
+      },
+      "models": [
+        {
+          "api_protocol": "openai",
+          "id": "baidu/ernie-4.5",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.55
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider_model_id": "ernie-4.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "baidu/ernie-x1",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.28
+            },
+            "output_tokens": {
+              "text": 1.1
+            }
+          },
+          "provider_model_id": "ernie-x1"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "baidu/ernie-5.1",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.59
+            },
+            "output_tokens": {
+              "text": 2.65
+            }
+          },
+          "provider_model_id": "ernie-5.1"
+        }
+      ],
+      "name": "qianfan",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "staging",
+      "submitted_at": "2026-07-07",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://qianfan.baidubce.com/v2",
       "auth_scheme": "bearer",
       "billing": "usage_token",
       "byok": true,
       "community": false,
-      "display_name": "Baidu Qianfan (百度千帆)",
-      "id": "qianfan",
+      "display_name": "Baidu Qianfan (China)",
+      "id": "qianfan_cn",
       "kind": "cloud",
       "metadata": {
         "datacenters": [
@@ -3769,7 +3877,7 @@
           "provider_model_id": "ernie-x1-turbo-32k"
         }
       ],
-      "name": "qianfan",
+      "name": "qianfan_cn",
       "required_config": [
         "api_key"
       ],
