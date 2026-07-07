@@ -465,6 +465,14 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(out, "Source reading rules:")?;
     writeln!(
         out,
+        "- The workflow installs `curl` and `rg`; use them before other fetch/parsing tools."
+    )?;
+    writeln!(
+        out,
+        "- For each source URL, first run `mkdir -p target/agentic-sync`, fetch the full primary document with `curl -sS -L <url> -o target/agentic-sync/<provider>-<n>.html`, then inspect that saved file with `rg`."
+    )?;
+    writeln!(
+        out,
         "- Raw HTML or rendered app HTML is still readable source material, not a reason to skip a provider."
     )?;
     writeln!(
@@ -474,6 +482,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(
         out,
         "- If a page is long, noisy, or rendered by a frontend framework, use generic extraction strategies: convert to text/Markdown with an available reader tool, parse visible text, search embedded JSON, or inspect repeated model/pricing records in the full page."
+    )?;
+    writeln!(
+        out,
+        "- Do not fetch `_next/`, static assets, JavaScript chunks, CSS, fonts, or images unless the saved primary document and a text/Markdown fallback both lack catalog data."
     )?;
     writeln!(
         out,
@@ -2422,6 +2434,10 @@ auto_sync:
         assert!(prompt.contains("writes: models, pricing"));
         assert!(prompt.contains("Raw HTML or rendered app HTML is still readable source material"));
         assert!(prompt.contains("Do not use truncated output"));
+        assert!(prompt.contains("mkdir -p target/agentic-sync"));
+        assert!(prompt.contains("curl -sS -L"));
+        assert!(prompt.contains("rg"));
+        assert!(prompt.contains("Do not fetch `_next/`, static assets, JavaScript chunks"));
         assert!(prompt.contains("generic extraction strategies"));
         assert!(prompt.contains("Do not use YAML serializers"));
         assert!(
