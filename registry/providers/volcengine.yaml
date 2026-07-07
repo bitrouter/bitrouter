@@ -1,0 +1,55 @@
+# SCAFFOLD — UNVERIFIED. status: staging (does not route until a human verifies
+# and flips to active). Researched 2026-07 from Volcengine Ark (火山方舟) docs.
+# Volcengine Ark is ByteDance's cloud LLM service (Doubao models + hosted
+# open models). OpenAI-compatible; the API now accepts model-name strings (the
+# legacy ep-... endpoint ids are no longer required), but a model must be enabled
+# for the account before first call.
+# PRICING: official rates are RMB per 1M tokens; converted to USD below at
+# ~7.2 CNY/USD — VERIFY on the live pricing page (JS-rendered; not scrapable):
+# https://www.volcengine.com/docs/82379/1544106 . Doubao pricing is tiered by
+# input length and thinking/non-thinking output; only the base tier is captured.
+# VERIFY BEFORE ACTIVATING:
+#   - Exact provider_model_id (date-suffixed form from GET /api/v3/models vs the
+#     dot-form aliases) and current prices.
+#   - Provider name `volcengine` → env VOLCENGINE_API_KEY (the Ark SDK itself uses
+#     ARK_API_KEY; bitrouter's env name is its own convention).
+#   - No published RPM (account/tier-scoped); no public status page.
+# FOLLOW-UPS (separate providers): hosted DeepSeek-V3.2 / Kimi-K2.5 / GLM-4.7 are
+#   sold mainly via the Ark Coding Plan (subscription: Lite ¥40/mo, Pro ¥200/mo,
+#   base https://ark.cn-beijing.volces.com/api/coding/v3) — scaffold as a
+#   billing: subscription sibling. International catalog is BytePlus ModelArk
+#   (https://ark.ap-southeast.bytepluses.com/api/v3) — different ids/pricing.
+name: volcengine
+display_name: Volcengine Ark (火山方舟)
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: Volcengine
+  privacy_policy_url: https://corplink.volcengine.cn/p/privacy/default_en.html
+  slug: volcengine
+  terms_of_service_url: https://www.volcengine.com/docs/82379/1104498
+api_base: https://ark.cn-beijing.volces.com/api/v3
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: cloud
+models:
+  - id: bytedance/doubao-seed-2.0-pro
+    provider_model_id: doubao-seed-2-0-pro-260215
+    pricing:
+      input_tokens:
+        no_cache: 0.83
+        cache_read: 0.167
+      output_tokens:
+        text: 4.17
+  - id: bytedance/doubao-seed-1.6
+    provider_model_id: doubao-seed-1-6-251015
+    pricing:
+      input_tokens:
+        no_cache: 0.11
+      output_tokens:
+        text: 0.28
+status: staging
+weight: 1
+submitted_at: 2026-07-07
