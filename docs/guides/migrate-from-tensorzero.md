@@ -35,7 +35,7 @@ BitRouter deliberately stops at the gateway. There's no `tensorzero.toml` to mai
 
 TensorZero's gateway is provider-facing — it unifies the upstreams. BitRouter adds the **agent-facing** half: an [MCP gateway](/docs/concepts/tools) for tools, an [ACP gateway](/docs/concepts/agents) for agent identity and dispatch, a [server-tool loop](/docs/features/server-tools), and [agentic payment](/docs/features/payment) so an agent can pay per request without you provisioning a key for it.
 
-And **the hosted cloud and local binary expose the same OpenAI-compatible endpoint** — start local during development, point at `api.bitrouter.ai` for production (or vice versa) without changing client code. See the [Quick Start](/docs/get-started/quickstart) for both flows.
+And **the hosted cloud and local binary expose the same OpenAI-compatible endpoint** — start local during development, point at `api.bitrouter.ai` for production (or vice versa) without changing client code. See the [Quick Start](/docs/get-started/configuration) for both flows.
 
 ## Migration paths
 
@@ -64,7 +64,7 @@ response = client.chat.completions.create(
 ```python
 import openai
 
-# Local: `bitrouter` (BYOK via env vars) — see /docs/get-started/quickstart
+# Local: `bitrouter` (BYOK via env vars) — see /docs/get-started/configuration
 # Cloud: base_url="https://api.bitrouter.ai/v1", api_key=$BITROUTER_API_KEY
 client = openai.OpenAI(
     base_url="http://127.0.0.1:4356/v1",
@@ -147,7 +147,7 @@ If your workflow depends on that closed feedback loop — collect inferences and
 
 <Callout type="success">
 **Migration**
-- [ ] Install the BitRouter CLI ([Quick Start](/docs/get-started/quickstart))
+- [ ] Install the BitRouter CLI ([Quick Start](/docs/get-started/configuration))
 - [ ] Export provider keys, or paste them into the cloud dashboard (sealed-box encrypted)
 - [ ] Update client `base_url` to `http://127.0.0.1:4356/v1` (local) or `https://api.bitrouter.ai/v1` (cloud)
 - [ ] Replace `tensorzero::…` model strings with `provider/model` ids
@@ -159,8 +159,8 @@ If your workflow depends on that closed feedback loop — collect inferences and
 ## Next steps
 
 <Cards>
-  <Card title="Quick Start" href="/docs/get-started/quickstart" description="Run BitRouter locally or in the cloud in under a minute" />
-  <Card title="Comparison" href="/docs/get-started/comparison" description="Side-by-side with OpenRouter, LiteLLM, and generic gateways" />
+  <Card title="Quick Start" href="/docs/get-started/configuration" description="Run BitRouter locally or in the cloud in under a minute" />
+  <Card title="Comparison" href="/docs/get-started/faqs" description="Side-by-side with OpenRouter, LiteLLM, and generic gateways" />
   <Card title="Agent features" href="/docs/concepts/tools" description="MCP, ACP, skills, agent firewall, x402 payment" />
   <Card title="API Reference" href="/docs/reference" description="OpenAI- and Anthropic-compatible endpoints" />
 </Cards>

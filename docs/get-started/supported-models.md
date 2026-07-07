@@ -1,14 +1,15 @@
 ---
-title: Models
+title: Supported Models
 description: The full catalog of models any BitRouter account can call — live pricing, reachable over your own keys or one hosted BitRouter Cloud account, with automatic discounts on open models.
-sourceHash: 86d87ac9130c04fd5ca161b83bc6f263323dbb88eb5d4be1d45f451a216af27c
 ---
 
-Every model BitRouter can route to is listed below, with live pricing. Reach any of them over your own provider keys ([BYOK](/docs/features/byok), paid to the providers at their list price) or one [BitRouter Cloud](/docs/get-started/self-hosted-and-cloud) account — one sign-in, no upstream keys, billed per request with failed requests not charged. Running your own model? See [local & private models](/docs/integrations/models) (free).
+Every model BitRouter can route to is listed below, with live pricing. Reach any of them over your own provider keys ([BYOK](/docs/features/byok), paid to the providers at their list price) or one [BitRouter Cloud](/docs/get-started/configuration) account — one sign-in, no upstream keys, billed per request with failed requests not charged. Running your own model? See [local & private models](/docs/integrations/models) (free).
 
 Prices are USD per **million tokens**, refreshed continuously from the live catalog. Open models are served **25% below official** by default — see [Discounted open models](#discounted-open-models) below.
 
 <ModelsTable />
+
+Every model above is served by one or more registered providers — see [Supported Providers](/docs/get-started/supported-providers) for the full list and how to register your own.
 
 ## Using BitRouter Cloud
 
@@ -18,12 +19,6 @@ The **BitRouter Cloud provider** lets an agent call any model above with a singl
 bitrouter cloud login   # one-time device-flow sign-in
 bitrouter start         # the `bitrouter` provider auto-enables once signed in
 ```
-
-## Providers
-
-Every model above is served by one or more **registered providers**. Membership lives in the public, open-source [registry](https://github.com/bitrouter/bitrouter/tree/main/registry) — anyone can [register a provider](/docs/guides/register-as-a-provider). The list refreshes from the registry continuously, so a newly-merged provider shows up within minutes.
-
-<ProvidersTable />
 
 ## Discounted open models
 

@@ -44,6 +44,15 @@ internal links).
    (it tracks whether a translation is current).
 4. **NEVER** author API-reference operation pages or the `ai-resources`/root nav
    here — those are owned by `bitrouter-docs` (see `docs/CONTRIBUTING.md`).
+5. **ALWAYS** keep `docs/get-started/supported-models.md` and
+   `supported-providers.md` (and their `.zh.md` siblings) consistent with the
+   `registry/` catalog. The `<ModelsTable />` / `<ProvidersTable />` tables are
+   fetched from the registry at runtime, but the surrounding **prose** hardcodes
+   registry-derived facts — the discounted-vs-closed-source vendor families
+   (`gpt-*`, `claude-*`, `gemini-*`, `grok-*`), example model ids, and the
+   default discount percentage. When you add, remove, or re-scope a vendor or
+   provider in `registry/models/` or `registry/providers/`, update that prose in
+   the same change so the docs never describe a catalog that no longer matches.
 
 ## Contributing
 

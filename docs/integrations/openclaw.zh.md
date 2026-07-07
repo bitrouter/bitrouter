@@ -8,7 +8,7 @@ OpenClaw 是一个自托管网关，用于把消息平台——WhatsApp、Telegr
 
 ## 前置条件
 
-- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/quickstart)，地址为 `https://api.bitrouter.ai`。
+- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/configuration)，地址为 `https://api.bitrouter.ai`。
 - 已安装 OpenClaw。安装方式见 [OpenClaw 文档](https://docs.openclaw.ai/)。
 
 ## 把 OpenClaw 指向 BitRouter
