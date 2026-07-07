@@ -37,16 +37,3 @@
   knowledge_cutoff: 2025-12-01
   open_weights: false
   family: gpt
-- id: openai/gpt-5.5-pro
-  name: 'OpenAI: GPT-5.5 Pro'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-04-24
-  knowledge_cutoff: 2025-12-01
-  open_weights: false
-  family: gpt

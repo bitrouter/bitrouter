@@ -1603,6 +1603,17 @@
             "tools",
             "image_input"
           ],
+          "id": "anthropic/claude-sonnet-5",
+          "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
           "id": "anthropic/claude-sonnet-4.6",
           "provider_model_id": "claude-sonnet-4-6"
         },
@@ -1613,8 +1624,8 @@
             "structured_outputs",
             "tools"
           ],
-          "id": "anthropic/claude-sonnet-4.5",
-          "provider_model_id": "claude-sonnet-4-5"
+          "id": "anthropic/claude-haiku-4.5",
+          "provider_model_id": "claude-haiku-4-5"
         },
         {
           "api_protocol": "anthropic",
@@ -1939,6 +1950,75 @@
       ],
       "status": "active",
       "submitted_at": "2026-05-25",
+      "weight": 1.0
+    },
+    {
+      "access": "local_oauth",
+      "api_base": "https://generativelanguage.googleapis.com/v1beta",
+      "auth": {
+        "handler": "google-ai",
+        "kind": "oauth"
+      },
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": false,
+      "community": false,
+      "display_name": "Google AI (subscription)",
+      "id": "google-ai",
+      "kind": "first_party",
+      "metadata": {
+        "headquarters": "US",
+        "name": "Google",
+        "privacy_policy_url": "https://policies.google.com/privacy",
+        "slug": "google",
+        "status_page_url": "https://status.cloud.google.com",
+        "terms_of_service_url": "https://ai.google.dev/gemini-api/terms"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "google/gemini-3.1-pro-preview",
+          "provider_model_id": "gemini-3.1-pro-preview"
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "google/gemini-3.5-flash",
+          "provider_model_id": "gemini-3.5-flash"
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "id": "google/gemini-3.1-flash-lite-preview",
+          "provider_model_id": "gemini-3.1-flash-lite-preview"
+        }
+      ],
+      "name": "google-ai",
+      "protocol_endpoints": {
+        "chat_completions": "https://generativelanguage.googleapis.com/v1beta/openai"
+      },
+      "required_config": [
+        "local_oauth"
+      ],
+      "status": "active",
       "weight": 1.0
     },
     {
@@ -4237,6 +4317,84 @@
       ],
       "status": "active",
       "submitted_at": "2026-07-06",
+      "weight": 1.0
+    },
+    {
+      "access": "local_oauth",
+      "api_base": "https://api.x.ai/v1",
+      "auth": {
+        "handler": "supergrok",
+        "kind": "oauth"
+      },
+      "auth_scheme": "x-api-key",
+      "billing": "subscription",
+      "byok": false,
+      "community": false,
+      "display_name": "SuperGrok (subscription)",
+      "id": "supergrok",
+      "kind": "first_party",
+      "metadata": {
+        "headquarters": "US",
+        "name": "xAI",
+        "privacy_policy_url": "https://x.ai/legal/privacy-policy",
+        "slug": "xai",
+        "status_page_url": "https://status.x.ai",
+        "terms_of_service_url": "https://x.ai/legal/terms-of-service"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "x-ai/grok-4.20-multi-agent",
+          "provider_model_id": "grok-4.20-multi-agent"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "x-ai/grok-4.20",
+          "provider_model_id": "grok-4.20"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "x-ai/grok-4.3",
+          "provider_model_id": "grok-4.3"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "id": "x-ai/grok-build-0.1",
+          "provider_model_id": "grok-build-0.1"
+        }
+      ],
+      "name": "supergrok",
+      "required_config": [
+        "local_oauth"
+      ],
+      "status": "active",
       "weight": 1.0
     },
     {

@@ -116,6 +116,16 @@
           }
         },
         {
+          "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "provider": "claude-code",
+          "provider_model_id": "claude-haiku-4-5"
+        },
+        {
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "claude-haiku-4.5"
@@ -647,7 +657,19 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "provider": "claude-code",
+          "provider_model_id": "claude-sonnet-5"
+        }
+      ],
       "release_date": "2026-06-30"
     },
     {
@@ -1254,66 +1276,6 @@
       "release_date": "2026-04-24"
     },
     {
-      "id": "google/gemini-2.5-pro-preview",
-      "input_modalities": [
-        "text",
-        "image",
-        "audio"
-      ],
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 65536,
-      "name": "Google: Gemini 2.5 Pro Preview",
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-08-03",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.125,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 10.0
-            }
-          },
-          "provider": "google",
-          "provider_model_id": "gemini-2.5-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.125,
-              "cache_write": 0.375,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 10.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "google/gemini-2.5-pro-preview"
-        }
-      ]
-    },
-    {
       "family": "gemini-flash-lite",
       "id": "google/gemini-3.1-flash-lite-preview",
       "input_modalities": [
@@ -1348,6 +1310,17 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "provider": "google-ai",
+          "provider_model_id": "gemini-3.1-flash-lite-preview"
         },
         {
           "api_protocol": [
@@ -1441,6 +1414,18 @@
         },
         {
           "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "google-ai",
+          "provider_model_id": "gemini-3.1-pro-preview"
+        },
+        {
+          "api_protocol": [
             "openai",
             "responses",
             "anthropic"
@@ -1529,6 +1514,18 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "google-ai",
+          "provider_model_id": "gemini-3.5-flash"
         },
         {
           "api_protocol": "openai",
@@ -2896,24 +2893,6 @@
       "release_date": "2026-04-23"
     },
     {
-      "family": "gpt",
-      "id": "openai/gpt-5.5-pro",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-12-01",
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 128000,
-      "name": "OpenAI: GPT-5.5 Pro",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-04-24"
-    },
-    {
       "description": "Alibaba Qwen3.6 Flash — Alibaba's fast, low-latency tier in the Qwen3.6 family.",
       "family": "qwen3.6",
       "id": "qwen/qwen3.6-flash",
@@ -4074,6 +4053,18 @@
           "provider_model_id": "x-ai/grok-4.20"
         },
         {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.20"
+        },
+        {
           "api_protocol": "openai",
           "capabilities": [
             "reasoning",
@@ -4163,6 +4154,18 @@
             "reasoning",
             "tools"
           ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.20-multi-agent"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "pricing": {
             "input_tokens": {
               "no_cache": 1.25
@@ -4211,6 +4214,18 @@
           },
           "provider": "openrouter",
           "provider_model_id": "x-ai/grok-4.3"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.3"
         },
         {
           "api_protocol": [
@@ -4283,6 +4298,17 @@
           },
           "provider": "openrouter",
           "provider_model_id": "x-ai/grok-build-0.1"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-build-0.1"
         },
         {
           "api_protocol": [
