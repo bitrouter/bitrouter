@@ -116,6 +116,28 @@ while `datacenters` is where the specific variant serves from (so a Chinese
 vendor's international endpoint is `headquarters: CN` with `datacenters: [SG]`,
 not `headquarters: SG`).
 
+### Pricing and sourcing
+
+- **All pricing is USD per 1M tokens.** Convert any RMB (or other-currency) rate
+  to USD and record the source and conversion in a comment — never leave a
+  non-USD number in a price field. (`usage_token` providers must price every
+  model; `subscription` providers price none — see the validator rules below.)
+- **Prefer the models.dev feed when the provider is listed there.** Set
+  `auto_sync: { feed: models_dev }` so the daily sync keeps the catalog and
+  pricing current. The sync key defaults to the provider `name`; set `key:`
+  explicitly when the models.dev key differs (e.g. `siliconflow_cn` uses
+  `key: siliconflow-cn`). Providers absent from models.dev are maintained by
+  hand from the vendor's published model + price list, and the comment header
+  should say so.
+
+### Status lifecycle
+
+`status` gates routing: **only `active` is served**; `staging`, `suspended`, and
+`withdrawn` are not. Use `staging` for a provider scaffolded from research but not
+yet confirmed against the live API — keep a `# VERIFY BEFORE ACTIVATING` header
+listing the exact fields a human must check (model ids via `GET /v1/models`,
+prices, env var, base URL) before flipping it to `active`.
+
 The validator (`cargo run -p dist-helper -- registry validate`) enforces:
 
 - Model ids and provider model ids are lowercase `<org>/<model>`.
