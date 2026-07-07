@@ -44,9 +44,12 @@ the models, and which providers serve them. It is fetched from the generated
 `$XDG_CACHE_HOME/bitrouter/registry.json` (24h TTL, stale-fallback on a
 network outage), and merged into the routing table. If a fetch fails the cache
 is reused; with no cache (first run, offline) the registry is empty and only
-locally-configured providers route. The merge routes a **canonical** model id
+locally-configured providers route. The merge routes a model id
 (e.g. `anthropic/claude-sonnet-4.6`) to a provider that serves it, translating
-to that provider's own upstream id.
+to that provider's own upstream id. Providers may serve models beyond the
+curated `registry/models` catalog (BYOK / BYO-subscription extras); those route
+the same way — the curated catalog is the blessed default set, not a routing
+gate.
 
 Rules:
 

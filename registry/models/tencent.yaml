@@ -1,44 +1,11 @@
-- id: tencent/hunyuan-2.0-instruct
-  name: 'Hunyuan 2.0 Instruct'
+- id: tencent/hy3
+  name: 'Hunyuan 3'
   input_modalities:
   - text
   output_modalities:
   - text
-  max_input_tokens: 131072
-  max_output_tokens: 16384
-  release_date: 2026-03-08
-  open_weights: false
-  family: hunyuan
-- id: tencent/hunyuan-2.0-thinking
-  name: 'Hunyuan 2.0 Thinking'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 131072
-  max_output_tokens: 16384
-  release_date: 2026-03-08
-  open_weights: false
-  family: hunyuan
-- id: tencent/hunyuan-t1
-  name: 'Hunyuan T1'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 131072
-  max_output_tokens: 16384
-  release_date: 2026-03-08
-  open_weights: false
-  family: hunyuan
-- id: tencent/hunyuan-turbos
-  name: 'Hunyuan TurboS'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 131072
-  max_output_tokens: 16384
-  release_date: 2026-03-08
-  open_weights: false
+  max_input_tokens: 256000
+  max_output_tokens: 64000
+  release_date: 2026-07-06
+  open_weights: true
   family: hunyuan

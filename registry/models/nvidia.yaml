@@ -1,15 +1,3 @@
-- id: nvidia/nemotron-3-nano-30b-a3b
-  name: 'Nemotron 3 Nano 30B-A3B'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 131072
-  max_output_tokens: 131072
-  release_date: 2025-12-15
-  knowledge_cutoff: 2024-09
-  open_weights: true
-  family: nemotron
 - id: nvidia/nemotron-3-super-120b-a12b
   name: 'Nemotron 3 Super 120B-A12B'
   input_modalities:

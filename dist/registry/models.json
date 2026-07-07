@@ -645,118 +645,6 @@
       "release_date": "2026-05-28"
     },
     {
-      "family": "claude-sonnet",
-      "id": "anthropic/claude-sonnet-4.5",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-07-31",
-      "max_input_tokens": 200000,
-      "max_output_tokens": 64000,
-      "name": "Anthropic: Claude Sonnet 4.5",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "anthropic",
-          "provider_model_id": "claude-sonnet-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "azure",
-          "provider_model_id": "claude-sonnet-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "provider": "claude-code",
-          "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "github-copilot",
-          "provider_model_id": "claude-sonnet-4.5"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "anthropic/claude-sonnet-4.5"
-        }
-      ],
-      "release_date": "2025-09-29"
-    },
-    {
       "description": "Anthropic's Claude Sonnet 4.6.",
       "family": "claude-sonnet",
       "id": "anthropic/claude-sonnet-4.6",
@@ -933,6 +821,25 @@
       "release_date": "2026-02-17"
     },
     {
+      "description": "Anthropic's Claude Sonnet 5.",
+      "family": "claude-sonnet",
+      "id": "anthropic/claude-sonnet-5",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-01-31",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "Anthropic: Claude Sonnet 5",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-06-30"
+    },
+    {
       "family": "ernie",
       "id": "baidu/ernie-5.1",
       "input_modalities": [
@@ -942,23 +849,6 @@
       "max_input_tokens": 119000,
       "max_output_tokens": 64000,
       "name": "ERNIE 5.1",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-05-10"
-    },
-    {
-      "family": "ernie",
-      "id": "baidu/ernie-5.1-thinking",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "max_input_tokens": 119000,
-      "max_output_tokens": 64000,
-      "name": "ERNIE 5.1 Thinking",
       "open_weights": false,
       "output_modalities": [
         "text"
@@ -1002,6 +892,23 @@
     },
     {
       "family": "doubao-seed",
+      "id": "bytedance/doubao-seed-2.0-mini",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 256000,
+      "max_output_tokens": 32000,
+      "name": "Doubao Seed 2.0 Mini",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-02-14"
+    },
+    {
+      "family": "doubao-seed",
       "id": "bytedance/doubao-seed-2.0-pro",
       "input_modalities": [
         "text",
@@ -1016,6 +923,40 @@
       ],
       "providers": [],
       "release_date": "2026-02-14"
+    },
+    {
+      "family": "doubao-seed",
+      "id": "bytedance/doubao-seed-2.1-pro",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 256000,
+      "max_output_tokens": 256000,
+      "name": "Doubao Seed 2.1 Pro",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-06-24"
+    },
+    {
+      "family": "doubao-seed",
+      "id": "bytedance/doubao-seed-2.1-turbo",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 256000,
+      "max_output_tokens": 256000,
+      "name": "Doubao Seed 2.1 Turbo",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-06-24"
     },
     {
       "description": "DeepSeek-V3.2 — high-efficiency reasoning model.",
@@ -2023,248 +1964,6 @@
     },
     {
       "family": "minimax",
-      "id": "minimax/minimax-m2.5",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 196608,
-      "max_output_tokens": 196608,
-      "name": "MiniMax: M2.5",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 1.15
-            }
-          },
-          "provider": "akashml",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 40
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
-          "provider_model_id": "MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "aws-bedrock",
-          "provider_model_id": "minimax.minimax-m2.5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.075,
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "chutes",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5-TEE",
-          "rate_limits": {
-            "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": [
-            "anthropic",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "cache_write": 0.375,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "minimax",
-          "provider_model_id": "MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "anthropic",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "cache_write": 0.375,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "minimax_cn",
-          "provider_model_id": "MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "minimax-m2.5"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "minimax-m2.5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.05,
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 0.9
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "minimax/minimax-m2.5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "tencent",
-          "provider_model_id": "minimax-m2.5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "tencent_cn",
-          "provider_model_id": "minimax-m2.5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-02-12"
-    },
-    {
-      "family": "minimax",
       "id": "minimax/minimax-m2.7",
       "input_modalities": [
         "text"
@@ -2585,74 +2284,21 @@
       "release_date": "2026-06-01"
     },
     {
-      "family": "magistral",
-      "id": "mistralai/magistral-medium",
-      "input_modalities": [
-        "text"
-      ],
-      "knowledge_cutoff": "2025-06",
-      "max_input_tokens": 128000,
-      "max_output_tokens": 16384,
-      "name": "Magistral Medium",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2025-03-17"
-    },
-    {
-      "family": "mistral-large",
-      "id": "mistralai/mistral-large",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2024-11",
-      "max_input_tokens": 262144,
-      "max_output_tokens": 262144,
-      "name": "Mistral Large",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2024-11-01"
-    },
-    {
       "family": "mistral-medium",
-      "id": "mistralai/mistral-medium",
+      "id": "mistralai/mistral-medium-3-5",
       "input_modalities": [
         "text",
         "image"
       ],
       "max_input_tokens": 262144,
       "max_output_tokens": 262144,
-      "name": "Mistral Medium",
+      "name": "Mistral Medium 3.5",
       "open_weights": true,
       "output_modalities": [
         "text"
       ],
       "providers": [],
-      "release_date": "2026-04-29"
-    },
-    {
-      "family": "mistral-small",
-      "id": "mistralai/mistral-small",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-06",
-      "max_input_tokens": 256000,
-      "max_output_tokens": 256000,
-      "name": "Mistral Small",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-03-16"
+      "release_date": "2026-04-30"
     },
     {
       "family": "kimi-k2",
@@ -3233,21 +2879,22 @@
       "release_date": "2026-06-12"
     },
     {
-      "family": "nemotron",
-      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "family": "kimi-k2",
+      "id": "moonshotai/kimi-k2.7-code-highspeed",
       "input_modalities": [
-        "text"
+        "text",
+        "image"
       ],
-      "knowledge_cutoff": "2024-09",
-      "max_input_tokens": 131072,
-      "max_output_tokens": 131072,
-      "name": "Nemotron 3 Nano 30B-A3B",
+      "knowledge_cutoff": "2025-01",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 32768,
+      "name": "Kimi: K2.7 Code High Speed",
       "open_weights": true,
       "output_modalities": [
         "text"
       ],
       "providers": [],
-      "release_date": "2025-12-15"
+      "release_date": "2026-06-15"
     },
     {
       "family": "nemotron",
@@ -3722,97 +3369,22 @@
       "release_date": "2026-04-23"
     },
     {
-      "description": "OpenAI's open-weight 120B (MoE) reasoning model with configurable reasoning effort.",
-      "family": "gpt-oss",
-      "id": "openai/gpt-oss-120b",
+      "family": "gpt",
+      "id": "openai/gpt-5.5-pro",
       "input_modalities": [
-        "text"
+        "text",
+        "image"
       ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 32768,
-      "name": "OpenAI: gpt-oss-120b",
-      "open_weights": true,
+      "knowledge_cutoff": "2025-12-01",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-5.5 Pro",
+      "open_weights": false,
       "output_modalities": [
         "text"
       ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 0.6
-            }
-          },
-          "provider": "aws-bedrock",
-          "provider_model_id": "openai.gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 0.69
-            }
-          },
-          "provider": "cerebras",
-          "provider_model_id": "gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "cache_write": 0.08,
-              "no_cache": 0.04
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "openai/gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.039
-            },
-            "output_tokens": {
-              "text": 0.18
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "openai/gpt-oss-120b"
-        }
-      ],
-      "release_date": "2025-08-05"
+      "providers": [],
+      "release_date": "2026-04-24"
     },
     {
       "description": "Alibaba Qwen3.6 Flash — Alibaba's fast, low-latency tier in the Qwen3.6 family.",
@@ -4927,67 +4499,19 @@
     },
     {
       "family": "hunyuan",
-      "id": "tencent/hunyuan-2.0-instruct",
+      "id": "tencent/hy3",
       "input_modalities": [
         "text"
       ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 16384,
-      "name": "Hunyuan 2.0 Instruct",
-      "open_weights": false,
+      "max_input_tokens": 256000,
+      "max_output_tokens": 64000,
+      "name": "Hunyuan 3",
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
       "providers": [],
-      "release_date": "2026-03-08"
-    },
-    {
-      "family": "hunyuan",
-      "id": "tencent/hunyuan-2.0-thinking",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 16384,
-      "name": "Hunyuan 2.0 Thinking",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-03-08"
-    },
-    {
-      "family": "hunyuan",
-      "id": "tencent/hunyuan-t1",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 16384,
-      "name": "Hunyuan T1",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-03-08"
-    },
-    {
-      "family": "hunyuan",
-      "id": "tencent/hunyuan-turbos",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 16384,
-      "name": "Hunyuan TurboS",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-03-08"
+      "release_date": "2026-07-06"
     },
     {
       "family": "grok",
@@ -5276,193 +4800,6 @@
           }
         }
       ]
-    },
-    {
-      "family": "mimo",
-      "id": "xiaomi/mimo-v2-flash",
-      "input_modalities": [
-        "text"
-      ],
-      "knowledge_cutoff": "2024-12-01",
-      "max_input_tokens": 65536,
-      "max_output_tokens": 32768,
-      "name": "Xiaomi: MiMo V2 Flash",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.09
-            },
-            "output_tokens": {
-              "text": 0.29
-            }
-          },
-          "provider": "chutes",
-          "provider_model_id": "XiaomiMiMo/MiMo-V2-Flash-TEE",
-          "rate_limits": {
-            "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.09
-            },
-            "output_tokens": {
-              "text": 0.29
-            }
-          },
-          "provider": "worldrouter",
-          "provider_model_id": "mimo-v2-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-06-30",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider": "xiaomi",
-          "provider_model_id": "mimo-v2-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2025-12-16"
-    },
-    {
-      "description": "Xiaomi MiMo V2 Omni — multimodal MiMo V2 tier.",
-      "family": "mimo",
-      "id": "xiaomi/mimo-v2-omni",
-      "input_modalities": [
-        "text",
-        "image",
-        "audio"
-      ],
-      "knowledge_cutoff": "2024-12",
-      "max_input_tokens": 262144,
-      "max_output_tokens": 131072,
-      "name": "Xiaomi: MiMo V2 Omni",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "mimo-v2-omni"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-06-30",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.08,
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 2.0
-            }
-          },
-          "provider": "xiaomi",
-          "provider_model_id": "mimo-v2-omni",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-03-18"
-    },
-    {
-      "family": "mimo",
-      "id": "xiaomi/mimo-v2-pro",
-      "input_modalities": [
-        "text"
-      ],
-      "knowledge_cutoff": "2024-12",
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 131072,
-      "name": "Xiaomi: MiMo V2 Pro",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "mimo-v2-pro"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-06-30",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "xiaomi",
-          "provider_model_id": "mimo-v2-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-03-18"
     },
     {
       "description": "Xiaomi MiMo V2.5 — standard tier of the MiMo V2.5 family.",

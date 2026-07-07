@@ -10,15 +10,3 @@
   release_date: 2026-05-10
   open_weights: false
   family: ernie
-- id: baidu/ernie-5.1-thinking
-  name: 'ERNIE 5.1 Thinking'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 119000
-  max_output_tokens: 64000
-  release_date: 2026-05-10
-  open_weights: false
-  family: ernie
