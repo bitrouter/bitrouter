@@ -53,6 +53,21 @@ models:
       - reasoning
       - structured_outputs
       - tools
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
+    # Introductory pricing through 2026-08-31; rises to $3/$15 after.
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+      - image_input
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: claude-sonnet-4-6
     pricing:
