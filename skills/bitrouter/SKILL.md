@@ -97,7 +97,7 @@ bitrouter update         # self-update the binary (prereleases by default); --ch
 
 The daemon writes its runtime files (`bitrouter.sock`, `bitrouter.pid`, `bitrouter.log`, optional `bitrouter.db`) into `~/.bitrouter/`.
 
-Beyond the built-ins, the daemon merges the public provider registry on startup: any registry **BYOK** provider whose key is present (convention `${NAME}_API_KEY`) becomes routable for the canonical models it serves, and providers are ranked by a configurable priority ladder. See `references/providers.md` → *Provider registry*.
+Beyond the built-ins, the daemon merges the public provider registry on startup: any registry **BYOK** provider whose key is present (convention `${NAME}_API_KEY`) becomes routable for the models it serves — the curated catalog plus any BYOK / BYO-subscription extras the provider lists beyond it — and providers are ranked by a configurable priority ladder. See `references/providers.md` → *Provider registry*.
 
 **With a config file.** When you want explicit control (multi-account, MCP servers, ACP agents, custom providers):
 

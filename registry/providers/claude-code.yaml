@@ -33,6 +33,13 @@ models:
       - reasoning
       - structured_outputs
       - tools
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+      - image_input
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: claude-sonnet-4-6
     capabilities:
@@ -40,8 +47,8 @@ models:
       - structured_outputs
       - tools
       - image_input
-  - id: anthropic/claude-sonnet-4.5
-    provider_model_id: claude-sonnet-4-5
+  - id: anthropic/claude-haiku-4.5
+    provider_model_id: claude-haiku-4-5
     capabilities:
       - reasoning
       - structured_outputs

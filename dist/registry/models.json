@@ -116,6 +116,16 @@
           }
         },
         {
+          "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "provider": "claude-code",
+          "provider_model_id": "claude-haiku-4-5"
+        },
+        {
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "claude-haiku-4.5"
@@ -498,97 +508,6 @@
       "release_date": "2026-05-28"
     },
     {
-      "family": "claude-sonnet",
-      "id": "anthropic/claude-sonnet-4.5",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-07-31",
-      "max_input_tokens": 200000,
-      "max_output_tokens": 64000,
-      "name": "Anthropic: Claude Sonnet 4.5",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "anthropic",
-          "provider_model_id": "claude-sonnet-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "provider": "claude-code",
-          "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "github-copilot",
-          "provider_model_id": "claude-sonnet-4.5"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "anthropic/claude-sonnet-4.5"
-        }
-      ],
-      "release_date": "2025-09-29"
-    },
-    {
       "description": "Anthropic's Claude Sonnet 4.6.",
       "family": "claude-sonnet",
       "id": "anthropic/claude-sonnet-4.6",
@@ -721,6 +640,37 @@
         }
       ],
       "release_date": "2026-02-17"
+    },
+    {
+      "description": "Anthropic's Claude Sonnet 5.",
+      "family": "claude-sonnet",
+      "id": "anthropic/claude-sonnet-5",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-01-31",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "Anthropic: Claude Sonnet 5",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "anthropic",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "provider": "claude-code",
+          "provider_model_id": "claude-sonnet-5"
+        }
+      ],
+      "release_date": "2026-06-30"
     },
     {
       "description": "DeepSeek-V3.2 — high-efficiency reasoning model.",
@@ -1207,66 +1157,6 @@
       "release_date": "2026-04-24"
     },
     {
-      "id": "google/gemini-2.5-pro-preview",
-      "input_modalities": [
-        "text",
-        "image",
-        "audio"
-      ],
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 65536,
-      "name": "Google: Gemini 2.5 Pro Preview",
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-08-03",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.125,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 10.0
-            }
-          },
-          "provider": "google",
-          "provider_model_id": "gemini-2.5-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.125,
-              "cache_write": 0.375,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 10.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "google/gemini-2.5-pro-preview"
-        }
-      ]
-    },
-    {
       "family": "gemini-flash-lite",
       "id": "google/gemini-3.1-flash-lite-preview",
       "input_modalities": [
@@ -1301,6 +1191,17 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
+          "provider": "google-ai",
+          "provider_model_id": "gemini-3.1-flash-lite-preview"
         },
         {
           "api_protocol": [
@@ -1394,6 +1295,18 @@
         },
         {
           "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "google-ai",
+          "provider_model_id": "gemini-3.1-pro-preview"
+        },
+        {
+          "api_protocol": [
             "openai",
             "responses",
             "anthropic"
@@ -1484,6 +1397,18 @@
           }
         },
         {
+          "api_protocol": [
+            "google",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "google-ai",
+          "provider_model_id": "gemini-3.5-flash"
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -1518,6 +1443,88 @@
         }
       ],
       "release_date": "2026-05-19"
+    },
+    {
+      "description": "Google Gemma 4 31B — open-weight instruction-tuned vision-language model.",
+      "family": "gemma",
+      "id": "google/gemma-4-31b",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 131072,
+      "max_output_tokens": 40960,
+      "name": "Google: Gemma 4 31B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-02"
+    },
+    {
+      "family": "ling",
+      "id": "inclusionai/ling-2.6-1t",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 32768,
+      "name": "Ling 2.6 1T",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-23"
+    },
+    {
+      "family": "ling",
+      "id": "inclusionai/ling-2.6-flash",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 32768,
+      "name": "Ling 2.6 Flash",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-24"
+    },
+    {
+      "family": "ring",
+      "id": "inclusionai/ring-2.6-1t",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 65536,
+      "name": "Ring 2.6 1T",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-05-08"
+    },
+    {
+      "family": "longcat",
+      "id": "meituan/longcat-2.0",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "LongCat 2.0",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-06-30"
     },
     {
       "family": "minimax",
@@ -2064,6 +2071,41 @@
       "release_date": "2026-06-01"
     },
     {
+      "family": "mistral-medium",
+      "id": "mistralai/mistral-medium-3-5",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "name": "Mistral Medium 3.5",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-30"
+    },
+    {
+      "family": "mistral-small",
+      "id": "mistralai/mistral-small-4",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2025-06",
+      "max_input_tokens": 256000,
+      "max_output_tokens": 65536,
+      "name": "Mistral Small 4",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-03-16"
+    },
+    {
       "family": "kimi-k2",
       "id": "moonshotai/kimi-k2.5",
       "input_modalities": [
@@ -2367,15 +2409,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.16,
-              "no_cache": 0.95
-            },
-            "output_tokens": {
-              "text": 4.0
-            }
-          },
           "provider": "moonshotai_coding_plan",
           "provider_model_id": "kimi-for-coding",
           "rate_limits": {
@@ -2428,6 +2461,15 @@
             "reasoning",
             "tools"
           ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
           "provider": "tencent",
           "provider_model_id": "kimi-k2.6",
           "rate_limits": {
@@ -2443,6 +2485,15 @@
             "reasoning",
             "tools"
           ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
           "provider": "tencent_cn",
           "provider_model_id": "kimi-k2.6",
           "rate_limits": {
@@ -2574,6 +2625,57 @@
         }
       ],
       "release_date": "2026-06-12"
+    },
+    {
+      "description": "Nex AGI Nex-N2-Pro — open-weight agentic mixture-of-experts model (397B/A17B) for coding and tool use.",
+      "family": "nex-n2",
+      "id": "nex-agi/nex-n2-pro",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "name": "Nex AGI: Nex-N2-Pro",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-06-08"
+    },
+    {
+      "family": "nemotron",
+      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "input_modalities": [
+        "text"
+      ],
+      "knowledge_cutoff": "2024-04",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "name": "Nemotron 3 Super 120B-A12B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-03-11"
+    },
+    {
+      "family": "nemotron",
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Nemotron 3 Ultra 550B-A55B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-06-04"
     },
     {
       "family": "gpt",
@@ -2915,969 +3017,95 @@
       "release_date": "2026-04-23"
     },
     {
-      "description": "OpenAI's open-weight 120B (MoE) reasoning model with configurable reasoning effort.",
-      "family": "gpt-oss",
-      "id": "openai/gpt-oss-120b",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 32768,
-      "name": "OpenAI: gpt-oss-120b",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 0.69
-            }
-          },
-          "provider": "cerebras",
-          "provider_model_id": "gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "cache_write": 0.08,
-              "no_cache": 0.04
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "openai/gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.039
-            },
-            "output_tokens": {
-              "text": 0.18
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "openai/gpt-oss-120b"
-        }
-      ],
-      "release_date": "2025-08-05"
-    },
-    {
-      "description": "Alibaba Qwen3.6 Flash — Alibaba's fast, low-latency tier in the Qwen3.6 family.",
-      "family": "qwen3.6",
-      "id": "qwen/qwen3.6-flash",
-      "input_modalities": [
-        "text"
-      ],
-      "knowledge_cutoff": "2025-04",
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 65536,
-      "name": "Qwen: Qwen3.6 Flash",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_cn",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.0
-                },
-                "output_tokens": {
-                  "text": 4.0
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.5
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.66
-                },
-                "output_tokens": {
-                  "text": 3.961
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.165
-            },
-            "output_tokens": {
-              "text": 0.99
-            }
-          },
-          "provider": "alibaba_us",
-          "provider_model_id": "qwen3.6-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_write": 0.234375,
-              "no_cache": 0.1875
-            },
-            "output_tokens": {
-              "text": 1.125
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "qwen/qwen3.6-flash"
-        }
-      ],
-      "release_date": "2026-04-02"
-    },
-    {
-      "description": "Alibaba Qwen3.6 Plus — Alibaba's general-purpose proprietary tier in the Qwen3.6 family.",
-      "family": "qwen3.6",
-      "id": "qwen/qwen3.6-plus",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 8192,
-      "name": "Qwen: Qwen3.6 Plus",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.651
-            }
-          },
-          "provider": "alibaba_cn",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.651
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.651
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.651
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 2.0
-                },
-                "output_tokens": {
-                  "text": 6.0
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.651
-            }
-          },
-          "provider": "alibaba_us",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "qwen3.6-plus"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "qwen3.6-plus"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_write": 0.40625,
-              "no_cache": 0.325
-            },
-            "output_tokens": {
-              "text": 1.95
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "qwen/qwen3.6-plus"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.07707,
-              "cache_write": 0.963375,
-              "no_cache": 0.7707
-            },
-            "output_tokens": {
-              "text": 4.6214
-            }
-          },
-          "provider": "worldrouter",
-          "provider_model_id": "qwen3.6-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-04-02"
-    },
-    {
-      "family": "qwen3.7-max",
-      "id": "qwen/qwen3.7-max",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 65536,
-      "name": "Qwen: Qwen3.7 Max",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_cn",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.65
-            },
-            "output_tokens": {
-              "text": 4.951
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.7-max",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider": "alibaba_us",
-          "provider_model_id": "qwen3.7-max-us",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "qwen3.7-max"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 1.5625,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 3.75
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "qwen/qwen3.7-max"
-        }
-      ],
-      "release_date": "2026-05-21"
-    },
-    {
-      "id": "qwen/qwen3.7-plus",
+      "description": "Qwen3.5 open-source native vision-language MoE (122B total, 10B active).",
+      "family": "qwen3.5",
+      "id": "qwen/qwen3.5-122b-a10b",
       "input_modalities": [
         "text",
         "image"
       ],
-      "max_input_tokens": 1000000,
+      "max_input_tokens": 262144,
       "max_output_tokens": 65536,
-      "name": "Qwen: Qwen3.7 Plus",
-      "open_weights": false,
+      "name": "Qwen: Qwen3.5 122B-A10B",
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
-      "providers": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.101
-            }
-          },
-          "provider": "alibaba_cn",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "alibaba_coding_plan_sg",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.101
-            }
-          },
-          "provider": "alibaba_eu",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.276
-            },
-            "output_tokens": {
-              "text": 1.101
-            }
-          },
-          "provider": "alibaba_hk",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.6
-            }
-          },
-          "provider": "alibaba_jp",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.6
-            }
-          },
-          "provider": "alibaba_sg",
-          "provider_model_id": "qwen3.7-plus",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.6
-            }
-          },
-          "provider": "alibaba_us",
-          "provider_model_id": "qwen3.7-plus-us",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "qwen3.7-plus"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.064,
-              "cache_write": 0.4,
-              "no_cache": 0.32
-            },
-            "output_tokens": {
-              "text": 1.28
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "qwen/qwen3.7-plus"
-        }
+      "providers": [],
+      "release_date": "2026-02-23"
+    },
+    {
+      "description": "Qwen3.5 open-source native vision-language model (27B).",
+      "family": "qwen3.5",
+      "id": "qwen/qwen3.5-27b",
+      "input_modalities": [
+        "text",
+        "image"
       ],
-      "release_date": "2026-06-01"
+      "max_input_tokens": 262144,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.5 27B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-02-23"
+    },
+    {
+      "description": "Qwen3.5 open-source native vision-language flagship MoE (397B total, 17B active).",
+      "family": "qwen3.5",
+      "id": "qwen/qwen3.5-397b-a17b",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2025-04",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.5 397B-A17B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-02-16"
+    },
+    {
+      "description": "Qwen3.6 open-source native vision-language model (27B).",
+      "family": "qwen3.6",
+      "id": "qwen/qwen3.6-27b",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.6 27B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-22"
+    },
+    {
+      "description": "Qwen3.6 open-source native vision-language MoE (35B total, 3B active).",
+      "family": "qwen3.6",
+      "id": "qwen/qwen3.6-35b-a3b",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.6 35B-A3B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-17"
     },
     {
       "id": "stepfun/step-3.5-flash",
@@ -4001,6 +3229,7 @@
       "max_input_tokens": 256000,
       "max_output_tokens": 256000,
       "name": "StepFun: Step 3.7 Flash",
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
@@ -4100,6 +3329,22 @@
       ]
     },
     {
+      "family": "hunyuan",
+      "id": "tencent/hy3",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 256000,
+      "max_output_tokens": 64000,
+      "name": "Hunyuan 3",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-07-06"
+    },
+    {
       "family": "grok",
       "id": "x-ai/grok-4.20",
       "input_modalities": [
@@ -4131,6 +3376,18 @@
           },
           "provider": "openrouter",
           "provider_model_id": "x-ai/grok-4.20"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.20"
         },
         {
           "api_protocol": "openai",
@@ -4222,6 +3479,18 @@
             "reasoning",
             "tools"
           ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.20-multi-agent"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "pricing": {
             "input_tokens": {
               "no_cache": 1.25
@@ -4270,6 +3539,18 @@
           },
           "provider": "openrouter",
           "provider_model_id": "x-ai/grok-4.3"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.3"
         },
         {
           "api_protocol": [
@@ -4351,6 +3632,17 @@
           "capabilities": [
             "tools"
           ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-build-0.1"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "tools"
+          ],
           "pricing": {
             "input_tokens": {
               "no_cache": 1.0
@@ -4366,193 +3658,6 @@
           }
         }
       ]
-    },
-    {
-      "family": "mimo",
-      "id": "xiaomi/mimo-v2-flash",
-      "input_modalities": [
-        "text"
-      ],
-      "knowledge_cutoff": "2024-12-01",
-      "max_input_tokens": 65536,
-      "max_output_tokens": 32768,
-      "name": "Xiaomi: MiMo V2 Flash",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.09
-            },
-            "output_tokens": {
-              "text": 0.29
-            }
-          },
-          "provider": "chutes",
-          "provider_model_id": "XiaomiMiMo/MiMo-V2-Flash-TEE",
-          "rate_limits": {
-            "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.09
-            },
-            "output_tokens": {
-              "text": 0.29
-            }
-          },
-          "provider": "worldrouter",
-          "provider_model_id": "mimo-v2-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-06-30",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider": "xiaomi",
-          "provider_model_id": "mimo-v2-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2025-12-16"
-    },
-    {
-      "description": "Xiaomi MiMo V2 Omni — multimodal MiMo V2 tier.",
-      "family": "mimo",
-      "id": "xiaomi/mimo-v2-omni",
-      "input_modalities": [
-        "text",
-        "image",
-        "audio"
-      ],
-      "knowledge_cutoff": "2024-12",
-      "max_input_tokens": 262144,
-      "max_output_tokens": 131072,
-      "name": "Xiaomi: MiMo V2 Omni",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "mimo-v2-omni"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-06-30",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.08,
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 2.0
-            }
-          },
-          "provider": "xiaomi",
-          "provider_model_id": "mimo-v2-omni",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-03-18"
-    },
-    {
-      "family": "mimo",
-      "id": "xiaomi/mimo-v2-pro",
-      "input_modalities": [
-        "text"
-      ],
-      "knowledge_cutoff": "2024-12",
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 131072,
-      "name": "Xiaomi: MiMo V2 Pro",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "mimo-v2-pro"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "deprecation_date": "2026-06-30",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "xiaomi",
-          "provider_model_id": "mimo-v2-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-03-18"
     },
     {
       "description": "Xiaomi MiMo V2.5 — standard tier of the MiMo V2.5 family.",
@@ -4830,6 +3935,22 @@
     },
     {
       "family": "glm",
+      "id": "z-ai/glm-4.7",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 200000,
+      "max_output_tokens": 131072,
+      "name": "Zhipu: GLM-4.7",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2025-12-23"
+    },
+    {
+      "family": "glm",
       "id": "z-ai/glm-5",
       "input_modalities": [
         "text"
@@ -5011,15 +4132,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
-            },
-            "output_tokens": {
-              "text": 3.2
-            }
-          },
           "provider": "zai_coding_plan",
           "provider_model_id": "glm-5",
           "rate_limits": {
@@ -5225,15 +4337,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
-            }
-          },
           "provider": "zai_coding_plan",
           "provider_model_id": "glm-5.1",
           "rate_limits": {
@@ -5252,7 +4355,7 @@
       "max_input_tokens": 1000000,
       "max_output_tokens": 131072,
       "name": "Zhipu: GLM-5.2",
-      "open_weights": false,
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
@@ -5375,15 +4478,6 @@
             "reasoning",
             "tools"
           ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
-            }
-          },
           "provider": "zai_coding_plan",
           "provider_model_id": "glm-5.2",
           "rate_limits": {

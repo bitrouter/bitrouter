@@ -1,0 +1,45 @@
+- id: z-ai/glm-5.1
+  name: 'Zhipu: GLM-5.1'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 128000
+  max_output_tokens: 8192
+  release_date: 2026-04-07
+  knowledge_cutoff: 2025-04
+  open_weights: true
+  family: glm
+- id: z-ai/glm-5.2
+  name: 'Zhipu: GLM-5.2'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-06-13
+  open_weights: true
+  family: glm
+- id: z-ai/glm-5
+  name: 'Zhipu: GLM-5'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 202752
+  max_output_tokens: 65535
+  release_date: 2026-02-11
+  open_weights: true
+  family: glm
+- id: z-ai/glm-4.7
+  name: 'Zhipu: GLM-4.7'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 200000
+  max_output_tokens: 131072
+  release_date: 2025-12-23
+  open_weights: true
+  family: glm

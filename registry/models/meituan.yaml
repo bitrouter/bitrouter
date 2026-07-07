@@ -1,0 +1,11 @@
+- id: meituan/longcat-2.0
+  name: 'LongCat 2.0'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-06-30
+  open_weights: true
+  family: longcat
