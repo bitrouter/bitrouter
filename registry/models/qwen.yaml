@@ -37,3 +37,30 @@
   release_date: 2026-02-23
   open_weights: true
   family: qwen3.5
+- id: qwen/qwen3.5-122b-a10b
+  name: 'Qwen: Qwen3.5 122B-A10B'
+  description: Qwen3.5 open-source native vision-language MoE (122B total, 10B active).
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 65536
+  release_date: 2026-02-23
+  open_weights: true
+  family: qwen3.5
+- id: qwen/qwen3.5-397b-a17b
+  name: 'Qwen: Qwen3.5 397B-A17B'
+  description: Qwen3.5 open-source native vision-language flagship MoE (397B total, 17B active).
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 65536
+  release_date: 2026-02-16
+  knowledge_cutoff: 2025-04
+  open_weights: true
+  family: qwen3.5
