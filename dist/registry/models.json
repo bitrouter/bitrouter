@@ -673,23 +673,6 @@
       "release_date": "2026-06-30"
     },
     {
-      "family": "ernie",
-      "id": "baidu/ernie-5.1",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "max_input_tokens": 119000,
-      "max_output_tokens": 64000,
-      "name": "ERNIE 5.1",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-05-10"
-    },
-    {
       "description": "DeepSeek-V3.2 — high-efficiency reasoning model.",
       "family": "deepseek",
       "id": "deepseek/deepseek-v3.2",
@@ -1526,22 +1509,6 @@
       ],
       "providers": [],
       "release_date": "2026-05-08"
-    },
-    {
-      "family": "kat-coder",
-      "id": "kuaishou/kat-coder-pro-v2",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 256000,
-      "max_output_tokens": 256000,
-      "name": "KAT Coder Pro V2",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-03-27"
     },
     {
       "family": "longcat",
@@ -3022,6 +2989,7 @@
       "max_input_tokens": 256000,
       "max_output_tokens": 256000,
       "name": "StepFun: Step 3.7 Flash",
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
@@ -4147,7 +4115,7 @@
       "max_input_tokens": 1000000,
       "max_output_tokens": 131072,
       "name": "Zhipu: GLM-5.2",
-      "open_weights": false,
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
