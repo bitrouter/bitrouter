@@ -165,6 +165,43 @@ providers:
 
 Glob-prefix patterns, same precedence as `api_protocol`. Each `(provider, pattern)` bucket gets an independent window.
 
+## Upstream timeouts
+
+Global defaults for the outbound client that calls providers live under the
+top-level `upstream.timeouts` block; any provider overrides them under
+`providers.<id>.timeouts`. All fields are seconds and optional — an unset
+provider field inherits the resolved global value, and an unset global inherits
+the built-in default.
+
+```yaml
+upstream:
+  timeouts:
+    connect_secs: 10          # TCP connect (default 10)
+    read_secs: 120            # idle/per-read: fires when the upstream goes
+                              #   silent this long, INCLUDING mid-stream
+                              #   (the stream-idle guard). Default 120.
+    pool_idle_secs: 90        # idle pooled-connection eviction (default 90)
+    tcp_keepalive_secs: 60    # TCP keepalive probe interval (default 60)
+    # total_secs:            # overall wall-clock cap for the whole
+                              #   request/stream. Opt-in, OFF by default —
+                              #   setting it bounds total stream duration, so
+                              #   keep it generous for reasoning/agentic models.
+providers:
+  slow-reasoner:
+    timeouts:
+      read_secs: 300          # this provider tolerates longer silences
+      total_secs: 1800        # and gets its own 30-min wall-clock cap
+```
+
+Notes:
+- `read_secs` is a per-read (idle) timeout — it resets on every chunk, so it is
+  what catches an upstream that stalls mid-SSE-stream. A mid-stream fire maps to
+  a `504` upstream-timeout (and triggers fallback only if it happens before the
+  first byte; once bytes are streaming the request can't fall back).
+- `total_secs` is unset by default on purpose: an overall cap would kill
+  legitimately long agentic/reasoning streams.
+- Timeouts are **not** inherited via a provider's `derives:` chain.
+
 ## Tags & routing
 
 Routing prefs filter providers by tag — `require_tags: [cheap]` keeps only tagged providers in scope:

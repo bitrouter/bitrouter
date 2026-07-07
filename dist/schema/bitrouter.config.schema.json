@@ -578,6 +578,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "timeouts": {
+          "$ref": "#/$defs/TimeoutConfig",
+          "description": "Per-provider upstream timeout overrides. Each set field layers over the\nresolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.\nNot inherited via [`derives`](Self::derives)."
         }
       },
       "type": "object"
@@ -840,6 +844,72 @@
           "type": "string"
         }
       ]
+    },
+    "TimeoutConfig": {
+      "description": "Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset\nfield inherits the level above — a provider override inherits the resolved\nglobal value, and an unset global inherits the built-in default\n([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒\nno overall wall-clock cap (the right default for long agentic streams).\n\nUsed both as the top-level `upstream.timeouts` block and as the per-provider\n`providers.<id>.timeouts` override; timeouts are **not** inherited via a\nprovider's `derives:` chain.",
+      "properties": {
+        "connect_secs": {
+          "default": null,
+          "description": "TCP connect timeout, seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pool_idle_secs": {
+          "default": null,
+          "description": "Idle pooled-connection eviction, seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "read_secs": {
+          "default": null,
+          "description": "Idle (per-read) timeout, seconds — fires when the upstream sends no\nbytes for this long, including mid-stream. The effective stream-idle\nguard.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tcp_keepalive_secs": {
+          "default": null,
+          "description": "TCP keepalive probe interval, seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_secs": {
+          "default": null,
+          "description": "Overall wall-clock cap for the entire request/stream, seconds. Opt-in:\nunset ⇒ no cap. Setting it bounds total stream duration, so keep it\ngenerous for reasoning / agentic providers.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UpstreamConfig": {
+      "description": "Outbound / upstream HTTP settings — the client BitRouter uses to call\nproviders. Distinct from [`ServerConfig`], which is the inbound listen\nsocket. Currently just [`timeouts`](Self::timeouts); grouped under\n`upstream:` so future outbound knobs have a home.",
+      "properties": {
+        "timeouts": {
+          "$ref": "#/$defs/TimeoutConfig",
+          "description": "Global upstream timeout defaults. A provider may override any field\nunder `providers.<id>.timeouts:`."
+        }
+      },
+      "type": "object"
     },
     "VariantConfig": {
       "description": "A `:variant` definition — a routing modifier only.",
@@ -1276,6 +1346,10 @@
     "server_tools": {
       "$ref": "#/$defs/ServerToolsConfig",
       "description": "Server-side tool loop: MCP server ids whose tools BitRouter injects into\nLLM requests and executes itself. Empty by default — the pipeline stays\nsingle-shot."
+    },
+    "upstream": {
+      "$ref": "#/$defs/UpstreamConfig",
+      "description": "Outbound / upstream HTTP settings (the client that calls providers)."
     },
     "variants": {
       "additionalProperties": {

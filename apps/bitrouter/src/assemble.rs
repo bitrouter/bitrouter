@@ -216,9 +216,24 @@ pub async fn build_app_with_path(
     // request. Listed only when the user configures the provider, so an
     // operator who doesn't use Copilot doesn't pay a token-store read.
     let auth_appliers = build_auth_appliers(config)?;
+    // Upstream timeouts: the `upstream.timeouts` block layered over the
+    // built-in defaults, plus a per-provider override for any provider whose
+    // resolved timeouts differ (v0 #394 fixed these; now they're configurable).
+    // Read from the user's `config` — per-provider timeouts are a user-only
+    // field, never set by the registry/builtin-defaults merge.
+    let global_timeouts = config.upstream.timeouts.apply_to(HttpTimeouts::default());
+    let provider_timeouts: std::collections::HashMap<String, HttpTimeouts> = config
+        .providers
+        .iter()
+        .filter_map(|(id, provider)| {
+            let resolved = provider.timeouts.apply_to(global_timeouts.clone());
+            (resolved != global_timeouts).then(|| (id.clone(), resolved))
+        })
+        .collect();
     let executor = Arc::new(
-        HttpExecutor::with_dispatch_and_auth(
-            HttpTimeouts::default(),
+        HttpExecutor::with_provider_timeouts(
+            global_timeouts,
+            provider_timeouts,
             OutboundDispatch::builtin(),
             auth_appliers,
         )

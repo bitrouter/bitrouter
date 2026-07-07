@@ -151,18 +151,31 @@ impl Executor for MockExecutor {
 // ===== real HTTP executor =====
 
 /// Upstream HTTP client timeout configuration. v0 #394: the upstream client had
-/// no timeouts, so a slow provider could hang a request forever. These four
-/// knobs are configured together.
-#[derive(Debug, Clone)]
+/// no timeouts, so a slow provider could hang a request forever.
+///
+/// `connect` / `read` / `pool_idle` / `tcp_keepalive` are set on the reqwest
+/// client at build time. `read` is a **per-read** (idle) timeout — it resets
+/// after every chunk, so it fires when an upstream sends no bytes for that long
+/// *including mid-stream*, which is the effective stream-idle guard.
+///
+/// `total` is the optional overall wall-clock cap for the whole request/stream,
+/// applied per-request via [`reqwest::RequestBuilder::timeout`]. It is `None` by
+/// default: an overall cap would kill legitimately long agentic/reasoning
+/// streams, so it is opt-in per deployment or per provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpTimeouts {
     /// TCP connect timeout.
     pub connect: Duration,
-    /// Per-read (response body) timeout.
+    /// Per-read (idle) timeout — resets after each chunk; fires mid-stream when
+    /// the upstream goes silent for this long.
     pub read: Duration,
     /// How long an idle pooled connection is kept.
     pub pool_idle: Duration,
     /// TCP keepalive probe interval.
     pub tcp_keepalive: Duration,
+    /// Optional overall wall-clock cap for the entire request/stream. `None` ⇒
+    /// no cap (default). Opt-in; keep it generous for reasoning providers.
+    pub total: Option<Duration>,
 }
 
 impl Default for HttpTimeouts {
@@ -172,6 +185,7 @@ impl Default for HttpTimeouts {
             read: Duration::from_secs(120),
             pool_idle: Duration::from_secs(90),
             tcp_keepalive: Duration::from_secs(60),
+            total: None,
         }
     }
 }
@@ -214,6 +228,23 @@ fn classify_upstream_error(status: u16, body: &str) -> BitrouterError {
     }
 }
 
+/// Classify a transport error that surfaces from the SSE decode loop *after*
+/// the stream is open. A read-timeout firing mid-stream must map to
+/// [`BitrouterError::UpstreamTimeout`] (504) — the same as a pre-stream
+/// timeout — rather than a generic 502, so status codes and metrics stay
+/// truthful once streaming has started. Non-timeout errors (parse / decode /
+/// other transport) keep the 502 mapping and carry the message.
+fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> BitrouterError {
+    if is_timeout {
+        BitrouterError::UpstreamTimeout
+    } else {
+        BitrouterError::Upstream {
+            status: 502,
+            message: format!("upstream stream error: {display}"),
+        }
+    }
+}
+
 /// Heuristic: does this upstream error body describe a depleted
 /// credit / balance? Matches the stable phrase family rather than any
 /// one provider's exact wording — string matching is unavoidable here
@@ -233,11 +264,34 @@ fn looks_like_credit_exhaustion(body: &str) -> bool {
 /// stream of [`StreamPart`]s.
 ///
 /// Build with [`HttpExecutor::with_defaults`] for sensible timeout defaults
-/// or [`HttpExecutor::new`] with a custom [`HttpTimeouts`].
+/// or [`HttpExecutor::new`] with a custom [`HttpTimeouts`]. Use
+/// [`with_provider_timeouts`](Self::with_provider_timeouts) to attach
+/// per-provider overrides.
 pub struct HttpExecutor {
-    client: reqwest::Client,
+    /// Client used for any provider without a per-provider override, plus its
+    /// timeouts (for the per-request `total` cap, which is not a client
+    /// setting).
+    default_client: reqwest::Client,
+    default_timeouts: HttpTimeouts,
+    /// Per-provider clients keyed by `provider_name`, each paired with the
+    /// resolved timeouts it was built from. Built once at construction; empty
+    /// in the common single-timeout deployment.
+    provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
     dispatch: OutboundDispatch,
     auth_appliers: AuthAppliers,
+}
+
+/// Build a reqwest client from the connection-level timeout knobs. `total` is
+/// deliberately not applied here — it is a per-request deadline set via
+/// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
+fn build_http_client(timeouts: &HttpTimeouts) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.read)
+        .pool_idle_timeout(timeouts.pool_idle)
+        .tcp_keepalive(timeouts.tcp_keepalive)
+        .build()
+        .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))
 }
 
 impl HttpExecutor {
@@ -268,18 +322,47 @@ impl HttpExecutor {
         dispatch: OutboundDispatch,
         auth_appliers: AuthAppliers,
     ) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .connect_timeout(timeouts.connect)
-            .read_timeout(timeouts.read)
-            .pool_idle_timeout(timeouts.pool_idle)
-            .tcp_keepalive(timeouts.tcp_keepalive)
-            .build()
-            .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))?;
+        Self::with_provider_timeouts(timeouts, HashMap::new(), dispatch, auth_appliers)
+    }
+
+    /// Build an executor with a global default [`HttpTimeouts`] plus a set of
+    /// per-provider overrides keyed by `provider_name`. Each override gets its
+    /// own reqwest client (connect/read/pool/keepalive are client-build-time
+    /// settings, so a differing tuple needs a distinct client); an override
+    /// equal to the default is skipped. Providers absent from the map use the
+    /// default client. This is how the app honours the `upstream.timeouts`
+    /// block and per-provider `timeouts:` overrides.
+    pub fn with_provider_timeouts(
+        default_timeouts: HttpTimeouts,
+        per_provider: HashMap<String, HttpTimeouts>,
+        dispatch: OutboundDispatch,
+        auth_appliers: AuthAppliers,
+    ) -> Result<Self> {
+        let default_client = build_http_client(&default_timeouts)?;
+        let mut provider_clients = HashMap::new();
+        for (name, timeouts) in per_provider {
+            if timeouts == default_timeouts {
+                continue;
+            }
+            let client = build_http_client(&timeouts)?;
+            provider_clients.insert(name, (timeouts, client));
+        }
         Ok(Self {
-            client,
+            default_client,
+            default_timeouts,
+            provider_clients,
             dispatch,
             auth_appliers,
         })
+    }
+
+    /// Pick the client + timeouts for `target`: a per-provider override when one
+    /// is registered for its `provider_name`, else the default pair.
+    fn client_for(&self, target: &RoutingTarget) -> (&reqwest::Client, &HttpTimeouts) {
+        match self.provider_clients.get(&target.provider_name) {
+            Some((timeouts, client)) => (client, timeouts),
+            None => (&self.default_client, &self.default_timeouts),
+        }
     }
 
     /// Build an executor with default timeouts and the built-in dispatch.
@@ -417,17 +500,19 @@ impl Executor for HttpExecutor {
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, false);
 
+        let (client, timeouts) = self.client_for(target);
         let started = Instant::now();
-        let mut request = self
-            .client
-            .post(&url)
-            .json(&body)
+        let mut builder = client.post(&url).json(&body);
+        if let Some(total) = timeouts.total {
+            builder = builder.timeout(total);
+        }
+        let mut request = builder
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
         forward_inbound_anthropic_beta(&mut request, target, ctx);
         let mut request = self.apply_auth(request, target, transport).await?;
         merge_outbound_trace_headers(&mut request, ctx);
-        let response = self.client.execute(request).await.map_err(|e| {
+        let response = client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
             } else {
@@ -490,16 +575,18 @@ impl Executor for HttpExecutor {
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, true);
 
-        let mut request = self
-            .client
-            .post(&url)
-            .json(&body)
+        let (client, timeouts) = self.client_for(target);
+        let mut builder = client.post(&url).json(&body);
+        if let Some(total) = timeouts.total {
+            builder = builder.timeout(total);
+        }
+        let mut request = builder
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
         forward_inbound_anthropic_beta(&mut request, target, ctx);
         let mut request = self.apply_auth(request, target, transport).await?;
         merge_outbound_trace_headers(&mut request, ctx);
-        let response = self.client.execute(request).await.map_err(|e| {
+        let response = client.execute(request).await.map_err(|e| {
             if e.is_timeout() {
                 BitrouterError::UpstreamTimeout
             } else {
@@ -544,10 +631,14 @@ impl Executor for HttpExecutor {
                         }
                     }
                     Err(e) => {
-                        yield Err(BitrouterError::Upstream {
-                            status: 502,
-                            message: format!("upstream stream error: {e}"),
-                        });
+                        // A read-timeout that fires mid-stream arrives here as a
+                        // transport error — recover the reqwest timeout signal so
+                        // it maps to UpstreamTimeout (504), not a blanket 502.
+                        let is_timeout = matches!(
+                            &e,
+                            eventsource_stream::EventStreamError::Transport(re) if re.is_timeout()
+                        );
+                        yield Err(stream_transport_error(is_timeout, &e));
                         return;
                     }
                 }
@@ -729,6 +820,31 @@ mod error_classification_tests {
         ));
         assert!(!looks_like_credit_exhaustion("invalid request: bad model"));
     }
+
+    #[test]
+    fn mid_stream_timeout_maps_to_upstream_timeout() {
+        // A read-timeout that fires *after* the SSE stream is open surfaces as
+        // a transport error inside the decode loop. It must be classified as
+        // UpstreamTimeout (504), not a generic 502 — otherwise the coarse
+        // stream-idle guard is mislabelled once streaming starts.
+        match stream_transport_error(true, "connection timed out") {
+            BitrouterError::UpstreamTimeout => {}
+            other => panic!("expected UpstreamTimeout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mid_stream_non_timeout_stays_a_502() {
+        // A parse / non-timeout transport error keeps the existing 502 mapping
+        // and preserves the underlying message.
+        match stream_transport_error(false, "malformed SSE frame") {
+            BitrouterError::Upstream { status, message } => {
+                assert_eq!(status, 502);
+                assert!(message.contains("malformed SSE frame"), "got {message:?}");
+            }
+            other => panic!("expected Upstream(502), got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -826,5 +942,72 @@ mod beta_forward_tests {
             &ctx_with_beta(None),
         );
         assert!(request.headers().get("anthropic-beta").is_none());
+    }
+}
+
+#[cfg(test)]
+mod client_selection_tests {
+    use super::*;
+    use crate::language_model::types::ApiProtocol;
+
+    fn target(provider: &str) -> RoutingTarget {
+        RoutingTarget {
+            provider_name: provider.into(),
+            service_id: "m".into(),
+            api_base: "https://api.example.com".into(),
+            api_key: String::new(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        }
+    }
+
+    #[test]
+    fn per_provider_override_selected_by_name_else_default() {
+        let default = HttpTimeouts::default();
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "slow".to_string(),
+            HttpTimeouts {
+                read: Duration::from_secs(300),
+                ..HttpTimeouts::default()
+            },
+        );
+        let exec = HttpExecutor::with_provider_timeouts(
+            default.clone(),
+            overrides,
+            OutboundDispatch::builtin(),
+            AuthAppliers::new(),
+        )
+        .expect("build executor");
+
+        // A provider with an override resolves to its own timeouts…
+        let (_, slow) = exec.client_for(&target("slow"));
+        assert_eq!(slow.read, Duration::from_secs(300));
+        // …and one absent from the map falls back to the default.
+        let (_, other) = exec.client_for(&target("openai"));
+        assert_eq!(other.read, default.read);
+    }
+
+    #[test]
+    fn override_equal_to_default_builds_no_extra_client() {
+        // An override identical to the default must not create a redundant
+        // per-provider client — the provider resolves to the default pair.
+        let default = HttpTimeouts::default();
+        let mut overrides = HashMap::new();
+        overrides.insert("same".to_string(), default.clone());
+        let exec = HttpExecutor::with_provider_timeouts(
+            default,
+            overrides,
+            OutboundDispatch::builtin(),
+            AuthAppliers::new(),
+        )
+        .expect("build executor");
+        assert!(
+            exec.provider_clients.is_empty(),
+            "an override equal to the default should be skipped"
+        );
     }
 }
