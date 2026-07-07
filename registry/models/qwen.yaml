@@ -64,3 +64,40 @@
   knowledge_cutoff: 2025-04
   open_weights: true
   family: qwen3.5
+- id: qwen/qwen3.7-plus
+  name: 'Qwen: Qwen3.7 Plus'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 65536
+  release_date: 2026-06-01
+  knowledge_cutoff: 2025-04
+  open_weights: false
+  family: qwen3.7
+- id: qwen/qwen3.7-max
+  name: 'Qwen: Qwen3.7 Max'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 65536
+  release_date: 2026-06-10
+  open_weights: false
+  family: qwen3.7
+- id: qwen/qwen3.6-flash
+  name: 'Qwen: Qwen3.6 Flash'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 65536
+  release_date: 2026-04-27
+  knowledge_cutoff: 2025-04
+  open_weights: false
+  family: qwen3.6
