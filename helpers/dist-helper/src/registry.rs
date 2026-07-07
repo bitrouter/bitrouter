@@ -2476,7 +2476,7 @@ auto_sync:
         let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
 
         assert!(workflow.contains(r#"cron: "0 22 * * *""#));
-        assert!(workflow.contains("AGENTIC_SYNC_MODEL: glm-5.2"));
+        assert!(workflow.contains("AGENTIC_SYNC_MODEL: z-ai/glm-5.2"));
     }
 
     #[test]
