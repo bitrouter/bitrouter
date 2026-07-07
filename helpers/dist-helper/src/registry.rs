@@ -462,6 +462,23 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         out,
         "- The current source model count is context only, not a limit. Add every public production model from the linked source that maps to an existing canonical model ID.\n"
     )?;
+    writeln!(out, "Source reading rules:")?;
+    writeln!(
+        out,
+        "- Raw HTML or rendered app HTML is still readable source material, not a reason to skip a provider."
+    )?;
+    writeln!(
+        out,
+        "- Do not use truncated output, first lines, or `head` output to conclude that a catalog is missing. Fetch the full response or save it to a temporary file before deciding."
+    )?;
+    writeln!(
+        out,
+        "- If a page is long, noisy, or rendered by a frontend framework, use generic extraction strategies: convert to text/Markdown with an available reader tool, parse visible text, search embedded JSON, or inspect repeated model/pricing records in the full page."
+    )?;
+    writeln!(
+        out,
+        "- Only report a source as unreadable after full-page retrieval and at least one fallback extraction method both fail.\n"
+    )?;
     writeln!(out, "Providers to sync:\n")?;
     if providers.is_empty() {
         writeln!(
@@ -2403,6 +2420,9 @@ auto_sync:
         assert!(prompt.contains("current source count, not a limit"));
         assert!(prompt.contains("existing_model_count: 1"));
         assert!(prompt.contains("writes: models, pricing"));
+        assert!(prompt.contains("Raw HTML or rendered app HTML is still readable source material"));
+        assert!(prompt.contains("Do not use truncated output"));
+        assert!(prompt.contains("generic extraction strategies"));
         assert!(prompt.contains("Do not use YAML serializers"));
         assert!(
             prompt.contains("A newly added provider model entry may include its own `pricing`")

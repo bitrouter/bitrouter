@@ -193,6 +193,3 @@ auto_sync:
   feed: agentic
   urls:
     - https://router.worldclaw.ai/models
-    - https://router.worldclaw.ai/docs/api
-    - https://router.worldclaw.ai/faq
-    - https://worldclaw.ai/
