@@ -2845,80 +2845,6 @@
       "release_date": "2026-04-23"
     },
     {
-      "description": "OpenAI's open-weight 120B (MoE) reasoning model with configurable reasoning effort.",
-      "family": "gpt-oss",
-      "id": "openai/gpt-oss-120b",
-      "input_modalities": [
-        "text"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 32768,
-      "name": "OpenAI: gpt-oss-120b",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 0.69
-            }
-          },
-          "provider": "cerebras",
-          "provider_model_id": "gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "cache_write": 0.08,
-              "no_cache": 0.04
-            },
-            "output_tokens": {
-              "text": 0.4
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "openai/gpt-oss-120b",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.039
-            },
-            "output_tokens": {
-              "text": 0.18
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "openai/gpt-oss-120b"
-        }
-      ],
-      "release_date": "2025-08-05"
-    },
-    {
       "description": "Qwen3.5 open-source native vision-language model (27B).",
       "family": "qwen3.5",
       "id": "qwen/qwen3.5-27b",
@@ -2953,6 +2879,24 @@
       ],
       "providers": [],
       "release_date": "2026-04-22"
+    },
+    {
+      "description": "Qwen3.6 open-source native vision-language MoE (35B total, 3B active).",
+      "family": "qwen3.6",
+      "id": "qwen/qwen3.6-35b-a3b",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 262144,
+      "max_output_tokens": 65536,
+      "name": "Qwen: Qwen3.6 35B-A3B",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [],
+      "release_date": "2026-04-17"
     },
     {
       "id": "stepfun/step-3.5-flash",
