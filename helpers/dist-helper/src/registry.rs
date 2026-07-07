@@ -460,6 +460,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     )?;
     writeln!(
         out,
+        "- Do not omit confirmed public models just to keep the diff small. Large catalog updates are allowed when the linked source supports them, but avoid unrelated formatting churn."
+    )?;
+    writeln!(
+        out,
         "- The current source model count is context only, not a limit. Add every public production model from the linked source that maps to an existing canonical model ID.\n"
     )?;
     writeln!(out, "Source reading rules:")?;
@@ -482,6 +486,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     writeln!(
         out,
         "- If a page is long, noisy, or rendered by a frontend framework, use generic extraction strategies: convert to text/Markdown with an available reader tool, parse visible text, search embedded JSON, or inspect repeated model/pricing records in the full page."
+    )?;
+    writeln!(
+        out,
+        "- Do not print large raw HTML, YAML, or JSON files to stdout. Use targeted extraction commands such as `rg -o`, counts, or small scripts that emit compact summaries."
     )?;
     writeln!(
         out,
@@ -646,17 +654,11 @@ fn slash_path(path: &Path) -> String {
         .join("/")
 }
 
-pub fn agentic_diff_check(root: &Path, max_provider_deletions: usize) -> Result<()> {
+pub fn agentic_diff_check(root: &Path) -> Result<()> {
     let output = ProcessCommand::new("git")
         .arg("-C")
         .arg(root)
-        .args([
-            "diff",
-            "--numstat",
-            "--",
-            "registry/providers",
-            "registry/models",
-        ])
+        .args(["diff", "--numstat", "--"])
         .output()
         .context("running git diff --numstat for agentic registry sync")?;
     if !output.status.success() {
@@ -666,7 +668,7 @@ pub fn agentic_diff_check(root: &Path, max_provider_deletions: usize) -> Result<
         );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let issues = agentic_diff_issues_from_numstat(&stdout, max_provider_deletions);
+    let issues = agentic_diff_issues_from_numstat(&stdout);
     if !issues.is_empty() {
         bail!("{}", issues.join("\n"));
     }
@@ -674,26 +676,18 @@ pub fn agentic_diff_check(root: &Path, max_provider_deletions: usize) -> Result<
     Ok(())
 }
 
-fn agentic_diff_issues_from_numstat(numstat: &str, max_provider_deletions: usize) -> Vec<String> {
+fn agentic_diff_issues_from_numstat(numstat: &str) -> Vec<String> {
     let mut issues = Vec::new();
     for line in numstat.lines() {
         let mut parts = line.splitn(3, '\t');
         let _additions = parts.next();
-        let Some(deletions) = parts.next() else {
-            continue;
-        };
+        let _deletions = parts.next();
         let Some(path) = parts.next() else {
             continue;
         };
-        if !path.starts_with("registry/providers/") {
-            continue;
-        }
-        let Ok(deletions) = deletions.parse::<usize>() else {
-            continue;
-        };
-        if deletions > max_provider_deletions {
+        if !path.starts_with("registry/providers/") && !path.starts_with("registry/models/") {
             issues.push(format!(
-                "{path}: agentic sync rewrote too much provider YAML ({deletions} deleted lines; max {max_provider_deletions}). Preserve formatting and make narrower edits."
+                "{path}: agentic sync may only edit files under registry/providers/ and registry/models/"
             ));
         }
     }
@@ -2438,8 +2432,10 @@ auto_sync:
         assert!(prompt.contains("curl -sS -L"));
         assert!(prompt.contains("rg"));
         assert!(prompt.contains("Do not fetch `_next/`, static assets, JavaScript chunks"));
+        assert!(prompt.contains("Do not print large raw HTML, YAML, or JSON files"));
         assert!(prompt.contains("generic extraction strategies"));
         assert!(prompt.contains("Do not use YAML serializers"));
+        assert!(prompt.contains("Do not omit confirmed public models just to keep the diff small"));
         assert!(
             prompt.contains("A newly added provider model entry may include its own `pricing`")
         );
@@ -2452,17 +2448,35 @@ auto_sync:
     }
 
     #[test]
-    fn agentic_diff_check_rejects_large_provider_rewrites() {
+    fn agentic_diff_check_allows_large_provider_rewrites() {
         let issues = agentic_diff_issues_from_numstat(
             "12\t179\tregistry/providers/worldrouter.yaml\n\
              70\t0\tregistry/providers/another.yaml\n\
              12\t179\tregistry/models/anthropic/example.yaml\n",
-            80,
+        );
+
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn agentic_diff_check_rejects_non_registry_source_paths() {
+        let issues = agentic_diff_issues_from_numstat(
+            "12\t0\tregistry/providers/worldrouter.yaml\n\
+             1\t0\thelpers/dist-helper/src/registry.rs\n",
         );
 
         assert_eq!(issues.len(), 1);
-        assert!(issues[0].contains("registry/providers/worldrouter.yaml"));
-        assert!(issues[0].contains("179 deleted lines"));
+        assert!(issues[0].contains("helpers/dist-helper/src/registry.rs"));
+        assert!(issues[0].contains("registry/providers/"));
+        assert!(issues[0].contains("registry/models/"));
+    }
+
+    #[test]
+    fn registry_sync_workflow_uses_agentic_defaults() {
+        let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
+
+        assert!(workflow.contains(r#"cron: "0 22 * * *""#));
+        assert!(workflow.contains("AGENTIC_SYNC_MODEL: z-ai/glm-5.2"));
     }
 
     #[test]
