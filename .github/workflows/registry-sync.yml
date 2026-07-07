@@ -32,6 +32,13 @@ jobs:
         run: |
           cargo run -p dist-helper -- registry sync --write
 
+      - name: Install agentic sync tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ripgrep
+          curl --version
+          rg --version
+
       - uses: actions/setup-node@v4
 
       - name: Sync agentic registry feeds
@@ -51,6 +58,7 @@ jobs:
           npm install -g @openai/codex
           export CODEX_HOME="${RUNNER_TEMP}/codex-home"
           mkdir -p "$CODEX_HOME"
+          mkdir -p target/agentic-sync
           codex --search -a never exec \
             --ignore-user-config \
             --ignore-rules \
