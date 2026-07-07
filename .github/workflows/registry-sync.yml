@@ -70,6 +70,7 @@ jobs:
             cat target/registry-agentic-result.md
             exit 1
           fi
+          cargo run -p dist-helper -- registry agentic-diff-check
 
       - name: Build and check registry dist
         run: |

@@ -52,6 +52,12 @@ enum RegistryCommand {
     },
     /// Render the prompt used by the headless agentic registry sync step.
     AgenticPrompt,
+    /// Check that an agentic sync made a narrow, reviewable registry diff.
+    AgenticDiffCheck {
+        /// Maximum deleted lines allowed in one provider YAML file.
+        #[arg(long, default_value_t = 80)]
+        max_provider_deletions: usize,
+    },
 }
 
 #[tokio::main]
@@ -78,6 +84,9 @@ async fn run(cli: Cli) -> Result<()> {
                 print!("{}", registry::agentic_prompt(&root)?);
                 Ok(())
             }
+            RegistryCommand::AgenticDiffCheck {
+                max_provider_deletions,
+            } => registry::agentic_diff_check(&root, max_provider_deletions),
         },
         Command::Check => {
             schema::generate(&root, true)?;
