@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.21](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.20...v1.0.0-alpha.21)
+
+
+### ⛰️ Features
+
+- Make registry dist runtime-only ([#641](https://github.com/bitrouter/bitrouter/pull/641)) - ([733bf7f](https://github.com/bitrouter/bitrouter/commit/733bf7f576607dd5e47ca0853e241df531e3468e))
+- Refactor registry provider variants ([#639](https://github.com/bitrouter/bitrouter/pull/639)) - ([0436241](https://github.com/bitrouter/bitrouter/commit/04362417b9821b715d9c858789083534cf302a3b))
+
+### 🐛 Bug Fixes
+
+- Preserve stream error settlement ([#656](https://github.com/bitrouter/bitrouter/pull/656)) - ([4e1df77](https://github.com/bitrouter/bitrouter/commit/4e1df77805a6f91a1607d44035ab1fea2e82d988))
+
+
 ## [1.0.0-alpha.20](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.19...v1.0.0-alpha.20)
 
 
