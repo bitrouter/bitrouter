@@ -41,5 +41,5 @@
   max_input_tokens: 200000
   max_output_tokens: 131072
   release_date: 2025-12-23
-  open_weights: false
+  open_weights: true
   family: glm

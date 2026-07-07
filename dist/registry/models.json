@@ -4800,7 +4800,7 @@
       "max_input_tokens": 200000,
       "max_output_tokens": 131072,
       "name": "Zhipu: GLM-4.7",
-      "open_weights": false,
+      "open_weights": true,
       "output_modalities": [
         "text"
       ],
