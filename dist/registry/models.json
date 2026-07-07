@@ -249,6 +249,20 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "anthropic/claude-opus-4.6"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
               "cache_write": 6.25,
               "no_cache": 5.0
             },
@@ -356,6 +370,20 @@
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "claude-opus-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.45,
+              "no_cache": 4.5
+            },
+            "output_tokens": {
+              "text": 22.5
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "anthropic/claude-opus-4.7"
         },
         {
           "api_protocol": "openai",
@@ -475,6 +503,20 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "anthropic/claude-opus-4.8"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
               "cache_write": 6.25,
               "no_cache": 5.0
             },
@@ -563,6 +605,20 @@
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "claude-sonnet-4.6"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "anthropic/claude-sonnet-4.6"
         },
         {
           "api_protocol": "openai",
@@ -957,6 +1013,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.022,
+              "no_cache": 0.112
+            },
+            "output_tokens": {
+              "text": 0.224
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -1143,6 +1213,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.116,
+              "no_cache": 1.392
+            },
+            "output_tokens": {
+              "text": 2.784
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro"
         },
         {
           "api_protocol": "openai",
@@ -2602,6 +2686,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.144,
+              "no_cache": 0.855
+            },
+            "output_tokens": {
+              "text": 3.6
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "moonshotai/Kimi-K2.6"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -2863,6 +2961,20 @@
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "kimi-k2.7-code"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.38,
+              "no_cache": 1.9
+            },
+            "output_tokens": {
+              "text": 8.0
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "moonshotai/kimi-k2.7-code-highspeed"
         },
         {
           "api_protocol": [
@@ -3221,6 +3333,20 @@
           "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "gpt-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "openai/gpt-5.5"
         },
         {
           "api_protocol": [
@@ -3662,6 +3788,20 @@
           },
           "provider": "atlascloud",
           "provider_model_id": "qwen/qwen3.7-max"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "Qwen/Qwen3.7-Max"
         },
         {
           "api_protocol": "openai",
@@ -4757,6 +4897,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 1.92
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "zai-org/GLM-5-FP8"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -4981,6 +5135,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.182,
+              "no_cache": 0.98
+            },
+            "output_tokens": {
+              "text": 3.08
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "zai-org/GLM-5.1-FP8"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -5200,6 +5368,20 @@
           },
           "provider": "atlascloud",
           "provider_model_id": "zai-org/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.182,
+              "no_cache": 0.979
+            },
+            "output_tokens": {
+              "text": 3.08
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "zai-org/GLM-5.2-FP8"
         },
         {
           "api_protocol": "openai",
