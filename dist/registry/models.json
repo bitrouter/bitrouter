@@ -1528,6 +1528,229 @@
     },
     {
       "family": "minimax",
+      "id": "minimax/minimax-m2.5",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 196608,
+      "max_output_tokens": 196608,
+      "name": "MiniMax: M2.5",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 1.15
+            }
+          },
+          "provider": "akashml",
+          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 40
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "alibaba_coding_plan_sg",
+          "provider_model_id": "MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "chutes",
+          "provider_model_id": "MiniMaxAI/MiniMax-M2.5-TEE",
+          "rate_limits": {
+            "requests_per_minute": 30
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "ionet",
+          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 50
+          }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "minimax",
+          "provider_model_id": "MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "minimax_cn",
+          "provider_model_id": "MiniMax-M2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "minimax-m2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "minimax-m2.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.9
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "minimax/minimax-m2.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "tencent",
+          "provider_model_id": "minimax-m2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "tencent_cn",
+          "provider_model_id": "minimax-m2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-02-12"
+    },
+    {
+      "family": "minimax",
       "id": "minimax/minimax-m2.7",
       "input_modalities": [
         "text"
@@ -2367,24 +2590,6 @@
         }
       ],
       "release_date": "2026-06-12"
-    },
-    {
-      "family": "kimi-k2",
-      "id": "moonshotai/kimi-k2.7-code-highspeed",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-01",
-      "max_input_tokens": 262144,
-      "max_output_tokens": 32768,
-      "name": "Kimi: K2.7 Code High Speed",
-      "open_weights": true,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [],
-      "release_date": "2026-06-15"
     },
     {
       "description": "Nex AGI Nex-N2-Pro — open-weight agentic mixture-of-experts model (397B/A17B) for coding and tool use.",
