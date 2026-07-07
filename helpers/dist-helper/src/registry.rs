@@ -506,11 +506,15 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     )?;
     writeln!(
         out,
-        "- If `writes` does not include `pricing`, preserve all existing `pricing` fields exactly."
+        "- Treat `writes: models` as permission to add or remove provider model entries. A newly added provider model entry may include its own `pricing` when the linked source documents it."
     )?;
     writeln!(
         out,
-        "- If `writes` includes `pricing`, add or update pricing only when the linked source documents it."
+        "- Treat `writes: pricing` as permission to update `pricing` on pre-existing provider model entries."
+    )?;
+    writeln!(
+        out,
+        "- If `writes` does not include `pricing`, preserve `pricing` in all pre-existing model entries exactly; do not recalculate, normalize, or remove it."
     )?;
     writeln!(
         out,
@@ -2224,6 +2228,10 @@ auto_sync:
         assert!(prompt.contains("current source count, not a limit"));
         assert!(prompt.contains("existing_model_count: 1"));
         assert!(prompt.contains("Do not use YAML serializers"));
+        assert!(
+            prompt.contains("A newly added provider model entry may include its own `pricing`")
+        );
+        assert!(prompt.contains("preserve `pricing` in all pre-existing model entries exactly"));
         assert!(prompt.contains("include the exact `registry valid:` output line"));
         assert!(!prompt.contains("canonical_models_json"));
         assert!(!prompt.contains("; model_count: 1"));
