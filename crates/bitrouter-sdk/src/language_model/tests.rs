@@ -122,6 +122,53 @@ impl SettlementRecorder for UsageCapturingRecorder {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettlementSnapshot {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    has_error: bool,
+}
+
+struct SettlementSnapshotRecorder(Arc<std::sync::Mutex<Vec<SettlementSnapshot>>>);
+#[async_trait]
+impl SettlementRecorder for SettlementSnapshotRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        self.0.lock().unwrap().push(SettlementSnapshot {
+            prompt_tokens: ctx.prompt_tokens,
+            completion_tokens: ctx.completion_tokens,
+            has_error: ctx.error.is_some(),
+        });
+        Ok(())
+    }
+}
+
+struct StreamErrorExecutor {
+    error: BitrouterError,
+}
+
+#[async_trait]
+impl Executor for StreamErrorExecutor {
+    async fn execute(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(self.error.clone())
+    }
+
+    async fn execute_stream(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Ok(Box::pin(futures::stream::iter(vec![Err(self
+            .error
+            .clone())])))
+    }
+}
+
 /// A `StreamHook` that records `on_stream_end` outcomes and can rewrite / abort.
 struct ScriptedStreamHook {
     interest: StreamInterest,
@@ -637,6 +684,57 @@ async fn disconnect_before_usage_bills_estimated_output() {
     assert!(
         completion >= 1,
         "completion-token estimate must be non-zero ({completion}); ~31 chars / 4 ≈ 8 tokens"
+    );
+}
+
+#[tokio::test]
+async fn upstream_stream_error_is_not_reclassified_as_client_disconnect_when_dropped() {
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured: Arc<std::sync::Mutex<Vec<SettlementSnapshot>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let upstream_error = BitrouterError::Upstream {
+        status: 401,
+        message: "upstream auth failed".into(),
+    };
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(StreamErrorExecutor {
+            error: upstream_error,
+        }),
+        |b| {
+            b.stream_hook(ScriptedStreamHook {
+                interest: StreamInterest::all(),
+                mode: StreamMode::Pass,
+                ended_with: ended.clone(),
+            })
+            .settlement_recorder(SettlementSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let first = stream.next().await.expect("upstream error item");
+    assert!(first.is_err(), "the upstream error surfaced to the client");
+
+    drop(stream);
+    let _ = pipeline.drain_pending_settlements().await;
+
+    assert_eq!(
+        *ended.lock().unwrap(),
+        vec!["upstream_error"],
+        "dropping after receiving the error must not overwrite the terminal outcome"
+    );
+    assert_eq!(
+        captured.lock().unwrap().as_slice(),
+        &[SettlementSnapshot {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            has_error: true,
+        }],
+        "failed streams without usage must settle as failed and unbillable"
     );
 }
 
