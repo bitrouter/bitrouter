@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  AGENTIC_SYNC_MODEL: z-ai/glm-5.2
+  AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code
 
 jobs:
   sync:
