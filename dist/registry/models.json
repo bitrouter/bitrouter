@@ -800,6 +800,20 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1345,
+              "no_cache": 0.269
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "deepseek/deepseek-v3.2"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -1048,6 +1062,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "deepseek/deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "deepseek-v4-flash"
         },
@@ -1081,6 +1109,23 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "deepseek/deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider": "phala",
           "provider_model_id": "deepseek/deepseek-v4-flash"
         },
         {
@@ -1251,6 +1296,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.135,
+              "no_cache": 1.6
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "deepseek/deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "deepseek-v4-pro"
         },
@@ -1284,6 +1343,23 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "deepseek/deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 5.25
+            }
+          },
+          "provider": "phala",
           "provider_model_id": "deepseek/deepseek-v4-pro"
         },
         {
@@ -1733,7 +1809,22 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "inclusionai/ling-2.6-1t"
+        }
+      ],
       "release_date": "2026-04-23"
     },
     {
@@ -1749,7 +1840,22 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.02,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.3
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "inclusionai/ling-2.6-flash"
+        }
+      ],
       "release_date": "2026-04-24"
     },
     {
@@ -1765,7 +1871,22 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "inclusionai/ring-2.6-1t"
+        }
+      ],
       "release_date": "2026-05-08"
     },
     {
@@ -1931,6 +2052,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "minimax/minimax-m2.5"
         },
         {
           "api_protocol": "openai",
@@ -2109,6 +2244,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "minimax/minimax-m2.7"
         },
         {
           "api_protocol": "openai",
@@ -2485,6 +2634,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "moonshotai/kimi-k2.5"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "kimi-k2.5"
         },
@@ -2758,6 +2921,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "no_cache": 0.8
+            },
+            "output_tokens": {
+              "text": 3.4
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "moonshotai/kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "kimi-k2.6"
         },
@@ -2791,6 +2968,23 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "moonshotai/kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.09
+            },
+            "output_tokens": {
+              "text": 4.6
+            }
+          },
+          "provider": "phala",
           "provider_model_id": "moonshotai/kimi-k2.6"
         },
         {
@@ -3460,6 +3654,19 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "qwen/qwen3.5-122b-a10b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "no_cache": 0.26
             },
             "output_tokens": {
@@ -3501,6 +3708,19 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "qwen/qwen3.5-27b"
+        },
         {
           "api_protocol": "openai",
           "pricing": {
@@ -3802,6 +4022,20 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "Qwen/Qwen3.7-Max"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "qwen/qwen3.7-max"
         },
         {
           "api_protocol": "openai",
@@ -4849,7 +5083,22 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "zai-org/glm-4.7"
+        }
+      ],
       "release_date": "2025-12-23"
     },
     {
@@ -4928,6 +5177,20 @@
           "rate_limits": {
             "requests_per_minute": 50
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "zai-org/glm-5"
         },
         {
           "api_protocol": "openai",
@@ -5170,6 +5433,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.38
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "zai-org/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "glm-5.1"
         },
@@ -5203,6 +5480,23 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.21
+            },
+            "output_tokens": {
+              "text": 4.2
+            }
+          },
+          "provider": "phala",
           "provider_model_id": "z-ai/glm-5.1"
         },
         {
@@ -5385,6 +5679,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "zai-org/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "glm-5.2"
         },
@@ -5418,6 +5726,23 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "phala",
           "provider_model_id": "z-ai/glm-5.2"
         },
         {

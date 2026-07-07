@@ -2477,6 +2477,280 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.novita.ai/openai",
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Novita AI",
+      "id": "novita",
+      "kind": "gateway",
+      "metadata": {
+        "headquarters": "US",
+        "name": "Novita AI",
+        "slug": "novita"
+      },
+      "models": [
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.135,
+              "no_cache": 1.6
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v3.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1345,
+              "no_cache": 0.269
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v3.2"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.7-max",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider_model_id": "qwen/qwen3.7-max"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-122b-a10b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider_model_id": "qwen/qwen3.5-122b-a10b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.5-27b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider_model_id": "qwen/qwen3.5-27b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "no_cache": 0.8
+            },
+            "output_tokens": {
+              "text": 3.4
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "minimax/minimax-m2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m2.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "minimax/minimax-m2.7"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "inclusionai/ling-2.6-1t",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider_model_id": "inclusionai/ling-2.6-1t"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "inclusionai/ling-2.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.02,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.3
+            }
+          },
+          "provider_model_id": "inclusionai/ling-2.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "inclusionai/ring-2.6-1t",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider_model_id": "inclusionai/ring-2.6-1t"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider_model_id": "zai-org/glm-5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.38
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "zai-org/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "zai-org/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider_model_id": "zai-org/glm-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-oss-120b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.05
+            },
+            "output_tokens": {
+              "text": 0.25
+            }
+          },
+          "provider_model_id": "openai/gpt-oss-120b"
+        }
+      ],
+      "name": "novita",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-07",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://api.openai.com/v1",
       "auth": {
         "env": "OPENAI_API_KEY",
@@ -3890,6 +4164,119 @@
         "api_key"
       ],
       "status": "active",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://inference.phala.com/v1",
+      "auth_scheme": "bearer",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Phala",
+      "id": "phala",
+      "kind": "gateway",
+      "metadata": {
+        "headquarters": "US",
+        "name": "Phala",
+        "privacy_policy_url": "https://phala.com/privacy",
+        "slug": "phala",
+        "status_page_url": "https://status.phala.network",
+        "terms_of_service_url": "https://phala.network/terms"
+      },
+      "models": [
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v4-pro",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 5.25
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "moonshotai/kimi-k2.6",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.09
+            },
+            "output_tokens": {
+              "text": 4.6
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.21
+            },
+            "output_tokens": {
+              "text": 4.2
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.2"
+        }
+      ],
+      "name": "phala",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-07",
       "weight": 1.0
     },
     {
