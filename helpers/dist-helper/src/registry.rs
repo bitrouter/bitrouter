@@ -2501,6 +2501,15 @@ auto_sync:
 
         assert!(workflow.contains(r#"cron: "0 22 * * *""#));
         assert!(workflow.contains("AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code"));
+        assert!(workflow.contains("uses: actions/create-github-app-token@v2"));
+        assert!(workflow.contains("app-id: ${{ secrets.APP_ID }}"));
+        assert!(workflow.contains("private-key: ${{ secrets.APP_PRIVATE_KEY }}"));
+        assert!(workflow.contains("token: ${{ steps.generate-token.outputs.token }}"));
+        assert!(workflow.contains("GH_TOKEN: ${{ steps.generate-token.outputs.token }}"));
+        assert!(workflow.contains(r#"git config user.name "bitrouter-automation[bot]""#));
+        assert!(workflow.contains(
+            r#"git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com""#
+        ));
     }
 
     #[test]
