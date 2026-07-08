@@ -6563,7 +6563,7 @@
     },
     {
       "access": "api_key",
-      "api_base": "https://tokenhub-intl.tencentmaas.com/v1",
+      "api_base": "https://tokenhub-intl.tencentcloudmaas.com/v1",
       "auth_scheme": "x-api-key",
       "billing": "usage_token",
       "byok": true,
