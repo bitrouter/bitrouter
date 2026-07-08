@@ -1,16 +1,7 @@
-# SCAFFOLD — UNVERIFIED. status: staging (does not route until a human verifies
-# and flips to active). Researched 2026-07 from Baidu AI Cloud Qianfan docs.
-# Baidu Qianfan (百度千帆) — CHINA endpoint. OpenAI-compatible /v2 endpoint on the
-# cloud.baidu.com console (mainland account), Bearer API-key auth (key format
-# bce-v3/ALTAK-...; NOT the legacy AK/SK flow). The INTERNATIONAL sibling is a
-# separate provider `qianfan` (api.baiduqianfan.ai, USD).
-# PRICING: official China rates are RMB per 1M tokens; converted to USD below at
-# ~7.2 CNY/USD — VERIFY every id + price on the live console (catalog churns).
-# context_tiers reflect Qianfan's ≤32k vs 32–128k input brackets.
-# VERIFY BEFORE ACTIVATING:
-#   - Provider name `qianfan_cn` → env QIANFAN_CN_API_KEY.
-#   - Exact ERNIE model-id strings/suffixes; per-model RPM/TPM (tier-dependent).
-#   - No confirmed Anthropic-compatible endpoint.
+# Verified 2026-07-08 from Baidu Qianfan China `/v2/models` documentation. The
+# live catalog endpoint requires a Bearer API key, so this remains a manual
+# provider rather than `auto_sync: v1_models`. Official prices are RMB per 1K
+# tokens; values below are converted to USD per 1M tokens at ~7.2 CNY/USD.
 name: qianfan_cn
 display_name: Baidu Qianfan (China)
 metadata:
@@ -33,15 +24,20 @@ models:
     pricing:
       input_tokens:
         no_cache: 1.67
-        cache_read: 0.139
       output_tokens:
         text: 3.33
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.28
   - id: deepseek/deepseek-v3.2
     provider_model_id: deepseek-v3.2
     pricing:
       input_tokens:
         no_cache: 0.28
-        cache_read: 0.056
       output_tokens:
         text: 0.42
       context_tiers:
@@ -50,14 +46,33 @@ models:
             no_cache: 0.56
           output_tokens:
             text: 0.83
-  - id: moonshotai/kimi-k2.6
-    provider_model_id: kimi-k2.6
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
     pricing:
       input_tokens:
-        no_cache: 0.9
-        cache_read: 0.153
+        no_cache: 0.56
       output_tokens:
-        text: 3.75
+        text: 2.92
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.29
+      output_tokens:
+        text: 1.17
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 0.83
+      output_tokens:
+        text: 3.33
+      context_tiers:
+        - above_input_tokens: 32000
+          input_tokens:
+            no_cache: 1.11
+          output_tokens:
+            text: 3.89
   - id: baidu/ernie-5.0
     provider_model_id: ernie-5.0
     pricing:
@@ -76,7 +91,6 @@ models:
     pricing:
       input_tokens:
         no_cache: 0.11
-        cache_read: 0.028
       output_tokens:
         text: 0.44
   - id: baidu/ernie-x1-turbo-32k
@@ -86,6 +100,6 @@ models:
         no_cache: 0.14
       output_tokens:
         text: 0.56
-status: staging
+status: active
 weight: 1
 submitted_at: 2026-07-07

@@ -1,21 +1,21 @@
-name: phala
-display_name: Phala
+name: redpill
+display_name: RedPill (Phala Network)
 metadata:
-  headquarters: US
-  name: Phala
-  privacy_policy_url: https://phala.com/privacy
-  slug: phala
-  status_page_url: https://status.phala.network
-  terms_of_service_url: https://phala.network/terms
-api_base: https://inference.phala.com/v1
+  headquarters: SG
+  name: RedPill
+  privacy_policy_url: https://redpill.ai/privacy
+  slug: redpill
+  terms_of_service_url: https://redpill.ai/terms
+api_base: https://api.redpill.ai/v1
 api_protocol:
   - "*": openai
 auth_scheme: bearer
 kind: gateway
-# Phala Cloud confidential (GPU-TEE) inference gateway. Verified 2026-07-08
-# against the public `GET https://inference.phala.com/v1/models` catalog.
-# Distinct from the `redpill` provider, which uses `https://api.redpill.ai/v1`.
-# Prices below are the live catalog's per-token prices converted to USD per 1M.
+doc_url: https://docs.redpill.ai/get-started/introduction
+# RedPill is Phala Network's confidential AI gateway. Verified 2026-07-08
+# against public `GET https://api.redpill.ai/v1/models`; the response currently
+# matches Phala's inference catalog for these models. Prices below are converted
+# from per-token catalog values to USD per 1M tokens.
 models:
   - id: deepseek/deepseek-v4-pro
     provider_model_id: deepseek/deepseek-v4-pro
@@ -72,4 +72,4 @@ models:
       - tools
 status: active
 weight: 1
-submitted_at: 2026-07-07
+submitted_at: 2026-07-08
