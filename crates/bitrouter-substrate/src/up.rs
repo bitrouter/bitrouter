@@ -61,6 +61,7 @@ use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::telemetry::{ContextUsage, SharedContextUsage};
 use crate::translate::{
     PermissionOutcome, SessionUpdateKind, sanitize_selection, select_option, translate,
 };
@@ -157,6 +158,9 @@ pub struct UpstreamConnection {
     raw_updates_tx: broadcast::Sender<SessionUpdate>,
     /// Single permissions receiver, handed out once by `subscribe_permissions`.
     permissions_rx: Mutex<Option<mpsc::UnboundedReceiver<PendingPermission>>>,
+    /// Latest context-window usage from upstream `UsageUpdate`s; written by the
+    /// `session/update` handler, snapshotted by the telemetry hook.
+    usage: SharedContextUsage,
     /// Keeps the driver thread alive for the connection's lifetime.
     _thread: std::thread::JoinHandle<()>,
 }
@@ -203,9 +207,11 @@ impl UpstreamConnection {
         let (raw_updates_tx, _) = broadcast::channel::<SessionUpdate>(UPDATE_CHANNEL_CAPACITY);
         let (perm_tx, perm_rx) = mpsc::unbounded::<PendingPermission>();
         let (handshake_tx, handshake_rx) = oneshot::channel::<anyhow::Result<Handshake>>();
+        let usage: SharedContextUsage = Arc::new(Mutex::new(None));
 
         let updates_for_thread = updates_tx.clone();
         let raw_updates_for_thread = raw_updates_tx.clone();
+        let usage_for_thread = usage.clone();
         let thread = std::thread::Builder::new()
             .name("bitrouter-substrate-up".to_string())
             .spawn(move || {
@@ -224,9 +230,12 @@ impl UpstreamConnection {
                     agent,
                     session_cwd,
                     cmd_rx,
-                    updates_for_thread,
-                    raw_updates_for_thread,
-                    perm_tx,
+                    CallbackPlane {
+                        updates_tx: updates_for_thread,
+                        raw_updates_tx: raw_updates_for_thread,
+                        usage: usage_for_thread,
+                        perm_tx,
+                    },
                     handshake_tx,
                 ));
             })?;
@@ -243,6 +252,7 @@ impl UpstreamConnection {
             updates_tx,
             raw_updates_tx,
             permissions_rx: Mutex::new(Some(perm_rx)),
+            usage,
             _thread: thread,
         })
     }
@@ -263,6 +273,16 @@ impl UpstreamConnection {
     /// substrate itself cannot honor) to its manager.
     pub fn upstream_init(&self) -> &InitializeResponse {
         &self.init
+    }
+
+    /// Handle to the latest context-window usage reported by the upstream
+    /// (`session/update UsageUpdate`); `None` until the upstream reports one.
+    /// The telemetry hook snapshots this into each [`RequestCompleted`]
+    /// record.
+    ///
+    /// [`RequestCompleted`]: crate::telemetry::RequestCompleted
+    pub fn context_usage(&self) -> SharedContextUsage {
+        self.usage.clone()
     }
 
     /// Subscribe to the stream of translated `session/update` notifications.
@@ -380,18 +400,26 @@ impl UpstreamConnection {
 
 /// Build the ACP client, perform the handshake (reporting it back over
 /// `handshake_tx`), then run the command loop until the command channel closes.
+/// The callback-plane outputs `drive` fans upstream events onto: the two
+/// update broadcasts, the latest-usage slot, and the permissions channel.
+struct CallbackPlane {
+    updates_tx: broadcast::Sender<SessionUpdateKind>,
+    raw_updates_tx: broadcast::Sender<SessionUpdate>,
+    usage: SharedContextUsage,
+    perm_tx: mpsc::UnboundedSender<PendingPermission>,
+}
+
 async fn drive(
     agent: AcpAgent,
     session_cwd: PathBuf,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
-    updates_tx: broadcast::Sender<SessionUpdateKind>,
-    raw_updates_tx: broadcast::Sender<SessionUpdate>,
-    perm_tx: mpsc::UnboundedSender<PendingPermission>,
+    plane: CallbackPlane,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
 ) {
-    let notif_updates = updates_tx.clone();
-    let notif_raw_updates = raw_updates_tx.clone();
-    let handler_perm_tx = perm_tx.clone();
+    let notif_updates = plane.updates_tx.clone();
+    let notif_raw_updates = plane.raw_updates_tx.clone();
+    let notif_usage = plane.usage.clone();
+    let handler_perm_tx = plane.perm_tx.clone();
 
     // The handshake oneshot is consumed exactly once. The `connect_with`
     // closure reports `Ok` on success then enters the command loop; if the
@@ -415,6 +443,7 @@ async fn drive(
             move |notification: SessionNotification, _cx| {
                 let notif_updates = notif_updates.clone();
                 let notif_raw_updates = notif_raw_updates.clone();
+                let notif_usage = notif_usage.clone();
                 async move {
                     let raw = notification.update;
                     // Forward the raw ACP update verbatim (down-facing agent), and
@@ -422,6 +451,16 @@ async fn drive(
                     // A `send` error just means no subscriber is attached yet.
                     let _ = notif_raw_updates.send(raw.clone());
                     if let Some(update) = translate(raw) {
+                        // Keep the latest context usage snapshot current for the
+                        // telemetry hook.
+                        if let SessionUpdateKind::Usage { used, size, .. } = &update
+                            && let Ok(mut slot) = notif_usage.lock()
+                        {
+                            *slot = Some(ContextUsage {
+                                used: *used,
+                                size: *size,
+                            });
+                        }
                         let _ = notif_updates.send(update);
                     }
                     Ok(())

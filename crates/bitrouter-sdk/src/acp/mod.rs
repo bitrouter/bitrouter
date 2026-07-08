@@ -156,6 +156,8 @@ pub struct AcpContext {
     /// The resolved target (Stage 2).
     pub target: Option<AcpTarget>,
     events: crate::event::EventBus,
+    /// When this context was created (pipeline entry).
+    started_at: std::time::Instant,
 }
 
 #[cfg(feature = "acp")]
@@ -166,12 +168,19 @@ impl AcpContext {
             request,
             target: None,
             events: crate::event::EventBus::new(),
+            started_at: std::time::Instant::now(),
         }
     }
 
     /// The inbound request.
     pub fn request(&self) -> &AcpRequest {
         &self.request
+    }
+
+    /// When this context was created (pipeline entry). Execution hooks derive
+    /// per-turn latency from it.
+    pub fn started_at(&self) -> std::time::Instant {
+        self.started_at
     }
 
     /// The caller.

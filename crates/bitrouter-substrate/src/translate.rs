@@ -24,8 +24,15 @@ pub enum PermissionOutcome {
     Deny,
 }
 
+/// Cumulative session cost as reported by the upstream's `UsageUpdate`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct UsageCost {
+    pub amount: f64,
+    pub currency: String,
+}
+
 /// Substrate-local event produced from one ACP `SessionUpdate`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionUpdateKind {
     MessageChunk {
@@ -48,10 +55,18 @@ pub enum SessionUpdateKind {
         title: Option<String>,
         diff: Option<String>,
     },
+    /// Context-window occupancy (+ optional cumulative cost) from the
+    /// upstream's `UsageUpdate`. ACP's stable usage signal reports tokens *in
+    /// context* (`used`/`size`), not per-turn input/output deltas.
+    Usage {
+        used: u64,
+        size: u64,
+        cost: Option<UsageCost>,
+    },
 }
 
 /// Map one ACP `SessionUpdate` to a `SessionUpdateKind`. Variants the substrate
-/// does not act on (`Plan`, `UsageUpdate`, …) → `None`.
+/// does not act on (`Plan`, …) → `None`.
 pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
     match update {
         SessionUpdate::AgentMessageChunk(c) => Some(SessionUpdateKind::MessageChunk {
@@ -73,6 +88,14 @@ pub fn translate(update: SessionUpdate) -> Option<SessionUpdateKind> {
             status: u.fields.status.map(map_status),
             title: u.fields.title,
             diff: u.fields.content.as_deref().and_then(render_diff),
+        }),
+        SessionUpdate::UsageUpdate(u) => Some(SessionUpdateKind::Usage {
+            used: u.used,
+            size: u.size,
+            cost: u.cost.map(|c| UsageCost {
+                amount: c.amount,
+                currency: c.currency,
+            }),
         }),
         _ => None,
     }
@@ -204,6 +227,25 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn usage_update_maps_with_cost() {
+        use agent_client_protocol::schema::v1::{Cost, UsageUpdate};
+        let got = translate(SessionUpdate::UsageUpdate(
+            UsageUpdate::new(1500, 200_000).cost(Cost::new(0.25, "USD")),
+        ));
+        assert_eq!(
+            got,
+            Some(SessionUpdateKind::Usage {
+                used: 1500,
+                size: 200_000,
+                cost: Some(UsageCost {
+                    amount: 0.25,
+                    currency: "USD".into(),
+                }),
+            })
+        );
     }
 
     #[test]

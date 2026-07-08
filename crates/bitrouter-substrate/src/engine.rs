@@ -205,7 +205,7 @@ impl Session {
         builder
             .routing_table(Arc::new(PinnedTable { target }))
             .executor(executor)
-            .execution_hook(TelemetryHook::new(telemetry_tx));
+            .execution_hook(TelemetryHook::new(telemetry_tx, conn.context_usage()));
         let pipeline = Arc::new(
             builder
                 .build()
@@ -373,9 +373,9 @@ mod tests {
     use super::Session;
     use crate::worktree::WorktreeSpec;
 
-    /// Bash stub: ACP handshake + a streamed `session/update` + prompt result.
-    /// Mirrors the `up.rs` stub so we exercise `launch` + `prompt` end-to-end
-    /// without a real agent.
+    /// Bash stub: ACP handshake + a streamed `session/update` (message chunk,
+    /// then a `usage_update`) + prompt result. Mirrors the `up.rs` stub so we
+    /// exercise `launch` + `prompt` end-to-end without a real agent.
     const BASH_STUB: &str = r#"
         while read line; do
           id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
@@ -383,6 +383,7 @@ mod tests {
             *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
             *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
             *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}\n';
+                              printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"usage_update","used":1500,"size":200000}}}\n';
                               printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
           esac
         done
@@ -592,6 +593,14 @@ mod tests {
 
         let record = telemetry.recv().await.expect("telemetry record");
         assert_eq!(record.stop_reason, "EndTurn");
+        // The stub streamed a usage_update mid-turn; the hook snapshots it.
+        assert_eq!(
+            record.context,
+            Some(crate::telemetry::ContextUsage {
+                used: 1500,
+                size: 200_000,
+            })
+        );
 
         session.shutdown().await.expect("shutdown");
     }

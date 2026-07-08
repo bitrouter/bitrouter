@@ -258,6 +258,9 @@ fn drain_telemetry_record(r: RequestCompleted) {
     tracing::info!(
         agent = %r.agent,
         stop_reason = %r.stop_reason,
+        latency_ms = r.latency_ms,
+        context_used = r.context.map(|c| c.used),
+        context_size = r.context.map(|c| c.size),
         "acp turn completed"
     );
 }
