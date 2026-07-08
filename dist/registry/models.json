@@ -696,27 +696,6 @@
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 0.38
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "deepseek-ai/DeepSeek-V3.2",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.1345,
@@ -867,27 +846,6 @@
       "providers": [
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider": "akashml",
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash",
-          "rate_limits": {
-            "requests_per_minute": 40
-          }
-        },
-        {
-          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "no_cache": 0.14
@@ -936,27 +894,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.38,
-              "no_cache": 1.55
-            },
-            "output_tokens": {
-              "text": 2.28
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
@@ -1170,27 +1107,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.35,
-              "no_cache": 4.45
-            },
-            "output_tokens": {
-              "text": 5.5
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
@@ -1773,27 +1689,6 @@
       "providers": [
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 1.15
-            }
-          },
-          "provider": "akashml",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 40
-          }
-        },
-        {
-          "api_protocol": "openai",
           "provider": "alibaba_coding_plan",
           "provider_model_id": "MiniMax-M2.5",
           "rate_limits": {
@@ -1832,27 +1727,6 @@
           "provider_model_id": "MiniMaxAI/MiniMax-M2.5-TEE",
           "rate_limits": {
             "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 50
           }
         },
         {
@@ -2440,26 +2314,6 @@
           }
         },
         {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 2.0
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "moonshotai/Kimi-K2.5",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
           "api_protocol": [
             "openai",
             "anthropic"
@@ -2629,26 +2483,6 @@
       "providers": [
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.95
-            },
-            "output_tokens": {
-              "text": 4.0
-            }
-          },
-          "provider": "akashml",
-          "provider_model_id": "moonshotai/Kimi-K2.6",
-          "rate_limits": {
-            "requests_per_minute": 40
-          }
-        },
-        {
-          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.2,
@@ -2712,27 +2546,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "moonshotai/Kimi-K2.6"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.25,
-              "no_cache": 0.74
-            },
-            "output_tokens": {
-              "text": 3.5
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "moonshotai/Kimi-K2.6",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": [
@@ -4876,26 +4689,6 @@
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.0
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "zai-org/GLM-5",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
-        },
-        {
-          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.2,
@@ -5125,27 +4918,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "zai-org/GLM-5.1-FP8"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 4.4
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "zai-org/GLM-5.1",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
