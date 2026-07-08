@@ -81,11 +81,18 @@ fn sample_prompt() -> Prompt {
 /// A canonical result with reasoning + text + a tool call, in that order — the
 /// order must survive every conversion (v0 #416, #454-1).
 fn sample_result() -> GenerateResult {
+    let mut reasoning_metadata = ProviderMetadata::new();
+    set_provider_metadata(
+        &mut reasoning_metadata,
+        "anthropic",
+        "signature",
+        "SIG-sample-reasoning".into(),
+    );
     GenerateResult {
         content: vec![
             Content::Reasoning {
                 text: "thinking...".to_string(),
-                provider_metadata: Default::default(),
+                provider_metadata: reasoning_metadata,
             },
             Content::Text {
                 text: "the answer is 4".to_string(),
@@ -181,10 +188,11 @@ fn conversion_matrix_4x4_non_streaming() {
     }
 }
 
-/// The streaming 4×4 matrix: for every (inbound, outbound) pair, encode a
-/// canonical part stream in the outbound protocol, decode it back, and assert
-/// the text/reasoning/tool-call parts survive — then re-encode in the inbound
-/// protocol.
+/// The streaming matrix: for every outbound protocol, encode a canonical part
+/// stream, decode it back, and assert visible text/tool-call parts survive.
+/// Unsigned reasoning survives on protocols that can carry provider-agnostic
+/// reasoning; Messages intentionally drops it because Claude Code replays
+/// Anthropic `thinking` blocks into follow-up requests.
 #[test]
 fn conversion_matrix_4x4_streaming() {
     let canonical_parts = vec![
@@ -250,12 +258,20 @@ fn conversion_matrix_4x4_streaming() {
             text, "the answer",
             "{outbound_proto:?}: streaming text survived encode→decode"
         );
-        assert!(
-            decoded
-                .iter()
-                .any(|p| matches!(p, StreamPart::ReasoningDelta { .. })),
-            "{outbound_proto:?}: reasoning delta survived"
-        );
+        let reasoning_survived = decoded
+            .iter()
+            .any(|p| matches!(p, StreamPart::ReasoningDelta { .. }));
+        if outbound_proto == ApiProtocol::Messages {
+            assert!(
+                !reasoning_survived,
+                "{outbound_proto:?}: unsigned reasoning must not become Anthropic thinking"
+            );
+        } else {
+            assert!(
+                reasoning_survived,
+                "{outbound_proto:?}: reasoning delta survived"
+            );
+        }
         assert!(
             decoded
                 .iter()
@@ -1635,8 +1651,13 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
     let adapter = adapter_for(ApiProtocol::Messages);
     let mut encoder = adapter.stream_encoder("msg_x", "claude-3-7-sonnet");
     let parts = [
+        StreamPart::ReasoningStart { id: "r1".into() },
         StreamPart::ReasoningDelta {
             text: "think ".into(),
+        },
+        StreamPart::ReasoningEnd {
+            id: "r1".into(),
+            signature: Some("SIG-transition".into()),
         },
         StreamPart::TextDelta {
             text: "answer ".into(),
@@ -1668,6 +1689,47 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
     assert!(
         thinking_open < first_stop && first_stop < text_open,
         "block_stop must fall *between* thinking_start and text_start; got:\n{joined}"
+    );
+}
+
+#[test]
+fn messages_stream_encoder_drops_unsigned_reasoning() {
+    // Non-Anthropic reasoning has no Anthropic continuity signature. If it is
+    // exposed to Claude Code as a `thinking` block, the next Claude request
+    // replays that block and Anthropic rejects it as an invalid signature.
+    let events = encode_stream_events(
+        ApiProtocol::Messages,
+        &[
+            StreamPart::ReasoningStart { id: "r1".into() },
+            StreamPart::ReasoningDelta {
+                text: "provider-private reasoning".into(),
+            },
+            StreamPart::ReasoningEnd {
+                id: "r1".into(),
+                signature: None,
+            },
+            StreamPart::TextDelta {
+                text: "visible answer".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    );
+    let joined = events
+        .iter()
+        .map(|(name, data)| format!("{name} {data}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !joined.contains("\"type\":\"thinking\"")
+            && !joined.contains("\"type\": \"thinking\"")
+            && !joined.contains("signature_delta"),
+        "unsigned reasoning must not become Anthropic thinking: {joined}"
+    );
+    assert!(
+        joined.contains("visible answer"),
+        "dropping unsigned reasoning must not drop visible text: {joined}"
     );
 }
 
@@ -1851,7 +1913,7 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
         },
         StreamPart::ReasoningEnd {
             id: "b".into(),
-            signature: None,
+            signature: Some("SIG-blocks".into()),
         },
         StreamPart::TextStart { id: "c".into() },
         StreamPart::TextDelta {
@@ -2624,6 +2686,39 @@ fn messages_response_roundtrip() {
     assert_eq!(json["content"][2]["type"], "tool_use");
     let parsed = adapter.parse_response(json).unwrap();
     assert_eq!(parsed.content.len(), 3);
+}
+
+#[test]
+fn messages_response_drops_unsigned_reasoning() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = sample_prompt();
+    let result = GenerateResult {
+        content: vec![
+            Content::Reasoning {
+                text: "provider-private reasoning".to_string(),
+                provider_metadata: Default::default(),
+            },
+            Content::Text {
+                text: "visible answer".to_string(),
+                provider_metadata: Default::default(),
+            },
+        ],
+        usage: None,
+        finish_reason: Some(FinishReason::Stop),
+        response_id: None,
+        stop_details: None,
+        provider_metadata: Default::default(),
+    };
+    let json = adapter
+        .render_response(&result, &prompt, "msg_unsigned")
+        .unwrap();
+    let blocks = json["content"].as_array().unwrap();
+    assert!(
+        blocks.iter().all(|b| b["type"] != "thinking"),
+        "unsigned reasoning must not render as Anthropic thinking: {json}"
+    );
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[0]["text"], "visible answer");
 }
 
 #[test]
