@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.22](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.21...v1.0.0-alpha.22)
+
+
+### ⛰️ Features
+
+- Configurable upstream HTTP timeouts ([#662](https://github.com/bitrouter/bitrouter/pull/662)) - ([88d1e4d](https://github.com/bitrouter/bitrouter/commit/88d1e4da5a774bf44a7e569be2fda3e60dd47c7a))
+
+### 🐛 Bug Fixes
+
+- *(messages)* Drop unsigned reasoning on Anthropic wire ([#669](https://github.com/bitrouter/bitrouter/pull/669)) - ([d78ddec](https://github.com/bitrouter/bitrouter/commit/d78ddec4a3bc05e11c60e00f64874387fbdccb38))
+
+
 ## [1.0.0-alpha.21](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.20...v1.0.0-alpha.21)
 
 
