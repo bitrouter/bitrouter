@@ -377,6 +377,20 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     // Hermes asks Chat Completions streams to include a final usage chunk, but
     // the ChatGPT/Codex backend rejects `stream_options.include_usage`.
     obj.remove("stream_options");
+    // Real agent harnesses attach local/session metadata (Codex
+    // `client_metadata`, Claude `metadata`) that the ChatGPT/Codex backend does
+    // not accept.
+    obj.remove("client_metadata");
+    obj.remove("metadata");
+    obj.remove("thinking");
+    obj.remove("context_management");
+    obj.remove("output_config");
+    obj.remove("cache_control");
+    let hoisted_instructions = hoist_system_like_input_messages(obj);
+    for value in obj.values_mut() {
+        strip_codex_unsupported_fields(value);
+    }
+    retain_codex_supported_tools(obj);
     obj.insert("store".to_string(), Value::Bool(false));
     match obj.get_mut("include") {
         Some(Value::Array(items)) => {
@@ -392,16 +406,112 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
         }
     }
     // Ensure `instructions` is present even when the caller sent no system
-    // prompt — the Codex backend expects it.
-    let has_instructions = obj
+    // prompt — the Codex backend expects it. If the caller supplied
+    // system/developer messages in `input`, hoist those into instructions
+    // because the backend rejects system/developer items inside `input`.
+    let existing_instructions = obj
         .get("instructions")
         .and_then(Value::as_str)
-        .is_some_and(|s| !s.is_empty());
-    if !has_instructions {
-        obj.insert(
-            "instructions".to_string(),
-            Value::String(DEFAULT_INSTRUCTIONS.to_string()),
-        );
+        .filter(|s| !s.is_empty());
+    let instructions = match (existing_instructions, hoisted_instructions.is_empty()) {
+        (Some(existing), true) => Some(existing.to_string()),
+        (Some(existing), false) => {
+            let mut parts = Vec::with_capacity(1 + hoisted_instructions.len());
+            parts.push(existing.to_string());
+            parts.extend(hoisted_instructions);
+            Some(parts.join("\n\n"))
+        }
+        (None, false) => Some(hoisted_instructions.join("\n\n")),
+        (None, true) => Some(DEFAULT_INSTRUCTIONS.to_string()),
+    };
+    if let Some(instructions) = instructions {
+        obj.insert("instructions".to_string(), Value::String(instructions));
+    }
+}
+
+fn hoist_system_like_input_messages(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+) -> Vec<String> {
+    use serde_json::Value;
+    let mut hoisted = Vec::new();
+    let Some(Value::Array(items)) = obj.get_mut("input") else {
+        return hoisted;
+    };
+    items.retain(|item| {
+        let is_system_like = item
+            .as_object()
+            .and_then(|obj| obj.get("role"))
+            .and_then(Value::as_str)
+            .is_some_and(|role| matches!(role, "system" | "developer"));
+        if is_system_like {
+            if let Some(content) = item.as_object().and_then(|obj| obj.get("content")) {
+                collect_text_content(content, &mut hoisted);
+            }
+            false
+        } else {
+            true
+        }
+    });
+    hoisted
+}
+
+fn collect_text_content(value: &serde_json::Value, out: &mut Vec<String>) {
+    use serde_json::Value;
+    match value {
+        Value::String(text) if !text.is_empty() => out.push(text.clone()),
+        Value::Array(items) => {
+            for item in items {
+                collect_text_content(item, out);
+            }
+        }
+        Value::Object(obj) => {
+            if let Some(text) = obj.get("text").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                out.push(text.to_string());
+                return;
+            }
+            if let Some(content) = obj.get("content") {
+                collect_text_content(content, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_codex_unsupported_fields(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                strip_codex_unsupported_fields(item);
+            }
+        }
+        Value::Object(obj) => {
+            obj.remove("cache_control");
+            for item in obj.values_mut() {
+                strip_codex_unsupported_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn retain_codex_supported_tools(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(serde_json::Value::Array(tools)) = obj.get_mut("tools") else {
+        return;
+    };
+    tools.retain(|tool| {
+        tool.as_object().is_some_and(|tool| {
+            tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
+                && tool
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| !name.is_empty())
+        })
+    });
+    if tools.is_empty() {
+        obj.remove("tools");
     }
 }
 
@@ -752,5 +862,97 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body3["instructions"], serde_json::json!("be a pirate"));
+
+        let mut body4 = serde_json::json!({
+            "instructions": "base instructions",
+            "metadata": {"session_id": "claude-session"},
+            "client_metadata": {"thread_id": "codex-thread"},
+            "thinking": {"type": "adaptive"},
+            "context_management": {"edits": []},
+            "output_config": {"effort": "high"},
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "developer guidance"}]
+                },
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": "system guidance"
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                }
+            ]
+        });
+        applier
+            .prepare_body(&mut body4, &codex_target(None))
+            .await
+            .unwrap();
+        assert!(body4.get("metadata").is_none());
+        assert!(body4.get("client_metadata").is_none());
+        assert!(body4.get("thinking").is_none());
+        assert!(body4.get("context_management").is_none());
+        assert!(body4.get("output_config").is_none());
+        assert_eq!(
+            body4["input"],
+            serde_json::json!([
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}]
+                }
+            ])
+        );
+        let instructions = body4["instructions"].as_str().unwrap();
+        assert!(instructions.contains("base instructions"));
+        assert!(instructions.contains("developer guidance"));
+        assert!(instructions.contains("system guidance"));
+
+        let mut body5 = serde_json::json!({
+            "input": "hi",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "description": "run commands",
+                    "parameters": {"type": "object"}
+                },
+                {
+                    "type": "namespace",
+                    "name": "multi_agent_v1",
+                    "tools": [],
+                    "description": "nested tools"
+                },
+                {
+                    "type": "web_search",
+                    "external_web_access": false
+                }
+            ]
+        });
+        applier
+            .prepare_body(&mut body5, &codex_target(None))
+            .await
+            .unwrap();
+        let tools = body5["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], serde_json::json!("function"));
+        assert_eq!(tools[0]["name"], serde_json::json!("exec_command"));
+
+        let mut body6 = serde_json::json!({
+            "input": "hi",
+            "tools": [
+                {"type": "web_search", "external_web_access": true},
+                {"type": "namespace", "name": "multi_agent_v1", "tools": []}
+            ]
+        });
+        applier
+            .prepare_body(&mut body6, &codex_target(None))
+            .await
+            .unwrap();
+        assert!(body6.get("tools").is_none());
     }
 }
