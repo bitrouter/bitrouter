@@ -767,8 +767,8 @@ mod tests {
     async fn serve_forwards_non_text_prompt_blocks_verbatim() {
         use agent_client_protocol::schema::ProtocolVersion;
         use agent_client_protocol::schema::v1::{
-            InitializeRequest, NewSessionRequest, PromptRequest, ResourceLink,
-            SessionNotification, StopReason,
+            InitializeRequest, NewSessionRequest, PromptRequest, ResourceLink, SessionNotification,
+            StopReason,
         };
         use agent_client_protocol::{Channel, Client, ConnectionTo};
         use tokio::task::LocalSet;

@@ -81,8 +81,7 @@ impl ExecutionHook for TelemetryHook {
         let record = RequestCompleted {
             agent: ctx.request().agent.clone(),
             stop_reason: format!("{:?}", response.result.stop_reason),
-            latency_ms: u64::try_from(ctx.started_at().elapsed().as_millis())
-                .unwrap_or(u64::MAX),
+            latency_ms: u64::try_from(ctx.started_at().elapsed().as_millis()).unwrap_or(u64::MAX),
             context: self.usage.lock().ok().and_then(|g| *g),
         };
         // A closed receiver means the consumer has gone away; treat it as a

@@ -296,7 +296,9 @@ where
             age = format_age(now.saturating_sub(r.started_at)),
         ));
     }
-    out.write_all(buf.as_bytes()).await.context("writing output")
+    out.write_all(buf.as_bytes())
+        .await
+        .context("writing output")
 }
 
 /// Whether `pid` is a live process. Used to demote a stale `running` record
