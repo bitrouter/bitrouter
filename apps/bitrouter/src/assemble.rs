@@ -80,6 +80,9 @@ pub struct Assembled {
     /// [`ConfigRoutingTable::replace_config`] when there's no source
     /// file to re-read from (zero-config mode).
     pub routing_table: Arc<ConfigRoutingTable>,
+    /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
+    /// object, but reload needs the concrete handle to replace timeout clients.
+    pub upstream_executor: Arc<HttpExecutor>,
     /// Snapshot provider for `bitrouter observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
@@ -95,6 +98,24 @@ pub struct Assembled {
     /// the subscriber on the `serve` path, so logging directly here
     /// would be dropped.
     pub otel_init_error: Option<String>,
+}
+
+pub(crate) fn resolved_upstream_timeouts(
+    config: &Config,
+) -> (
+    HttpTimeouts,
+    std::collections::HashMap<String, HttpTimeouts>,
+) {
+    let global_timeouts = config.upstream.timeouts.apply_to(HttpTimeouts::default());
+    let provider_timeouts: std::collections::HashMap<String, HttpTimeouts> = config
+        .providers
+        .iter()
+        .filter_map(|(id, provider)| {
+            let resolved = provider.timeouts.apply_to(global_timeouts.clone());
+            (resolved != global_timeouts).then(|| (id.clone(), resolved))
+        })
+        .collect();
+    (global_timeouts, provider_timeouts)
 }
 
 /// `ObserveStatusProvider` impl backed by a real [`OtelExporter`]. The
@@ -216,14 +237,22 @@ pub async fn build_app_with_path(
     // request. Listed only when the user configures the provider, so an
     // operator who doesn't use Copilot doesn't pay a token-store read.
     let auth_appliers = build_auth_appliers(config)?;
+    // Upstream timeouts: the `upstream.timeouts` block layered over the
+    // built-in defaults, plus a per-provider override for any provider whose
+    // resolved timeouts differ (v0 #394 fixed these; now they're configurable).
+    // Read from the user's `config` — per-provider timeouts are a user-only
+    // field, never set by the registry/builtin-defaults merge.
+    let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
     let executor = Arc::new(
-        HttpExecutor::with_dispatch_and_auth(
-            HttpTimeouts::default(),
+        HttpExecutor::with_provider_timeouts(
+            global_timeouts,
+            provider_timeouts,
             OutboundDispatch::builtin(),
             auth_appliers,
         )
         .context("building the upstream HTTP executor")?,
     );
+    let executor_for_reload = executor.clone();
 
     // ---- pricing, metering, policy, guardrails — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
@@ -526,6 +555,7 @@ pub async fn build_app_with_path(
         db,
         policy_store: policy_store_for_reload,
         routing_table: routing_table_for_reload,
+        upstream_executor: executor_for_reload,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
         otel_init_error,
