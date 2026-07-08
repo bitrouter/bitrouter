@@ -46,8 +46,24 @@ models:
       - reasoning
       - structured_outputs
       - tools
+  - id: google/gemma-4-31b
+    provider_model_id: gemma4-31b
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 1
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5-2
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 5.25
 status: active
 weight: 1
 submitted_at: 2026-05-12
 auth_scheme: x-api-key
 community: true
+auto_sync:
+  feed: models_dev

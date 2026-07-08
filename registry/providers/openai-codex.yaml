@@ -12,8 +12,10 @@
 # - https://github.com/sst/opencode/blob/dev/packages/opencode/src/plugin/codex.ts
 #
 # Codex speaks the Responses API exclusively. The explicit model entries are listed
-# below (no per-token `pricing` — it's a flat-rate subscription); the
-# backend's FULL catalog is still pulled at runtime via `auto_sync: v1_models`.
+# below (no per-token `pricing` — it's a flat-rate subscription). Keep this on
+# models.dev's `openai` catalog; do not wire `auto_sync: v1_models` here: the
+# backend `/models` endpoint requires the user's OAuth credential and is not a
+# public catalog endpoint.
 # `access: local_pkce` — credentials come from the local OAuth+PKCE flow against
 # the user's ChatGPT subscription, so there is no portable key to BYOK.
 name: openai-codex
@@ -56,4 +58,5 @@ models:
     capabilities: [reasoning, tools]
 status: active
 auto_sync:
-  feed: v1_models
+  feed: models_dev
+  key: openai
