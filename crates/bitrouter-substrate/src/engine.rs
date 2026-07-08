@@ -19,16 +19,16 @@
 //!
 //! # Shutdown / child-kill
 //!
-//! The agent child dies when the upstream connection's driver future ends, which
-//! happens once **every** `Arc<UpstreamConnection>` clone is dropped (that closes
-//! the command channel the driver selects on). Two long-lived clones exist: the
-//! one [`Session`] holds, and the one the pipeline's [`SessionExecutor`] holds.
-//! The pipeline clone is reachable from two places — `Session`'s own
-//! `Arc<Pipeline>` and the [`TurnController`] worker task that captured a clone
-//! of it. [`Session::shutdown`] therefore drops the turn controller (which lets
-//! the worker task finish and release its pipeline clone), drops `Session`'s
-//! pipeline clone, waits for the connection's strong count to fall to one, then
-//! drops the connection and finally removes the worktree.
+//! [`Session::shutdown`] tears down **deterministically**: it drops the turn
+//! controller (no new turns get queued), then sends an explicit `Shutdown`
+//! command into the upstream connection's command loop and awaits its
+//! confirmation — the loop exits, the connection (and its transport) drops,
+//! and the ACP SDK's child guard kills the agent process. Outstanding
+//! `Arc<UpstreamConnection>` clones (the pipeline's executor, a mid-turn
+//! worker) only keep the struct alive, not the connection: their subsequent
+//! calls fail fast on the closed command channel. If the connection ended on
+//! its own earlier (agent crash), shutdown is a no-op for the connection and
+//! still settles the worktree.
 
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -60,12 +60,6 @@ use crate::worktree::{WorktreeManager, WorktreeSpec};
 /// non-panicking `submit`, so an over-full queue surfaces as a turn error rather
 /// than a panic.
 const TURN_QUEUE_BOUND: usize = 64;
-
-/// How many cooperative yields [`Session::shutdown`] performs while waiting for
-/// the upstream connection's strong count to fall to one (all pipeline-held
-/// clones released) before dropping it. Bounded so a stuck worker can never wedge
-/// shutdown; if the count never settles we drop anyway.
-const SHUTDOWN_DRAIN_YIELDS: usize = 1024;
 
 /// A routing table pinned to one session's single [`AcpTarget`].
 ///
@@ -328,20 +322,10 @@ impl Session {
         self.conn.upstream_init()
     }
 
-    /// Drops the connection (which kills the child once the driver observes the
-    /// closed channel) and settles the worktree (if any): retained by default —
-    /// it holds the agent's work — and removed only when the session was
-    /// launched with `remove_on_shutdown` and created the worktree itself. Logs
-    /// a warning if the connection could not be released within the drain
-    /// bound.
-    ///
-    /// Drops everything that holds an `Arc<UpstreamConnection>` clone — the turn
-    /// controller (whose worker task captured the pipeline), `Session`'s own
-    /// pipeline clone, and finally the connection — so the driver future ends
-    /// and the agent child is killed, *then* removes the worktree. Teardown is
-    /// best-effort: if the worker has not released its connection clone within
-    /// [`SHUTDOWN_DRAIN_YIELDS`] yields the connection is dropped anyway, but a
-    /// warning is logged because the child may not have terminated.
+    /// Tears the upstream connection down deterministically (killing the agent
+    /// child) and settles the worktree (if any): retained by default — it
+    /// holds the agent's work — and removed only when the session was launched
+    /// with `remove_on_shutdown` and created the worktree itself.
     pub async fn shutdown(self) -> anyhow::Result<()> {
         let Session {
             conn,
@@ -353,29 +337,16 @@ impl Session {
             ..
         } = self;
 
-        // Dropping the controller closes the worker's job channel; the worker
-        // observes the close, exits, and releases its captured `Arc<Pipeline>`.
+        // No new turns: dropping the controller closes the worker's job channel.
         drop(turn);
-        // Drop `Session`'s own pipeline clone (the other `Arc<Pipeline>`).
         drop(pipeline);
 
-        // Let the worker task run so it releases its pipeline clone (and thus
-        // the executor's connection clone). Once only our `conn` clone remains,
-        // dropping it ends the driver future and kills the child.
-        for _ in 0..SHUTDOWN_DRAIN_YIELDS {
-            if Arc::strong_count(&conn) == 1 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        // If another clone is still outstanding, dropping `conn` will NOT end the
-        // driver future, so the child may survive. Surface that instead of
-        // silently claiming a clean teardown.
-        if Arc::strong_count(&conn) > 1 {
-            tracing::warn!(
-                strong_count = Arc::strong_count(&conn),
-                "upstream connection not released within drain bound; child may not have terminated"
-            );
+        // Explicit teardown: the command loop exits, the connection drops, and
+        // the agent child is killed; returns once the driver confirms. A
+        // failure must not skip worktree settlement, so it is logged instead of
+        // propagated.
+        if let Err(e) = conn.shutdown().await {
+            tracing::warn!(error = %e, "upstream teardown unconfirmed; child may not have terminated");
         }
         drop(conn);
 

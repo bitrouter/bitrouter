@@ -120,7 +120,15 @@ enum Command {
     },
     /// Send a `session/cancel` notification for `session_id`.
     Cancel { session_id: String },
+    /// Exit the command loop, tearing the connection down (which kills the
+    /// agent child). `done` fires once teardown has completed.
+    Shutdown { done: oneshot::Sender<()> },
 }
+
+/// How long [`UpstreamConnection::shutdown`] waits for the driver to confirm
+/// teardown before reporting failure. Killing the child is a synchronous
+/// signal, so this is generous.
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What the handshake reports back to [`UpstreamConnection::spawn`] before the
 /// command loop takes over.
@@ -342,6 +350,32 @@ impl UpstreamConnection {
             })
             .map_err(|_| anyhow::anyhow!("upstream command loop closed"))
     }
+
+    /// Tear the connection down **deterministically**: the command loop exits,
+    /// the connection (and its transport) drops — killing the agent child —
+    /// and this returns once the driver confirms teardown. Idempotent: if the
+    /// loop is already gone the connection is already down and this returns
+    /// `Ok`. Errs only when the driver fails to confirm within
+    /// [`SHUTDOWN_TIMEOUT`], in which case the child may still be alive.
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        if self
+            .cmd_tx
+            .unbounded_send(Command::Shutdown { done: done_tx })
+            .is_err()
+        {
+            // Command loop already ended — the connection is already down.
+            return Ok(());
+        }
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, done_rx).await {
+            // Confirmed, or the driver ended before processing the command
+            // (receiver dropped) — either way the connection is down.
+            Ok(_) => Ok(()),
+            Err(_) => Err(anyhow::anyhow!(
+                "upstream teardown did not confirm within {SHUTDOWN_TIMEOUT:?}"
+            )),
+        }
+    }
 }
 
 /// Build the ACP client, perform the handshake (reporting it back over
@@ -367,6 +401,12 @@ async fn drive(
     let handshake_tx: Arc<Mutex<Option<oneshot::Sender<anyhow::Result<Handshake>>>>> =
         Arc::new(Mutex::new(Some(handshake_tx)));
     let closure_handshake_tx = handshake_tx.clone();
+
+    // Confirmation for an explicit `Command::Shutdown`: the command loop stashes
+    // the sender here and breaks; it fires AFTER `connect_with` returns (the
+    // connection and its transport dropped, the agent child killed).
+    let shutdown_done: Arc<Mutex<Option<oneshot::Sender<()>>>> = Arc::new(Mutex::new(None));
+    let closure_shutdown_done = shutdown_done.clone();
 
     let result = agent_client_protocol::Client
         .builder()
@@ -473,7 +513,9 @@ async fn drive(
             // ── Command loop ───────────────────────────────────────────────
             // Never blocks on a prompt turn: each prompt runs in its own task so
             // the loop stays responsive while a turn (and its mid-turn permission
-            // requests) is in flight.
+            // requests) is in flight. Ends when the command channel closes or an
+            // explicit `Shutdown` arrives; returning ends `main_fn`, which tears
+            // the connection down and kills the agent child.
             while let Some(cmd) = cmd_rx.next().await {
                 match cmd {
                     Command::Prompt { req, reply } => {
@@ -495,12 +537,26 @@ async fn drive(
                         let _ = connection
                             .send_notification(CancelNotification::new(SessionId::new(session_id)));
                     }
+                    Command::Shutdown { done } => {
+                        // Stash the confirmation; it fires after `connect_with`
+                        // returns (teardown complete), not here.
+                        if let Ok(mut guard) = closure_shutdown_done.lock() {
+                            *guard = Some(done);
+                        }
+                        break;
+                    }
                 }
             }
 
             Ok(())
         })
         .await;
+
+    // An explicit shutdown was requested and the connection is now fully torn
+    // down (transport dropped, child killed): confirm it.
+    if let Some(tx) = shutdown_done.lock().ok().and_then(|mut guard| guard.take()) {
+        let _ = tx.send(());
+    }
 
     // If the handshake never completed (connect/initialize/session-new failed),
     // surface the error to `spawn()` so it doesn't hang on the oneshot.
@@ -689,6 +745,36 @@ mod tests {
 
         let resp = prompt.await.expect("join").expect("prompt");
         assert!(format!("{resp:?}").contains("EndTurn"));
+    }
+
+    /// An explicit `shutdown` confirms teardown promptly, after which the
+    /// command loop is gone: further commands fail fast instead of hanging.
+    /// A second `shutdown` is an idempotent no-op.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_confirms_teardown_and_closes_loop() {
+        let script = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+              esac
+            done
+        "#;
+        let conn =
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new(), None)
+                .await
+                .expect("spawn");
+
+        conn.shutdown().await.expect("shutdown confirms");
+
+        // The loop is gone: a prompt fails fast on the closed command channel.
+        let err = conn.prompt("u1", "x").await;
+        assert!(err.is_err(), "prompt after shutdown must fail, got Ok");
+
+        // Idempotent.
+        conn.shutdown().await.expect("second shutdown is a no-op");
     }
 
     /// health_check: a stub that answers `initialize` → returns Ok with an
