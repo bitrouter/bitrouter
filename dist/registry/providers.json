@@ -939,7 +939,7 @@
     {
       "access": "api_key",
       "api_base": "https://api.atlascloud.ai/v1",
-      "auth_scheme": "x-api-key",
+      "auth_scheme": "bearer",
       "billing": "usage_token",
       "byok": true,
       "community": false,
@@ -962,6 +962,7 @@
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.5,
               "no_cache": 2.5
             },
             "output_tokens": {
@@ -974,7 +975,20 @@
           "api_protocol": "openai",
           "id": "qwen/qwen3.7-plus",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 262144,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
             "input_tokens": {
+              "cache_read": 0.08,
               "no_cache": 0.4
             },
             "output_tokens": {
@@ -988,6 +1002,7 @@
           "id": "deepseek/deepseek-v4-pro",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.13,
               "no_cache": 1.68
             },
             "output_tokens": {
@@ -1001,6 +1016,7 @@
           "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.028,
               "no_cache": 0.14
             },
             "output_tokens": {
@@ -1014,6 +1030,7 @@
           "id": "deepseek/deepseek-v3.2",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.13,
               "no_cache": 0.26
             },
             "output_tokens": {
@@ -1027,6 +1044,7 @@
           "id": "moonshotai/kimi-k2.5",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 0.49
             },
             "output_tokens": {
@@ -1040,6 +1058,7 @@
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.16,
               "no_cache": 0.95
             },
             "output_tokens": {
@@ -1053,6 +1072,7 @@
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.16,
               "no_cache": 0.95
             },
             "output_tokens": {
@@ -1066,6 +1086,7 @@
           "id": "minimax/minimax-m2.5",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.06,
               "no_cache": 0.295
             },
             "output_tokens": {
@@ -1078,7 +1099,20 @@
           "api_protocol": "openai",
           "id": "minimax/minimax-m3",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.12,
+                  "no_cache": 0.6
+                },
+                "output_tokens": {
+                  "text": 2.4
+                }
+              }
+            ],
             "input_tokens": {
+              "cache_read": 0.06,
               "no_cache": 0.3
             },
             "output_tokens": {
@@ -1092,10 +1126,11 @@
           "id": "z-ai/glm-5.1",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.95
+              "cache_read": 0.234,
+              "no_cache": 1.26
             },
             "output_tokens": {
-              "text": 3.15
+              "text": 3.96
             }
           },
           "provider_model_id": "zai-org/glm-5.1"
@@ -1105,10 +1140,11 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
-              "no_cache": 1.26
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "output_tokens": {
-              "text": 3.96
+              "text": 4.4
             }
           },
           "provider_model_id": "zai-org/glm-5.2"
@@ -1117,7 +1153,20 @@
           "api_protocol": "openai",
           "id": "x-ai/grok-4.3",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 200000,
+                "input_tokens": {
+                  "cache_read": 0.4,
+                  "no_cache": 2.5
+                },
+                "output_tokens": {
+                  "text": 5.0
+                }
+              }
+            ],
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 1.25
             },
             "output_tokens": {
@@ -1125,26 +1174,13 @@
             }
           },
           "provider_model_id": "xai/grok-4.3"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "openai/gpt-oss-120b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.03
-            },
-            "output_tokens": {
-              "text": 0.1
-            }
-          },
-          "provider_model_id": "openai/gpt-oss-120b"
         }
       ],
       "name": "atlascloud",
       "required_config": [
         "api_key"
       ],
-      "status": "staging",
+      "status": "active",
       "submitted_at": "2026-07-07",
       "weight": 1.0
     },
@@ -5168,6 +5204,7 @@
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.37,
               "no_cache": 1.09
             },
             "output_tokens": {
@@ -5185,6 +5222,7 @@
           "id": "z-ai/glm-5.1",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.6,
               "no_cache": 1.21
             },
             "output_tokens": {
@@ -5202,6 +5240,7 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.7,
               "no_cache": 1.4
             },
             "output_tokens": {
@@ -5239,49 +5278,122 @@
       "models": [
         {
           "api_protocol": "openai",
-          "id": "baidu/ernie-4.5",
+          "id": "deepseek/deepseek-v3.2",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.55
+              "cache_read": 0.0252,
+              "no_cache": 0.252
             },
             "output_tokens": {
-              "text": 2.2
+              "text": 0.378
             }
           },
-          "provider_model_id": "ernie-4.5"
+          "provider_model_id": "deepseek-v3.2"
         },
         {
           "api_protocol": "openai",
-          "id": "baidu/ernie-x1",
+          "id": "deepseek/deepseek-v4-pro",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.28
+              "cache_read": 0.063,
+              "no_cache": 0.7605
             },
             "output_tokens": {
-              "text": 1.1
+              "text": 1.521
             }
           },
-          "provider_model_id": "ernie-x1"
+          "provider_model_id": "deepseek-v4-pro"
         },
         {
           "api_protocol": "openai",
-          "id": "baidu/ernie-5.1",
+          "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.59
+              "cache_read": 0.0197,
+              "no_cache": 0.0983
             },
             "output_tokens": {
-              "text": 2.65
+              "text": 0.1966
             }
           },
-          "provider_model_id": "ernie-5.1"
+          "provider_model_id": "deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.144,
+              "no_cache": 0.684
+            },
+            "output_tokens": {
+              "text": 3.42
+            }
+          },
+          "provider_model_id": "kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.14,
+              "no_cache": 0.7
+            },
+            "output_tokens": {
+              "text": 2.24
+            }
+          },
+          "provider_model_id": "glm-5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.182,
+              "no_cache": 0.98
+            },
+            "output_tokens": {
+              "text": 3.08
+            }
+          },
+          "provider_model_id": "glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.208,
+              "no_cache": 1.12
+            },
+            "output_tokens": {
+              "text": 3.96
+            }
+          },
+          "provider_model_id": "glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "tencent/hy3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0261,
+              "no_cache": 0.066
+            },
+            "output_tokens": {
+              "text": 0.26
+            }
+          },
+          "provider_model_id": "hy3-preview"
         }
       ],
       "name": "qianfan",
       "required_config": [
         "api_key"
       ],
-      "status": "staging",
+      "status": "active",
       "submitted_at": "2026-07-07",
       "weight": 1.0
     },
@@ -5312,7 +5424,6 @@
           "id": "deepseek/deepseek-v4-pro",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.139,
               "no_cache": 1.67
             },
             "output_tokens": {
@@ -5320,6 +5431,19 @@
             }
           },
           "provider_model_id": "deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "deepseek-v4-flash"
         },
         {
           "api_protocol": "openai",
@@ -5337,7 +5461,6 @@
               }
             ],
             "input_tokens": {
-              "cache_read": 0.056,
               "no_cache": 0.28
             },
             "output_tokens": {
@@ -5348,17 +5471,53 @@
         },
         {
           "api_protocol": "openai",
-          "id": "moonshotai/kimi-k2.6",
+          "id": "moonshotai/kimi-k2.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.153,
-              "no_cache": 0.9
+              "no_cache": 0.56
             },
             "output_tokens": {
-              "text": 3.75
+              "text": 2.92
             }
           },
-          "provider_model_id": "kimi-k2.6"
+          "provider_model_id": "kimi-k2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m2.5",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.29
+            },
+            "output_tokens": {
+              "text": 1.17
+            }
+          },
+          "provider_model_id": "minimax-m2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 32000,
+                "input_tokens": {
+                  "no_cache": 1.11
+                },
+                "output_tokens": {
+                  "text": 3.89
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.83
+            },
+            "output_tokens": {
+              "text": 3.33
+            }
+          },
+          "provider_model_id": "glm-5.1"
         },
         {
           "api_protocol": "openai",
@@ -5389,7 +5548,6 @@
           "id": "baidu/ernie-4.5-turbo-128k",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.028,
               "no_cache": 0.11
             },
             "output_tokens": {
@@ -5416,8 +5574,124 @@
       "required_config": [
         "api_key"
       ],
-      "status": "staging",
+      "status": "active",
       "submitted_at": "2026-07-07",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
+      "api_base": "https://api.redpill.ai/v1",
+      "auth_scheme": "bearer",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "RedPill (Phala Network)",
+      "doc_url": "https://docs.redpill.ai/get-started/introduction",
+      "id": "redpill",
+      "kind": "gateway",
+      "metadata": {
+        "headquarters": "SG",
+        "name": "RedPill",
+        "privacy_policy_url": "https://redpill.ai/privacy",
+        "slug": "redpill",
+        "terms_of_service_url": "https://redpill.ai/terms"
+      },
+      "models": [
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v4-pro",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 5.25
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "moonshotai/kimi-k2.6",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.37,
+              "no_cache": 1.09
+            },
+            "output_tokens": {
+              "text": 4.6
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "z-ai/glm-5.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.6,
+              "no_cache": 1.21
+            },
+            "output_tokens": {
+              "text": 4.2
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.7,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.2"
+        }
+      ],
+      "name": "redpill",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-08",
       "weight": 1.0
     },
     {
@@ -6138,7 +6412,7 @@
     },
     {
       "access": "api_key",
-      "api_base": "https://wanqing.streamlakeapi.com/api/gateway/v1/endpoints",
+      "api_base": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
       "auth_scheme": "bearer",
       "billing": "usage_token",
       "byok": true,
@@ -6152,6 +6426,7 @@
         ],
         "headquarters": "CN",
         "name": "StreamLake",
+        "privacy_policy_url": "https://www.streamlake.ai/document/DOC/mgkci47q13qr66h9i54",
         "slug": "streamlake",
         "terms_of_service_url": "https://www.streamlake.ai/document/DOC/mgkchnd89grpt1961fw"
       },
@@ -6161,11 +6436,12 @@
           "id": "kwaipilot/kat-coder-pro-v2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.058,
-              "no_cache": 0.29
+              "cache_read": 0.06,
+              "cache_write": 0.0,
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 1.17
+              "text": 1.2
             }
           },
           "provider_model_id": "kat-coder-pro-v2"
@@ -6175,11 +6451,11 @@
           "id": "kwaipilot/kat-coder-pro-v2.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.139,
-              "no_cache": 0.69
+              "cache_read": 0.15,
+              "no_cache": 0.74
             },
             "output_tokens": {
-              "text": 2.78
+              "text": 2.96
             }
           },
           "provider_model_id": "kat-coder-pro-v2.5"
@@ -6189,11 +6465,11 @@
           "id": "kwaipilot/kat-coder-air-v2.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
+              "cache_read": 0.03,
+              "no_cache": 0.15
             },
             "output_tokens": {
-              "text": 0.56
+              "text": 0.6
             }
           },
           "provider_model_id": "kat-coder-air-v2.5"
@@ -6203,7 +6479,7 @@
       "required_config": [
         "api_key"
       ],
-      "status": "staging",
+      "status": "active",
       "submitted_at": "2026-07-07",
       "weight": 1.0
     },
