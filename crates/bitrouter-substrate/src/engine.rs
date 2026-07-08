@@ -160,6 +160,9 @@ pub struct Session {
     /// The transcript writer task, when the transcript is enabled. Awaited at
     /// shutdown so the tail is flushed to disk.
     transcript_writer: Option<tokio::task::JoinHandle<()>>,
+    /// Where the transcript lives, when enabled. The down-facing endpoint
+    /// replays it for `session/load`.
+    transcript_path: Option<PathBuf>,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
@@ -312,10 +315,10 @@ impl Session {
         // A single writer task owns the file; the connection's non-lossy raw
         // update feed is pumped into it, and the turn closure below adds
         // prompt/result/error events on the same channel.
-        let (transcript_tx, transcript_writer) = if transcript {
+        let (transcript_tx, transcript_writer, transcript_path) = if transcript {
             let (tx, rx) = unbounded_channel::<TranscriptEvent>();
             let path = crate::transcript::transcript_path(&base_repo, &state.record_id);
-            let writer = crate::transcript::spawn_writer(path, rx);
+            let writer = crate::transcript::spawn_writer(path.clone(), rx);
             if let Some(mut feed) = conn.take_transcript_feed() {
                 let update_tx = tx.clone();
                 tokio::spawn(async move {
@@ -331,9 +334,9 @@ impl Session {
                     }
                 });
             }
-            (Some(tx), Some(writer))
+            (Some(tx), Some(writer), Some(path))
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // ── Pipeline (pinned table + session executor + telemetry hook) ─────
@@ -484,6 +487,7 @@ impl Session {
             record: std::sync::Mutex::new(record),
             records,
             transcript_writer,
+            transcript_path,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
         })
     }
@@ -600,6 +604,13 @@ impl Session {
     /// down-facing `SessionAgent` reflects these capabilities to its manager.
     pub fn upstream_init(&self) -> &agent_client_protocol_schema::v1::InitializeResponse {
         self.conn.upstream_init()
+    }
+
+    /// Where the durable transcript lives, when enabled. The down-facing
+    /// endpoint replays it for `session/load`, and advertises `loadSession`
+    /// only when this is `Some`.
+    pub fn transcript_path(&self) -> Option<&std::path::Path> {
+        self.transcript_path.as_deref()
     }
 
     /// Tears the upstream connection down deterministically (killing the agent

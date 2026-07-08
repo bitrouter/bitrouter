@@ -24,6 +24,12 @@
 //! - `session/prompt` → forward the prompt's content blocks **verbatim** via
 //!   [`Session::prompt_blocks`] — text, images, resources, and resource links
 //!   all reach the upstream agent unmodified.
+//! - `session/load` → replays the session's durable transcript to the
+//!   manager as `session/update` notifications (user prompts as
+//!   `user_message_chunk`, upstream updates verbatim) **before** responding —
+//!   v1 `session/load` with the semantics ACP v2's `session/resume
+//!   { replayFrom: start }` standardizes. Only the session's own `record_id`
+//!   loads; `loadSession` is advertised only when a transcript exists.
 //! - `session/cancel` → [`Session::cancel`].
 //! - `fs/*`, `terminal/*`, and any other method → answered with a JSON-RPC
 //!   "method not found" error (spec §11 / R1). We never silently drop. Sandboxed
@@ -69,9 +75,12 @@
 
 use std::sync::Arc;
 
+use anyhow::Context as _;
+
 use agent_client_protocol::schema::v1::{
-    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, RequestPermissionRequest, SessionId, SessionNotification,
+    ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
@@ -190,20 +199,24 @@ fn serve_on(
     // `acp_session_id` never crosses this boundary.
     let record_id = session.state().record_id.clone();
 
-    // Reflect the upstream agent's real capabilities to the manager, masked for
-    // what this endpoint cannot honor: no `session/load` (the session was
-    // launched with this process; there is nothing to load), and no relayed
-    // auth methods (`authenticate` is answered method-not-found). `agent_info`
-    // passes through so the manager knows which agent this session fronts.
+    // Reflect the upstream agent's real capabilities to the manager, adjusted
+    // for what this endpoint itself provides: `loadSession` is OURS — we can
+    // replay the durable transcript regardless of the upstream's support — so
+    // it is advertised exactly when a transcript exists. Upstream auth methods
+    // are not relayed (`authenticate` is answered method-not-found).
+    // `agent_info` passes through so the manager knows which agent this
+    // session fronts.
     let upstream_init = session.upstream_init();
     let mut relayed_caps = upstream_init.agent_capabilities.clone();
-    relayed_caps.load_session = false;
+    relayed_caps.load_session = session.transcript_path().is_some();
     let relayed_agent_info = upstream_init.agent_info.clone();
 
     // One `Arc<Session>` clone per handler / forwarding closure that needs the
     // session.
     let record_for_new = record_id.clone();
     let session_new = Arc::clone(&session);
+    let record_for_load = record_id.clone();
+    let session_load = Arc::clone(&session);
     let session_prompt = Arc::clone(&session);
     let session_dispatch = Arc::clone(&session);
     let session_forward = session;
@@ -249,6 +262,52 @@ fn serve_on(
                             Err(e) => responder
                                 .respond_with_error(agent_client_protocol::util::internal_error(e)),
                         }
+                    })?;
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // ── session/load ────────────────────────────────────────────────────
+        .on_receive_request(
+            // Replays the durable transcript to the manager as session/update
+            // notifications BEFORE responding (v1 session/load semantics; what
+            // ACP v2 standardizes as session/resume with replayFrom: start).
+            // Only this session's record_id loads. Opens a still-deferred
+            // session first (session/load carries cwd + mcpServers too).
+            move |req: LoadSessionRequest,
+                  responder: Responder<LoadSessionResponse>,
+                  cx: ConnectionTo<Client>| {
+                let session = Arc::clone(&session_load);
+                let record_id = record_for_load.clone();
+                async move {
+                    let conn = cx.clone();
+                    cx.spawn(async move {
+                        if req.session_id.0.as_ref() != record_id {
+                            return responder.respond_with_error(
+                                agent_client_protocol::schema::v1::Error::invalid_params(),
+                            );
+                        }
+                        let Some(path) =
+                            session.transcript_path().map(std::path::Path::to_path_buf)
+                        else {
+                            // loadSession was not advertised; refuse rather than
+                            // silently replaying nothing.
+                            return responder.respond_with_error(
+                                agent_client_protocol::schema::v1::Error::method_not_found(),
+                            );
+                        };
+                        if let Err(e) = session.open(Some(req.cwd), req.mcp_servers).await {
+                            return responder.respond_with_error(
+                                agent_client_protocol::util::internal_error(e),
+                            );
+                        }
+                        if let Err(e) = replay_transcript(&conn, &path, &record_id).await {
+                            return responder.respond_with_error(
+                                agent_client_protocol::util::internal_error(e),
+                            );
+                        }
+                        responder.respond(LoadSessionResponse::new())
                     })?;
                     Ok(())
                 }
@@ -416,6 +475,69 @@ fn spawn_permission_forwarder(
         }
         Ok(())
     })
+}
+
+/// Replay the durable transcript at `path` to the manager as `session/update`
+/// notifications: `prompt` lines become `user_message_chunk` updates (one per
+/// content block), `update` lines are re-sent verbatim, `result`/`error`
+/// lines are skipped (turn boundaries are implicit in the update stream).
+/// A missing file replays nothing (the session simply has no events yet);
+/// malformed lines are skipped with a warning rather than failing the load.
+async fn replay_transcript(
+    conn: &ConnectionTo<Client>,
+    path: &std::path::Path,
+    record_id: &str,
+) -> anyhow::Result<()> {
+    let raw = match tokio::fs::read_to_string(path).await {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(anyhow::Error::new(e))
+                .with_context(|| format!("reading transcript {}", path.display()));
+        }
+    };
+    for line in raw.lines() {
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(e) => {
+                tracing::warn!(error = %e, "skipping malformed transcript line in replay");
+                continue;
+            }
+        };
+        match value.get("kind").and_then(|k| k.as_str()) {
+            Some("update") => {
+                match serde_json::from_value::<SessionUpdate>(value["update"].clone()) {
+                    Ok(update) => {
+                        conn.send_notification(SessionNotification::new(
+                            SessionId::new(record_id),
+                            update,
+                        ))?;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "skipping unreplayable transcript update");
+                    }
+                }
+            }
+            Some("prompt") => {
+                match serde_json::from_value::<Vec<ContentBlock>>(value["blocks"].clone()) {
+                    Ok(blocks) => {
+                        for block in blocks {
+                            conn.send_notification(SessionNotification::new(
+                                SessionId::new(record_id),
+                                SessionUpdate::UserMessageChunk(ContentChunk::new(block)),
+                            ))?;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "skipping unreplayable transcript prompt");
+                    }
+                }
+            }
+            // result / error lines mark turn boundaries; nothing to replay.
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -713,6 +835,142 @@ mod tests {
             .await;
     }
 
+    /// `session/load` replays the transcript to the manager — the user prompt
+    /// as a `user_message_chunk` and the streamed updates verbatim — before
+    /// the load response arrives. A wrong session id is refused.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_session_load_replays_transcript() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
+            SessionNotification, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const BASH_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}\n';
+                                  printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, base) = launch_stub_session(BASH_STUB).await;
+                let record_id = session.state().record_id.clone();
+                let transcript = crate::transcript::transcript_path(base.path(), &record_id);
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let (update_tx, mut update_rx) =
+                    futures::channel::mpsc::unbounded::<SessionNotification>();
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .on_receive_notification(
+                        move |notif: SessionNotification, _cx: ConnectionTo<Agent>| {
+                            let update_tx = update_tx.clone();
+                            async move {
+                                let _ = update_tx.unbounded_send(notif);
+                                Ok(())
+                            }
+                        },
+                        agent_client_protocol::on_receive_notification!(),
+                    )
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        let ns = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                ns.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new(
+                                    "replay-me".to_string(),
+                                ))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+                        // Wait for the async transcript writer to persist the
+                        // turn (the result line lands last) — replay reads the
+                        // file, so the test must not race the writer.
+                        for _ in 0..100 {
+                            if tokio::fs::read_to_string(&transcript)
+                                .await
+                                .is_ok_and(|raw| raw.contains("\"result\""))
+                            {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+
+                        // Drain the live updates received so far so the replay
+                        // is observed in isolation.
+                        while update_rx.try_next().is_ok_and(|opt| opt.is_some()) {}
+
+                        // Wrong id is refused.
+                        let bad = cx
+                            .send_request(LoadSessionRequest::new(
+                                SessionId::new("not-the-record-id"),
+                                std::path::PathBuf::from("/"),
+                            ))
+                            .block_task()
+                            .await;
+                        assert!(bad.is_err(), "wrong session id must be refused");
+
+                        // Real load: replay arrives BEFORE the response resolves
+                        // (same ordered connection), so once the response is in,
+                        // the replayed lines are queued in update_rx.
+                        cx.send_request(LoadSessionRequest::new(
+                            ns.session_id.clone(),
+                            std::path::PathBuf::from("/"),
+                        ))
+                        .block_task()
+                        .await?;
+
+                        let mut kinds: Vec<String> = Vec::new();
+                        while let Ok(Some(n)) = update_rx.try_next() {
+                            kinds.push(format!("{:?}", n.update));
+                        }
+                        assert!(
+                            kinds
+                                .iter()
+                                .any(|k| k.contains("UserMessageChunk") && k.contains("replay-me")),
+                            "replay must contain the user prompt; got: {kinds:?}"
+                        );
+                        assert!(
+                            kinds
+                                .iter()
+                                .any(|k| k.contains("AgentMessageChunk") && k.contains("hi")),
+                            "replay must contain the streamed update; got: {kinds:?}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
     /// The deferred-launch serve flow: the session is spawned+initialized but
     /// NOT opened; the manager's `session/new` opens it (relaying cwd) and a
     /// prompt round-trips afterwards. This is the `bitrouter acp serve` path.
@@ -806,8 +1064,9 @@ mod tests {
 
     /// Downstream `initialize` reflects the upstream agent's real capabilities
     /// (here: `promptCapabilities.image=true`, `agentInfo`) instead of a
-    /// fabricated minimal set, while masking `loadSession` to `false` because
-    /// this endpoint does not serve `session/load`.
+    /// fabricated minimal set. `loadSession` is OURS: advertised because the
+    /// default-enabled transcript makes `session/load` replay possible,
+    /// regardless of what the upstream advertised.
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn serve_reflects_upstream_capabilities_masking_load_session() {
@@ -851,11 +1110,11 @@ mod tests {
                             init.agent_capabilities.prompt_capabilities.embedded_context,
                             "upstream embedded_context capability must be relayed"
                         );
-                        // …but load_session is masked: this endpoint has no
-                        // session/load.
+                        // …and load_session reflects OUR transcript-backed
+                        // session/load, not the upstream's claim.
                         assert!(
-                            !init.agent_capabilities.load_session,
-                            "load_session must be masked to false"
+                            init.agent_capabilities.load_session,
+                            "load_session must be advertised (transcript on)"
                         );
                         // agent_info identifies the fronted agent.
                         assert_eq!(
