@@ -42,17 +42,19 @@ Each line is a self-describing JSON object with a `type` field (snake_case):
 
 `--worktree <name>` provisions `.bitrouter/worktrees/<name>` — created with a same-named branch, or **reused** when the worktree already exists (attaching to an existing branch instead of failing). At shutdown the worktree is **retained** (it holds the agent's work; the path is logged to stderr). `--rm-worktree` opts in to removal, which destroys uncommitted work; a pre-existing (reused) worktree is never removed. `serve` and `prompt` share these semantics.
 
-## Session records
+## Session records + transcript
 
-Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, worktree path, pid, start/end timestamps, status — and shutdown settles it to `exited`. `bitrouter acp sessions` lists them; a `running` record whose pid is gone displays as `dead` (the substrate was killed without shutdown). Records are the persistence hook for v2 `session/load`.
+Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, worktree path, pid, start/end timestamps, status — and shutdown settles it to `exited`. `bitrouter acp sessions` lists them; a `running` record whose pid is gone displays as `dead` (the substrate was killed without shutdown).
+
+Alongside it, a **durable transcript** (`<record_id>.transcript.ndjson`, disable with `--no-transcript`) records the whole conversation non-lossily: `prompt` (verbatim content blocks), `update` (every raw ACP `session/update`), `result` / `error` per turn. Each line is stamped `{seq, ts}` with a writer-minted monotonic `seq` — the cursor shape ACP v2's `session/resume { replayFrom }` replays from. Records + transcript together are the persistence substrate for v2 warm sessions.
 
 ## One agent per session (D8)
 
 Agent identity is fixed at launch via `--agent <id>`. There is no mid-session agent switch. The invariant: one substrate process ↔ one upstream agent process ↔ one ACP session. This is the inverse of BitRouter's LLM router: ACP session state is agent-private — switching would cause silent amnesia.
 
-## FIFO turn queue + upstream cancel (D9)
+## FIFO turn queue + session-scoped cancel (D9)
 
-Turns are serialized by a single-writer FIFO queue. A second prompt submitted while a turn is in flight queues (bounded; rejected past the cap). Turn cancellation is **upstream-level**: the engine calls ACP `session/cancel` on the upstream connection, which completes the in-flight turn cooperatively (`stop_reason: "cancelled"`). Cancel affects only the active turn; queued turns proceed normally.
+Turns are serialized by a single-writer FIFO queue. A second prompt submitted while a turn is in flight queues (bounded; rejected past the cap). Cancellation is **session-scoped**, matching ACP `session/cancel`: the queued backlog is flushed (each queued prompt resolves `stop_reason: "cancelled"` without running) and the active turn is cancelled cooperatively at the upstream. An optional per-turn deadline (`--turn-timeout SECS`) triggers the same cooperative cancel on elapse, with a 3s grace before the turn errors.
 
 ## Three-tier identity (D10)
 

@@ -377,9 +377,14 @@ impl From<McpClient> for bitrouter_mcp::install::Client {
 
 #[derive(Subcommand)]
 enum AgentsAction {
-    /// Show the bundled v1.0 catalog of well-known agents and which of
-    /// them are present under `agents:` in the loaded config.
+    /// Show the bundled catalog of well-known agents and which of them are
+    /// present under `agents:` in the loaded config. With `--remote`, also
+    /// fetch and list the official ACP agent registry.
     List {
+        /// Also fetch the ACP agent registry
+        /// (cdn.agentclientprotocol.com) and list its agents.
+        #[arg(long)]
+        remote: bool,
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
@@ -396,10 +401,11 @@ enum AgentsAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Print a YAML stub for an agent in the catalog (paste under
-    /// `agents:` in `bitrouter.yaml`).
+    /// Print a YAML stub for an agent (paste under `agents:` in
+    /// `bitrouter.yaml`). Resolves from the bundled catalog first, then the
+    /// ACP registry (`npx`/`uvx` distributions only).
     Install {
-        /// Agent id from the catalog (see `bitrouter agents list`).
+        /// Agent id (see `bitrouter agents list` / `list --remote`).
         id: String,
     },
 }
@@ -2067,7 +2073,7 @@ async fn agents_cmd(action: AgentsAction) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
-        AgentsAction::List { config } => {
+        AgentsAction::List { remote, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let rows = agents_cmd::list(&cfg);
@@ -2083,6 +2089,26 @@ async fn agents_cmd(action: AgentsAction) -> Result<()> {
                     if row.in_catalog { "yes" } else { "no" },
                     row.description,
                 );
+            }
+            if remote {
+                let registry =
+                    bitrouter::agent_registry::fetch(bitrouter::agent_registry::REGISTRY_URL)
+                        .await?;
+                let rows = agents_cmd::registry_rows(&registry);
+                println!();
+                println!("ACP registry ({} agents):", rows.len());
+                println!(
+                    "{:<20} {:<12} {:<8} DESCRIPTION",
+                    "ID", "VERSION", "INSTALL"
+                );
+                for row in rows {
+                    println!(
+                        "{:<20} {:<12} {:<8} {}",
+                        row.id, row.version, row.install, row.description,
+                    );
+                }
+                println!();
+                println!("  install a stub with: bitrouter agents install <id>");
             }
             Ok(())
         }
@@ -2112,7 +2138,29 @@ async fn agents_cmd(action: AgentsAction) -> Result<()> {
                 print!("{yaml}");
                 Ok(())
             }
-            Err(e) => anyhow::bail!(e),
+            // Not in the compiled catalog: fall back to the ACP registry
+            // (npx/uvx distributions only).
+            Err(catalog_miss) => {
+                let registry = match bitrouter::agent_registry::fetch(
+                    bitrouter::agent_registry::REGISTRY_URL,
+                )
+                .await
+                {
+                    Ok(registry) => registry,
+                    Err(fetch_err) => {
+                        anyhow::bail!(
+                            "{catalog_miss}\n(also failed to consult the ACP registry: {fetch_err})"
+                        )
+                    }
+                };
+                match agents_cmd::install_from_registry(&registry, &id) {
+                    Ok(yaml) => {
+                        print!("{yaml}");
+                        Ok(())
+                    }
+                    Err(e) => anyhow::bail!(e),
+                }
+            }
         },
     }
 }

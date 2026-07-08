@@ -1,0 +1,11 @@
+{
+  "record_id": "637dc273-cc0d-460a-883b-c11fd24e0b60",
+  "agent_id": "stub",
+  "acp_session_id": "u1",
+  "agent_session_id": null,
+  "worktree": null,
+  "pid": 31927,
+  "started_at": 1783545572,
+  "status": "exited",
+  "ended_at": 1783545572
+}

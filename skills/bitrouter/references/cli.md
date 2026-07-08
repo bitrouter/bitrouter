@@ -24,9 +24,9 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 | `bitrouter tools list [--config PATH]` | Enumerate tools advertised by every configured MCP server (one `tools/list` round-trip per server). |
 | `bitrouter tools status [--config PATH]` | Health-check each MCP server. Latency or error per row. |
 | `bitrouter tools discover <server> [--config PATH]` | Print a YAML stub for the discovered server, paste into `mcp_servers:`. |
-| `bitrouter agents list [--config PATH]` | Show bundled v1 ACP catalog + which are configured. |
+| `bitrouter agents list [--remote] [--config PATH]` | Show bundled ACP catalog + which are configured. `--remote` also fetches the official ACP agent registry (cdn.agentclientprotocol.com) and lists its agents with version + install support (`npx`/`uvx` stub-able; `manual` for binary-only). |
 | `bitrouter agents check [--config PATH]` | Spawn each configured ACP agent and verify `initialize` round-trip. |
-| `bitrouter agents install <id>` | Print a paste-ready YAML stub for catalog entry `<id>`. |
+| `bitrouter agents install <id>` | Print a paste-ready YAML stub for `<id>` — resolved from the bundled catalog first, then the ACP registry (`npx`/`uvx` distributions, version-pinned, `env` included). Binary-only registry entries are refused with a manual-install pointer (the registry has no checksums). |
 | `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: wired / endpoint / sampler / cardinality usage / in-flight spans. JSON output for tooling. |
 
 ## ACP sessions
@@ -35,11 +35,15 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 | Command | Effect |
 |---|---|
-| `bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel`). Logs go to stderr; stdout carries ACP JSON-RPC. |
-| `bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-wait] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. |
+| `bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel`). Logs go to stderr; stdout carries ACP JSON-RPC. |
+| `bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--no-wait] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. |
 | `bitrouter acp sessions` | List the current repo's session records (`.bitrouter/sessions/*.json`), newest first: short record id, agent, status (`running` / `exited` / `dead` when the recorded pid no longer exists), age, worktree. |
 
 **Worktrees**: `--worktree <name>` provisions `.bitrouter/worktrees/<name>` (created with a same-named branch, or reused/attached when the worktree or branch already exists). Worktrees are **retained** on exit — they hold the agent's work — and the retained path is logged to stderr. `--rm-worktree` opts in to removal at shutdown (destroys uncommitted work; only a worktree the session itself created is removed).
+
+**Transcript**: every session appends a durable NDJSON transcript to `.bitrouter/sessions/<record_id>.transcript.ndjson` — prompts, every raw `session/update` (non-lossy), and per-turn results, each line stamped `{seq, ts}` (monotonic `seq`, unix-ms `ts`). Disable with `--no-transcript`.
+
+**Turns**: `session/cancel` is session-scoped — it cancels the active turn upstream *and* flushes the queued backlog (queued prompts resolve `stop_reason: "cancelled"`). `--turn-timeout SECS` sets a per-turn deadline: on elapse the agent is asked to cancel cooperatively (3s grace) before the turn errors.
 
 **NDJSON format** (for `acp prompt`): each update line is a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` is emitted.
 
