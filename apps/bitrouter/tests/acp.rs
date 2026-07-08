@@ -621,3 +621,71 @@ async fn warm_reattach_socket_e2e() {
     assert!(v["socket"].is_null(), "socket must be cleared at shutdown");
     assert!(!socket_path.exists(), "socket file must be removed");
 }
+
+/// Regression: a permission request during a **headless** `acp prompt` must
+/// be auto-denied so the turn completes — with no manager attached, an
+/// unconsumed `session/request_permission` would otherwise park its resolver
+/// forever and hang the process (found driving a real agent that asked for
+/// file-write permission).
+#[tokio::test]
+async fn prompt_headless_denies_permission_and_completes() {
+    const PERM_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+            *session/prompt*)
+                printf '{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{"sessionId":"u1","toolCall":{"toolCallId":"tc1","title":"write file"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"rej","name":"Reject","kind":"reject_once"}]}}\n'
+                read resp
+                chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"chose:%s"}}}}\n' "$chosen"
+                printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+          esac
+        done
+    "#;
+    let agent_cfg = AcpAgentConfig {
+        name: "perm-stub".to_string(),
+        transport: AcpTransport::Stdio {
+            command: "bash".to_string(),
+            args: vec!["-c".to_string(), PERM_STUB.to_string()],
+            env: HashMap::new(),
+        },
+    };
+    let mut cfg = Config::default();
+    cfg.agents.insert("perm-stub".to_string(), agent_cfg);
+
+    let base = tempfile::tempdir().expect("tempdir");
+    let orig_dir = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(base.path()).expect("set_current_dir");
+
+    let mut buf: Vec<u8> = Vec::new();
+    // Bound the whole run: before the fix this hung forever.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        bitrouter::acp_cli::prompt(
+            cfg,
+            "perm-stub",
+            bitrouter::acp_cli::launch_options(None, false, false, None),
+            "write it",
+            false,
+            &mut buf,
+        ),
+    )
+    .await;
+
+    let _ = std::env::set_current_dir(&orig_dir);
+
+    let result = result.expect("headless prompt must not hang on a permission request");
+    result.expect("prompt should complete");
+
+    let output = String::from_utf8(buf).expect("utf8");
+    assert!(
+        output.contains("chose:rej"),
+        "the permission must be auto-denied (reject option); output:\n{output}"
+    );
+    assert!(
+        output.contains("\"result\""),
+        "turn must complete:\n{output}"
+    );
+}

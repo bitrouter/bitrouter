@@ -296,6 +296,26 @@ where
             .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session).await;
 
+    // Headless: there is no manager to broker permissions. Consume the
+    // permission stream and DENY each request (dropping the pending item
+    // resolves it as the reject option upstream) — an unconsumed request
+    // would otherwise park its resolver forever and hang the turn.
+    let mut permissions = session.permissions();
+    tokio::spawn(async move {
+        while let Some(pending) = permissions.next().await {
+            tracing::warn!(
+                tool = pending
+                    .tool_call
+                    .fields
+                    .title
+                    .as_deref()
+                    .unwrap_or("(unnamed)"),
+                "headless prompt: denying permission request (no manager attached)"
+            );
+            drop(pending);
+        }
+    });
+
     if no_wait {
         // v1 no-wait: emit ack, then shut down immediately. The agent child is
         // killed on shutdown. Callers needing a persistent background session
