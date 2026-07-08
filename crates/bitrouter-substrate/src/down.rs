@@ -32,10 +32,11 @@
 //! - **Permissions:** [`Session::permissions`] yields each [`PendingPermission`];
 //!   we re-issue it to the manager as a `session/request_permission` request with
 //!   the same tool-call and options, await the manager's
-//!   [`RequestPermissionResponse`], map the chosen option back to a
-//!   [`PermissionOutcome`] via [`outcome_from_selection`], and resolve the pending
-//!   item. The await happens inside a spawned task (off the dispatch path), so a
-//!   slow manager never blocks message dispatch.
+//!   [`RequestPermissionResponse`], and resolve the pending item with the
+//!   manager's outcome **verbatim** — the exact chosen `optionId` reaches the
+//!   upstream (validated there against the offered set), never a lossy
+//!   collapse to option kind. The await happens inside a spawned task (off the
+//!   dispatch path), so a slow manager never blocks message dispatch.
 //!
 //! ## Connection handle + lifecycle for the forwarding tasks
 //!
@@ -71,7 +72,6 @@ use futures::StreamExt;
 use futures::channel::oneshot;
 
 use crate::engine::Session;
-use crate::translate::outcome_from_selection;
 
 /// Method names this endpoint answers explicitly. Everything else under the
 /// `fs/` and `terminal/` namespaces (and any unknown method) gets a JSON-RPC
@@ -372,7 +372,6 @@ fn spawn_permission_forwarder(
                 pending.tool_call.clone(),
                 pending.options.clone(),
             );
-            let options = pending.options.clone();
             // Drive each round-trip in its own task so a slow manager decision
             // never stalls the forwarder (and the dispatch loop) for the next
             // permission. The pending item moves in so its resolver lives until
@@ -382,10 +381,10 @@ fn spawn_permission_forwarder(
                 let conn = conn.clone();
                 async move {
                     match conn.send_request(request).block_task().await {
-                        Ok(resp) => {
-                            let outcome = outcome_from_selection(&resp.outcome, &options);
-                            pending.resolve(outcome);
-                        }
+                        // Resolve with the manager's outcome verbatim: the exact
+                        // chosen optionId is preserved end-to-end (up.rs
+                        // validates it against the offered set).
+                        Ok(resp) => pending.resolve(resp.outcome),
                         // Manager errored or went away: drop the pending item,
                         // which defaults the upstream to Deny so it never hangs.
                         Err(_) => drop(pending),
@@ -577,10 +576,10 @@ mod tests {
 
     /// End-to-end permission round-trip:
     /// upstream `request_permission` → up.rs `PendingPermission` →
-    /// down.rs forwarder re-issues to the manager → test client answers
-    /// `AllowOnce` → `outcome_from_selection` → `pending.resolve` → up.rs
-    /// `select_option` picks the `allow_once` option → upstream gets the allow
-    /// id back.
+    /// down.rs forwarder re-issues to the manager → test client selects the
+    /// allow option → `pending.resolve` passes the exact selection through →
+    /// up.rs `sanitize_selection` validates it → upstream gets the allow id
+    /// back.
     ///
     /// The upstream stub offers `allow_once` (id `allow`) + `reject_once` (id
     /// `rej`) mid-prompt, reads the response, and echoes the chosen optionId into
@@ -701,6 +700,129 @@ mod tests {
                         assert!(
                             chose.contains("chose:allow"),
                             "expected allow option chosen, got: {chose}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// The manager's exact `optionId` survives the full round-trip when the
+    /// upstream offers **two options of the same kind** — the case a
+    /// kind-collapsing translation cannot represent. The stub offers two
+    /// `allow_once` options (`allow1`, `allow2`); the manager picks `allow2`;
+    /// the upstream must see `allow2`, not the first same-kind option.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_preserves_exact_option_id_between_same_kind_options() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, NewSessionRequest, PermissionOptionId, PromptRequest,
+            RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+            SelectedPermissionOutcome, SessionNotification, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo, Responder};
+        use tokio::task::LocalSet;
+
+        const TWO_ALLOW_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                    printf '{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{"sessionId":"u1","toolCall":{"toolCallId":"tc1","title":"run npm"},"options":[{"optionId":"allow1","name":"Allow this command","kind":"allow_once"},{"optionId":"allow2","name":"Allow all npm commands","kind":"allow_once"},{"optionId":"rej","name":"Reject","kind":"reject_once"}]}}\n'
+                    read resp
+                    chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                    printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"chose:%s"}}}}\n' "$chosen"
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(TWO_ALLOW_STUB).await;
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let (update_tx, mut update_rx) =
+                    futures::channel::mpsc::unbounded::<SessionNotification>();
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .on_receive_notification(
+                        move |notif: SessionNotification, _cx: ConnectionTo<Agent>| {
+                            let update_tx = update_tx.clone();
+                            async move {
+                                let _ = update_tx.unbounded_send(notif);
+                                Ok(())
+                            }
+                        },
+                        agent_client_protocol::on_receive_notification!(),
+                    )
+                    // The manager picks the SECOND allow_once option by id.
+                    .on_receive_request(
+                        move |req: RequestPermissionRequest,
+                              responder: Responder<RequestPermissionResponse>,
+                              _cx: ConnectionTo<Agent>| async move {
+                            assert!(
+                                req.options
+                                    .iter()
+                                    .any(|o| o.option_id == PermissionOptionId::new("allow2")),
+                                "both allow options must be forwarded to the manager"
+                            );
+                            responder.respond(RequestPermissionResponse::new(
+                                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                    PermissionOptionId::new("allow2"),
+                                )),
+                            ))
+                        },
+                        agent_client_protocol::on_receive_request!(),
+                    )
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        let new_session = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                new_session.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new("do X".to_string()))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+                        let mut chose = None;
+                        for _ in 0..8 {
+                            match update_rx.next().await {
+                                Some(n) => {
+                                    let s = format!("{:?}", n.update);
+                                    if s.contains("chose:") {
+                                        chose = Some(s);
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        let chose = chose.expect("upstream echoed a chosen optionId");
+                        assert!(
+                            chose.contains("chose:allow2"),
+                            "exact optionId must survive; got: {chose}"
                         );
                         Ok(())
                     })

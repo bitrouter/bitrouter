@@ -113,28 +113,27 @@ pub fn select_option(
     }
 }
 
-/// Inverse of [`select_option`]: map a manager's `RequestPermissionOutcome`
-/// back to a substrate [`PermissionOutcome`] using the option set originally
-/// offered.
+/// Validate a manager's `RequestPermissionOutcome` against the option set
+/// originally offered, preserving the **exact** selection.
 ///
-/// `Cancelled` and an unrecognized option id both map to
-/// [`PermissionOutcome::Deny`] (the safe default). A recognized id maps by its
-/// `kind`; `RejectOnce` / `RejectAlways` collapse to `Deny`.
-pub fn outcome_from_selection(
-    outcome: &RequestPermissionOutcome,
+/// `Cancelled` passes through. A `Selected` whose `option_id` is one of the
+/// offered options passes through **verbatim** — the manager's choice is never
+/// collapsed to an option kind, so two options of the same kind (e.g. "allow
+/// this command" vs "allow all npm commands", both `allow_once`) stay
+/// distinguishable. A `Selected` carrying an id we never offered is replaced by
+/// the safe default, [`select_option`]`(Deny)`.
+pub fn sanitize_selection(
+    outcome: RequestPermissionOutcome,
     options: &[PermissionOption],
-) -> PermissionOutcome {
-    let RequestPermissionOutcome::Selected(selected) = outcome else {
-        return PermissionOutcome::Deny;
-    };
-    let kind = options
-        .iter()
-        .find(|o| o.option_id == selected.option_id)
-        .map(|o| o.kind);
-    match kind {
-        Some(PermissionOptionKind::AllowOnce) => PermissionOutcome::AllowOnce,
-        Some(PermissionOptionKind::AllowAlways) => PermissionOutcome::AllowAlways,
-        _ => PermissionOutcome::Deny,
+) -> RequestPermissionOutcome {
+    match &outcome {
+        RequestPermissionOutcome::Cancelled => outcome,
+        RequestPermissionOutcome::Selected(selected)
+            if options.iter().any(|o| o.option_id == selected.option_id) =>
+        {
+            outcome
+        }
+        _ => select_option(PermissionOutcome::Deny, options),
     }
 }
 
@@ -239,11 +238,20 @@ mod tests {
         }
     }
 
+    fn selected_id(outcome: &RequestPermissionOutcome) -> Option<String> {
+        match outcome {
+            RequestPermissionOutcome::Selected(s) => Some(s.option_id.0.to_string()),
+            _ => None,
+        }
+    }
+
     #[test]
-    fn outcome_from_selection_maps_kind_cancel_and_unknown() {
+    fn sanitize_selection_preserves_exact_known_id() {
+        // Two options of the SAME kind: the exact id must survive, proving the
+        // selection is never collapsed to a kind.
         let opts = vec![
             opt(PermissionOptionKind::AllowOnce, "a1"),
-            opt(PermissionOptionKind::AllowAlways, "a2"),
+            opt(PermissionOptionKind::AllowOnce, "a2"),
             opt(PermissionOptionKind::RejectOnce, "r1"),
         ];
         let sel = |id: &str| {
@@ -252,27 +260,37 @@ mod tests {
             ))
         };
         assert_eq!(
-            outcome_from_selection(&sel("a1"), &opts),
-            PermissionOutcome::AllowOnce
+            selected_id(&sanitize_selection(sel("a2"), &opts)).as_deref(),
+            Some("a2")
         );
         assert_eq!(
-            outcome_from_selection(&sel("a2"), &opts),
-            PermissionOutcome::AllowAlways
+            selected_id(&sanitize_selection(sel("r1"), &opts)).as_deref(),
+            Some("r1")
         );
-        // Reject kind → Deny.
+    }
+
+    #[test]
+    fn sanitize_selection_unknown_id_falls_back_to_deny_option() {
+        let opts = vec![
+            opt(PermissionOptionKind::AllowOnce, "a1"),
+            opt(PermissionOptionKind::RejectOnce, "r1"),
+        ];
+        let sel = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            PermissionOptionId::new("nope"),
+        ));
+        // Unknown id → the reject option, never the fabricated id.
         assert_eq!(
-            outcome_from_selection(&sel("r1"), &opts),
-            PermissionOutcome::Deny
+            selected_id(&sanitize_selection(sel, &opts)).as_deref(),
+            Some("r1")
         );
-        // Unknown id → Deny.
+    }
+
+    #[test]
+    fn sanitize_selection_cancelled_passes_through() {
+        let opts = vec![opt(PermissionOptionKind::AllowOnce, "a1")];
         assert_eq!(
-            outcome_from_selection(&sel("nope"), &opts),
-            PermissionOutcome::Deny
-        );
-        // Cancelled → Deny.
-        assert_eq!(
-            outcome_from_selection(&RequestPermissionOutcome::Cancelled, &opts),
-            PermissionOutcome::Deny
+            sanitize_selection(RequestPermissionOutcome::Cancelled, &opts),
+            RequestPermissionOutcome::Cancelled
         );
     }
 }

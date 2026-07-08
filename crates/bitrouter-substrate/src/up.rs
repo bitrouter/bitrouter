@@ -34,10 +34,14 @@
 //! ## Single permission resolver
 //!
 //! Each `session/request_permission` has exactly **one** resolver: the oneshot
-//! sender carried by the emitted [`PendingPermission`]. The parked handler task
-//! awaits the matching receiver and defaults to [`PermissionOutcome::Deny`] if
-//! the sender is dropped (i.e. the consumer dropped the `PendingPermission`
-//! without resolving), so the upstream never hangs.
+//! sender carried by the emitted [`PendingPermission`]. The resolver carries the
+//! **exact** [`RequestPermissionOutcome`] (the chosen `optionId`, validated
+//! against the offered set by [`sanitize_selection`]) — never a coarse
+//! allow/deny that would collapse same-kind options. If the sender is dropped
+//! (i.e. the consumer dropped the `PendingPermission` without resolving), the
+//! parked handler task defaults to the reject option
+//! ([`select_option`]`(`[`PermissionOutcome::Deny`]`)`), so the upstream never
+//! hangs.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -47,9 +51,9 @@ use std::collections::HashMap;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, EnvVariable, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionNotification, SessionUpdate, TextContent,
-    ToolCallUpdate,
+    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
+    SessionUpdate, TextContent, ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -57,7 +61,9 @@ use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::translate::{PermissionOutcome, SessionUpdateKind, select_option, translate};
+use crate::translate::{
+    PermissionOutcome, SessionUpdateKind, sanitize_selection, select_option, translate,
+};
 
 /// Capacity of the broadcast channel that fans `session/update`-derived
 /// [`SessionUpdateKind`]s out to subscribers. Sized to absorb a streaming burst
@@ -70,8 +76,10 @@ const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 ///
 /// There is exactly **one** resolver per request — the one carried here. A
 /// consumer that cannot answer should simply **drop** the `PendingPermission`:
-/// dropping the resolver makes the parked upstream handler respond
-/// [`PermissionOutcome::Deny`], so the upstream never hangs.
+/// dropping the resolver makes the parked upstream handler respond with the
+/// reject option ([`PermissionOutcome::Deny`] mapped via
+/// [`select_option`](crate::translate::select_option)), so the upstream never
+/// hangs.
 ///
 /// Unresolved permissions are otherwise reaped only when the connection tears
 /// down — ACP v1 has no per-turn-cancel cleanup for in-flight permission
@@ -85,17 +93,20 @@ pub struct PendingPermission {
     pub tool_call: ToolCallUpdate,
     /// The verbatim permission options from the upstream `request_permission`.
     /// Carried so a consumer that re-issues the request (the down-facing agent)
-    /// forwards the same options and can map the manager's chosen `optionId`
-    /// back to a [`PermissionOutcome`] by the option's `kind`.
+    /// forwards the same options and resolves with the exact selection.
     pub options: Vec<PermissionOption>,
-    resolver: oneshot::Sender<PermissionOutcome>,
+    resolver: oneshot::Sender<RequestPermissionOutcome>,
 }
 
 impl PendingPermission {
-    /// Answer this permission request. Consumes the pending item; if the
-    /// `PendingPermission` is instead **dropped** without calling this, the
-    /// upstream handler defaults the response to [`PermissionOutcome::Deny`].
-    pub fn resolve(self, outcome: PermissionOutcome) {
+    /// Answer this permission request with the **exact** outcome — the chosen
+    /// `optionId` (or `Cancelled`) as selected by the consumer. The parked
+    /// upstream handler validates the id against the offered options
+    /// ([`sanitize_selection`](crate::translate::sanitize_selection)) before
+    /// responding. Consumes the pending item; if the `PendingPermission` is
+    /// instead **dropped** without calling this, the upstream handler defaults
+    /// the response to the reject option.
+    pub fn resolve(self, outcome: RequestPermissionOutcome) {
         let _ = self.resolver.send(outcome);
     }
 }
@@ -376,13 +387,14 @@ async fn drive(
                     // by the emitted `PendingPermission`. The parked task below
                     // awaits its receiver; if the consumer drops the
                     // `PendingPermission` without resolving, the sender drops and
-                    // the receiver yields `Err`, which we map to `Deny`.
-                    let (item_tx, item_rx) = oneshot::channel::<PermissionOutcome>();
+                    // the receiver yields `Err`, which defaults to the reject
+                    // option.
+                    let (item_tx, item_rx) = oneshot::channel::<RequestPermissionOutcome>();
                     // `options` is needed both by the emitted item (so a consumer
-                    // can re-issue the request and map the chosen option back) and
-                    // by the parked task below (to `select_option` onto the chosen
-                    // id). Clone once for the parked task; move the rest into the
-                    // item.
+                    // can re-issue the request with the same options) and by the
+                    // parked task below (to validate the chosen id / pick the
+                    // reject default). Clone once for the parked task; move the
+                    // rest into the item.
                     let options = request.options.clone();
                     let pending_item = PendingPermission {
                         request_id,
@@ -397,11 +409,14 @@ async fn drive(
                     // Park the wait + respond OUTSIDE the dispatch loop so other
                     // messages keep flowing while the decision is pending.
                     connection.spawn(async move {
-                        // Default to Deny if the resolver is dropped (the consumer
-                        // dropped the `PendingPermission`) so the upstream never
-                        // hangs waiting on this permission request.
-                        let outcome = item_rx.await.unwrap_or(PermissionOutcome::Deny);
-                        let outcome = select_option(outcome, &options);
+                        // The consumer's exact selection passes through verbatim
+                        // (validated against the offered set); a dropped resolver
+                        // (the consumer dropped the `PendingPermission`) defaults
+                        // to the reject option so the upstream never hangs.
+                        let outcome = match item_rx.await {
+                            Ok(selection) => sanitize_selection(selection, &options),
+                            Err(_) => select_option(PermissionOutcome::Deny, &options),
+                        };
                         responder.respond(RequestPermissionResponse::new(outcome))
                     })?;
                     Ok(())
