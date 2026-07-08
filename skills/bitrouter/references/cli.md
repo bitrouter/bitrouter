@@ -35,13 +35,22 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 | Command | Effect |
 |---|---|
-| `bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel`). Logs go to stderr; stdout carries ACP JSON-RPC. |
+| `bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--warm] [--idle-timeout SECS] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel` / `session/load`). `--warm` keeps the session alive after disconnect and accepts reattach on a per-session unix socket until `--idle-timeout` (default 1800s) elapses with no manager. Logs go to stderr; stdout carries ACP JSON-RPC. |
 | `bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--no-wait] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. |
+| `bitrouter acp attach <record>` | Reattach a terminal to a warm session by record id (or unique prefix): bridges stdio to the session's unix socket (same NDJSON JSON-RPC framing). Run `initialize` → `session/load` to replay the conversation, then continue live. Unix-only. |
 | `bitrouter acp sessions` | List the current repo's session records (`.bitrouter/sessions/*.json`), newest first: short record id, agent, status (`running` / `exited` / `dead` when the recorded pid no longer exists), age, worktree. |
 
 **Worktrees**: `--worktree <name>` provisions `.bitrouter/worktrees/<name>` (created with a same-named branch, or reused/attached when the worktree or branch already exists). Worktrees are **retained** on exit — they hold the agent's work — and the retained path is logged to stderr. `--rm-worktree` opts in to removal at shutdown (destroys uncommitted work; only a worktree the session itself created is removed).
 
 **Transcript**: every session appends a durable NDJSON transcript to `.bitrouter/sessions/<record_id>.transcript.ndjson` — prompts, every raw `session/update` (non-lossy), and per-turn results, each line stamped `{seq, ts}` (monotonic `seq`, unix-ms `ts`). Disable with `--no-transcript`.
+
+**session/new relay**: the manager's `session/new` opens the upstream session, relaying its `cwd` (the launch-time `--worktree` wins) and `mcpServers` **verbatim** — the v2-aligned way for a manager to provide fs/terminal-style tooling (ACP v2 removes the client `fs/*`/`terminal/*` surface; client-side MCP servers replace it). Repeated `session/new` answers with the same stable record id.
+
+**session/load**: replays the durable transcript as `session/update` notifications (user prompts as `user_message_chunk`, upstream updates verbatim) before the response — v1 `session/load` with the semantics ACP v2 standardizes as `session/resume {replayFrom: start}`. `loadSession` is advertised exactly when a transcript exists.
+
+**Warm sessions**: with `--warm`, the record advertises a reattach socket (bound under `$BITROUTER_HOME/sock` — short paths; unix `sun_path` caps ~104 bytes) and `acp sessions` shows the session `running` after the manager leaves. Reattach with `bitrouter acp attach <record>`; the socket speaks the stdio framing (ACP's standardized remote transport replaces it when it ships).
+
+**Observability**: when `plugins.bitrouter-observe` opts telemetry in (same config as the daemon), `acp serve|prompt` emit OTel GenAI agent spans — `invoke_agent <agent>` per turn and `execute_tool <tool>` per completed tool call, correlated by `gen_ai.conversation.id` = record id (the join key to the HTTP router plane when the agent's model calls go through bitrouter).
 
 **Turns**: `session/cancel` is session-scoped — it cancels the active turn upstream *and* flushes the queued backlog (queued prompts resolve `stop_reason: "cancelled"`). `--turn-timeout SECS` sets a per-turn deadline: on elapse the agent is asked to cancel cooperatively (3s grace) before the turn errors.
 

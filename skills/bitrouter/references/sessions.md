@@ -12,16 +12,21 @@ How BitRouter's per-session substrate works — one process, one session, one ag
 
 ```bash
 # Expose one session as a vanilla ACP Agent over stdio (manager-driven)
-bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--config PATH]
+bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] \
+  [--turn-timeout SECS] [--warm] [--idle-timeout SECS] [--config PATH]
 
 # One-shot headless: launch, send one prompt, stream NDJSON output, exit
-bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-wait] [--config PATH] <text>
+bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] \
+  [--turn-timeout SECS] [--no-wait] [--config PATH] <text>
 
 # List this repo's session records (.bitrouter/sessions/), newest first
 bitrouter acp sessions
+
+# Reattach a terminal to a warm session (stdio ↔ unix socket bridge)
+bitrouter acp attach <record-id-or-prefix>
 ```
 
-- **`serve`**: runs until the manager disconnects (stdin EOF). Stdout carries ACP JSON-RPC; logs go to stderr. The manager drives standard ACP: `initialize` → `session/new` → `session/prompt` / `session/cancel`.
+- **`serve`**: runs until the manager disconnects (stdin EOF) — or, with `--warm`, until the idle timeout. Stdout carries ACP JSON-RPC; logs go to stderr. The manager drives standard ACP: `initialize` → `session/new` (cwd + `mcpServers` relayed upstream) → `session/prompt` / `session/cancel` / `session/load`.
 - **`prompt`**: runs the same substrate engine in-process, sends one prompt, streams NDJSON to stdout, exits. Logs go to stderr.
 
 ### NDJSON format
@@ -68,24 +73,22 @@ Each session carries three identity fields:
 
 ## Vanilla ACP, no extensions (D11)
 
-The substrate speaks standard ACP on the wire — `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`. There are no `_conductor/*` extensions. Agent and worktree are launch-time arguments, not wire methods; the manager chooses the agent by spawning the right command.
+The substrate speaks standard ACP on the wire — `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`. There are no `_conductor/*` extensions. Agent and worktree are launch-time arguments, not wire methods; the manager chooses the agent by spawning the right command.
 
 Fidelity guarantees on that wire:
 
-- **Capabilities relay**: the manager-facing `initialize` reflects the upstream agent's real capabilities (and `agentInfo`), with `loadSession` masked to `false` (no `session/load` in v1) and auth methods withheld.
+- **Capabilities relay**: the manager-facing `initialize` reflects the upstream agent's real capabilities (and `agentInfo`); `loadSession` is the substrate's own (advertised exactly when a transcript exists — replay is ours, not the upstream's) and auth methods are withheld.
 - **Prompts forward verbatim**: `session/prompt` content blocks (text, images, resources, resource links) reach the upstream unmodified.
 - **Exact permission outcomes**: the manager's chosen `optionId` passes through to the upstream verbatim (validated against the offered set); two same-kind options stay distinguishable. Dropping/failing to answer defaults to the reject option.
 
-## Ephemeral v1 vs warm-owner v2
+## Warm sessions (`serve --warm`)
 
-**v1** sessions are ephemeral: the session lives for the process's lifetime. When the process exits (manager disconnect or `acp prompt` completion), the session is gone.
-
-**v2** (deferred): per-session warm owners — a lease file + IPC socket + heartbeat so a session can outlive the initial client. Recovery would use the three-tier identity (D10): respawn → ACP `session/resume(agent_session_id)` → `session/load` → `session/new`. The substrate design already reserves these hooks; v2 adds the machinery without a rewrite.
+By default a session lives for the process's lifetime and dies with its manager. With `--warm`, the session survives manager disconnects: reattach connections are accepted on a per-session unix socket (advertised in the session record; bound under `$BITROUTER_HOME/sock`) until `--idle-timeout` elapses with no manager. A reattaching manager (`bitrouter acp attach <record>` or any ACP client on the socket) runs `initialize` → `session/load` — which replays the durable transcript — and continues live. The socket speaks the exact stdio NDJSON JSON-RPC framing (no bespoke protocol); ACP's standardized remote transport (streamable HTTP / WebSocket RFD) replaces the socket when it ships. *Recovery* (respawning a dead agent via `agent_session_id`) remains future work.
 
 ## v1 limitations
 
 | Risk | Detail |
 |---|---|
-| `fs/*` / `terminal/*` (R1) | These ACP methods respond with `method-not-found` in v1. The planned fix is pass-through (relay the manager's `ClientCapabilities` upstream and proxy agent→client `fs`/`terminal` requests down to the manager), which requires deferring the upstream handshake until the manager's `initialize` — a follow-up. |
+| `fs/*` / `terminal/*` | Answered `method-not-found`, **by design**: ACP v2 removes this client surface (low adoption). The blessed channel is client-side MCP servers, which the substrate relays — the manager's `session/new` `mcpServers` reach the upstream agent verbatim. |
 | Telemetry granularity | Per-turn records carry `{agent, stop_reason, latency_ms, context used/size}` (to stderr). Per-turn input/output token *deltas* are not in ACP's stable surface (only the `unstable_end_turn_token_usage` feature), so cost attribution finer than the streamed cumulative `cost` is deferred. |
 | One-shot `acp prompt` | `acp prompt` is a single-turn command in v1. Multi-turn reuse over the CLI needs warm owners (v2). For a long conversation use `acp serve` and drive it with a manager. |
