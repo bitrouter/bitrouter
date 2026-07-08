@@ -302,6 +302,12 @@ impl Session {
         &self.state
     }
 
+    /// The upstream agent's `initialize` response, captured at handshake. The
+    /// down-facing `SessionAgent` reflects these capabilities to its manager.
+    pub fn upstream_init(&self) -> &agent_client_protocol_schema::v1::InitializeResponse {
+        self.conn.upstream_init()
+    }
+
     /// Drops the connection (which kills the child once the driver observes the
     /// closed channel) and removes the worktree (if any); logs a warning if the
     /// connection could not be released within the drain bound.

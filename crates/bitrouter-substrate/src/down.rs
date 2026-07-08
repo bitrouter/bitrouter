@@ -8,7 +8,12 @@
 //!
 //! ## Request plane (manager → us → session)
 //!
-//! - `initialize` → minimal [`AgentCapabilities`].
+//! - `initialize` → the **upstream agent's real capabilities** (captured at the
+//!   upstream handshake), masked for what this endpoint cannot honor:
+//!   `load_session` is forced `false` (no `session/load` here). Upstream
+//!   `agent_info` is relayed so the manager knows which agent it fronts;
+//!   upstream `auth_methods` are **not** relayed (we answer `authenticate`
+//!   with method-not-found).
 //! - `session/new` → returns the session's `record_id` as the manager-facing
 //!   session id. The upstream `acp_session_id` stays internal.
 //! - `session/prompt` → forward the prompt's content blocks **verbatim** via
@@ -60,9 +65,8 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, PromptResponse, RequestPermissionRequest, SessionId,
-    SessionNotification,
+    ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
+    PromptRequest, PromptResponse, RequestPermissionRequest, SessionId, SessionNotification,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
@@ -181,6 +185,16 @@ fn serve_on(
     // `acp_session_id` never crosses this boundary.
     let record_id = session.state().record_id.clone();
 
+    // Reflect the upstream agent's real capabilities to the manager, masked for
+    // what this endpoint cannot honor: no `session/load` (the session was
+    // launched with this process; there is nothing to load), and no relayed
+    // auth methods (`authenticate` is answered method-not-found). `agent_info`
+    // passes through so the manager knows which agent this session fronts.
+    let upstream_init = session.upstream_init();
+    let mut relayed_caps = upstream_init.agent_capabilities.clone();
+    relayed_caps.load_session = false;
+    let relayed_agent_info = upstream_init.agent_info.clone();
+
     // One `Arc<Session>` clone per handler / forwarding closure that needs the
     // session. (`session/new` doesn't — it only echoes the record_id.)
     let record_for_new = record_id.clone();
@@ -196,11 +210,15 @@ fn serve_on(
         .on_receive_request(
             move |req: InitializeRequest,
                   responder: Responder<InitializeResponse>,
-                  _cx: ConnectionTo<Client>| async move {
-                responder.respond(
-                    InitializeResponse::new(req.protocol_version)
-                        .agent_capabilities(AgentCapabilities::new()),
-                )
+                  _cx: ConnectionTo<Client>| {
+                let caps = relayed_caps.clone();
+                let agent_info = relayed_agent_info.clone();
+                async move {
+                    let mut resp =
+                        InitializeResponse::new(req.protocol_version).agent_capabilities(caps);
+                    resp.agent_info = agent_info;
+                    responder.respond(resp)
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -657,6 +675,76 @@ mod tests {
                         assert!(
                             chose.contains("chose:allow"),
                             "expected allow option chosen, got: {chose}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// Downstream `initialize` reflects the upstream agent's real capabilities
+    /// (here: `promptCapabilities.image=true`, `agentInfo`) instead of a
+    /// fabricated minimal set, while masking `loadSession` to `false` because
+    /// this endpoint does not serve `session/load`.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_reflects_upstream_capabilities_masking_load_session() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::InitializeRequest;
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const CAPS_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true,"audio":false,"embeddedContext":true}},"agentInfo":{"name":"stub-agent","version":"9.9"}}}\n' "$id";;
+                *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(CAPS_STUB).await;
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        let init = cx
+                            .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        // Upstream prompt capabilities pass through…
+                        assert!(
+                            init.agent_capabilities.prompt_capabilities.image,
+                            "upstream image capability must be relayed"
+                        );
+                        assert!(
+                            init.agent_capabilities.prompt_capabilities.embedded_context,
+                            "upstream embedded_context capability must be relayed"
+                        );
+                        // …but load_session is masked: this endpoint has no
+                        // session/load.
+                        assert!(
+                            !init.agent_capabilities.load_session,
+                            "load_session must be masked to false"
+                        );
+                        // agent_info identifies the fronted agent.
+                        assert_eq!(
+                            init.agent_info.as_ref().map(|i| i.name.as_str()),
+                            Some("stub-agent")
                         );
                         Ok(())
                     })

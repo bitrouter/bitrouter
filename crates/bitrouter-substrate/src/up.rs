@@ -50,10 +50,10 @@ use std::collections::HashMap;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, EnvVariable, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
-    SessionUpdate, TextContent, ToolCallUpdate,
+    CancelNotification, ContentBlock, EnvVariable, InitializeRequest, InitializeResponse,
+    McpServer, McpServerStdio, NewSessionRequest, PermissionOption, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
+    SessionNotification, SessionUpdate, TextContent, ToolCallUpdate,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -127,12 +127,18 @@ enum Command {
 struct Handshake {
     acp_session_id: String,
     agent_session_id: Option<String>,
+    /// The upstream agent's `initialize` response — capabilities, agent info,
+    /// auth methods. Kept so the down-facing endpoint can reflect the real
+    /// agent's capabilities to its manager instead of fabricating minimal ones.
+    init: Box<InitializeResponse>,
 }
 
 /// A live upstream ACP `Client` connection to one agent process.
 pub struct UpstreamConnection {
     acp_session_id: String,
     agent_session_id: Option<String>,
+    /// The upstream agent's `initialize` response, captured at handshake.
+    init: Box<InitializeResponse>,
     /// Submits [`Command`]s into the connection's command loop.
     cmd_tx: mpsc::UnboundedSender<Command>,
     /// Source of [`SessionUpdateKind`]s; cloned per `subscribe_updates`.
@@ -224,6 +230,7 @@ impl UpstreamConnection {
         Ok(Self {
             acp_session_id: handshake.acp_session_id,
             agent_session_id: handshake.agent_session_id,
+            init: handshake.init,
             cmd_tx,
             updates_tx,
             raw_updates_tx,
@@ -241,6 +248,13 @@ impl UpstreamConnection {
     /// `_meta.agentSessionId`, when the upstream exposes one. Never synthesized.
     pub fn agent_session_id(&self) -> Option<&str> {
         self.agent_session_id.as_deref()
+    }
+
+    /// The upstream agent's `initialize` response, captured at handshake. The
+    /// down-facing endpoint reflects these capabilities (masked for what the
+    /// substrate itself cannot honor) to its manager.
+    pub fn upstream_init(&self) -> &InitializeResponse {
+        &self.init
     }
 
     /// Subscribe to the stream of translated `session/update` notifications.
@@ -426,7 +440,7 @@ async fn drive(
         )
         .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
             // ── Handshake ──────────────────────────────────────────────────
-            connection
+            let init = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
                 .block_task()
                 .await?;
@@ -452,6 +466,7 @@ async fn drive(
                 let _ = tx.send(Ok(Handshake {
                     acp_session_id: acp_session_id.clone(),
                     agent_session_id,
+                    init: Box::new(init),
                 }));
             }
 
