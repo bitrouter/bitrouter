@@ -463,6 +463,7 @@ impl Session {
             agent_session_id: state.agent_session_id.clone(),
             worktree: worktree_path.clone(),
             pid: std::process::id(),
+            socket: None,
             started_at: now_unix(),
             status: RecordStatus::Running,
             ended_at: None,
@@ -613,6 +614,23 @@ impl Session {
         self.transcript_path.as_deref()
     }
 
+    /// Record the unix socket this (warm) session accepts manager reattach on,
+    /// so `bitrouter acp attach` / `acp sessions` can discover it. Cleared
+    /// automatically at shutdown.
+    pub async fn advertise_socket(&self, path: PathBuf) {
+        let updated = {
+            let mut guard = match self.record.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.socket = Some(path);
+            guard.clone()
+        };
+        if let Err(e) = self.records.write(&updated).await {
+            tracing::warn!(error = %e, "failed to record warm-session socket");
+        }
+    }
+
     /// Tears the upstream connection down deterministically (killing the agent
     /// child) and settles the worktree (if any): retained by default — it
     /// holds the agent's work — and removed only when the session was launched
@@ -671,6 +689,8 @@ impl Session {
         };
         record.status = RecordStatus::Exited;
         record.ended_at = Some(now_unix());
+        // The socket dies with the process; a stale path must not be advertised.
+        record.socket = None;
         if let Err(e) = records.write(&record).await {
             tracing::warn!(error = %e, "failed to update session record");
         }

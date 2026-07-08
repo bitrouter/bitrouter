@@ -39,6 +39,10 @@ pub struct SessionRecord {
     pub worktree: Option<PathBuf>,
     /// Pid of the substrate process that owns (owned) the session.
     pub pid: u32,
+    /// Unix socket a warm session accepts manager reattach on
+    /// (`bitrouter acp attach`). Set while serving warm; cleared at shutdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<PathBuf>,
     /// Unix seconds when the session launched.
     pub started_at: u64,
     pub status: RecordStatus,
@@ -130,6 +134,7 @@ mod tests {
             agent_session_id: None,
             worktree: None,
             pid: 4242,
+            socket: None,
             started_at: 1_750_000_000,
             status: RecordStatus::Running,
             ended_at: None,

@@ -126,6 +126,67 @@ async fn prompt_ndjson() {
     );
 }
 
+// ── shared raw JSON-RPC helpers (subprocess / socket e2e) ────────────────────
+
+/// Send a JSON-RPC request line and read back lines until one matches the
+/// given id (the response). Lines that don't match the id are collected as
+/// notifications or intermediary messages.
+async fn rpc_round_trip(
+    writer: &mut (impl tokio::io::AsyncWriteExt + Unpin),
+    reader: &mut tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>,
+    request: serde_json::Value,
+    request_id: &str,
+) -> (serde_json::Value, Vec<serde_json::Value>) {
+    use tokio::io::AsyncBufReadExt;
+
+    let line = serde_json::to_string(&request).expect("serialize request") + "\n";
+    writer
+        .write_all(line.as_bytes())
+        .await
+        .expect("write request");
+    writer.flush().await.expect("flush");
+
+    let mut notifications = Vec::new();
+    loop {
+        let mut buf = String::new();
+        let n = reader
+            .read_line(&mut buf)
+            .await
+            .expect("read response line");
+        assert!(n > 0, "EOF before receiving response for id {request_id}");
+        let trimmed = buf.trim();
+        if trimmed.is_empty() {
+            // Skip blank lines (the ACP wire format is newline-delimited).
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(trimmed)
+            .unwrap_or_else(|e| panic!("invalid JSON from server: {e}\nraw line: {trimmed:?}"));
+        if v.get("id").and_then(|i| i.as_str()) == Some(request_id) {
+            return (v, notifications);
+        }
+        // This is a notification (no matching id); collect it.
+        notifications.push(v);
+    }
+}
+
+/// Run one round-trip under `timeout`; panic on elapse so a stalled server
+/// never hangs the test runner.
+async fn bounded_round_trip(
+    writer: &mut (impl tokio::io::AsyncWriteExt + Unpin),
+    reader: &mut tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>,
+    request: serde_json::Value,
+    request_id: &str,
+    timeout: std::time::Duration,
+) -> (serde_json::Value, Vec<serde_json::Value>) {
+    match tokio::time::timeout(timeout, rpc_round_trip(writer, reader, request, request_id)).await {
+        Ok(out) => out,
+        Err(_) => panic!(
+            "timed out after {}s waiting for response to id {request_id}",
+            timeout.as_secs()
+        ),
+    }
+}
+
 // ── Test 2: serve subprocess E2E ─────────────────────────────────────────────
 
 /// A minimal YAML config for the subprocess serve test.
@@ -232,65 +293,6 @@ async fn serve_subprocess_e2e() {
     let child_stdout = child.stdout.take().expect("child stdout");
     let mut reader = BufReader::new(child_stdout);
 
-    /// Send a JSON-RPC request line to the child and read back lines until one
-    /// matches the given id (the response). Lines that don't match the id are
-    /// collected as notifications or intermediary messages.
-    async fn rpc_round_trip(
-        stdin: &mut (impl AsyncWriteExt + Unpin),
-        reader: &mut BufReader<impl tokio::io::AsyncRead + Unpin>,
-        request: serde_json::Value,
-        request_id: &str,
-    ) -> (serde_json::Value, Vec<serde_json::Value>) {
-        let line = serde_json::to_string(&request).expect("serialize request") + "\n";
-        stdin
-            .write_all(line.as_bytes())
-            .await
-            .expect("write request");
-        stdin.flush().await.expect("flush");
-
-        let mut notifications = Vec::new();
-        loop {
-            let mut buf = String::new();
-            let n = reader
-                .read_line(&mut buf)
-                .await
-                .expect("read response line");
-            assert!(n > 0, "EOF before receiving response for id {request_id}");
-            let trimmed = buf.trim();
-            if trimmed.is_empty() {
-                // Skip blank lines (the ACP wire format is newline-delimited).
-                continue;
-            }
-            let v: serde_json::Value = serde_json::from_str(trimmed)
-                .unwrap_or_else(|e| panic!("invalid JSON from server: {e}\nraw line: {trimmed:?}"));
-            if v.get("id").and_then(|i| i.as_str()) == Some(request_id) {
-                return (v, notifications);
-            }
-            // This is a notification (no matching id); collect it.
-            notifications.push(v);
-        }
-    }
-
-    // Run one round-trip under [`RPC_TIMEOUT`]; kill the child and panic on
-    // elapse so a stalled server never hangs the test runner.
-    async fn bounded_round_trip(
-        stdin: &mut (impl AsyncWriteExt + Unpin),
-        reader: &mut BufReader<impl tokio::io::AsyncRead + Unpin>,
-        request: serde_json::Value,
-        request_id: &str,
-        timeout: Duration,
-    ) -> (serde_json::Value, Vec<serde_json::Value>) {
-        match tokio::time::timeout(timeout, rpc_round_trip(stdin, reader, request, request_id))
-            .await
-        {
-            Ok(out) => out,
-            Err(_) => panic!(
-                "timed out after {}s waiting for response to id {request_id}",
-                timeout.as_secs()
-            ),
-        }
-    }
-
     // ── 1. initialize ─────────────────────────────────────────────────────
     let (init_resp, _) = bounded_round_trip(
         &mut child_stdin,
@@ -393,4 +395,229 @@ async fn serve_subprocess_e2e() {
             );
         }
     }
+}
+
+// ── Test 3: warm reattach over the per-session unix socket ──────────────────
+
+/// Full warm-session lifecycle against the real binary:
+/// 1. `acp serve --warm` is driven over stdio (initialize → session/new →
+///    prompt "first").
+/// 2. The record advertises the reattach socket; the stdio manager
+///    disconnects (stdin closed) — the session must survive.
+/// 3. A second manager connects over the unix socket (same NDJSON JSON-RPC
+///    framing), runs `session/load`, and must receive the transcript replay
+///    (the "first" prompt as user_message_chunk + the streamed "hi") before
+///    the load response; a follow-up prompt round-trips live.
+/// 4. After the socket manager disconnects, the idle timeout reaps the
+///    session: the child exits on its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn warm_reattach_socket_e2e() {
+    use std::time::Duration;
+
+    use tokio::io::{AsyncWriteExt, BufReader};
+
+    const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("bitrouter.yaml");
+    std::fs::write(&config_path, SERVE_CONFIG_YAML).expect("write config");
+
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let binary = workspace_root
+        .join("target")
+        .join(profile)
+        .join("bitrouter");
+    if !binary.exists() {
+        eprintln!(
+            "warm_reattach_socket_e2e: binary not found at {}; skipping",
+            binary.display()
+        );
+        return;
+    }
+
+    let stderr_path = dir.path().join("serve.stderr");
+    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
+    let mut child = tokio::process::Command::new(&binary)
+        .args([
+            "acp",
+            "serve",
+            "--agent",
+            "stub",
+            "--warm",
+            "--idle-timeout",
+            "5",
+            "--config",
+            config_path.to_str().expect("config path utf8"),
+        ])
+        .current_dir(dir.path())
+        // Scope the reattach socket to the test (sockets bind under
+        // $BITROUTER_HOME/sock, not the repo).
+        .env("BITROUTER_HOME", dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(stderr_file)
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn bitrouter acp serve --warm");
+
+    let mut child_stdin = child.stdin.take().expect("child stdin");
+    let child_stdout = child.stdout.take().expect("child stdout");
+    let mut reader = BufReader::new(child_stdout);
+
+    // ── stdio manager: initialize → session/new → prompt "first" ──────────
+    let (init_resp, _) = bounded_round_trip(
+        &mut child_stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":1}}),
+        "1",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert!(
+        init_resp["result"]["agentCapabilities"]["loadSession"]
+            .as_bool()
+            .unwrap_or(false),
+        "warm serve must advertise loadSession; got: {init_resp}"
+    );
+    let (new_resp, _) = bounded_round_trip(
+        &mut child_stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":"/","mcpServers":[]}}),
+        "2",
+        RPC_TIMEOUT,
+    )
+    .await;
+    let record_id = new_resp["result"]["sessionId"]
+        .as_str()
+        .expect("sessionId")
+        .to_string();
+    let (prompt_resp, _) = bounded_round_trip(
+        &mut child_stdin,
+        &mut reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"3","method":"session/prompt","params":{"sessionId":record_id,"prompt":[{"type":"text","text":"first"}]}}),
+        "3",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert_eq!(
+        prompt_resp["result"]["stopReason"].as_str(),
+        Some("end_turn")
+    );
+
+    // The record advertises the reattach socket (written at warm startup).
+    let record_path = dir
+        .path()
+        .join(".bitrouter")
+        .join("sessions")
+        .join(format!("{record_id}.json"));
+    let mut socket_path = None;
+    for _ in 0..100 {
+        if let Ok(raw) = tokio::fs::read_to_string(&record_path).await
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw)
+            && let Some(sock) = v["socket"].as_str()
+        {
+            socket_path = Some(std::path::PathBuf::from(sock));
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let socket_path = socket_path.expect("record must advertise the reattach socket");
+
+    // Wait for the transcript to be flushed through the "first" turn so the
+    // replay is complete (the writer is async).
+    let transcript_path = dir
+        .path()
+        .join(".bitrouter")
+        .join("sessions")
+        .join(format!("{record_id}.transcript.ndjson"));
+    for _ in 0..100 {
+        if tokio::fs::read_to_string(&transcript_path)
+            .await
+            .is_ok_and(|raw| raw.contains("\"result\""))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // ── stdio manager disconnects; the warm session must survive ──────────
+    drop(child_stdin);
+    drop(reader);
+
+    // ── second manager over the unix socket ───────────────────────────────
+    let stream = tokio::net::UnixStream::connect(&socket_path)
+        .await
+        .expect("connect to reattach socket");
+    let (sock_read, sock_write) = stream.into_split();
+    let mut sock_reader = BufReader::new(sock_read);
+    let mut sock_writer = sock_write;
+
+    bounded_round_trip(
+        &mut sock_writer,
+        &mut sock_reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"10","method":"initialize","params":{"protocolVersion":1}}),
+        "10",
+        RPC_TIMEOUT,
+    )
+    .await;
+
+    // session/load replays the transcript BEFORE the response resolves.
+    let (_load_resp, replayed) = bounded_round_trip(
+        &mut sock_writer,
+        &mut sock_reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"11","method":"session/load","params":{"sessionId":record_id,"cwd":"/","mcpServers":[]}}),
+        "11",
+        RPC_TIMEOUT,
+    )
+    .await;
+    let replay_text = serde_json::to_string(&replayed).expect("serialize");
+    assert!(
+        replay_text.contains("user_message_chunk") && replay_text.contains("first"),
+        "replay must contain the earlier prompt; got: {replay_text}"
+    );
+    assert!(
+        replay_text.contains("\"hi\""),
+        "replay must contain the streamed update; got: {replay_text}"
+    );
+
+    // The reattached manager continues live.
+    let (prompt2, _) = bounded_round_trip(
+        &mut sock_writer,
+        &mut sock_reader,
+        serde_json::json!({"jsonrpc":"2.0","id":"12","method":"session/prompt","params":{"sessionId":record_id,"prompt":[{"type":"text","text":"second"}]}}),
+        "12",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert_eq!(prompt2["result"]["stopReason"].as_str(), Some("end_turn"));
+
+    // ── disconnect; the idle timeout (5s) must reap the session ───────────
+    drop(sock_writer);
+    drop(sock_reader);
+
+    let exit = tokio::time::timeout(Duration::from_secs(20), child.wait()).await;
+    match exit {
+        Ok(Ok(status)) => eprintln!("warm serve exited after idle timeout: {status:?}"),
+        Ok(Err(e)) => panic!("error waiting for warm serve child: {e}"),
+        Err(_) => {
+            let _ = child.kill().await;
+            let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+            panic!("warm serve did NOT exit within 20s after the idle timeout\nstderr:\n{stderr}");
+        }
+    }
+
+    // The record no longer advertises the (now removed) socket.
+    let raw = tokio::fs::read_to_string(&record_path)
+        .await
+        .expect("record after shutdown");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("record json");
+    assert_eq!(v["status"].as_str(), Some("exited"));
+    assert!(v["socket"].is_null(), "socket must be cleared at shutdown");
+    assert!(!socket_path.exists(), "socket file must be removed");
 }

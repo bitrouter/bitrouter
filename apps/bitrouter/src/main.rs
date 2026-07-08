@@ -555,6 +555,17 @@ enum AcpCmd {
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
+        /// Keep the session alive after the manager disconnects and accept
+        /// reattach connections on `.bitrouter/sessions/<record_id>.sock`
+        /// (same stdio JSON-RPC framing over a unix socket; reconnect with
+        /// `bitrouter acp attach <record>` and rejoin history via
+        /// `session/load`). Unix-only.
+        #[arg(long)]
+        warm: bool,
+        /// Shut a warm session down after this many seconds with no manager
+        /// attached.
+        #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
+        idle_timeout: u64,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -603,6 +614,13 @@ enum AcpCmd {
     /// `.bitrouter/sessions/`, newest first. A `running` record whose process
     /// no longer exists is shown as `dead`.
     Sessions,
+    /// Reattach to a warm session: bridge this terminal's stdio to the
+    /// session's unix socket. Speak ACP as usual; `session/load` replays the
+    /// conversation so far. Unix-only.
+    Attach {
+        /// Session record id (or unique prefix) from `bitrouter acp sessions`.
+        record: String,
+    },
 }
 
 #[tokio::main]
@@ -2175,6 +2193,8 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             rm_worktree,
             no_transcript,
             turn_timeout,
+            warm,
+            idle_timeout,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -2185,7 +2205,10 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 no_transcript,
                 turn_timeout,
             );
-            bitrouter::acp_cli::serve(cfg, &agent, options).await
+            let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
+                idle_timeout: std::time::Duration::from_secs(idle_timeout),
+            });
+            bitrouter::acp_cli::serve(cfg, &agent, options, warm).await
         }
         AcpCmd::Prompt {
             agent,
@@ -2212,6 +2235,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             let mut stdout = tokio::io::stdout();
             bitrouter::acp_cli::sessions(&mut stdout).await
         }
+        AcpCmd::Attach { record } => bitrouter::acp_cli::attach(&record).await,
     }
 }
 

@@ -180,10 +180,11 @@ pub fn serve(
 }
 
 /// Serve `session` as a vanilla ACP Agent over an arbitrary transport. `serve`
-/// pins this to [`Stdio`]; tests drive it over an in-memory
-/// [`agent_client_protocol::Channel`] so a `serve`↔client round-trip needs no
-/// subprocess.
-fn serve_on(
+/// pins this to [`Stdio`]; the warm-reattach loop serves accepted unix-socket
+/// connections through it (via [`agent_client_protocol::ByteStreams`] — the
+/// same NDJSON framing as stdio, no bespoke protocol); tests drive it over an
+/// in-memory [`agent_client_protocol::Channel`].
+pub fn serve_on(
     session: Arc<Session>,
     transport: impl ConnectTo<Agent> + 'static,
 ) -> impl std::future::Future<Output = agent_client_protocol::Result<()>> {
