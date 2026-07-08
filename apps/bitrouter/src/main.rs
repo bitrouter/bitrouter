@@ -531,10 +531,16 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to create inside the repo before launching.
-        /// When omitted the session runs in the current directory.
+        /// Name of a git worktree to provision inside the repo before
+        /// launching (created, or reused when it already exists). When
+        /// omitted the session runs in the current directory.
         #[arg(long)]
         worktree: Option<String>,
+        /// Remove the worktree when the session ends. Off by default: the
+        /// worktree holds the agent's work, and removal discards anything
+        /// uncommitted. Only a worktree created by this session is removed.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -550,9 +556,15 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to create inside the repo before launching.
+        /// Name of a git worktree to provision inside the repo before
+        /// launching (created, or reused when it already exists).
         #[arg(long)]
         worktree: Option<String>,
+        /// Remove the worktree when the session ends. Off by default: the
+        /// worktree holds the agent's work, and removal discards anything
+        /// uncommitted. Only a worktree created by this session is removed.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
         /// Return immediately after submitting the prompt (emit
         /// `{"type":"submitted"}`). The session is torn down after ack.
         #[arg(long)]
@@ -2092,15 +2104,17 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         AcpCmd::Serve {
             agent,
             worktree,
+            rm_worktree,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            bitrouter::acp_cli::serve(cfg, &agent, worktree.as_deref()).await
+            bitrouter::acp_cli::serve(cfg, &agent, worktree.as_deref(), rm_worktree).await
         }
         AcpCmd::Prompt {
             agent,
             worktree,
+            rm_worktree,
             no_wait,
             config,
             text,
@@ -2112,6 +2126,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 cfg,
                 &agent,
                 worktree.as_deref(),
+                rm_worktree,
                 &text,
                 no_wait,
                 &mut stdout,

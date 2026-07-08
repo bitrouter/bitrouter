@@ -65,8 +65,8 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
-    PromptRequest, PromptResponse, RequestPermissionRequest, SessionId, SessionNotification,
+    InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse, RequestPermissionRequest, SessionId, SessionNotification,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,

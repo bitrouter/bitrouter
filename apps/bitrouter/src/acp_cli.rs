@@ -45,6 +45,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use bitrouter_substrate::telemetry::RequestCompleted;
 use bitrouter_substrate::translate::SessionUpdateKind;
+use bitrouter_substrate::worktree::WorktreeSpec;
 
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
 
@@ -81,14 +82,26 @@ where
 /// **stdio** until the manager disconnects.
 ///
 /// Config is taken by value (already loaded by the caller). `worktree` names
-/// an optional git worktree to create inside the current directory's repo.
-pub async fn serve(config: Config, agent_id: &str, worktree: Option<&str>) -> Result<()> {
+/// an optional git worktree to provision inside the current directory's repo
+/// (created, or reused when it already exists). The worktree is **retained**
+/// on exit — it holds the agent's work — unless `rm_worktree` opts in to
+/// removal.
+pub async fn serve(
+    config: Config,
+    agent_id: &str,
+    worktree: Option<&str>,
+    rm_worktree: bool,
+) -> Result<()> {
     let catalog = catalog_from_config(&config)?;
     let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let session =
-        bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, worktree)
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let session = bitrouter_substrate::engine::Session::launch(
+        &catalog,
+        agent_id,
+        base_repo,
+        worktree_spec(worktree, rm_worktree),
+    )
+    .await
+    .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     // Take the telemetry receiver BEFORE wrapping in Arc so we don't need &mut
     // through the shared reference. Drain-and-log to stderr; tracing already
     // goes to stderr for both acp modes so stdout (ACP JSON-RPC) stays clean.
@@ -100,9 +113,19 @@ pub async fn serve(config: Config, agent_id: &str, worktree: Option<&str>) -> Re
         });
     }
     let session = Arc::new(session);
-    bitrouter_substrate::down::serve(session)
-        .await
-        .map_err(|e| anyhow::anyhow!("acp serve: {e}"))
+    let served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
+
+    // Manager disconnected: shut the session down deliberately so the worktree
+    // policy is honored (same semantics as `prompt`). Once `serve` returns, the
+    // forwarding tasks have released their clones, so we are the sole owner.
+    match Arc::try_unwrap(session) {
+        Ok(session) => session
+            .shutdown()
+            .await
+            .context("shutting down acp session")?,
+        Err(_) => tracing::warn!("session still referenced after serve; skipping shutdown"),
+    }
+    served.map_err(|e| anyhow::anyhow!("acp serve: {e}"))
 }
 
 // ── prompt ────────────────────────────────────────────────────────────────────
@@ -121,6 +144,7 @@ pub async fn prompt<W>(
     config: Config,
     agent_id: &str,
     worktree: Option<&str>,
+    rm_worktree: bool,
     text: &str,
     no_wait: bool,
     out: &mut W,
@@ -130,10 +154,14 @@ where
 {
     let catalog = catalog_from_config(&config)?;
     let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let session =
-        bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, worktree)
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    let session = bitrouter_substrate::engine::Session::launch(
+        &catalog,
+        agent_id,
+        base_repo,
+        worktree_spec(worktree, rm_worktree),
+    )
+    .await
+    .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     // Drain telemetry records to stderr (tracing → stderr) so stdout stays clean
     // (NDJSON output). The task ends naturally when the session/pipeline drops,
     // closing the sender and causing `recv()` to return `None`.
@@ -232,6 +260,16 @@ fn drain_telemetry_record(r: RequestCompleted) {
         stop_reason = %r.stop_reason,
         "acp turn completed"
     );
+}
+
+/// Build the optional [`WorktreeSpec`] from the CLI's `--worktree` /
+/// `--rm-worktree` flags. Retention is the default: removal destroys the
+/// agent's uncommitted work, so it is strictly opt-in.
+fn worktree_spec(worktree: Option<&str>, rm_worktree: bool) -> Option<WorktreeSpec> {
+    worktree.map(|name| WorktreeSpec {
+        name: name.to_string(),
+        remove_on_shutdown: rm_worktree,
+    })
 }
 
 /// Build a [`ConfigAcpRoutingTable`] from the `agents` section of `config`.

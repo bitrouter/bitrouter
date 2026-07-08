@@ -53,7 +53,7 @@ use crate::telemetry::{RequestCompleted, TelemetryHook};
 use crate::translate::SessionUpdateKind;
 use crate::turn::TurnController;
 use crate::up::{PendingPermission, UpstreamConnection};
-use crate::worktree::WorktreeManager;
+use crate::worktree::{WorktreeManager, WorktreeSpec};
 
 /// Bound on the per-session turn queue: how many prompts may be enqueued at once
 /// before [`TurnController::try_submit`] reports backpressure. `prompt` uses the
@@ -96,9 +96,13 @@ pub struct Session {
     /// Serialises prompts into ordered turns, each carrying the prompt's
     /// content blocks verbatim and yielding a [`PromptResponse`].
     turn: TurnController<Vec<ContentBlock>, PromptResponse>,
-    /// The worktree this session runs in, if one was created. Removed on
-    /// shutdown.
+    /// The worktree this session runs in, if one was provisioned.
     worktree: Option<PathBuf>,
+    /// Remove the worktree at [`shutdown`](Self::shutdown). Only `true` when
+    /// the caller opted in **and** this session newly created the worktree —
+    /// worktrees are retained by default because removal (`git worktree remove
+    /// --force`) destroys the agent's uncommitted work.
+    remove_worktree_on_shutdown: bool,
     /// Manages the worktree lifecycle (rooted at the base repo).
     worktrees: WorktreeManager,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
@@ -107,14 +111,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// Launch a session: resolve `agent_id` in `catalog`, optionally create a
-    /// worktree, spawn the upstream connection, build the pipeline and turn
+    /// Launch a session: resolve `agent_id` in `catalog`, optionally provision
+    /// a worktree, spawn the upstream connection, build the pipeline and turn
     /// queue, and record the session identity.
     pub async fn launch(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
         base_repo: PathBuf,
-        worktree: Option<&str>,
+        worktree: Option<WorktreeSpec>,
     ) -> anyhow::Result<Self> {
         // ── Resolve the agent's stdio transport ────────────────────────────
         let transport = catalog
@@ -124,18 +128,32 @@ impl Session {
 
         // ── Worktree (optional) ────────────────────────────────────────────
         let worktrees = WorktreeManager::new(base_repo.clone());
-        let worktree_path = match worktree {
-            Some(name) => Some(worktrees.create(name).await?),
+        let provisioned = match &worktree {
+            Some(spec) => Some(worktrees.create(&spec.name).await?),
             None => None,
         };
+        let worktree_path = provisioned.as_ref().map(|p| p.path.clone());
+        // Removal is honored only for a worktree this session newly created; a
+        // reused (pre-existing) worktree is never removed by the session.
+        let newly_created = provisioned.as_ref().is_some_and(|p| p.newly_created);
+        let remove_on_shutdown =
+            newly_created && worktree.as_ref().is_some_and(|s| s.remove_on_shutdown);
 
         // Everything after a successful `create` runs in `build`. If it fails we
-        // must remove the just-created worktree before propagating the error, or
-        // it leaks on disk.
-        match Self::build(agent_id, transport, base_repo, worktree_path.clone()).await {
+        // must remove a just-created worktree before propagating the error, or
+        // it leaks on disk. A reused worktree is left untouched.
+        match Self::build(
+            agent_id,
+            transport,
+            base_repo,
+            worktree_path.clone(),
+            remove_on_shutdown,
+        )
+        .await
+        {
             Ok(session) => Ok(session),
             Err(original) => {
-                if let Some(path) = &worktree_path {
+                if newly_created && let Some(path) = &worktree_path {
                     // Best-effort cleanup; a remove error must not mask the
                     // original failure that triggered the cleanup.
                     if let Err(remove_err) = worktrees.remove(path).await {
@@ -159,6 +177,7 @@ impl Session {
         transport: AcpTransport,
         base_repo: PathBuf,
         worktree_path: Option<PathBuf>,
+        remove_worktree_on_shutdown: bool,
     ) -> anyhow::Result<Self> {
         let AcpTransport::Stdio { command, args, env } = &transport;
         let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
@@ -237,6 +256,7 @@ impl Session {
             pipeline,
             turn,
             worktree: worktree_path,
+            remove_worktree_on_shutdown,
             // `WorktreeManager` is a thin `base_repo` wrapper; a fresh one for
             // the session's own shutdown removal is equivalent to the one
             // `launch` keeps for error-path cleanup.
@@ -309,8 +329,11 @@ impl Session {
     }
 
     /// Drops the connection (which kills the child once the driver observes the
-    /// closed channel) and removes the worktree (if any); logs a warning if the
-    /// connection could not be released within the drain bound.
+    /// closed channel) and settles the worktree (if any): retained by default —
+    /// it holds the agent's work — and removed only when the session was
+    /// launched with `remove_on_shutdown` and created the worktree itself. Logs
+    /// a warning if the connection could not be released within the drain
+    /// bound.
     ///
     /// Drops everything that holds an `Arc<UpstreamConnection>` clone — the turn
     /// controller (whose worker task captured the pipeline), `Session`'s own
@@ -325,6 +348,7 @@ impl Session {
             pipeline,
             turn,
             worktree,
+            remove_worktree_on_shutdown,
             worktrees,
             ..
         } = self;
@@ -356,7 +380,12 @@ impl Session {
         drop(conn);
 
         if let Some(path) = worktree {
-            worktrees.remove(&path).await?;
+            if remove_worktree_on_shutdown {
+                worktrees.remove(&path).await?;
+            } else {
+                // The worktree holds the agent's work; surface where it lives.
+                tracing::info!(path = %path.display(), "worktree retained");
+            }
         }
         Ok(())
     }
@@ -371,6 +400,7 @@ mod tests {
     use futures::StreamExt;
 
     use super::Session;
+    use crate::worktree::WorktreeSpec;
 
     /// Bash stub: ACP handshake + a streamed `session/update` + prompt result.
     /// Mirrors the `up.rs` stub so we exercise `launch` + `prompt` end-to-end
@@ -479,13 +509,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn launch_in_worktree_then_shutdown_removes_it() {
+    async fn launch_in_worktree_then_shutdown_removes_it_when_opted_in() {
         let repo = init_repo();
         let catalog = stub_catalog();
 
-        let session = Session::launch(&catalog, "stub", repo.path().to_path_buf(), Some("feat-1"))
-            .await
-            .expect("launch");
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            repo.path().to_path_buf(),
+            Some(WorktreeSpec {
+                name: "feat-1".to_string(),
+                remove_on_shutdown: true,
+            }),
+        )
+        .await
+        .expect("launch");
 
         // The worktree was created and the prompt round-trips through it.
         let worktree_path = repo
@@ -501,7 +539,40 @@ mod tests {
         session.shutdown().await.expect("shutdown");
         assert!(
             !worktree_path.exists(),
-            "worktree should be removed after shutdown"
+            "worktree should be removed after opt-in shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_retains_worktree_by_default() {
+        let repo = init_repo();
+        let catalog = stub_catalog();
+
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            repo.path().to_path_buf(),
+            Some(WorktreeSpec {
+                name: "feat-keep".to_string(),
+                remove_on_shutdown: false,
+            }),
+        )
+        .await
+        .expect("launch");
+
+        let worktree_path = repo
+            .path()
+            .join(".bitrouter")
+            .join("worktrees")
+            .join("feat-keep");
+
+        // The agent leaves uncommitted work behind; shutdown must not destroy it.
+        std::fs::write(worktree_path.join("wip"), "uncommitted").expect("write");
+
+        session.shutdown().await.expect("shutdown");
+        assert!(
+            worktree_path.join("wip").exists(),
+            "worktree (and uncommitted work) must survive default shutdown"
         );
     }
 
@@ -516,13 +587,21 @@ mod tests {
             .join("worktrees")
             .join("doomed");
 
-        let result =
-            Session::launch(&catalog, "stub", repo.path().to_path_buf(), Some("doomed")).await;
+        let result = Session::launch(
+            &catalog,
+            "stub",
+            repo.path().to_path_buf(),
+            Some(WorktreeSpec {
+                name: "doomed".to_string(),
+                remove_on_shutdown: false,
+            }),
+        )
+        .await;
 
         assert!(result.is_err(), "launch should fail on a bad binary");
         assert!(
             !worktree_path.exists(),
-            "worktree must be removed when launch fails, not leaked"
+            "a newly created worktree must be removed when launch fails"
         );
     }
 
