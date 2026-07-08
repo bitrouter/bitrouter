@@ -1850,6 +1850,47 @@
             }
           },
           "provider_model_id": "z-ai/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nex-agi/nex-n2-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider_model_id": "nex-agi/nex-n2-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.08
+            },
+            "output_tokens": {
+              "text": 0.45
+            }
+          },
+          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
         }
       ],
       "name": "bitrouter",
