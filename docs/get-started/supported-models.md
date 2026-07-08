@@ -29,7 +29,7 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `inclusionai/ling-2.6-flash` | Ling 2.6 Flash | 256K | text | ✅ | $0.1 | $0.3 |
 | `inclusionai/ring-2.6-1t` | Ring 2.6 1T | 256K | text | ✅ | $0.3 | $2.5 |
 | `meituan/longcat-2.0` | LongCat 2.0 | 1M | text | ✅ | — | — |
-| `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $1.15 |
+| `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $1.2 |
 | `minimax/minimax-m2.7` | MiniMax: M2.7 | 192K | text | ✅ | $0.25 | $1 |
 | `minimax/minimax-m3` | MiniMax: M3 | 1M | text, image | ✅ | $0.3 | $1.2 |
 | `moonshotai/kimi-k2.5` | Kimi: K2.5 | 256K | text, image | ✅ | $0.375 | $2.025 |

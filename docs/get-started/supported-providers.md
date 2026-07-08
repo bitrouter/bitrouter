@@ -9,7 +9,6 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 
 | Provider | Name | HQ | Protocols | Billing | Models |
 | --- | --- | --- | --- | --- | --- |
-| `akashml` | AkashML | US | openai | Per-token | 3 |
 | `alibaba` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 4 |
 | `alibaba_cn` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 4 |
 | `alibaba_coding_plan` | Alibaba Cloud | CN | openai | Subscription | 7 |
@@ -26,7 +25,6 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `gmicloud` | GMI Cloud | US | openai | Per-token | 13 |
 | `google` | Google | US | google, openai | Per-token | 4 |
 | `google-ai` | Google | US | google, openai | Subscription | 3 |
-| `ionet` | io.net | US | openai | Per-token | 9 |
 | `minimax` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `minimax_cn` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 3 |
