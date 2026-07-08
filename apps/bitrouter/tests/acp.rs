@@ -216,6 +216,9 @@ async fn serve_subprocess_e2e() {
             "--config",
             config_path.to_str().expect("config path utf8"),
         ])
+        // The substrate roots its session records/transcripts at the cwd;
+        // pin it to the tempdir so test artifacts never land in the repo.
+        .current_dir(dir.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(stderr_file)
