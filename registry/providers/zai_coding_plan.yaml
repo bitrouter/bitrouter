@@ -27,6 +27,8 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: z-ai/glm-4.7
+    provider_model_id: glm-4.7
 status: active
 weight: 1
 submitted_at: 2026-06-05
@@ -34,3 +36,4 @@ api_base: https://api.z.ai/api/coding/paas/v4
 auth_scheme: x-api-key
 auto_sync:
   feed: models_dev
+  key: zai-coding-plan

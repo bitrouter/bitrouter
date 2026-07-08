@@ -1026,6 +1026,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(bitrouter::reload::AppReloader::new(
         policy_store.clone(),
         assembled.routing_table,
+        assembled.upstream_executor,
         reload_source,
     ));
 

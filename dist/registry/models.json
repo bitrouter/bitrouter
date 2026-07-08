@@ -77,6 +77,21 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 50.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-fable-5"
+        },
+        {
           "api_protocol": "anthropic",
           "provider": "claude-code",
           "provider_model_id": "claude-fable-5"
@@ -177,6 +192,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-haiku-4.5"
         },
         {
           "api_protocol": "anthropic",
@@ -289,6 +319,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-opus-4.6"
         },
         {
           "api_protocol": "anthropic",
@@ -415,6 +460,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.45,
+              "no_cache": 4.5
+            },
+            "output_tokens": {
+              "text": 22.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-opus-4.7"
         },
         {
           "api_protocol": "anthropic",
@@ -561,6 +620,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-opus-4.8"
         },
         {
           "api_protocol": "anthropic",
@@ -712,6 +786,21 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-sonnet-4.6"
+        },
+        {
           "api_protocol": "anthropic",
           "capabilities": [
             "reasoning",
@@ -820,6 +909,21 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-sonnet-5"
+        },
+        {
           "api_protocol": "anthropic",
           "capabilities": [
             "reasoning",
@@ -829,6 +933,45 @@
           ],
           "provider": "claude-code",
           "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "claude-sonnet-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-sonnet-5"
         }
       ],
       "release_date": "2026-06-30"
@@ -1050,6 +1193,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.105,
+              "no_cache": 0.21
+            },
+            "output_tokens": {
+              "text": 0.315
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "deepseek/deepseek-v3.2"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -1067,27 +1224,6 @@
           "provider_model_id": "deepseek-ai/DeepSeek-V3.2-TEE",
           "rate_limits": {
             "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.045,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 0.38
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "deepseek-ai/DeepSeek-V3.2",
-          "rate_limits": {
-            "requests_per_minute": 50
           }
         },
         {
@@ -1241,24 +1377,24 @@
       ],
       "providers": [
         {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.0028,
               "no_cache": 0.14
             },
             "output_tokens": {
               "text": 0.28
             }
           },
-          "provider": "akashml",
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash",
+          "provider": "alibaba_cn",
+          "provider_model_id": "deepseek-v4-flash",
           "rate_limits": {
-            "requests_per_minute": 40
+            "requests_per_minute": 60
           }
         },
         {
@@ -1292,6 +1428,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.02,
+              "no_cache": 0.09
+            },
+            "output_tokens": {
+              "text": 0.18
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "deepseek/deepseek-v4-flash"
         },
         {
           "api_protocol": [
@@ -1330,27 +1480,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.38,
-              "no_cache": 1.55
-            },
-            "output_tokens": {
-              "text": 2.28
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
@@ -1515,6 +1644,27 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003625,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "deepseek-v4-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -1545,6 +1695,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003625,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "deepseek/deepseek-v4-pro"
         },
         {
           "api_protocol": [
@@ -1583,27 +1747,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.35,
-              "no_cache": 4.45
-            },
-            "output_tokens": {
-              "text": 5.5
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
@@ -1804,6 +1947,20 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "google/gemini-3.1-flash-lite-preview"
+        },
+        {
           "api_protocol": [
             "google",
             "openai"
@@ -1889,6 +2046,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 12.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "google/gemini-3.1-pro-preview"
+        },
         {
           "api_protocol": "openai",
           "provider": "github-copilot",
@@ -1986,6 +2157,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 9.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "google/gemini-3.5-flash"
+        },
         {
           "api_protocol": "openai",
           "provider": "github-copilot",
@@ -2106,8 +2291,53 @@
               "text": 0.4
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "google/gemma-4-31b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.99
+            },
+            "output_tokens": {
+              "text": 1.49
+            }
+          },
+          "provider": "cerebras",
+          "provider_model_id": "gemma-4-31b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.13
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
           "provider": "siliconflow",
           "provider_model_id": "google/gemma-4-31B-it"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider": "tinfoil",
+          "provider_model_id": "gemma4-31b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-04-02"
@@ -2137,7 +2367,39 @@
               "text": 2.5
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "inclusionai/ling-2.6-1t"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
           "provider": "novita",
+          "provider_model_id": "inclusionai/ling-2.6-1t"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.625
+            }
+          },
+          "provider": "openrouter",
           "provider_model_id": "inclusionai/ling-2.6-1t"
         }
       ],
@@ -2168,7 +2430,39 @@
               "text": 0.3
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "inclusionai/ling-2.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.02,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.3
+            }
+          },
           "provider": "novita",
+          "provider_model_id": "inclusionai/ling-2.6-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.002,
+              "no_cache": 0.01
+            },
+            "output_tokens": {
+              "text": 0.03
+            }
+          },
+          "provider": "openrouter",
           "provider_model_id": "inclusionai/ling-2.6-flash"
         }
       ],
@@ -2199,7 +2493,39 @@
               "text": 2.5
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "inclusionai/ring-2.6-1t"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
           "provider": "novita",
+          "provider_model_id": "inclusionai/ring-2.6-1t"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.625
+            }
+          },
+          "provider": "openrouter",
           "provider_model_id": "inclusionai/ring-2.6-1t"
         }
       ],
@@ -2252,24 +2578,23 @@
       ],
       "providers": [
         {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
           ],
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.15
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.2
             }
           },
-          "provider": "akashml",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
+          "provider": "alibaba_cn",
+          "provider_model_id": "MiniMax-M2.5",
           "rate_limits": {
-            "requests_per_minute": 40
+            "requests_per_minute": 60
           }
         },
         {
@@ -2314,6 +2639,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.9
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "minimax/minimax-m2.5"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -2331,27 +2670,6 @@
           "provider_model_id": "MiniMaxAI/MiniMax-M2.5-TEE",
           "rate_limits": {
             "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "MiniMaxAI/MiniMax-M2.5",
-          "rate_limits": {
-            "requests_per_minute": 50
           }
         },
         {
@@ -2548,6 +2866,43 @@
       "providers": [
         {
           "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "MiniMax/MiniMax-M2.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.045,
+              "cache_write": 0.28125,
+              "no_cache": 0.225
+            },
+            "output_tokens": {
+              "text": 0.9
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "minimax/minimax-m2.7"
+        },
+        {
+          "api_protocol": [
             "anthropic",
             "openai"
           ],
@@ -2725,6 +3080,20 @@
           },
           "provider": "atlascloud",
           "provider_model_id": "minimaxai/minimax-m3"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "minimax/minimax-m3"
         },
         {
           "api_protocol": [
@@ -2914,6 +3283,26 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.574
+            },
+            "output_tokens": {
+              "text": 2.411
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "kimi-k2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "provider": "alibaba_coding_plan",
           "provider_model_id": "kimi-k2.5",
@@ -2974,6 +3363,19 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.375
+            },
+            "output_tokens": {
+              "text": 2.025
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "moonshotai/kimi-k2.5"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -2991,26 +3393,6 @@
           "provider_model_id": "moonshotai/Kimi-K2.5-TEE",
           "rate_limits": {
             "requests_per_minute": 30
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.44
-            },
-            "output_tokens": {
-              "text": 2.0
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "moonshotai/Kimi-K2.5",
-          "rate_limits": {
-            "requests_per_minute": 50
           }
         },
         {
@@ -3182,23 +3564,23 @@
       ],
       "providers": [
         {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
           ],
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.95
+              "no_cache": 0.929
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 3.858
             }
           },
-          "provider": "akashml",
-          "provider_model_id": "moonshotai/Kimi-K2.6",
+          "provider": "alibaba_cn",
+          "provider_model_id": "kimi-k2.6",
           "rate_limits": {
-            "requests_per_minute": 40
+            "requests_per_minute": 60
           }
         },
         {
@@ -3253,6 +3635,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.7125
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "moonshotai/kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
           "capabilities": [
             "reasoning",
             "tools"
@@ -3285,27 +3681,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "moonshotai/Kimi-K2.6"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.25,
-              "no_cache": 0.74
-            },
-            "output_tokens": {
-              "text": 3.5
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "moonshotai/Kimi-K2.6",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": [
@@ -3578,6 +3953,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1296,
+              "no_cache": 0.612
+            },
+            "output_tokens": {
+              "text": 3.069
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "moonshotai/kimi-k2.7-code"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "kimi-k2.7-code"
         },
@@ -3670,7 +4059,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "nex-agi/nex-n2-pro"
+        }
+      ],
       "release_date": "2026-06-08"
     },
     {
@@ -3687,7 +4095,25 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.08
+            },
+            "output_tokens": {
+              "text": 0.45
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
+        }
+      ],
       "release_date": "2026-03-11"
     },
     {
@@ -3703,7 +4129,26 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
+        }
+      ],
       "release_date": "2026-06-04"
     },
     {
@@ -3761,6 +4206,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-5.4"
         },
         {
           "api_protocol": "openai",
@@ -3871,6 +4330,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 4.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-5.4-mini"
         },
         {
           "api_protocol": "openai",
@@ -4004,6 +4477,20 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-5.5"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "gpt-5.5"
         },
@@ -4107,6 +4594,39 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.5-122b-a10b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.26
+            },
+            "output_tokens": {
+              "text": 2.08
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.5-122b-a10b"
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -4117,6 +4637,23 @@
             }
           },
           "provider": "novita",
+          "provider_model_id": "qwen/qwen3.5-122b-a10b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.26
+            },
+            "output_tokens": {
+              "text": 2.08
+            }
+          },
+          "provider": "openrouter",
           "provider_model_id": "qwen/qwen3.5-122b-a10b"
         },
         {
@@ -4165,6 +4702,39 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.5-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.5-27b"
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -4175,6 +4745,23 @@
             }
           },
           "provider": "novita",
+          "provider_model_id": "qwen/qwen3.5-27b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.195
+            },
+            "output_tokens": {
+              "text": 1.56
+            }
+          },
+          "provider": "openrouter",
           "provider_model_id": "qwen/qwen3.5-27b"
         },
         {
@@ -4223,6 +4810,57 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 3.6
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.6-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.6-27b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 0.285
+            },
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.6-27b"
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -4254,6 +4892,56 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.248
+            },
+            "output_tokens": {
+              "text": 1.485
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.6-35b-a3b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.6
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.6-35b-a3b"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.6-35b-a3b"
+        },
         {
           "api_protocol": "openai",
           "pricing": {
@@ -4370,6 +5058,19 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.165
+            },
+            "output_tokens": {
+              "text": 0.99
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.6-flash"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -4463,6 +5164,21 @@
             }
           },
           "provider": "atlascloud",
+          "provider_model_id": "qwen/qwen3.7-max"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 1.5625,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider": "bitrouter",
           "provider_model_id": "qwen/qwen3.7-max"
         },
         {
@@ -4621,6 +5337,19 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.276
+            },
+            "output_tokens": {
+              "text": 1.101
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.7-plus"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "qwen3.7-plus"
         },
@@ -4660,6 +5389,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01425,
+              "no_cache": 0.072
+            },
+            "output_tokens": {
+              "text": 0.216
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "stepfun/step-3.5-flash"
+        },
         {
           "api_protocol": [
             "openai",
@@ -4800,6 +5543,20 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.03,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.8625
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "stepfun/step-3.7-flash"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -4918,8 +5675,61 @@
               "text": 0.26
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "tencent/hy3"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 0.8
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "tencent/hy3"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.029,
+              "no_cache": 0.066
+            },
+            "output_tokens": {
+              "text": 0.26
+            }
+          },
           "provider": "siliconflow",
           "provider_model_id": "tencent/Hy3-preview"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0,
+              "cache_write": 0.0,
+              "no_cache": 0.0
+            },
+            "output_tokens": {
+              "text": 0.0
+            }
+          },
+          "provider": "tencent_cn",
+          "provider_model_id": "hy3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-07-06"
@@ -4939,6 +5749,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "x-ai/grok-4.20"
+        },
         {
           "api_protocol": [
             "openai",
@@ -5009,6 +5833,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "x-ai/grok-4.20-multi-agent"
+        },
         {
           "api_protocol": [
             "openai",
@@ -5113,6 +5951,20 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "x-ai/grok-4.3"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -5182,6 +6034,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "x-ai/grok-build-0.1"
+        },
         {
           "api_protocol": "openai",
           "pricing": {
@@ -5265,6 +6131,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "xiaomi/mimo-v2.5"
+        },
         {
           "api_protocol": "openai",
           "provider": "opencode-go",
@@ -5382,6 +6262,20 @@
       "providers": [
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "xiaomi/mimo-v2.5-pro"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "mimo-v2.5-pro"
         },
@@ -5495,6 +6389,46 @@
       "providers": [
         {
           "api_protocol": "openai",
+          "provider": "alibaba_coding_plan",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "z-ai/glm-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0,
+              "cache_write": 0.0,
+              "no_cache": 2.25
+            },
+            "output_tokens": {
+              "text": 2.75
+            }
+          },
+          "provider": "cerebras",
+          "provider_model_id": "zai-glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.11,
@@ -5506,6 +6440,70 @@
           },
           "provider": "novita",
           "provider_model_id": "zai-org/glm-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "glm-4.7"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.08,
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 1.75
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-4.7"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 0.0,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "zai",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "provider": "zai_coding_plan",
+          "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2025-12-23"
@@ -5524,6 +6522,26 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.86
+            },
+            "output_tokens": {
+              "text": 3.15
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "glm-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": "openai",
           "provider": "alibaba_coding_plan",
@@ -5550,6 +6568,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 1.92
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "z-ai/glm-5"
         },
         {
           "api_protocol": "openai",
@@ -5585,26 +6617,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "zai-org/GLM-5-FP8"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.0
-            },
-            "output_tokens": {
-              "text": 3.0
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "zai-org/GLM-5",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
@@ -5791,6 +6803,27 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17,
+              "no_cache": 0.87
+            },
+            "output_tokens": {
+              "text": 3.48
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "glm-5.1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -5802,6 +6835,20 @@
           },
           "provider": "atlascloud",
           "provider_model_id": "zai-org/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.182,
+              "no_cache": 0.98
+            },
+            "output_tokens": {
+              "text": 3.08
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "z-ai/glm-5.1"
         },
         {
           "api_protocol": "openai",
@@ -5837,27 +6884,6 @@
           },
           "provider": "gmicloud",
           "provider_model_id": "zai-org/GLM-5.1-FP8"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 4.4
-            }
-          },
-          "provider": "ionet",
-          "provider_model_id": "zai-org/GLM-5.1",
-          "rate_limits": {
-            "requests_per_minute": 50
-          }
         },
         {
           "api_protocol": "openai",
@@ -6079,6 +7105,28 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0.0,
+              "no_cache": 1.1
+            },
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "glm-5.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -6090,6 +7138,20 @@
           },
           "provider": "atlascloud",
           "provider_model_id": "zai-org/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.182,
+              "no_cache": 0.979
+            },
+            "output_tokens": {
+              "text": 3.08
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "z-ai/glm-5.2"
         },
         {
           "api_protocol": "openai",
@@ -6243,6 +7305,22 @@
           },
           "provider": "tencent_cn",
           "provider_model_id": "glm-5.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 5.25
+            }
+          },
+          "provider": "tinfoil",
+          "provider_model_id": "glm-5-2",
           "rate_limits": {
             "requests_per_minute": 60
           }

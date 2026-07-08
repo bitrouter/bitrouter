@@ -46,3 +46,6 @@ status: active
 auth:
   kind: oauth
   handler: supergrok
+auto_sync:
+  feed: models_dev
+  key: xai

@@ -63,3 +63,6 @@ auth_scheme: x-api-key
 auth:
   kind: oauth
   handler: anthropic
+auto_sync:
+  feed: models_dev
+  key: anthropic

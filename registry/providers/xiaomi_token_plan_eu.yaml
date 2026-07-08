@@ -32,3 +32,6 @@ status: active
 weight: 1
 submitted_at: 2026-07-06
 auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
+  key: xiaomi-token-plan-ams

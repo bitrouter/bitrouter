@@ -212,14 +212,7 @@ async fn sync_v1_models_loaded(root: &Path, loaded: &LoadedRegistry, write: bool
             ));
             continue;
         };
-        let Some(headers) = v1_auth_headers(&provider.data) else {
-            skipped.push(format!(
-                "{}: credential unavailable for v1_models",
-                provider.data.name
-            ));
-            continue;
-        };
-        let body = fetch_v1_models(&url, headers)
+        let body = fetch_v1_models(&url, v1_auth_headers(&provider.data))
             .await
             .with_context(|| format!("syncing {} from {url}", provider.data.name))?;
         let plan = v1_models_plan_for_provider(&provider.data, &body, &resolve)
@@ -306,11 +299,18 @@ fn v1_models_plan_for_provider(
         if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
             continue;
         }
+        let pricing = match provider.billing {
+            Billing::Subscription => None,
+            Billing::UsageToken => match model.pricing {
+                Some(pricing) => Some(pricing),
+                None => continue,
+            },
+        };
         adds.push(ProviderModel {
             id: canonical_id,
             provider_model_id: model.id,
             api_protocol: None,
-            pricing: None,
+            pricing,
             rate_limits: None,
             capabilities: Vec::new(),
             deprecation_date: None,
@@ -330,31 +330,8 @@ fn v1_models_url(provider: &ProviderFile) -> Option<String> {
     }
 }
 
-fn v1_auth_headers(provider: &ProviderFile) -> Option<Vec<(String, String)>> {
-    let Some(auth) = &provider.auth else {
-        return Some(Vec::new());
-    };
-    match auth.kind {
-        AuthKind::Bearer => {
-            let env = auth.env.as_ref()?;
-            let token = nonempty_env(env)?;
-            Some(vec![(
-                "Authorization".to_string(),
-                format!("Bearer {token}"),
-            )])
-        }
-        AuthKind::Header => {
-            let env = auth.env.as_ref()?;
-            let header = auth.header.as_ref()?;
-            let value = nonempty_env(env)?;
-            Some(vec![(header.clone(), value)])
-        }
-        AuthKind::Oauth | AuthKind::Native => None,
-    }
-}
-
-fn nonempty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|value| !value.is_empty())
+fn v1_auth_headers(_provider: &ProviderFile) -> Vec<(String, String)> {
+    Vec::new()
 }
 
 async fn fetch_v1_models(url: &str, headers: Vec<(String, String)>) -> Result<String> {
@@ -385,6 +362,8 @@ struct V1ModelsResponse {
 #[derive(Debug, Deserialize)]
 struct V1Model {
     id: String,
+    #[serde(default)]
+    pricing: Option<ModelPricing>,
 }
 
 pub fn agentic_prompt(root: &Path) -> Result<String> {
@@ -2397,6 +2376,7 @@ models:
   - id: openai/gpt-5.5
     provider_model_id: gpt-5.5
 status: active
+billing: subscription
 api_base: https://api.acme.test/v1
 auto_sync:
   feed: v1_models
@@ -2422,6 +2402,103 @@ auto_sync:
         assert_eq!(plan.adds[0].id, "anthropic/claude-sonnet-4.6");
         assert_eq!(plan.adds[0].provider_model_id, "claude-sonnet-4-6");
         assert!(plan.adds[0].pricing.is_none());
+    }
+
+    #[test]
+    fn v1_models_catalog_copies_pricing_when_present() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models: []
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: v1_models
+"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver(["openai/gpt-5.5"]);
+        let body = r#"
+{
+  "data": [
+    {
+      "id": "openai/gpt-5.5",
+      "pricing": {
+        "input_tokens": {
+          "no_cache": 1.5,
+          "cache_read": 0.15
+        },
+        "output_tokens": {
+          "text": 6.0
+        }
+      }
+    }
+  ]
+}
+"#;
+
+        let plan = v1_models_plan_for_provider(&provider, body, &resolve).unwrap();
+
+        assert_eq!(plan.adds.len(), 1);
+        let pricing = plan.adds[0].pricing.as_ref().expect("pricing copied");
+        let input = pricing.input_tokens.as_ref().expect("input pricing");
+        let output = pricing.output_tokens.as_ref().expect("output pricing");
+        assert_eq!(input.no_cache, Some(1.5));
+        assert_eq!(input.cache_read, Some(0.15));
+        assert_eq!(output.text, Some(6.0));
+    }
+
+    #[test]
+    fn v1_models_catalog_skips_usage_token_models_without_pricing() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models: []
+status: active
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: v1_models
+"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver(["openai/gpt-5.5"]);
+        let body = r#"
+{
+  "data": [
+    { "id": "openai/gpt-5.5" }
+  ]
+}
+"#;
+
+        let plan = v1_models_plan_for_provider(&provider, body, &resolve).unwrap();
+
+        assert!(plan.adds.is_empty());
+    }
+
+    #[test]
+    fn v1_models_sync_uses_public_endpoint_even_with_runtime_auth() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models: []
+status: active
+api_base: https://api.acme.test/v1
+auth:
+  kind: bearer
+  env: ACME_API_KEY
+auto_sync:
+  feed: v1_models
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(v1_auth_headers(&provider), Vec::<(String, String)>::new());
     }
 
     #[test]

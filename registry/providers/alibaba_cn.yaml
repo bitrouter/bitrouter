@@ -64,6 +64,76 @@ models:
             no_cache: 0.66
           output_tokens:
             text: 3.961
+  - id: minimax/minimax-m2.5
+    provider_model_id: MiniMax-M2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 1.2
+  - id: minimax/minimax-m2.7
+    provider_model_id: MiniMax/MiniMax-M2.7
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+        cache_write: 0.375
+      output_tokens:
+        text: 1.2
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.0028
+      output_tokens:
+        text: 0.28
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 0.435
+        cache_read: 0.003625
+      output_tokens:
+        text: 0.87
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+    pricing:
+      input_tokens:
+        no_cache: 0.86
+      output_tokens:
+        text: 3.15
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 0.87
+        cache_read: 0.17
+      output_tokens:
+        text: 3.48
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+        cache_write: 0
+      output_tokens:
+        text: 3.851
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.574
+      output_tokens:
+        text: 2.411
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.929
+      output_tokens:
+        text: 3.858
 status: active
 weight: 1
 submitted_at: 2026-07-06
