@@ -12,10 +12,13 @@ How BitRouter's per-session substrate works — one process, one session, one ag
 
 ```bash
 # Expose one session as a vanilla ACP Agent over stdio (manager-driven)
-bitrouter acp serve --agent <id> [--worktree <name>] [--config PATH]
+bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--config PATH]
 
 # One-shot headless: launch, send one prompt, stream NDJSON output, exit
-bitrouter acp prompt --agent <id> [--worktree <name>] [--no-wait] [--config PATH] <text>
+bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-wait] [--config PATH] <text>
+
+# List this repo's session records (.bitrouter/sessions/), newest first
+bitrouter acp sessions
 ```
 
 - **`serve`**: runs until the manager disconnects (stdin EOF). Stdout carries ACP JSON-RPC; logs go to stderr. The manager drives standard ACP: `initialize` → `session/new` → `session/prompt` / `session/cancel`.
@@ -31,8 +34,17 @@ Each line is a self-describing JSON object with a `type` field (snake_case):
 | `thought_chunk` | Streaming thought/reasoning |
 | `tool_call` | Agent initiated a tool call |
 | `tool_call_update` | Update on an in-flight tool call |
+| `usage` | Context-window occupancy from the upstream's `UsageUpdate` — `used`/`size` tokens, optional cumulative `cost` |
 | `result` | Terminal line — carries `stop_reason` (ACP wire spelling, e.g. `"end_turn"`) |
 | `submitted` | Only with `--no-wait` — emitted after enqueue, then the process exits |
+
+## Worktrees: retained by default
+
+`--worktree <name>` provisions `.bitrouter/worktrees/<name>` — created with a same-named branch, or **reused** when the worktree already exists (attaching to an existing branch instead of failing). At shutdown the worktree is **retained** (it holds the agent's work; the path is logged to stderr). `--rm-worktree` opts in to removal, which destroys uncommitted work; a pre-existing (reused) worktree is never removed. `serve` and `prompt` share these semantics.
+
+## Session records
+
+Every launch writes `.bitrouter/sessions/<record_id>.json` — three-tier identity, worktree path, pid, start/end timestamps, status — and shutdown settles it to `exited`. `bitrouter acp sessions` lists them; a `running` record whose pid is gone displays as `dead` (the substrate was killed without shutdown). Records are the persistence hook for v2 `session/load`.
 
 ## One agent per session (D8)
 
@@ -56,6 +68,12 @@ Each session carries three identity fields:
 
 The substrate speaks standard ACP on the wire — `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`. There are no `_conductor/*` extensions. Agent and worktree are launch-time arguments, not wire methods; the manager chooses the agent by spawning the right command.
 
+Fidelity guarantees on that wire:
+
+- **Capabilities relay**: the manager-facing `initialize` reflects the upstream agent's real capabilities (and `agentInfo`), with `loadSession` masked to `false` (no `session/load` in v1) and auth methods withheld.
+- **Prompts forward verbatim**: `session/prompt` content blocks (text, images, resources, resource links) reach the upstream unmodified.
+- **Exact permission outcomes**: the manager's chosen `optionId` passes through to the upstream verbatim (validated against the offered set); two same-kind options stay distinguishable. Dropping/failing to answer defaults to the reject option.
+
 ## Ephemeral v1 vs warm-owner v2
 
 **v1** sessions are ephemeral: the session lives for the process's lifetime. When the process exits (manager disconnect or `acp prompt` completion), the session is gone.
@@ -66,7 +84,6 @@ The substrate speaks standard ACP on the wire — `initialize`, `session/new`, `
 
 | Risk | Detail |
 |---|---|
-| `fs/*` / `terminal/*` (R1) | These ACP methods respond with `method-not-found` in v1. If an agent in the bundled catalog actually calls them, minimal handlers sandboxed to the worktree are added first. |
-| Coarse permission outcomes (R5) | Permission answers flow through a 3-value `PermissionOutcome` (`AllowOnce` / `AllowAlways` / `Deny`). The manager's exact `optionId` is not preserved verbatim to the upstream — the down-handler maps to an outcome and the up-handler re-derives an option by kind. |
-| Thin telemetry | v1 telemetry is `{agent, stop_reason}` only. Token counts and latency enrichment (via `UsageUpdate` and a `PreRequest` timestamp hook) are v2 follow-ups. |
+| `fs/*` / `terminal/*` (R1) | These ACP methods respond with `method-not-found` in v1. The planned fix is pass-through (relay the manager's `ClientCapabilities` upstream and proxy agent→client `fs`/`terminal` requests down to the manager), which requires deferring the upstream handshake until the manager's `initialize` — a follow-up. |
+| Telemetry granularity | Per-turn records carry `{agent, stop_reason, latency_ms, context used/size}` (to stderr). Per-turn input/output token *deltas* are not in ACP's stable surface (only the `unstable_end_turn_token_usage` feature), so cost attribution finer than the streamed cumulative `cost` is deferred. |
 | One-shot `acp prompt` | `acp prompt` is a single-turn command in v1. Multi-turn reuse over the CLI needs warm owners (v2). For a long conversation use `acp serve` and drive it with a manager. |
