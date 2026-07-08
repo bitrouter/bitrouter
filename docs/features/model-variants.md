@@ -51,7 +51,7 @@ Separate from the ranking profiles above, BitRouter accepts a `:discount` suffix
 moonshotai/kimi-k2.6:discount     # route to the self-hosted discounted provider
 ```
 
-Because it pins the provider rather than re-ranking the eligible ones, `:discount` is **not** a routing profile and doesn't combine meaningfully with `:cost` / `:latency` / `:throughput`. Open models are already 25% off by default without it; the suffix forces the discounted self-hosted supply and is where custom account discounts apply. See [Discounted Models](/docs/get-started/models) for the full behavior — including custom discounts up to 50% for open-source projects.
+Because it pins the provider rather than re-ranking the eligible ones, `:discount` is **not** a routing profile and doesn't combine meaningfully with `:cost` / `:latency` / `:throughput`. Open models are already 25% off by default without it; the suffix forces the discounted self-hosted supply and is where custom account discounts apply. See [Discounted Models](/docs/get-started/supported-models) for the full behavior — including custom discounts up to 50% for open-source projects.
 
 ## Variants never change authorization
 

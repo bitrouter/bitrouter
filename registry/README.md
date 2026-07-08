@@ -83,6 +83,61 @@ Source lives in two places; `dist/registry/` is generated — never hand-edit it
   beyond the curated catalog** (BYOK / BYO-subscription extras) — those are
   allowed and surface as non-failing *advisories*, not errors.
 
+### Provider variants — one file per distinct endpoint
+
+A provider file is **one routable endpoint with its own commercial terms**, not a
+datacenter. A vendor gets more than one file only along two orthogonal axes:
+
+- **Entity / region.** The default is *global* — **no suffix**. "International"
+  is a commercial tier (USD, global signup), **not** a geography, so it never
+  gets a suffix. Add a suffixed variant only when the vendor exposes a genuinely
+  distinct public endpoint with distinct commercial or legal terms — a different
+  base URL **and** a different currency, account/KYC, or data-residency
+  jurisdiction. A different datacenter for the *same* product (latency only) is
+  **not** a variant.
+  - `_cn` — mainland China: separate legal entity, RMB, mainland real-name
+    account, non-interchangeable keys. This is the one geographic split that is
+    near-universal among Chinese vendors and always a distinct endpoint.
+  - Other region suffixes (`_eu`, `_us`, `_apac`, …) are allowed **only** when
+    such an endpoint really exists (e.g. a dedicated EU-residency host). Most
+    providers will only ever have the default and maybe `_cn`. Do not reserve
+    region slots the vendor doesn't offer, and do not split one product across
+    per-city gateways (this is why Alibaba's endpoint-less `_hk`/`_jp`/`_eu`
+    entries were removed).
+- **Billing.** Independent of region: `usage_token` (the default) vs
+  `subscription` (a flat-rate plan). Prefer the plan's real product name when it
+  has one (`claude-code`, not `anthropic_coding_plan`); the `billing:` field
+  carries the semantics regardless.
+
+The name equals the filename stem and the env-var root (`{NAME}_API_KEY`); use
+lowercase region codes. In `metadata`, `headquarters` is the home country of the
+company behind the brand — **identical across all of that brand's variants** —
+while `datacenters` is where the specific variant serves from (so a Chinese
+vendor's international endpoint is `headquarters: CN` with `datacenters: [SG]`,
+not `headquarters: SG`).
+
+### Pricing and sourcing
+
+- **All pricing is USD per 1M tokens.** Convert any RMB (or other-currency) rate
+  to USD and record the source and conversion in a comment — never leave a
+  non-USD number in a price field. (`usage_token` providers must price every
+  model; `subscription` providers price none — see the validator rules below.)
+- **Prefer the models.dev feed when the provider is listed there.** Set
+  `auto_sync: { feed: models_dev }` so the daily sync keeps the catalog and
+  pricing current. The sync key defaults to the provider `name`; set `key:`
+  explicitly when the models.dev key differs (e.g. `siliconflow_cn` uses
+  `key: siliconflow-cn`). Providers absent from models.dev are maintained by
+  hand from the vendor's published model + price list, and the comment header
+  should say so.
+
+### Status lifecycle
+
+`status` gates routing: **only `active` is served**; `staging`, `suspended`, and
+`withdrawn` are not. Use `staging` for a provider scaffolded from research but not
+yet confirmed against the live API — keep a `# VERIFY BEFORE ACTIVATING` header
+listing the exact fields a human must check (model ids via `GET /v1/models`,
+prices, env var, base URL) before flipping it to `active`.
+
 The validator (`cargo run -p dist-helper -- registry validate`) enforces:
 
 - Model ids and provider model ids are lowercase `<org>/<model>`.

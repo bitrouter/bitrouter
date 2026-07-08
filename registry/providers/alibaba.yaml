@@ -1,19 +1,21 @@
-name: alibaba_eu
-display_name: Alibaba Cloud Model Studio (Germany Frankfurt)
+name: alibaba
+display_name: Alibaba Cloud Model Studio (International)
 metadata:
-  headquarters: SG
+  headquarters: CN
   datacenters:
-    - EU
+    - SG
   name: Alibaba Cloud
   privacy_policy_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy
   slug: alibaba-cloud
   status_page_url: https://status.alibabacloud.com
   terms_of_service_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use
-required_config:
-  - api_key
-  - base_url
+# Source: Alibaba Cloud Model Studio, International deployment scope
+# (Singapore-hosted), served on a fixed DashScope-compatible base URL.
+api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+protocol_endpoints:
+  anthropic: https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1
 api_protocol:
-  - "*": [openai, responses]
+  - "*": [openai, responses, anthropic]
 rate_limits:
   - "*":
       requests_per_minute: 60
@@ -22,49 +24,52 @@ models:
     provider_model_id: qwen3.7-max
     pricing:
       input_tokens:
-        no_cache: 1.65
+        no_cache: 2.5
       output_tokens:
-        text: 4.951
+        text: 7.5
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen3.7-plus
     pricing:
       input_tokens:
-        no_cache: 0.276
+        no_cache: 0.4
       output_tokens:
-        text: 1.101
+        text: 1.6
       context_tiers:
         - above_input_tokens: 256000
           input_tokens:
-            no_cache: 0.826
+            no_cache: 1.2
           output_tokens:
-            text: 3.301
+            text: 4.8
   - id: qwen/qwen3.6-plus
     provider_model_id: qwen3.6-plus
     pricing:
       input_tokens:
-        no_cache: 0.276
+        no_cache: 0.5
       output_tokens:
-        text: 1.651
+        text: 3
       context_tiers:
         - above_input_tokens: 256000
           input_tokens:
-            no_cache: 1.101
+            no_cache: 2
           output_tokens:
-            text: 6.602
+            text: 6
   - id: qwen/qwen3.6-flash
     provider_model_id: qwen3.6-flash
     pricing:
       input_tokens:
-        no_cache: 0.165
+        no_cache: 0.25
       output_tokens:
-        text: 0.99
+        text: 1.5
       context_tiers:
         - above_input_tokens: 256000
           input_tokens:
-            no_cache: 0.66
+            no_cache: 1
           output_tokens:
-            text: 3.961
+            text: 4
 status: active
 weight: 1
-submitted_at: 2026-07-06
+submitted_at: 2026-05-25
 auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
+  key: alibaba

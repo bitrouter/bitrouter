@@ -35,16 +35,3 @@
   knowledge_cutoff: 2025-01
   open_weights: true
   family: kimi-k2
-- id: moonshotai/kimi-k2.7-code-highspeed
-  name: 'Kimi: K2.7 Code High Speed'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 262144
-  max_output_tokens: 32768
-  release_date: 2026-06-15
-  knowledge_cutoff: 2025-01
-  open_weights: true
-  family: kimi-k2

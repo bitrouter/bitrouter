@@ -40,4 +40,4 @@ Open (non-closed-source) models carry a second property: BitRouter serves them t
 - [Structured outputs](/docs/features/structured-outputs) — enforce a JSON schema across providers.
 - [Add external keys (BYOK)](/docs/features/byok) — route through your own provider account.
 - [Local & private models](/docs/integrations/models) — point BitRouter at your own server.
-- [Managed provider & pricing](/docs/get-started/models) — the hosted provider and the full catalog.
+- [Managed provider & pricing](/docs/get-started/supported-models) — the hosted provider and the full catalog.

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -453,6 +454,51 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         out,
         "- Do not infer provider catalog changes from `dist/` artifacts or helper source code.\n"
     )?;
+    writeln!(
+        out,
+        "- Do not use YAML serializers, formatters, or full-file rewrites. Preserve comments, ordering, quoting, and indentation; edit the smallest necessary YAML ranges."
+    )?;
+    writeln!(
+        out,
+        "- Do not omit confirmed public models just to keep the diff small. Large catalog updates are allowed when the linked source supports them, but avoid unrelated formatting churn."
+    )?;
+    writeln!(
+        out,
+        "- The current source model count is context only, not a limit. Add every public production model from the linked source that maps to an existing canonical model ID.\n"
+    )?;
+    writeln!(out, "Source reading rules:")?;
+    writeln!(
+        out,
+        "- The workflow installs `curl` and `rg`; use them before other fetch/parsing tools."
+    )?;
+    writeln!(
+        out,
+        "- For each source URL, first run `mkdir -p target/agentic-sync`, fetch the full primary document with `curl -sS -L <url> -o target/agentic-sync/<provider>-<n>.html`, then inspect that saved file with `rg`."
+    )?;
+    writeln!(
+        out,
+        "- Raw HTML or rendered app HTML is still readable source material, not a reason to skip a provider."
+    )?;
+    writeln!(
+        out,
+        "- Do not use truncated output, first lines, or `head` output to conclude that a catalog is missing. Fetch the full response or save it to a temporary file before deciding."
+    )?;
+    writeln!(
+        out,
+        "- If a page is long, noisy, or rendered by a frontend framework, use generic extraction strategies: convert to text/Markdown with an available reader tool, parse visible text, search embedded JSON, or inspect repeated model/pricing records in the full page."
+    )?;
+    writeln!(
+        out,
+        "- Do not print large raw HTML, YAML, or JSON files to stdout. Use targeted extraction commands such as `rg -o`, counts, or small scripts that emit compact summaries."
+    )?;
+    writeln!(
+        out,
+        "- Do not fetch `_next/`, static assets, JavaScript chunks, CSS, fonts, or images unless the saved primary document and a text/Markdown fallback both lack catalog data."
+    )?;
+    writeln!(
+        out,
+        "- Only report a source as unreadable after full-page retrieval and at least one fallback extraction method both fail.\n"
+    )?;
     writeln!(out, "Providers to sync:\n")?;
     if providers.is_empty() {
         writeln!(
@@ -494,11 +540,44 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
     )?;
     writeln!(
         out,
-        "- For usage-token providers, add pricing when the linked source documents it."
+        "- Only modify data classes listed in the provider `writes` line."
+    )?;
+    writeln!(
+        out,
+        "- Treat `writes: models` as permission to add or remove provider model entries. A newly added provider model entry may include its own `pricing` when the linked source documents it."
+    )?;
+    writeln!(
+        out,
+        "- Treat `writes: pricing` as permission to update `pricing` on pre-existing provider model entries."
+    )?;
+    writeln!(
+        out,
+        "- When `writes` includes `pricing`, re-check pricing for every provider model against the linked source. Update confirmed changes; leave pricing unchanged only when it cannot be confirmed."
+    )?;
+    writeln!(
+        out,
+        "- If `writes` does not include `pricing`, preserve `pricing` in all pre-existing model entries exactly; do not recalculate, normalize, or remove it."
     )?;
     writeln!(
         out,
         "- For subscription providers, do not invent token pricing.\n"
+    )?;
+    writeln!(out, "Pricing unit rules:")?;
+    writeln!(
+        out,
+        "- Registry pricing values are USD per 1 million tokens unless the schema field explicitly says otherwise."
+    )?;
+    writeln!(
+        out,
+        "- Credits, points, coins, or other provider-internal units are not USD. Find and cite the provider's conversion to USD before using them."
+    )?;
+    writeln!(
+        out,
+        "- If the source only exposes provider-internal units and no USD conversion can be confirmed, do not copy provider-internal unit numbers into pricing. Preserve existing pricing for existing entries; skip new usage-token models whose pricing cannot be converted and report them as uncertain."
+    )?;
+    writeln!(
+        out,
+        "- Before broad pricing rewrites, compare at least one existing model's current registry price against the source number. Large uniform multipliers usually mean a unit conversion is missing; re-check the source instead of applying the raw numbers.\n"
     )?;
     writeln!(out, "Validation:")?;
     writeln!(
@@ -526,6 +605,10 @@ pub fn agentic_prompt(root: &Path) -> Result<String> {
         out,
         "- models skipped because canonical mapping or facts were uncertain"
     )?;
+    writeln!(
+        out,
+        "- pricing units and conversions used, especially for credits/points/coins"
+    )?;
     writeln!(out, "- validation result")?;
     writeln!(
         out,
@@ -551,7 +634,7 @@ fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut Str
     }
     writeln!(
         out,
-        "  - status: {:?}; billing: {:?}; access: {:?}; model_count: {}",
+        "  - status: {:?}; billing: {:?}; access: {:?}; existing_model_count: {} (current source count, not a limit)",
         data.status,
         data.billing,
         data.access,
@@ -566,7 +649,7 @@ fn render_agentic_provider(root: &Path, provider: &LoadedProvider, out: &mut Str
             .as_ref()
             .into_iter()
             .flatten()
-            .map(|write| format!("{write:?}"))
+            .map(|write| write.source_key())
             .collect();
         writeln!(out, "  - writes: {}", writes.join(", "))?;
     } else {
@@ -590,6 +673,46 @@ fn slash_path(path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+pub fn agentic_diff_check(root: &Path) -> Result<()> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--numstat", "--"])
+        .output()
+        .context("running git diff --numstat for agentic registry sync")?;
+    if !output.status.success() {
+        bail!(
+            "git diff --numstat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let issues = agentic_diff_issues_from_numstat(&stdout);
+    if !issues.is_empty() {
+        bail!("{}", issues.join("\n"));
+    }
+    println!("agentic registry diff check passed");
+    Ok(())
+}
+
+fn agentic_diff_issues_from_numstat(numstat: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    for line in numstat.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let _additions = parts.next();
+        let _deletions = parts.next();
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        if !path.starts_with("registry/providers/") && !path.starts_with("registry/models/") {
+            issues.push(format!(
+                "{path}: agentic sync may only edit files under registry/providers/ and registry/models/"
+            ));
+        }
+    }
+    issues
 }
 
 struct Artifacts {
@@ -1843,6 +1966,15 @@ enum AutoSyncWrite {
     Pricing,
 }
 
+impl AutoSyncWrite {
+    fn source_key(self) -> &'static str {
+        match self {
+            Self::Models => "models",
+            Self::Pricing => "pricing",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RateLimits {
@@ -2342,8 +2474,72 @@ auto_sync:
         assert!(prompt.contains("cargo run -p dist-helper -- registry validate"));
         assert!(prompt.contains("If the listed URLs are unreachable"));
         assert!(prompt.contains("Do not remove or edit provider `auto_sync`"));
+        assert!(prompt.contains("current source count, not a limit"));
+        assert!(prompt.contains("existing_model_count: 1"));
+        assert!(prompt.contains("writes: models, pricing"));
+        assert!(prompt.contains("Raw HTML or rendered app HTML is still readable source material"));
+        assert!(prompt.contains("Do not use truncated output"));
+        assert!(prompt.contains("mkdir -p target/agentic-sync"));
+        assert!(prompt.contains("curl -sS -L"));
+        assert!(prompt.contains("rg"));
+        assert!(prompt.contains("Do not fetch `_next/`, static assets, JavaScript chunks"));
+        assert!(prompt.contains("Do not print large raw HTML, YAML, or JSON files"));
+        assert!(prompt.contains("generic extraction strategies"));
+        assert!(prompt.contains("Do not use YAML serializers"));
+        assert!(prompt.contains("Do not omit confirmed public models just to keep the diff small"));
+        assert!(
+            prompt.contains("A newly added provider model entry may include its own `pricing`")
+        );
+        assert!(prompt.contains("re-check pricing for every provider model"));
+        assert!(prompt.contains("leave pricing unchanged only when it cannot be confirmed"));
+        assert!(prompt.contains("preserve `pricing` in all pre-existing model entries exactly"));
+        assert!(prompt.contains("Registry pricing values are USD per 1 million tokens"));
+        assert!(prompt.contains("Credits, points, coins, or other provider-internal units"));
+        assert!(prompt.contains("do not copy provider-internal unit numbers into pricing"));
         assert!(prompt.contains("include the exact `registry valid:` output line"));
         assert!(!prompt.contains("canonical_models_json"));
+        assert!(!prompt.contains("; model_count: 1"));
+    }
+
+    #[test]
+    fn agentic_diff_check_allows_large_provider_rewrites() {
+        let issues = agentic_diff_issues_from_numstat(
+            "12\t179\tregistry/providers/worldrouter.yaml\n\
+             70\t0\tregistry/providers/another.yaml\n\
+             12\t179\tregistry/models/anthropic/example.yaml\n",
+        );
+
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn agentic_diff_check_rejects_non_registry_source_paths() {
+        let issues = agentic_diff_issues_from_numstat(
+            "12\t0\tregistry/providers/worldrouter.yaml\n\
+             1\t0\thelpers/dist-helper/src/registry.rs\n",
+        );
+
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].contains("helpers/dist-helper/src/registry.rs"));
+        assert!(issues[0].contains("registry/providers/"));
+        assert!(issues[0].contains("registry/models/"));
+    }
+
+    #[test]
+    fn registry_sync_workflow_uses_agentic_defaults() {
+        let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
+
+        assert!(workflow.contains(r#"cron: "0 22 * * *""#));
+        assert!(workflow.contains("AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code"));
+        assert!(workflow.contains("uses: actions/create-github-app-token@v2"));
+        assert!(workflow.contains("app-id: ${{ secrets.APP_ID }}"));
+        assert!(workflow.contains("private-key: ${{ secrets.APP_PRIVATE_KEY }}"));
+        assert!(workflow.contains("token: ${{ steps.generate-token.outputs.token }}"));
+        assert!(workflow.contains("GH_TOKEN: ${{ steps.generate-token.outputs.token }}"));
+        assert!(workflow.contains(r#"git config user.name "bitrouter-automation[bot]""#));
+        assert!(workflow.contains(
+            r#"git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com""#
+        ));
     }
 
     #[test]

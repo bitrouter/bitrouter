@@ -2,5 +2,5 @@
   "title": "Get Started",
   "icon": "Rocket",
   "defaultOpen": true,
-  "pages": ["introduction", "self-hosted-and-cloud", "comparison", "quickstart", "models"]
+  "pages": ["introduction", "configuration", "supported-models", "supported-providers", "faqs"]
 }

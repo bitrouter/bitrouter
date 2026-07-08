@@ -18,3 +18,4 @@
   - text
   max_input_tokens: 256000
   max_output_tokens: 256000
+  open_weights: true

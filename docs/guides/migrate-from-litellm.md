@@ -24,7 +24,7 @@ LiteLLM is a Python SDK and self-hosted proxy for unifying access to 100+ LLM pr
 
 ### 1. Cloud and local share the same surface
 
-With LiteLLM, the proxy is something you operate. With BitRouter, **the hosted cloud and local binary expose the same OpenAI-compatible endpoint** — you can start local during development, then point at `api.bitrouter.ai` for production (or vice versa) without changing client code. The CLI, the wizard, and Agent Skills all work in either mode; toggle with one keypress in the setup TUI. See the [Quick Start](/docs/get-started/quickstart) for both flows.
+With LiteLLM, the proxy is something you operate. With BitRouter, **the hosted cloud and local binary expose the same OpenAI-compatible endpoint** — you can start local during development, then point at `api.bitrouter.ai` for production (or vice versa) without changing client code. The CLI, the wizard, and Agent Skills all work in either mode; toggle with one keypress in the setup TUI. See the [Quick Start](/docs/get-started/configuration) for both flows.
 
 This matters when your agent should *pay per request* without you provisioning keys for it — Cloud mode supports [x402 / MPP autonomous payments](/docs/features/payment), which LiteLLM has no equivalent for.
 
@@ -64,7 +64,7 @@ response = completion(
 ```python
 import openai
 
-# Local: `bitrouter` (BYOK via env vars) — see /docs/get-started/quickstart
+# Local: `bitrouter` (BYOK via env vars) — see /docs/get-started/configuration
 # Cloud: base_url="https://api.bitrouter.ai/v1", api_key=$BITROUTER_API_KEY
 client = openai.OpenAI(
     base_url="http://127.0.0.1:4356/v1",
@@ -143,7 +143,7 @@ To set expectations honestly: BitRouter does not ship a built-in admin UI for te
 
 <Callout type="success">
 **Migration**
-- [ ] Install the BitRouter CLI ([Quick Start](/docs/get-started/quickstart))
+- [ ] Install the BitRouter CLI ([Quick Start](/docs/get-started/configuration))
 - [ ] Export provider keys, or paste them into the cloud dashboard (sealed-box encrypted)
 - [ ] Update client `base_url` to `http://127.0.0.1:4356/v1` (local) or `https://api.bitrouter.ai/v1` (cloud)
 - [ ] Verify with a sample request
@@ -153,8 +153,8 @@ To set expectations honestly: BitRouter does not ship a built-in admin UI for te
 ## Next steps
 
 <Cards>
-  <Card title="Quick Start" href="/docs/get-started/quickstart" description="Run BitRouter locally or in the cloud in under a minute" />
-  <Card title="Comparison" href="/docs/get-started/comparison" description="Side-by-side with OpenRouter, LiteLLM, and generic gateways" />
+  <Card title="Quick Start" href="/docs/get-started/configuration" description="Run BitRouter locally or in the cloud in under a minute" />
+  <Card title="Comparison" href="/docs/get-started/faqs" description="Side-by-side with OpenRouter, LiteLLM, and generic gateways" />
   <Card title="Agent features" href="/docs/concepts/tools" description="MCP, ACP, skills, agent firewall, x402 payment" />
   <Card title="API Reference" href="/docs/reference" description="OpenAI- and Anthropic-compatible endpoints" />
 </Cards>

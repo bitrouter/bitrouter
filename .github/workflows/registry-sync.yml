@@ -3,7 +3,7 @@ name: Registry Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "0 22 * * *"
 
 permissions:
   contents: write
@@ -22,15 +22,30 @@ jobs:
     name: sync source registry feeds
     runs-on: ubuntu-latest
     steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
         with:
           ref: main
+          token: ${{ steps.generate-token.outputs.token }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Sync deterministic registry feeds
         run: |
           cargo run -p dist-helper -- registry sync --write
+
+      - name: Install agentic sync tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ripgrep
+          curl --version
+          rg --version
 
       - uses: actions/setup-node@v4
 
@@ -51,6 +66,7 @@ jobs:
           npm install -g @openai/codex
           export CODEX_HOME="${RUNNER_TEMP}/codex-home"
           mkdir -p "$CODEX_HOME"
+          mkdir -p target/agentic-sync
           codex --search -a never exec \
             --ignore-user-config \
             --ignore-rules \
@@ -70,6 +86,7 @@ jobs:
             cat target/registry-agentic-result.md
             exit 1
           fi
+          cargo run -p dist-helper -- registry agentic-diff-check
 
       - name: Build and check registry dist
         run: |
@@ -78,7 +95,7 @@ jobs:
 
       - name: Open registry sync PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           BRANCH: automation/registry-sync
         run: |
           if git diff --quiet -- registry dist/registry; then
@@ -100,11 +117,17 @@ jobs:
           - `cargo run -p dist-helper -- check`
           EOF
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "bitrouter-automation[bot]"
+          git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
           git add registry dist/registry
           git commit -m "chore: sync registry catalog"
-          git push --force-with-lease origin "HEAD:${BRANCH}"
+          remote_ref="$(git ls-remote --heads origin "${BRANCH}")"
+          remote_sha="$(printf '%s\n' "${remote_ref}" | awk '{print $1}')"
+          if [ -n "${remote_sha}" ]; then
+            git push --force-with-lease="refs/heads/${BRANCH}:${remote_sha}" origin "HEAD:${BRANCH}"
+          else
+            git push origin "HEAD:${BRANCH}"
+          fi
 
           pr_number="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
           if [ -n "${pr_number}" ]; then

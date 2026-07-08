@@ -1,0 +1,91 @@
+# SCAFFOLD — UNVERIFIED. status: staging (does not route until a human verifies
+# and flips to active). Researched 2026-07 from Baidu AI Cloud Qianfan docs.
+# Baidu Qianfan (百度千帆) — CHINA endpoint. OpenAI-compatible /v2 endpoint on the
+# cloud.baidu.com console (mainland account), Bearer API-key auth (key format
+# bce-v3/ALTAK-...; NOT the legacy AK/SK flow). The INTERNATIONAL sibling is a
+# separate provider `qianfan` (api.baiduqianfan.ai, USD).
+# PRICING: official China rates are RMB per 1M tokens; converted to USD below at
+# ~7.2 CNY/USD — VERIFY every id + price on the live console (catalog churns).
+# context_tiers reflect Qianfan's ≤32k vs 32–128k input brackets.
+# VERIFY BEFORE ACTIVATING:
+#   - Provider name `qianfan_cn` → env QIANFAN_CN_API_KEY.
+#   - Exact ERNIE model-id strings/suffixes; per-model RPM/TPM (tier-dependent).
+#   - No confirmed Anthropic-compatible endpoint.
+name: qianfan_cn
+display_name: Baidu Qianfan (China)
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: Baidu AI Cloud
+  privacy_policy_url: https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en
+  slug: qianfan
+  status_page_url: https://cloud.baidu.com/status.html
+  terms_of_service_url: https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en
+api_base: https://qianfan.baidubce.com/v2
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: cloud
+models:
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.67
+        cache_read: 0.139
+      output_tokens:
+        text: 3.33
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+        cache_read: 0.056
+      output_tokens:
+        text: 0.42
+      context_tiers:
+        - above_input_tokens: 32000
+          input_tokens:
+            no_cache: 0.56
+          output_tokens:
+            text: 0.83
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.9
+        cache_read: 0.153
+      output_tokens:
+        text: 3.75
+  - id: baidu/ernie-5.0
+    provider_model_id: ernie-5.0
+    pricing:
+      input_tokens:
+        no_cache: 0.83
+      output_tokens:
+        text: 3.33
+      context_tiers:
+        - above_input_tokens: 32000
+          input_tokens:
+            no_cache: 1.39
+          output_tokens:
+            text: 5.56
+  - id: baidu/ernie-4.5-turbo-128k
+    provider_model_id: ernie-4.5-turbo-128k
+    pricing:
+      input_tokens:
+        no_cache: 0.11
+        cache_read: 0.028
+      output_tokens:
+        text: 0.44
+  - id: baidu/ernie-x1-turbo-32k
+    provider_model_id: ernie-x1-turbo-32k
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.56
+status: staging
+weight: 1
+submitted_at: 2026-07-07

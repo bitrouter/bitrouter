@@ -44,6 +44,22 @@ internal links).
    (it tracks whether a translation is current).
 4. **NEVER** author API-reference operation pages or the `ai-resources`/root nav
    here — those are owned by `bitrouter-docs` (see `docs/CONTRIBUTING.md`).
+5. **ALWAYS** keep `docs/get-started/supported-models.md` and
+   `supported-providers.md` (and their `.zh.md` siblings) consistent with the
+   `registry/` catalog whenever you add, remove, or re-scope a vendor or provider
+   in `registry/models/` or `registry/providers/`. Two things must stay in sync:
+   - **The catalog/directory tables.** These are generated, not hand-edited. Rebuild
+     the registry (`cargo run -p dist-helper -- registry build`) and then
+     regenerate the tables (`python3 scripts/gen-supported-tables.py`), which
+     rewrites the block under the `Model catalog` / `Provider directory` anchor
+     heading in all four pages from `dist/registry/{models,providers}.json`. The
+     English and Chinese tables share identical data rows — only the header row
+     differs — so run the script rather than editing rows by hand.
+   - **The surrounding prose.** It hardcodes registry-derived facts the script does
+     not touch: the discounted-vs-closed-source vendor families (`gpt-*`,
+     `claude-*`, `gemini-*`, `grok-*`), example model ids, and the default discount
+     percentage. Update these in the same change so the docs never describe a
+     catalog that no longer matches.
 
 ## Contributing
 

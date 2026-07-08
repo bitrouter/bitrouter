@@ -1,0 +1,45 @@
+# Google AI — the Gemini consumer subscription (Google AI Pro / Ultra via
+# gemini.google.com), routed with the user's subscription credentials rather
+# than a metered API key. Flat-rate (no per-token pricing), activated by a local
+# OAuth login — distinct from the metered `google` (Gemini API) provider.
+#
+# NOTE: the `google-ai` OAuth handler is not yet implemented in bitrouter — this
+# registry entry stages the provider; the handler (client id + endpoints) still
+# needs wiring before it is routable.
+name: google-ai
+display_name: Google AI (subscription)
+metadata:
+  headquarters: US
+  name: Google
+  privacy_policy_url: https://policies.google.com/privacy
+  slug: google
+  status_page_url: https://status.cloud.google.com
+  terms_of_service_url: https://ai.google.dev/gemini-api/terms
+kind: first_party
+access: local_oauth
+billing: subscription
+api_base: https://generativelanguage.googleapis.com/v1beta
+api_protocol:
+  - "*": [google, openai]
+protocol_endpoints:
+  openai: https://generativelanguage.googleapis.com/v1beta/openai
+rate_limits: []
+models:
+  - id: google/gemini-3.1-pro-preview
+    provider_model_id: gemini-3.1-pro-preview
+    capabilities:
+      - reasoning
+      - tools
+  - id: google/gemini-3.5-flash
+    provider_model_id: gemini-3.5-flash
+    capabilities:
+      - reasoning
+      - tools
+  - id: google/gemini-3.1-flash-lite-preview
+    provider_model_id: gemini-3.1-flash-lite-preview
+    capabilities:
+      - tools
+status: active
+auth:
+  kind: oauth
+  handler: google-ai

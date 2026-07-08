@@ -1,6 +1,6 @@
 name: stepfun
 metadata:
-  headquarters: SG
+  headquarters: CN
   datacenters:
     - US
   name: StepFun

@@ -52,6 +52,8 @@ enum RegistryCommand {
     },
     /// Render the prompt used by the headless agentic registry sync step.
     AgenticPrompt,
+    /// Check that an agentic sync touched only registry source files.
+    AgenticDiffCheck,
 }
 
 #[tokio::main]
@@ -78,6 +80,7 @@ async fn run(cli: Cli) -> Result<()> {
                 print!("{}", registry::agentic_prompt(&root)?);
                 Ok(())
             }
+            RegistryCommand::AgenticDiffCheck => registry::agentic_diff_check(&root),
         },
         Command::Check => {
             schema::generate(&root, true)?;
