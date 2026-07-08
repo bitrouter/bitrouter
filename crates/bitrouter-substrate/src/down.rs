@@ -424,9 +424,14 @@ mod tests {
             ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog");
         let base = tempfile::tempdir().expect("tempdir");
         let session = Arc::new(
-            Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
-                .await
-                .expect("launch"),
+            Session::launch(
+                &catalog,
+                "stub",
+                base.path().to_path_buf(),
+                crate::engine::LaunchOptions::default(),
+            )
+            .await
+            .expect("launch"),
         );
         (session, base)
     }

@@ -12,14 +12,20 @@
 //!   receiver that immediately resolves to `Err("turn queue full")` so the
 //!   caller can still `.await` it uniformly.
 //!
-//! # Cancellation
+//! # Cancellation (flush semantics)
 //!
-//! The controller is pure FIFO serialization and does **not** itself cancel.
-//! Turn cancellation is handled at the upstream level: the engine's
-//! `Session::cancel` calls ACP `session/cancel` on the upstream connection,
-//! which makes the in-flight turn complete cooperatively (`StopReason::Cancelled`).
-//! v1 semantic: cancel affects the *active* turn (via upstream), not the queued
-//! backlog — queued turns proceed normally once the active one finishes.
+//! Cancellation has two halves, matching ACP's session-scoped `session/cancel`:
+//!
+//! - the **active** turn is cancelled at the upstream level — the engine's
+//!   `Session::cancel` sends ACP `session/cancel`, which makes the in-flight
+//!   turn complete cooperatively (`StopReason::Cancelled`);
+//! - the **queued backlog** is flushed by [`TurnController::flush`]: it bumps a
+//!   generation counter, and the worker resolves every job submitted before the
+//!   bump with the controller's `flushed` value (the engine supplies a
+//!   synthesized `StopReason::Cancelled` response) instead of running it.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Result, anyhow};
 use tokio::sync::{mpsc, oneshot};
@@ -27,6 +33,9 @@ use tokio::sync::{mpsc, oneshot};
 /// A job sent from `submit`/`try_submit` to the worker.
 struct Job<I, T> {
     input: I,
+    /// Generation at submit time; the worker skips jobs older than the current
+    /// generation (they were flushed by a cancel).
+    generation: u64,
     reply: oneshot::Sender<Result<T>>,
 }
 
@@ -39,6 +48,9 @@ struct Job<I, T> {
 /// text-flattened) and yields the upstream's typed prompt result.
 pub struct TurnController<I, T> {
     tx: mpsc::Sender<Job<I, T>>,
+    /// Current generation; bumped by [`flush`](Self::flush) to invalidate every
+    /// job queued before the bump.
+    generation: Arc<AtomicU64>,
 }
 
 impl<I: Send + 'static, T: Send + 'static> TurnController<I, T> {
@@ -47,22 +59,43 @@ impl<I: Send + 'static, T: Send + 'static> TurnController<I, T> {
     /// - `bound`: maximum number of turns that may be queued at once.
     /// - `run_turn`: closure that executes one turn given its input; the engine
     ///   passes a closure that calls `acp::Pipeline::execute` for the session.
-    pub fn new<F, Fut>(bound: usize, run_turn: F) -> Self
+    /// - `flushed`: value resolved for a queued job that was flushed by
+    ///   [`flush`](Self::flush) before it started; the engine passes a
+    ///   synthesized `StopReason::Cancelled` prompt response.
+    pub fn new<F, Fut, G>(bound: usize, run_turn: F, flushed: G) -> Self
     where
         F: Fn(I) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+        G: Fn() -> Result<T> + Send + 'static,
     {
         let (tx, mut rx) = mpsc::channel::<Job<I, T>>(bound);
+        let generation = Arc::new(AtomicU64::new(0));
+        let worker_generation = Arc::clone(&generation);
 
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let result = run_turn(job.input).await;
+                // A job from a flushed generation resolves with the `flushed`
+                // value instead of running.
+                let result = if job.generation < worker_generation.load(Ordering::Acquire) {
+                    flushed()
+                } else {
+                    run_turn(job.input).await
+                };
                 // Ignore send error: the caller may have dropped the receiver.
                 let _ = job.reply.send(result);
             }
         });
 
-        Self { tx }
+        Self { tx, generation }
+    }
+
+    /// Flush the queued backlog: every job submitted before this call resolves
+    /// with the controller's `flushed` value instead of running. Does **not**
+    /// affect the active turn — cancel that at the upstream level
+    /// (`session/cancel`), which is what the engine's `Session::cancel` does
+    /// alongside this.
+    pub fn flush(&self) {
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     /// Enqueue a turn.
@@ -95,6 +128,7 @@ impl<I: Send + 'static, T: Send + 'static> TurnController<I, T> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let job = Job {
             input,
+            generation: self.generation.load(Ordering::Acquire),
             reply: reply_tx,
         };
         self.tx
@@ -113,15 +147,19 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let order = Arc::new(Mutex::new(Vec::<String>::new()));
         let o = order.clone();
-        let c = TurnController::new(4, move |label: String| {
-            let o = o.clone();
-            async move {
-                o.lock().unwrap().push(format!("start {label}"));
-                tokio::task::yield_now().await;
-                o.lock().unwrap().push(format!("end {label}"));
-                Ok::<(), anyhow::Error>(())
-            }
-        });
+        let c = TurnController::new(
+            4,
+            move |label: String| {
+                let o = o.clone();
+                async move {
+                    o.lock().unwrap().push(format!("start {label}"));
+                    tokio::task::yield_now().await;
+                    o.lock().unwrap().push(format!("end {label}"));
+                    Ok::<(), anyhow::Error>(())
+                }
+            },
+            || Ok(()),
+        );
         let h1 = c.submit("A".into());
         let h2 = c.submit("B".into());
         h1.await.unwrap().unwrap();
@@ -133,11 +171,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn flush_resolves_queued_jobs_without_running_them() {
+        use std::sync::{Arc, Mutex};
+        // The first job parks on a oneshot so the backlog stays queued while we
+        // flush; after flush it is released and completes normally (it was
+        // active, not queued). The queued jobs must resolve with the `flushed`
+        // marker and never run.
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+        let ran = Arc::new(Mutex::new(Vec::<String>::new()));
+        let ran_in_turn = ran.clone();
+        let c = TurnController::new(
+            8,
+            move |label: String| {
+                let ran = ran_in_turn.clone();
+                let release_rx = release_rx.clone();
+                async move {
+                    ran.lock().unwrap().push(label.clone());
+                    if label == "active" {
+                        let rx = release_rx.lock().unwrap().take();
+                        if let Some(rx) = rx {
+                            let _ = rx.await;
+                        }
+                    }
+                    Ok::<String, anyhow::Error>(label)
+                }
+            },
+            || Ok("flushed".to_string()),
+        );
+
+        let active = c.submit("active".into());
+        let queued_a = c.submit("qa".into());
+        let queued_b = c.submit("qb".into());
+        // Let the worker pick up the active job before flushing.
+        tokio::task::yield_now().await;
+
+        c.flush();
+        // A job submitted AFTER the flush runs normally.
+        let fresh = c.submit("fresh".into());
+        release_tx.send(()).expect("release active");
+
+        assert_eq!(active.await.unwrap().unwrap(), "active");
+        assert_eq!(queued_a.await.unwrap().unwrap(), "flushed");
+        assert_eq!(queued_b.await.unwrap().unwrap(), "flushed");
+        assert_eq!(fresh.await.unwrap().unwrap(), "fresh");
+        // The flushed jobs never executed.
+        assert_eq!(*ran.lock().unwrap(), vec!["active", "fresh"]);
+    }
+
+    #[tokio::test]
     async fn queue_rejects_past_bound() {
-        let c = TurnController::new(1, |_l: String| async {
-            tokio::task::yield_now().await;
-            Ok::<(), anyhow::Error>(())
-        });
+        let c = TurnController::new(
+            1,
+            |_l: String| async {
+                tokio::task::yield_now().await;
+                Ok::<(), anyhow::Error>(())
+            },
+            || Ok(()),
+        );
         let _r = c.submit("A".into());
         let _q = c.submit("B".into());
         assert!(c.try_submit("C".into()).is_err());
@@ -147,10 +238,14 @@ mod tests {
     async fn submit_on_full_queue_returns_err_receiver() {
         // bound=1; A occupies worker, B fills the single queue slot,
         // C submitted via submit() (not try_submit) must return an Err receiver.
-        let c = TurnController::new(1, |_l: String| async {
-            tokio::task::yield_now().await;
-            Ok::<(), anyhow::Error>(())
-        });
+        let c = TurnController::new(
+            1,
+            |_l: String| async {
+                tokio::task::yield_now().await;
+                Ok::<(), anyhow::Error>(())
+            },
+            || Ok(()),
+        );
         let _a = c.submit("A".into());
         let _b = c.submit("B".into());
         let c_rx = c.submit("C".into()); // full — must not panic
@@ -166,13 +261,17 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let order = Arc::new(Mutex::new(Vec::<String>::new()));
         let o = order.clone();
-        let c = TurnController::new(4, move |label: String| {
-            let o = o.clone();
-            async move {
-                o.lock().unwrap().push(label);
-                Ok::<(), anyhow::Error>(())
-            }
-        });
+        let c = TurnController::new(
+            4,
+            move |label: String| {
+                let o = o.clone();
+                async move {
+                    o.lock().unwrap().push(label);
+                    Ok::<(), anyhow::Error>(())
+                }
+            },
+            || Ok(()),
+        );
         c.submit("A".into()).await.unwrap().unwrap();
         c.submit("B".into()).await.unwrap().unwrap();
         assert_eq!(*order.lock().unwrap(), vec!["A", "B"]);

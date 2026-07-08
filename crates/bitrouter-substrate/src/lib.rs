@@ -5,6 +5,7 @@ pub mod executor;
 pub mod record;
 pub mod session;
 pub mod telemetry;
+pub mod transcript;
 pub mod translate;
 pub mod turn;
 pub mod up;

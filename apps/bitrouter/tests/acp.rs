@@ -68,9 +68,15 @@ async fn prompt_ndjson() {
     std::env::set_current_dir(base.path()).expect("set_current_dir");
 
     let mut buf: Vec<u8> = Vec::new();
-    let result =
-        bitrouter::acp_cli::prompt(stub_config(), "stub", None, false, "hello", false, &mut buf)
-            .await;
+    let result = bitrouter::acp_cli::prompt(
+        stub_config(),
+        "stub",
+        bitrouter::acp_cli::launch_options(None, false, false, None),
+        "hello",
+        false,
+        &mut buf,
+    )
+    .await;
 
     let _ = std::env::set_current_dir(&orig_dir);
 

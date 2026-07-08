@@ -33,9 +33,10 @@
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol_schema::v1::{
-    ContentBlock, PromptRequest, PromptResponse, SessionId, SessionUpdate, TextContent,
+    ContentBlock, PromptRequest, PromptResponse, SessionId, SessionUpdate, StopReason, TextContent,
 };
 use async_trait::async_trait;
 use bitrouter_sdk::acp::{
@@ -51,6 +52,7 @@ use crate::executor::SessionExecutor;
 use crate::record::{RecordStatus, RecordStore, SessionRecord, now_unix};
 use crate::session::{SessionState, SessionStatus};
 use crate::telemetry::{RequestCompleted, TelemetryHook};
+use crate::transcript::TranscriptEvent;
 use crate::translate::SessionUpdateKind;
 use crate::turn::TurnController;
 use crate::up::{PendingPermission, UpstreamConnection};
@@ -61,6 +63,38 @@ use crate::worktree::{WorktreeManager, WorktreeSpec};
 /// non-panicking `submit`, so an over-full queue surfaces as a turn error rather
 /// than a panic.
 const TURN_QUEUE_BOUND: usize = 64;
+
+/// How long a timed-out turn waits for the upstream to honor the
+/// `session/cancel` it was sent before the turn is failed outright.
+const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
+
+/// How long [`Session::shutdown`] waits for the transcript writer to flush its
+/// tail after every sender has been dropped.
+const TRANSCRIPT_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Options for [`Session::launch`].
+#[derive(Debug, Clone)]
+pub struct LaunchOptions {
+    /// Provision (or reuse) a git worktree for the session.
+    pub worktree: Option<WorktreeSpec>,
+    /// Write the durable NDJSON transcript (prompts, raw updates, results) to
+    /// `.bitrouter/sessions/<record_id>.transcript.ndjson`. On by default.
+    pub transcript: bool,
+    /// Per-turn deadline. On elapse the upstream is asked to cancel
+    /// cooperatively (`session/cancel`); if it does not comply within
+    /// [`TURN_CANCEL_GRACE`] the turn errors.
+    pub turn_timeout: Option<Duration>,
+}
+
+impl Default for LaunchOptions {
+    fn default() -> Self {
+        Self {
+            worktree: None,
+            transcript: true,
+            turn_timeout: None,
+        }
+    }
+}
 
 /// A routing table pinned to one session's single [`AcpTarget`].
 ///
@@ -104,6 +138,9 @@ pub struct Session {
     record: SessionRecord,
     /// Persists [`Self::record`] under `<base_repo>/.bitrouter/sessions/`.
     records: RecordStore,
+    /// The transcript writer task, when the transcript is enabled. Awaited at
+    /// shutdown so the tail is flushed to disk.
+    transcript_writer: Option<tokio::task::JoinHandle<()>>,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
@@ -111,14 +148,19 @@ pub struct Session {
 
 impl Session {
     /// Launch a session: resolve `agent_id` in `catalog`, optionally provision
-    /// a worktree, spawn the upstream connection, build the pipeline and turn
-    /// queue, and record the session identity.
+    /// a worktree, spawn the upstream connection, build the pipeline, turn
+    /// queue, and transcript, and record the session identity.
     pub async fn launch(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
         base_repo: PathBuf,
-        worktree: Option<WorktreeSpec>,
+        options: LaunchOptions,
     ) -> anyhow::Result<Self> {
+        let LaunchOptions {
+            worktree,
+            transcript,
+            turn_timeout,
+        } = options;
         // ── Resolve the agent's stdio transport ────────────────────────────
         let transport = catalog
             .lookup(agent_id)
@@ -147,6 +189,8 @@ impl Session {
             base_repo,
             worktree_path.clone(),
             remove_on_shutdown,
+            transcript,
+            turn_timeout,
         )
         .await
         {
@@ -177,6 +221,8 @@ impl Session {
         base_repo: PathBuf,
         worktree_path: Option<PathBuf>,
         remove_worktree_on_shutdown: bool,
+        transcript: bool,
+        turn_timeout: Option<Duration>,
     ) -> anyhow::Result<Self> {
         let AcpTransport::Stdio { command, args, env } = &transport;
         let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
@@ -199,6 +245,34 @@ impl Session {
         }
         state.status = SessionStatus::Idle;
 
+        // ── Transcript (durable, non-lossy NDJSON) ─────────────────────────
+        // A single writer task owns the file; the connection's non-lossy raw
+        // update feed is pumped into it, and the turn closure below adds
+        // prompt/result/error events on the same channel.
+        let (transcript_tx, transcript_writer) = if transcript {
+            let (tx, rx) = unbounded_channel::<TranscriptEvent>();
+            let path = crate::transcript::transcript_path(&base_repo, &state.record_id);
+            let writer = crate::transcript::spawn_writer(path, rx);
+            if let Some(mut feed) = conn.take_transcript_feed() {
+                let update_tx = tx.clone();
+                tokio::spawn(async move {
+                    while let Some(update) = feed.recv().await {
+                        if update_tx
+                            .send(TranscriptEvent::Update {
+                                update: Box::new(update),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+            (Some(tx), Some(writer))
+        } else {
+            (None, None)
+        };
+
         // ── Pipeline (pinned table + session executor + telemetry hook) ─────
         let target = AcpTarget {
             agent_name: agent_id.to_string(),
@@ -220,9 +294,12 @@ impl Session {
         // ── Turn queue ─────────────────────────────────────────────────────
         // Each turn builds an `AcpRequest` for the prompt's content blocks
         // (forwarded verbatim — multi-modal, not text-flattened) and drives it
-        // through the pipeline, returning the typed `PromptResponse`.
+        // through the pipeline under the optional per-turn deadline, returning
+        // the typed `PromptResponse`. A queued turn flushed by `cancel`
+        // resolves as `StopReason::Cancelled` without running.
         let turn = {
             let pipeline = Arc::clone(&pipeline);
+            let conn_for_turn = Arc::clone(&conn);
             // The request's agent field carries the configured agent id — the
             // pinned table resolves any name to this session's target, and the
             // telemetry hook reports this field, so it must be the real agent
@@ -230,27 +307,77 @@ impl Session {
             let agent = agent_id.to_string();
             let acp_session_id = acp_session_id.clone();
             let caller = CallerContext::local();
-            TurnController::new(TURN_QUEUE_BOUND, move |blocks: Vec<ContentBlock>| {
-                let pipeline = Arc::clone(&pipeline);
-                let agent = agent.clone();
-                let acp_session_id = acp_session_id.clone();
-                let caller = caller.clone();
-                async move {
-                    let req = AcpRequest::new(
-                        agent,
-                        AcpRequestPayload::Prompt(PromptRequest::new(
-                            SessionId::new(acp_session_id),
-                            blocks,
-                        )),
-                        caller,
-                    );
-                    let resp = pipeline
-                        .execute(req)
-                        .await
-                        .map_err(|e: BitrouterError| anyhow::anyhow!(e.to_string()))?;
-                    Ok::<PromptResponse, anyhow::Error>(resp.result)
-                }
-            })
+            let turn_transcript = transcript_tx.clone();
+            TurnController::new(
+                TURN_QUEUE_BOUND,
+                move |blocks: Vec<ContentBlock>| {
+                    let pipeline = Arc::clone(&pipeline);
+                    let conn = Arc::clone(&conn_for_turn);
+                    let agent = agent.clone();
+                    let acp_session_id = acp_session_id.clone();
+                    let caller = caller.clone();
+                    let transcript = turn_transcript.clone();
+                    async move {
+                        if let Some(tx) = &transcript {
+                            let _ = tx.send(TranscriptEvent::Prompt {
+                                blocks: blocks.clone(),
+                            });
+                        }
+                        let req = AcpRequest::new(
+                            agent,
+                            AcpRequestPayload::Prompt(PromptRequest::new(
+                                SessionId::new(acp_session_id.clone()),
+                                blocks,
+                            )),
+                            caller,
+                        );
+                        let run = async {
+                            pipeline
+                                .execute(req)
+                                .await
+                                .map(|resp| resp.result)
+                                .map_err(|e: BitrouterError| anyhow::anyhow!(e.to_string()))
+                        };
+                        tokio::pin!(run);
+                        let result: anyhow::Result<PromptResponse> = match turn_timeout {
+                            None => run.await,
+                            Some(deadline) => {
+                                match tokio::time::timeout(deadline, &mut run).await {
+                                    Ok(result) => result,
+                                    Err(_) => {
+                                        // Deadline hit: ask the upstream to end the
+                                        // turn cooperatively, then give it a short
+                                        // grace to comply (it should resolve with
+                                        // `StopReason::Cancelled`).
+                                        let _ = conn.cancel(&acp_session_id).await;
+                                        match tokio::time::timeout(TURN_CANCEL_GRACE, &mut run)
+                                            .await
+                                        {
+                                            Ok(result) => result,
+                                            Err(_) => Err(anyhow::anyhow!(
+                                                "turn timed out after {deadline:?} and the upstream \
+                                                 did not cancel within {TURN_CANCEL_GRACE:?}"
+                                            )),
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                        if let Some(tx) = &transcript {
+                            let _ = tx.send(match &result {
+                                Ok(resp) => TranscriptEvent::Result {
+                                    stop_reason: resp.stop_reason,
+                                },
+                                Err(e) => TranscriptEvent::Error {
+                                    message: e.to_string(),
+                                },
+                            });
+                        }
+                        result
+                    }
+                },
+                || Ok(PromptResponse::new(StopReason::Cancelled)),
+            )
         };
 
         // ── Durable session record ─────────────────────────────────────────
@@ -286,6 +413,7 @@ impl Session {
             worktrees: WorktreeManager::new(base_repo),
             record,
             records,
+            transcript_writer,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
         })
     }
@@ -308,10 +436,12 @@ impl Session {
             .map_err(|_| anyhow::anyhow!("turn worker dropped the reply"))?
     }
 
-    /// Cancel the in-flight turn cooperatively via the upstream
-    /// (`session/cancel`). v1: this affects the active turn, not the queued
-    /// backlog (see [`crate::turn`]).
+    /// Cancel the session's work, matching ACP's session-scoped
+    /// `session/cancel`: the queued backlog is flushed (each queued turn
+    /// resolves as `StopReason::Cancelled` without running) and the active
+    /// turn is cancelled cooperatively via the upstream.
     pub async fn cancel(&self) -> anyhow::Result<()> {
+        self.turn.flush();
         self.conn.cancel(self.conn.acp_session_id()).await
     }
 
@@ -367,6 +497,7 @@ impl Session {
             worktrees,
             mut record,
             records,
+            transcript_writer,
             ..
         } = self;
 
@@ -382,6 +513,17 @@ impl Session {
             tracing::warn!(error = %e, "upstream teardown unconfirmed; child may not have terminated");
         }
         drop(conn);
+
+        // Every transcript sender is now gone (the turn worker exited with the
+        // controller; the connection's feed closed with the teardown), so the
+        // writer flushes its tail and finishes. Bounded wait.
+        if let Some(writer) = transcript_writer
+            && tokio::time::timeout(TRANSCRIPT_FLUSH_TIMEOUT, writer)
+                .await
+                .is_err()
+        {
+            tracing::warn!("transcript writer did not flush within {TRANSCRIPT_FLUSH_TIMEOUT:?}");
+        }
 
         if let Some(path) = worktree {
             if remove_worktree_on_shutdown {
@@ -410,7 +552,7 @@ mod tests {
     use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
     use futures::StreamExt;
 
-    use super::Session;
+    use super::{LaunchOptions, Session};
     use crate::worktree::WorktreeSpec;
 
     /// Bash stub: ACP handshake + a streamed `session/update` (message chunk,
@@ -489,9 +631,14 @@ mod tests {
         let base = tempfile::tempdir().expect("tempdir");
         let catalog = stub_catalog();
 
-        let session = Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
-            .await
-            .expect("launch");
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch");
 
         // Subscribe BEFORE prompting so the streamed update is observed.
         let mut updates = session.updates();
@@ -510,9 +657,14 @@ mod tests {
         let base = tempfile::tempdir().expect("tempdir");
         let catalog = stub_catalog();
 
-        let session = Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
-            .await
-            .expect("launch");
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch");
 
         assert_eq!(session.state().acp_session_id.as_deref(), Some("u1"));
         assert_eq!(session.state().agent_id, "stub");
@@ -529,10 +681,13 @@ mod tests {
             &catalog,
             "stub",
             repo.path().to_path_buf(),
-            Some(WorktreeSpec {
-                name: "feat-1".to_string(),
-                remove_on_shutdown: true,
-            }),
+            LaunchOptions {
+                worktree: Some(WorktreeSpec {
+                    name: "feat-1".to_string(),
+                    remove_on_shutdown: true,
+                }),
+                ..LaunchOptions::default()
+            },
         )
         .await
         .expect("launch");
@@ -564,10 +719,13 @@ mod tests {
             &catalog,
             "stub",
             repo.path().to_path_buf(),
-            Some(WorktreeSpec {
-                name: "feat-keep".to_string(),
-                remove_on_shutdown: false,
-            }),
+            LaunchOptions {
+                worktree: Some(WorktreeSpec {
+                    name: "feat-keep".to_string(),
+                    remove_on_shutdown: false,
+                }),
+                ..LaunchOptions::default()
+            },
         )
         .await
         .expect("launch");
@@ -603,10 +761,13 @@ mod tests {
             &catalog,
             "stub",
             repo.path().to_path_buf(),
-            Some(WorktreeSpec {
-                name: "doomed".to_string(),
-                remove_on_shutdown: false,
-            }),
+            LaunchOptions {
+                worktree: Some(WorktreeSpec {
+                    name: "doomed".to_string(),
+                    remove_on_shutdown: false,
+                }),
+                ..LaunchOptions::default()
+            },
         )
         .await;
 
@@ -618,15 +779,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transcript_records_prompt_updates_and_result() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let catalog = stub_catalog();
+
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch");
+        let record_id = session.state().record_id.clone();
+
+        session.prompt("hi").await.expect("prompt");
+        session.shutdown().await.expect("shutdown");
+
+        let path = crate::transcript::transcript_path(base.path(), &record_id);
+        let raw = std::fs::read_to_string(&path).expect("transcript file written");
+        let lines: Vec<serde_json::Value> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("valid ndjson"))
+            .collect();
+        let kinds: Vec<&str> = lines
+            .iter()
+            .map(|l| l["kind"].as_str().expect("kind"))
+            .collect();
+        // Prompt, the two streamed updates (message chunk + usage), result.
+        assert!(kinds.contains(&"prompt"), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"update"), "kinds: {kinds:?}");
+        assert_eq!(*kinds.last().expect("lines"), "result");
+        // seq is strictly monotonic from 0.
+        for (i, line) in lines.iter().enumerate() {
+            assert_eq!(line["seq"].as_u64(), Some(i as u64));
+        }
+    }
+
+    #[tokio::test]
+    async fn transcript_disabled_writes_nothing() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let catalog = stub_catalog();
+
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions {
+                transcript: false,
+                ..LaunchOptions::default()
+            },
+        )
+        .await
+        .expect("launch");
+        let record_id = session.state().record_id.clone();
+        session.prompt("hi").await.expect("prompt");
+        session.shutdown().await.expect("shutdown");
+
+        let path = crate::transcript::transcript_path(base.path(), &record_id);
+        assert!(!path.exists(), "transcript must be absent when disabled");
+    }
+
+    /// Turn timeout: the stub never answers `session/prompt` directly, but
+    /// honors `session/cancel` by resolving the pending prompt with
+    /// `stopReason: "cancelled"`. A short `turn_timeout` must trigger the
+    /// cooperative-cancel path and return `Cancelled` promptly.
+    #[tokio::test]
+    async fn turn_timeout_cancels_cooperatively() {
+        const STALL_STUB: &str = r#"
+            pending=""
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*) pending="$id";;
+                *session/cancel*)
+                    if [ -n "$pending" ]; then
+                      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"cancelled"}}\n' "$pending"
+                      pending=""
+                    fi;;
+              esac
+            done
+        "#;
+        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+            name: "stall".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "bash".to_string(),
+                args: vec!["-c".to_string(), STALL_STUB.to_string()],
+                env: HashMap::new(),
+            },
+        };
+        let catalog =
+            ConfigAcpRoutingTable::from_configs([("stall".to_string(), cfg)]).expect("catalog");
+        let base = tempfile::tempdir().expect("tempdir");
+
+        let session = Session::launch(
+            &catalog,
+            "stall",
+            base.path().to_path_buf(),
+            LaunchOptions {
+                turn_timeout: Some(std::time::Duration::from_millis(200)),
+                ..LaunchOptions::default()
+            },
+        )
+        .await
+        .expect("launch");
+
+        let started = std::time::Instant::now();
+        let resp = session.prompt("never answered").await.expect("prompt");
+        assert_eq!(resp.stop_reason, StopReason::Cancelled);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "cooperative cancel must resolve well before the grace bound"
+        );
+
+        session.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
     async fn session_record_written_running_then_exited() {
         use crate::record::{RecordStatus, RecordStore};
 
         let base = tempfile::tempdir().expect("tempdir");
         let catalog = stub_catalog();
 
-        let session = Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
-            .await
-            .expect("launch");
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch");
         let record_id = session.state().record_id.clone();
 
         let store = RecordStore::new(base.path());
@@ -650,9 +935,14 @@ mod tests {
         let base = tempfile::tempdir().expect("tempdir");
         let catalog = stub_catalog();
 
-        let session = Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
-            .await
-            .expect("launch");
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch");
 
         let mut telemetry = session.telemetry().expect("telemetry receiver");
 

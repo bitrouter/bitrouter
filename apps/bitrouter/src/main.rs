@@ -541,6 +541,14 @@ enum AcpCmd {
         /// uncommitted. Only a worktree created by this session is removed.
         #[arg(long, requires = "worktree")]
         rm_worktree: bool,
+        /// Disable the durable session transcript
+        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -565,6 +573,14 @@ enum AcpCmd {
         /// uncommitted. Only a worktree created by this session is removed.
         #[arg(long, requires = "worktree")]
         rm_worktree: bool,
+        /// Disable the durable session transcript
+        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
         /// Return immediately after submitting the prompt (emit
         /// `{"type":"submitted"}`). The session is torn down after ack.
         #[arg(long)]
@@ -2109,33 +2125,40 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             agent,
             worktree,
             rm_worktree,
+            no_transcript,
+            turn_timeout,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            bitrouter::acp_cli::serve(cfg, &agent, worktree.as_deref(), rm_worktree).await
+            let options = bitrouter::acp_cli::launch_options(
+                worktree.as_deref(),
+                rm_worktree,
+                no_transcript,
+                turn_timeout,
+            );
+            bitrouter::acp_cli::serve(cfg, &agent, options).await
         }
         AcpCmd::Prompt {
             agent,
             worktree,
             rm_worktree,
+            no_transcript,
+            turn_timeout,
             no_wait,
             config,
             text,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let mut stdout = tokio::io::stdout();
-            bitrouter::acp_cli::prompt(
-                cfg,
-                &agent,
+            let options = bitrouter::acp_cli::launch_options(
                 worktree.as_deref(),
                 rm_worktree,
-                &text,
-                no_wait,
-                &mut stdout,
-            )
-            .await
+                no_transcript,
+                turn_timeout,
+            );
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::prompt(cfg, &agent, options, &text, no_wait, &mut stdout).await
         }
         AcpCmd::Sessions => {
             let mut stdout = tokio::io::stdout();

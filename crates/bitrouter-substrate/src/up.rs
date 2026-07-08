@@ -161,6 +161,9 @@ pub struct UpstreamConnection {
     /// Latest context-window usage from upstream `UsageUpdate`s; written by the
     /// `session/update` handler, snapshotted by the telemetry hook.
     usage: SharedContextUsage,
+    /// Single non-lossy raw-update feed for the transcript writer, handed out
+    /// once by `take_transcript_feed`. Unbounded, unlike the broadcasts.
+    transcript_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>>>,
     /// Keeps the driver thread alive for the connection's lifetime.
     _thread: std::thread::JoinHandle<()>,
 }
@@ -208,6 +211,8 @@ impl UpstreamConnection {
         let (perm_tx, perm_rx) = mpsc::unbounded::<PendingPermission>();
         let (handshake_tx, handshake_rx) = oneshot::channel::<anyhow::Result<Handshake>>();
         let usage: SharedContextUsage = Arc::new(Mutex::new(None));
+        let (transcript_tx, transcript_rx) =
+            tokio::sync::mpsc::unbounded_channel::<SessionUpdate>();
 
         let updates_for_thread = updates_tx.clone();
         let raw_updates_for_thread = raw_updates_tx.clone();
@@ -234,6 +239,7 @@ impl UpstreamConnection {
                         updates_tx: updates_for_thread,
                         raw_updates_tx: raw_updates_for_thread,
                         usage: usage_for_thread,
+                        transcript_tx,
                         perm_tx,
                     },
                     handshake_tx,
@@ -253,6 +259,7 @@ impl UpstreamConnection {
             raw_updates_tx,
             permissions_rx: Mutex::new(Some(perm_rx)),
             usage,
+            transcript_rx: Mutex::new(Some(transcript_rx)),
             _thread: thread,
         })
     }
@@ -273,6 +280,16 @@ impl UpstreamConnection {
     /// substrate itself cannot honor) to its manager.
     pub fn upstream_init(&self) -> &InitializeResponse {
         &self.init
+    }
+
+    /// Take the **non-lossy** feed of raw upstream `session/update`s for the
+    /// transcript writer. Unbounded — every update arrives in order, unlike
+    /// the lossy UI broadcasts. Single-consumer: the first call returns the
+    /// receiver, later calls return `None`.
+    pub fn take_transcript_feed(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>> {
+        self.transcript_rx.lock().ok().and_then(|mut g| g.take())
     }
 
     /// Handle to the latest context-window usage reported by the upstream
@@ -406,6 +423,8 @@ struct CallbackPlane {
     updates_tx: broadcast::Sender<SessionUpdateKind>,
     raw_updates_tx: broadcast::Sender<SessionUpdate>,
     usage: SharedContextUsage,
+    /// Non-lossy raw-update feed for the transcript writer.
+    transcript_tx: tokio::sync::mpsc::UnboundedSender<SessionUpdate>,
     perm_tx: mpsc::UnboundedSender<PendingPermission>,
 }
 
@@ -419,6 +438,7 @@ async fn drive(
     let notif_updates = plane.updates_tx.clone();
     let notif_raw_updates = plane.raw_updates_tx.clone();
     let notif_usage = plane.usage.clone();
+    let notif_transcript = plane.transcript_tx.clone();
     let handler_perm_tx = plane.perm_tx.clone();
 
     // The handshake oneshot is consumed exactly once. The `connect_with`
@@ -444,11 +464,15 @@ async fn drive(
                 let notif_updates = notif_updates.clone();
                 let notif_raw_updates = notif_raw_updates.clone();
                 let notif_usage = notif_usage.clone();
+                let notif_transcript = notif_transcript.clone();
                 async move {
                     let raw = notification.update;
                     // Forward the raw ACP update verbatim (down-facing agent), and
                     // — when it maps to one — the translated kind (GUI/telemetry).
                     // A `send` error just means no subscriber is attached yet.
+                    // The transcript feed is non-lossy; a send error there just
+                    // means no transcript writer was attached (disabled).
+                    let _ = notif_transcript.send(raw.clone());
                     let _ = notif_raw_updates.send(raw.clone());
                     if let Some(update) = translate(raw) {
                         // Keep the latest context usage snapshot current for the
