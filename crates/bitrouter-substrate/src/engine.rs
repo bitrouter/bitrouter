@@ -32,11 +32,12 @@
 
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use agent_client_protocol_schema::v1::{
-    ContentBlock, PromptRequest, PromptResponse, SessionId, SessionUpdate, StopReason, TextContent,
+    ContentBlock, McpServer, PromptRequest, PromptResponse, SessionId, SessionUpdate, StopReason,
+    TextContent,
 };
 use async_trait::async_trait;
 use bitrouter_sdk::acp::{
@@ -55,7 +56,7 @@ use crate::telemetry::{RequestCompleted, TelemetryHook};
 use crate::transcript::TranscriptEvent;
 use crate::translate::SessionUpdateKind;
 use crate::turn::TurnController;
-use crate::up::{PendingPermission, UpstreamConnection};
+use crate::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
 use crate::worktree::{WorktreeManager, WorktreeSpec};
 
 /// Bound on the per-session turn queue: how many prompts may be enqueued at once
@@ -96,6 +97,20 @@ impl Default for LaunchOptions {
     }
 }
 
+/// Everything [`Session::build`] needs beyond the agent id; bundled so the
+/// launch paths stay readable.
+struct BuildArgs {
+    transport: AcpTransport,
+    base_repo: PathBuf,
+    worktree_path: Option<PathBuf>,
+    remove_worktree_on_shutdown: bool,
+    transcript: bool,
+    turn_timeout: Option<Duration>,
+    /// Run the upstream `session/new` right away (headless/prompt path) rather
+    /// than deferring to [`Session::open`] (serve path).
+    open_now: bool,
+}
+
 /// A routing table pinned to one session's single [`AcpTarget`].
 ///
 /// The agent is fixed for the life of the session (D8), so this resolves *any*
@@ -134,8 +149,12 @@ pub struct Session {
     remove_worktree_on_shutdown: bool,
     /// Manages the worktree lifecycle (rooted at the base repo).
     worktrees: WorktreeManager,
-    /// The session's durable on-disk record; updated to `Exited` at shutdown.
-    record: SessionRecord,
+    /// Wire identity, set exactly once — at launch (immediate open) or when
+    /// the manager's `session/new` arrives ([`Session::open`]).
+    wire: Arc<OnceLock<UpstreamSessionIds>>,
+    /// The session's durable on-disk record; wire ids added at open, settled
+    /// to `Exited` at shutdown. Mutex because `open` runs behind `&self`.
+    record: std::sync::Mutex<SessionRecord>,
     /// Persists [`Self::record`] under `<base_repo>/.bitrouter/sessions/`.
     records: RecordStore,
     /// The transcript writer task, when the transcript is enabled. Awaited at
@@ -147,14 +166,42 @@ pub struct Session {
 }
 
 impl Session {
-    /// Launch a session: resolve `agent_id` in `catalog`, optionally provision
-    /// a worktree, spawn the upstream connection, build the pipeline, turn
-    /// queue, and transcript, and record the session identity.
+    /// Launch a session and **open it immediately**: resolve `agent_id` in
+    /// `catalog`, optionally provision a worktree, spawn the upstream
+    /// connection, run `initialize` + `session/new` (cwd = worktree or
+    /// `base_repo`, no MCP servers), build the pipeline, turn queue, and
+    /// transcript, and record the session identity. Used by the headless
+    /// `prompt` path and library callers that have no manager to relay from.
     pub async fn launch(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
         base_repo: PathBuf,
         options: LaunchOptions,
+    ) -> anyhow::Result<Self> {
+        Self::launch_inner(catalog, agent_id, base_repo, options, true).await
+    }
+
+    /// Launch a session with the upstream `session/new` **deferred**: the
+    /// agent is spawned and initialized (so its capabilities can be relayed to
+    /// the manager), but the session is created only when [`Session::open`] is
+    /// called — by the down-facing endpoint, with the **manager's** `cwd` and
+    /// `mcpServers` relayed verbatim. Prompts before `open` fail with a clear
+    /// error. Used by `bitrouter acp serve`.
+    pub async fn launch_deferred(
+        catalog: &ConfigAcpRoutingTable,
+        agent_id: &str,
+        base_repo: PathBuf,
+        options: LaunchOptions,
+    ) -> anyhow::Result<Self> {
+        Self::launch_inner(catalog, agent_id, base_repo, options, false).await
+    }
+
+    async fn launch_inner(
+        catalog: &ConfigAcpRoutingTable,
+        agent_id: &str,
+        base_repo: PathBuf,
+        options: LaunchOptions,
+        open_now: bool,
     ) -> anyhow::Result<Self> {
         let LaunchOptions {
             worktree,
@@ -185,12 +232,15 @@ impl Session {
         // it leaks on disk. A reused worktree is left untouched.
         match Self::build(
             agent_id,
-            transport,
-            base_repo,
-            worktree_path.clone(),
-            remove_on_shutdown,
-            transcript,
-            turn_timeout,
+            BuildArgs {
+                transport,
+                base_repo,
+                worktree_path: worktree_path.clone(),
+                remove_worktree_on_shutdown: remove_on_shutdown,
+                transcript,
+                turn_timeout,
+                open_now,
+            },
         )
         .await
         {
@@ -212,24 +262,26 @@ impl Session {
         }
     }
 
-    /// The body of [`launch`] after the worktree has been created (if any).
-    /// Returns a fully wired `Session`, or an error; on error the caller
-    /// ([`launch`]) removes the worktree.
-    async fn build(
-        agent_id: &str,
-        transport: AcpTransport,
-        base_repo: PathBuf,
-        worktree_path: Option<PathBuf>,
-        remove_worktree_on_shutdown: bool,
-        transcript: bool,
-        turn_timeout: Option<Duration>,
-    ) -> anyhow::Result<Self> {
+    /// The body of [`launch`]/[`launch_deferred`] after the worktree has been
+    /// created (if any). Returns a fully wired `Session`, or an error; on
+    /// error the caller removes a newly created worktree.
+    async fn build(agent_id: &str, args: BuildArgs) -> anyhow::Result<Self> {
+        let BuildArgs {
+            transport,
+            base_repo,
+            worktree_path,
+            remove_worktree_on_shutdown,
+            transcript,
+            turn_timeout,
+            open_now,
+        } = args;
         let AcpTransport::Stdio { command, args, env } = &transport;
-        let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
 
-        // ── Upstream connection (agent child) ──────────────────────────────
-        let conn = Arc::new(UpstreamConnection::spawn(command, args, env, Some(cwd)).await?);
-        let acp_session_id = conn.acp_session_id().to_string();
+        // ── Upstream connection (agent child): spawn + initialize only ─────
+        // `session/new` happens later — immediately (`open_now`) for the
+        // headless/prompt path, or when the manager sends its own
+        // `session/new` (whose cwd + mcpServers are relayed) for `serve`.
+        let conn = Arc::new(UpstreamConnection::spawn(command, args, env).await?);
 
         // ── Identity (D8/D10) ──────────────────────────────────────────────
         // `record_id` is a STABLE, distinct manager-facing id — minted here, NOT
@@ -239,11 +291,22 @@ impl Session {
         // for `session/new`; the upstream `acp_session_id` stays internal.
         let record_id = uuid::Uuid::new_v4().to_string();
         let mut state = SessionState::new(record_id, agent_id.to_string());
-        state.set_acp_session_id(acp_session_id.clone());
-        if let Some(agent_sid) = conn.agent_session_id() {
-            state.set_agent_session_id(agent_sid.to_string());
-        }
         state.status = SessionStatus::Idle;
+
+        // Wire identity slot: set exactly once, either right below (`open_now`)
+        // or by `Session::open` when the manager's `session/new` arrives. The
+        // turn closure and `cancel` read it; a prompt before the session is
+        // open fails with a clear error.
+        let wire: Arc<OnceLock<UpstreamSessionIds>> = Arc::new(OnceLock::new());
+        if open_now {
+            let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
+            let ids = conn.new_session(cwd, Vec::new()).await?;
+            state.set_acp_session_id(ids.acp_session_id.clone());
+            if let Some(agent_sid) = &ids.agent_session_id {
+                state.set_agent_session_id(agent_sid.clone());
+            }
+            let _ = wire.set(ids);
+        }
 
         // ── Transcript (durable, non-lossy NDJSON) ─────────────────────────
         // A single writer task owns the file; the connection's non-lossy raw
@@ -305,7 +368,7 @@ impl Session {
             // telemetry hook reports this field, so it must be the real agent
             // name (not the record id).
             let agent = agent_id.to_string();
-            let acp_session_id = acp_session_id.clone();
+            let turn_wire = Arc::clone(&wire);
             let caller = CallerContext::local();
             let turn_transcript = transcript_tx.clone();
             TurnController::new(
@@ -314,10 +377,16 @@ impl Session {
                     let pipeline = Arc::clone(&pipeline);
                     let conn = Arc::clone(&conn_for_turn);
                     let agent = agent.clone();
-                    let acp_session_id = acp_session_id.clone();
+                    let wire = Arc::clone(&turn_wire);
                     let caller = caller.clone();
                     let transcript = turn_transcript.clone();
                     async move {
+                        let Some(ids) = wire.get() else {
+                            return Err(anyhow::anyhow!(
+                                "no session open: the manager must send session/new first"
+                            ));
+                        };
+                        let acp_session_id = ids.acp_session_id.clone();
                         if let Some(tx) = &transcript {
                             let _ = tx.send(TranscriptEvent::Prompt {
                                 blocks: blocks.clone(),
@@ -411,11 +480,57 @@ impl Session {
             // the session's own shutdown removal is equivalent to the one
             // `launch` keeps for error-path cleanup.
             worktrees: WorktreeManager::new(base_repo),
-            record,
+            wire,
+            record: std::sync::Mutex::new(record),
             records,
             transcript_writer,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
         })
+    }
+
+    /// Open the upstream session (`session/new`) for a
+    /// [`launch_deferred`](Self::launch_deferred) session, relaying the
+    /// **manager's** `cwd` and `mcpServers`. The session's worktree (a launch
+    /// argument, operator-chosen) wins over the manager's `cwd`; without
+    /// either, the base repo is used.
+    ///
+    /// Idempotent: opening an already-open session (including one launched
+    /// with the immediate-open [`launch`](Self::launch)) is a no-op — the
+    /// first opener's arguments win, matching the endpoint contract that
+    /// `session/new` always answers with the same `record_id`.
+    pub async fn open(
+        &self,
+        manager_cwd: Option<PathBuf>,
+        mcp_servers: Vec<McpServer>,
+    ) -> anyhow::Result<()> {
+        if self.wire.get().is_some() {
+            tracing::debug!("session already open; ignoring session/new arguments");
+            return Ok(());
+        }
+        let cwd = self
+            .worktree
+            .clone()
+            .or(manager_cwd)
+            .unwrap_or_else(|| self.worktrees.base_repo().to_path_buf());
+        let ids = self.conn.new_session(cwd, mcp_servers).await?;
+        // A concurrent open may have won the race; first one in wins.
+        if self.wire.set(ids.clone()).is_err() {
+            return Ok(());
+        }
+        // Persist the wire identity into the durable record.
+        let updated = {
+            let mut guard = match self.record.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.acp_session_id = Some(ids.acp_session_id.clone());
+            guard.agent_session_id = ids.agent_session_id.clone();
+            guard.clone()
+        };
+        if let Err(e) = self.records.write(&updated).await {
+            tracing::warn!(error = %e, "failed to update session record after open");
+        }
+        Ok(())
     }
 
     /// Enqueue a text prompt, await its turn, and return the typed
@@ -439,10 +554,14 @@ impl Session {
     /// Cancel the session's work, matching ACP's session-scoped
     /// `session/cancel`: the queued backlog is flushed (each queued turn
     /// resolves as `StopReason::Cancelled` without running) and the active
-    /// turn is cancelled cooperatively via the upstream.
+    /// turn is cancelled cooperatively via the upstream. A no-op before the
+    /// session is open (nothing can be in flight).
     pub async fn cancel(&self) -> anyhow::Result<()> {
         self.turn.flush();
-        self.conn.cancel(self.conn.acp_session_id()).await
+        match self.wire.get() {
+            Some(ids) => self.conn.cancel(&ids.acp_session_id).await,
+            None => Ok(()),
+        }
     }
 
     /// Stream of translated `session/update` notifications. Each call yields an
@@ -495,7 +614,7 @@ impl Session {
             worktree,
             remove_worktree_on_shutdown,
             worktrees,
-            mut record,
+            record,
             records,
             transcript_writer,
             ..
@@ -535,6 +654,10 @@ impl Session {
         }
 
         // Settle the durable record last so it reflects the final state.
+        let mut record = match record.into_inner() {
+            Ok(record) => record,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         record.status = RecordStatus::Exited;
         record.ended_at = Some(now_unix());
         if let Err(e) = records.write(&record).await {
@@ -776,6 +899,91 @@ mod tests {
             !worktree_path.exists(),
             "a newly created worktree must be removed when launch fails"
         );
+    }
+
+    /// Deferred launch: prompting before `open` fails with a clear error;
+    /// `open` relays the manager's `mcpServers` (and cwd) into the upstream
+    /// `session/new` — the stub proves it by echoing a marker session id when
+    /// the request carried the probe MCP server; the wire id lands in the
+    /// durable record.
+    #[tokio::test]
+    async fn deferred_launch_relays_manager_mcp_servers_on_open() {
+        use agent_client_protocol_schema::v1::{McpServer, McpServerStdio};
+
+        const RELAY_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)
+                    case "$line" in
+                      *relay-probe-server*) sid="saw-mcp";;
+                      *) sid="no-mcp";;
+                    esac
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"%s"}}\n' "$id" "$sid";;
+                *session/prompt*) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+            name: "relay".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "bash".to_string(),
+                args: vec!["-c".to_string(), RELAY_STUB.to_string()],
+                env: HashMap::new(),
+            },
+        };
+        let catalog =
+            ConfigAcpRoutingTable::from_configs([("relay".to_string(), cfg)]).expect("catalog");
+        let base = tempfile::tempdir().expect("tempdir");
+
+        let session = Session::launch_deferred(
+            &catalog,
+            "relay",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch_deferred");
+
+        // Prompting before the manager opens the session must fail clearly.
+        let early = session.prompt("too early").await;
+        let err = early.expect_err("prompt before open must fail");
+        assert!(
+            err.to_string().contains("session/new"),
+            "unexpected error: {err}"
+        );
+
+        // Open with the manager's cwd + an MCP server; the stub marks the
+        // session id when it sees the server in the request.
+        let probe = McpServer::Stdio(McpServerStdio::new("relay-probe-server", "probe-cmd"));
+        session
+            .open(Some(base.path().to_path_buf()), vec![probe])
+            .await
+            .expect("open");
+
+        // The relayed request produced the marker wire id, persisted into the
+        // durable record.
+        let records = crate::record::RecordStore::new(base.path())
+            .list()
+            .await
+            .expect("list records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].acp_session_id.as_deref(),
+            Some("saw-mcp"),
+            "upstream session/new must carry the manager's mcpServers"
+        );
+
+        // Prompting now works, and open is idempotent.
+        let resp = session.prompt("hi").await.expect("prompt after open");
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        session
+            .open(None, vec![])
+            .await
+            .expect("second open is a no-op");
+
+        session.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]

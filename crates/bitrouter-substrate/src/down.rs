@@ -14,8 +14,13 @@
 //!   `agent_info` is relayed so the manager knows which agent it fronts;
 //!   upstream `auth_methods` are **not** relayed (we answer `authenticate`
 //!   with method-not-found).
-//! - `session/new` → returns the session's `record_id` as the manager-facing
-//!   session id. The upstream `acp_session_id` stays internal.
+//! - `session/new` → opens the upstream session, relaying the manager's `cwd`
+//!   (the session's launch-time worktree wins when set) and `mcpServers`
+//!   **verbatim** — this is how a manager provides fs/terminal-style tooling
+//!   in the v2-aligned model (client-side MCP servers, not the removed
+//!   `fs/*`/`terminal/*` surface). Returns the session's `record_id` as the
+//!   manager-facing session id; the upstream `acp_session_id` stays internal.
+//!   Idempotent for an already-open session (same `record_id` back).
 //! - `session/prompt` → forward the prompt's content blocks **verbatim** via
 //!   [`Session::prompt_blocks`] — text, images, resources, and resource links
 //!   all reach the upstream agent unmodified.
@@ -196,8 +201,9 @@ fn serve_on(
     let relayed_agent_info = upstream_init.agent_info.clone();
 
     // One `Arc<Session>` clone per handler / forwarding closure that needs the
-    // session. (`session/new` doesn't — it only echoes the record_id.)
+    // session.
     let record_for_new = record_id.clone();
+    let session_new = Arc::clone(&session);
     let session_prompt = Arc::clone(&session);
     let session_dispatch = Arc::clone(&session);
     let session_forward = session;
@@ -224,14 +230,28 @@ fn serve_on(
         )
         // ── session/new ─────────────────────────────────────────────────────
         .on_receive_request(
-            // The handler doesn't touch the session: it just echoes our stable,
-            // manager-facing `record_id` as the session id (the upstream
-            // acp_session_id stays internal). The session was already launched.
-            move |_req: NewSessionRequest,
+            // Opens the upstream session, relaying the manager's cwd +
+            // mcpServers (the launch-time worktree wins over cwd). For a
+            // session that is already open — the immediate-open launch path,
+            // or a repeated session/new — this is a no-op that answers with
+            // the same stable record_id. Driven off the dispatch path: the
+            // open is an upstream round-trip.
+            move |req: NewSessionRequest,
                   responder: Responder<NewSessionResponse>,
-                  _cx: ConnectionTo<Client>| {
+                  cx: ConnectionTo<Client>| {
+                let session = Arc::clone(&session_new);
                 let record_id = record_for_new.clone();
-                async move { responder.respond(NewSessionResponse::new(SessionId::new(record_id))) }
+                async move {
+                    cx.spawn(async move {
+                        match session.open(Some(req.cwd), req.mcp_servers).await {
+                            Ok(()) => responder
+                                .respond(NewSessionResponse::new(SessionId::new(record_id))),
+                            Err(e) => responder
+                                .respond_with_error(agent_client_protocol::util::internal_error(e)),
+                        }
+                    })?;
+                    Ok(())
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -681,6 +701,97 @@ mod tests {
                             chose.contains("chose:allow"),
                             "expected allow option chosen, got: {chose}"
                         );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// The deferred-launch serve flow: the session is spawned+initialized but
+    /// NOT opened; the manager's `session/new` opens it (relaying cwd) and a
+    /// prompt round-trips afterwards. This is the `bitrouter acp serve` path.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_opens_deferred_session_on_manager_session_new() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, NewSessionRequest, PromptRequest, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const BASH_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                use std::collections::HashMap;
+
+                use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
+
+                let cfg = AcpAgentConfig {
+                    name: "stub".to_string(),
+                    transport: AcpTransport::Stdio {
+                        command: "bash".to_string(),
+                        args: vec!["-c".to_string(), BASH_STUB.to_string()],
+                        env: HashMap::new(),
+                    },
+                };
+                let catalog = ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)])
+                    .expect("catalog");
+                let base = tempfile::tempdir().expect("tempdir");
+                let session = Arc::new(
+                    Session::launch_deferred(
+                        &catalog,
+                        "stub",
+                        base.path().to_path_buf(),
+                        crate::engine::LaunchOptions::default(),
+                    )
+                    .await
+                    .expect("launch_deferred"),
+                );
+                let record_id = session.state().record_id.clone();
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        // The manager's session/new OPENS the deferred session.
+                        let new_session = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        assert_eq!(new_session.session_id.0.to_string(), record_id);
+
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                new_session.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new("do X".to_string()))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
                         Ok(())
                     })
                     .await;

@@ -91,10 +91,13 @@ where
 pub async fn serve(config: Config, agent_id: &str, options: LaunchOptions) -> Result<()> {
     let catalog = catalog_from_config(&config)?;
     let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let session =
-        bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, options)
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    // Deferred open: the upstream `session/new` runs when the manager sends
+    // its own `session/new`, so the manager's cwd + mcpServers are relayed.
+    let session = bitrouter_substrate::engine::Session::launch_deferred(
+        &catalog, agent_id, base_repo, options,
+    )
+    .await
+    .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     // Take the telemetry receiver BEFORE wrapping in Arc so we don't need &mut
     // through the shared reference. Drain-and-log to stderr; tracing already
     // goes to stderr for both acp modes so stdout (ACP JSON-RPC) stays clean.

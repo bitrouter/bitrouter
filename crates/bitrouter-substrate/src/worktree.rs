@@ -38,6 +38,12 @@ impl WorktreeManager {
         Self { base_repo }
     }
 
+    /// The repository this manager roots its worktrees (and the session's
+    /// default cwd) at.
+    pub fn base_repo(&self) -> &Path {
+        &self.base_repo
+    }
+
     /// Provision the worktree named `name` under `.bitrouter/worktrees/`.
     ///
     /// - An existing **registered** worktree at that path is reused as-is

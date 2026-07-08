@@ -112,8 +112,26 @@ impl PendingPermission {
     }
 }
 
+/// The wire identity minted by the upstream's `session/new`.
+#[derive(Debug, Clone)]
+pub struct UpstreamSessionIds {
+    /// The ACP wire session id.
+    pub acp_session_id: String,
+    /// The provider-native id from `_meta.agentSessionId`, when the upstream
+    /// exposes one. Never synthesized.
+    pub agent_session_id: Option<String>,
+}
+
 /// One command driven inside the connection's command loop.
 enum Command {
+    /// Create the upstream session (`session/new`) with the given working
+    /// directory and MCP servers (the manager's, relayed verbatim); reply
+    /// with the minted wire identity.
+    NewSession {
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+        reply: oneshot::Sender<anyhow::Result<UpstreamSessionIds>>,
+    },
     /// Drive a prompt turn; reply with the typed [`PromptResponse`].
     Prompt {
         req: Box<PromptRequest>,
@@ -134,8 +152,6 @@ const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What the handshake reports back to [`UpstreamConnection::spawn`] before the
 /// command loop takes over.
 struct Handshake {
-    acp_session_id: String,
-    agent_session_id: Option<String>,
     /// The upstream agent's `initialize` response — capabilities, agent info,
     /// auth methods. Kept so the down-facing endpoint can reflect the real
     /// agent's capabilities to its manager instead of fabricating minimal ones.
@@ -143,9 +159,12 @@ struct Handshake {
 }
 
 /// A live upstream ACP `Client` connection to one agent process.
+///
+/// `spawn` runs `initialize` only; the session itself is created later via
+/// [`new_session`](Self::new_session) so the caller (the engine / down-facing
+/// endpoint) can relay the **manager's** `cwd` and `mcpServers` into the
+/// upstream `session/new` instead of fabricating them at launch.
 pub struct UpstreamConnection {
-    acp_session_id: String,
-    agent_session_id: Option<String>,
     /// The upstream agent's `initialize` response, captured at handshake.
     init: Box<InitializeResponse>,
     /// Submits [`Command`]s into the connection's command loop.
@@ -191,19 +210,17 @@ fn build_agent(command: &str, args: &[String], env: &HashMap<String, String>) ->
 
 impl UpstreamConnection {
     /// Spawn the agent process, connect as an ACP `Client`, and run
-    /// `initialize` + `session/new`. Returns once the handshake completes and
-    /// the command loop is resident, or an error if spawn/handshake failed.
+    /// `initialize`. Returns once the handshake completes and the command
+    /// loop is resident, or an error if spawn/handshake failed. The session
+    /// itself is created afterwards via [`new_session`](Self::new_session)
+    /// (which carries the cwd — `AcpAgent::spawn_process` does not set the
+    /// child's working directory; ACP carries it at the protocol level).
     pub async fn spawn(
         command: &str,
         args: &[String],
         env: &HashMap<String, String>,
-        cwd: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        // `AcpAgent::spawn_process` does not set the child's working directory;
-        // ACP carries the session cwd at the protocol level via `NewSessionRequest`.
         let agent = build_agent(command, args, env);
-        let session_cwd =
-            cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
@@ -233,7 +250,6 @@ impl UpstreamConnection {
                 };
                 rt.block_on(drive(
                     agent,
-                    session_cwd,
                     cmd_rx,
                     CallbackPlane {
                         updates_tx: updates_for_thread,
@@ -251,8 +267,6 @@ impl UpstreamConnection {
             .map_err(|_| anyhow::anyhow!("upstream driver thread exited before handshake"))??;
 
         Ok(Self {
-            acp_session_id: handshake.acp_session_id,
-            agent_session_id: handshake.agent_session_id,
             init: handshake.init,
             cmd_tx,
             updates_tx,
@@ -264,15 +278,27 @@ impl UpstreamConnection {
         })
     }
 
-    /// The ACP wire session id returned by `session/new`.
-    pub fn acp_session_id(&self) -> &str {
-        &self.acp_session_id
-    }
-
-    /// The provider-native session id from the `session/new` response
-    /// `_meta.agentSessionId`, when the upstream exposes one. Never synthesized.
-    pub fn agent_session_id(&self) -> Option<&str> {
-        self.agent_session_id.as_deref()
+    /// Create the upstream session: `session/new` with `cwd` and the given
+    /// MCP servers (the manager's, relayed verbatim). Returns the minted wire
+    /// identity. The caller decides when this happens — the engine's
+    /// immediate-open launch calls it right away; the down-facing endpoint
+    /// calls it when its manager sends `session/new`.
+    pub async fn new_session(
+        &self,
+        cwd: PathBuf,
+        mcp_servers: Vec<McpServer>,
+    ) -> anyhow::Result<UpstreamSessionIds> {
+        let (reply, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .unbounded_send(Command::NewSession {
+                cwd,
+                mcp_servers,
+                reply,
+            })
+            .map_err(|_| anyhow::anyhow!("upstream command loop closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("upstream dropped the session/new reply"))?
     }
 
     /// The upstream agent's `initialize` response, captured at handshake. The
@@ -430,7 +456,6 @@ struct CallbackPlane {
 
 async fn drive(
     agent: AcpAgent,
-    session_cwd: PathBuf,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     plane: CallbackPlane,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
@@ -542,24 +567,17 @@ async fn drive(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
-            // ── Handshake ──────────────────────────────────────────────────
+            // ── Handshake: initialize only ─────────────────────────────────
+            // `session/new` is a command (below) so the caller can relay the
+            // manager's cwd + mcpServers into it instead of fabricating them
+            // here at spawn time. Client capabilities are deliberately left at
+            // their defaults (no fs / no terminal): ACP v2 removes that client
+            // surface, and a manager provides such tooling via the relayed MCP
+            // servers instead.
             let init = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
                 .block_task()
                 .await?;
-
-            let new_session = connection
-                .send_request(NewSessionRequest::new(session_cwd))
-                .block_task()
-                .await?;
-            let acp_session_id = new_session.session_id.0.to_string();
-            // `_meta.agentSessionId`, when the upstream exposes one. Never synthesized.
-            let agent_session_id = new_session
-                .meta
-                .as_ref()
-                .and_then(|m| m.get("agentSessionId"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
 
             let report = closure_handshake_tx
                 .lock()
@@ -567,8 +585,6 @@ async fn drive(
                 .and_then(|mut guard| guard.take());
             if let Some(tx) = report {
                 let _ = tx.send(Ok(Handshake {
-                    acp_session_id: acp_session_id.clone(),
-                    agent_session_id,
                     init: Box::new(init),
                 }));
             }
@@ -581,6 +597,35 @@ async fn drive(
             // the connection down and kills the agent child.
             while let Some(cmd) = cmd_rx.next().await {
                 match cmd {
+                    Command::NewSession {
+                        cwd,
+                        mcp_servers,
+                        reply,
+                    } => {
+                        let session_connection = connection.clone();
+                        connection.spawn(async move {
+                            let mut req = NewSessionRequest::new(cwd);
+                            req.mcp_servers = mcp_servers;
+                            let result = session_connection
+                                .send_request(req)
+                                .block_task()
+                                .await
+                                .map(|resp| UpstreamSessionIds {
+                                    acp_session_id: resp.session_id.0.to_string(),
+                                    // `_meta.agentSessionId`, when the upstream
+                                    // exposes one. Never synthesized.
+                                    agent_session_id: resp
+                                        .meta
+                                        .as_ref()
+                                        .and_then(|m| m.get("agentSessionId"))
+                                        .and_then(|v| v.as_str())
+                                        .map(str::to_string),
+                                })
+                                .map_err(anyhow::Error::from);
+                            let _ = reply.send(result);
+                            Ok(())
+                        })?;
+                    }
                     Command::Prompt { req, reply } => {
                         let turn_connection = connection.clone();
                         connection.spawn(async move {
@@ -621,8 +666,8 @@ async fn drive(
         let _ = tx.send(());
     }
 
-    // If the handshake never completed (connect/initialize/session-new failed),
-    // surface the error to `spawn()` so it doesn't hang on the oneshot.
+    // If the handshake never completed (connect/initialize failed), surface
+    // the error to `spawn()` so it doesn't hang on the oneshot.
     let report = handshake_tx.lock().ok().and_then(|mut guard| guard.take());
     if let Some(tx) = report {
         let err = match result {
@@ -732,10 +777,14 @@ mod tests {
             done
         "#;
         let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new(), None)
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
                 .await
                 .expect("spawn");
-        let usid = conn.acp_session_id().to_string();
+        let ids = conn
+            .new_session(std::path::PathBuf::from("/"), vec![])
+            .await
+            .expect("session/new");
+        let usid = ids.acp_session_id;
         assert_eq!(usid, "u1");
         let mut updates = conn.subscribe_updates();
         let resp = conn.prompt(&usid, "do X").await.expect("prompt");
@@ -775,10 +824,14 @@ mod tests {
             done
         "#;
         let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new(), None)
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
                 .await
                 .expect("spawn");
-        let usid = conn.acp_session_id().to_string();
+        let usid = conn
+            .new_session(std::path::PathBuf::from("/"), vec![])
+            .await
+            .expect("session/new")
+            .acp_session_id;
         let mut updates = conn.subscribe_updates();
         let mut perms = conn.subscribe_permissions();
 
@@ -826,7 +879,7 @@ mod tests {
             done
         "#;
         let conn =
-            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new(), None)
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
                 .await
                 .expect("spawn");
 
