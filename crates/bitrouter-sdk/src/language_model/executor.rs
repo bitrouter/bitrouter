@@ -3,7 +3,7 @@
 //! and `HttpExecutor` — the real protocol-aware HTTP executor.
 
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -245,6 +245,17 @@ fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> 
     }
 }
 
+fn upstream_body_error(context: &'static str, error: reqwest::Error) -> BitrouterError {
+    if error.is_timeout() {
+        BitrouterError::UpstreamTimeout
+    } else {
+        BitrouterError::Upstream {
+            status: 502,
+            message: format!("{context}: {error}"),
+        }
+    }
+}
+
 /// Heuristic: does this upstream error body describe a depleted
 /// credit / balance? Matches the stable phrase family rather than any
 /// one provider's exact wording — string matching is unavoidable here
@@ -268,6 +279,12 @@ fn looks_like_credit_exhaustion(body: &str) -> bool {
 /// [`with_provider_timeouts`](Self::with_provider_timeouts) to attach
 /// per-provider overrides.
 pub struct HttpExecutor {
+    clients: RwLock<HttpClientSet>,
+    dispatch: OutboundDispatch,
+    auth_appliers: AuthAppliers,
+}
+
+struct HttpClientSet {
     /// Client used for any provider without a per-provider override, plus its
     /// timeouts (for the per-request `total` cap, which is not a client
     /// setting).
@@ -277,8 +294,6 @@ pub struct HttpExecutor {
     /// resolved timeouts it was built from. Built once at construction; empty
     /// in the common single-timeout deployment.
     provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
-    dispatch: OutboundDispatch,
-    auth_appliers: AuthAppliers,
 }
 
 /// Build a reqwest client from the connection-level timeout knobs. `total` is
@@ -292,6 +307,26 @@ fn build_http_client(timeouts: &HttpTimeouts) -> Result<reqwest::Client> {
         .tcp_keepalive(timeouts.tcp_keepalive)
         .build()
         .map_err(|e| BitrouterError::internal(format!("building HTTP client: {e}")))
+}
+
+fn build_http_client_set(
+    default_timeouts: HttpTimeouts,
+    per_provider: HashMap<String, HttpTimeouts>,
+) -> Result<HttpClientSet> {
+    let default_client = build_http_client(&default_timeouts)?;
+    let mut provider_clients = HashMap::new();
+    for (name, timeouts) in per_provider {
+        if timeouts == default_timeouts {
+            continue;
+        }
+        let client = build_http_client(&timeouts)?;
+        provider_clients.insert(name, (timeouts, client));
+    }
+    Ok(HttpClientSet {
+        default_client,
+        default_timeouts,
+        provider_clients,
+    })
 }
 
 impl HttpExecutor {
@@ -338,30 +373,41 @@ impl HttpExecutor {
         dispatch: OutboundDispatch,
         auth_appliers: AuthAppliers,
     ) -> Result<Self> {
-        let default_client = build_http_client(&default_timeouts)?;
-        let mut provider_clients = HashMap::new();
-        for (name, timeouts) in per_provider {
-            if timeouts == default_timeouts {
-                continue;
-            }
-            let client = build_http_client(&timeouts)?;
-            provider_clients.insert(name, (timeouts, client));
-        }
+        let clients = build_http_client_set(default_timeouts, per_provider)?;
         Ok(Self {
-            default_client,
-            default_timeouts,
-            provider_clients,
+            clients: RwLock::new(clients),
             dispatch,
             auth_appliers,
         })
     }
 
+    /// Replace the global/per-provider timeout clients in-place. Existing
+    /// in-flight requests keep the cloned client they already selected; new
+    /// requests use the freshly built set.
+    pub fn reload_provider_timeouts(
+        &self,
+        default_timeouts: HttpTimeouts,
+        per_provider: HashMap<String, HttpTimeouts>,
+    ) -> Result<()> {
+        let clients = build_http_client_set(default_timeouts, per_provider)?;
+        let mut guard = match self.clients.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = clients;
+        Ok(())
+    }
+
     /// Pick the client + timeouts for `target`: a per-provider override when one
     /// is registered for its `provider_name`, else the default pair.
-    fn client_for(&self, target: &RoutingTarget) -> (&reqwest::Client, &HttpTimeouts) {
-        match self.provider_clients.get(&target.provider_name) {
-            Some((timeouts, client)) => (client, timeouts),
-            None => (&self.default_client, &self.default_timeouts),
+    fn client_for(&self, target: &RoutingTarget) -> (reqwest::Client, HttpTimeouts) {
+        let guard = match self.clients.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match guard.provider_clients.get(&target.provider_name) {
+            Some((timeouts, client)) => (client.clone(), timeouts.clone()),
+            None => (guard.default_client.clone(), guard.default_timeouts.clone()),
         }
     }
 
@@ -527,10 +573,7 @@ impl Executor for HttpExecutor {
         let text = response
             .text()
             .await
-            .map_err(|e| BitrouterError::Upstream {
-                status: 502,
-                message: format!("reading upstream body: {e}"),
-            })?;
+            .map_err(|e| upstream_body_error("reading upstream body", e))?;
 
         if !status.is_success() {
             return Err(classify_upstream_error(status.as_u16(), &text));
@@ -948,7 +991,10 @@ mod beta_forward_tests {
 #[cfg(test)]
 mod client_selection_tests {
     use super::*;
+    use crate::caller::CallerContext;
     use crate::language_model::types::ApiProtocol;
+    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn target(provider: &str) -> RoutingTarget {
         RoutingTarget {
@@ -1005,9 +1051,108 @@ mod client_selection_tests {
             AuthAppliers::new(),
         )
         .expect("build executor");
+        let clients = exec.clients.read().expect("client set lock");
         assert!(
-            exec.provider_clients.is_empty(),
+            clients.provider_clients.is_empty(),
             "an override equal to the default should be skipped"
         );
+    }
+
+    #[test]
+    fn reload_provider_timeouts_replaces_selected_timeouts() {
+        let default = HttpTimeouts::default();
+        let exec = HttpExecutor::with_provider_timeouts(
+            default.clone(),
+            HashMap::new(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new(),
+        )
+        .expect("build executor");
+
+        let (_, before) = exec.client_for(&target("slow"));
+        assert_eq!(before.read, default.read);
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "slow".to_string(),
+            HttpTimeouts {
+                read: Duration::from_secs(450),
+                ..default.clone()
+            },
+        );
+        exec.reload_provider_timeouts(default, overrides)
+            .expect("reload timeout clients");
+
+        let (_, after) = exec.client_for(&target("slow"));
+        assert_eq!(after.read, Duration::from_secs(450));
+    }
+
+    #[tokio::test]
+    async fn non_streaming_body_read_timeout_maps_to_upstream_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request_buf = [0_u8; 1024];
+            let _ = socket.read(&mut request_buf).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      content-type: application/json\r\n\
+                      content-length: 1024\r\n\
+                      \r\n\
+                      {\"id\":\"partial\"",
+                )
+                .await
+                .expect("write partial response");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let exec = HttpExecutor::new(HttpTimeouts {
+            read: Duration::from_millis(75),
+            ..HttpTimeouts::default()
+        })
+        .expect("build executor");
+        let target = RoutingTarget {
+            provider_name: "slow".into(),
+            service_id: "m".into(),
+            api_base: format!("http://{addr}/v1"),
+            api_key: "k".into(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        };
+        let prompt = Prompt {
+            model: "m".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "hi")],
+            tools: vec![],
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let ctx = PipelineContext::new(PipelineRequest::new(
+            "m",
+            CallerContext::local(),
+            prompt.clone(),
+        ));
+
+        let err =
+            tokio::time::timeout(Duration::from_secs(3), exec.execute(&target, &prompt, &ctx))
+                .await
+                .expect("executor should return before outer timeout")
+                .expect_err("partial stalled body should fail");
+        server.abort();
+
+        match err {
+            BitrouterError::UpstreamTimeout => {}
+            other => panic!("expected UpstreamTimeout, got {other:?}"),
+        }
     }
 }
