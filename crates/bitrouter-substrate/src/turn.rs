@@ -25,37 +25,38 @@ use anyhow::{Result, anyhow};
 use tokio::sync::{mpsc, oneshot};
 
 /// A job sent from `submit`/`try_submit` to the worker.
-struct Job<T> {
-    label: String,
+struct Job<I, T> {
+    input: I,
     reply: oneshot::Sender<Result<T>>,
 }
 
 /// Per-session single-writer turn queue.
 ///
-/// Generic over the turn output `T` (and over the turn-runner closure) so it is
-/// unit-testable without a live upstream pipeline. The engine instantiates it as
-/// `TurnController<PromptResponse>` so each turn yields the upstream's typed
-/// prompt result.
-pub struct TurnController<T> {
-    tx: mpsc::Sender<Job<T>>,
+/// Generic over the turn input `I` and output `T` (and over the turn-runner
+/// closure) so it is unit-testable without a live upstream pipeline. The engine
+/// instantiates it as `TurnController<Vec<ContentBlock>, PromptResponse>` so
+/// each turn carries the prompt's content blocks verbatim (multi-modal, not
+/// text-flattened) and yields the upstream's typed prompt result.
+pub struct TurnController<I, T> {
+    tx: mpsc::Sender<Job<I, T>>,
 }
 
-impl<T: Send + 'static> TurnController<T> {
+impl<I: Send + 'static, T: Send + 'static> TurnController<I, T> {
     /// Create a new controller.
     ///
     /// - `bound`: maximum number of turns that may be queued at once.
-    /// - `run_turn`: closure that executes one turn given its label; the engine
+    /// - `run_turn`: closure that executes one turn given its input; the engine
     ///   passes a closure that calls `acp::Pipeline::execute` for the session.
     pub fn new<F, Fut>(bound: usize, run_turn: F) -> Self
     where
-        F: Fn(String) -> Fut + Send + 'static,
+        F: Fn(I) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T>> + Send + 'static,
     {
-        let (tx, mut rx) = mpsc::channel::<Job<T>>(bound);
+        let (tx, mut rx) = mpsc::channel::<Job<I, T>>(bound);
 
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let result = run_turn(job.label).await;
+                let result = run_turn(job.input).await;
                 // Ignore send error: the caller may have dropped the receiver.
                 let _ = job.reply.send(result);
             }
@@ -69,8 +70,8 @@ impl<T: Send + 'static> TurnController<T> {
     /// On a full channel this does **not** panic; it returns a receiver that
     /// immediately resolves to `Err("turn queue full")` so the caller can still
     /// `.await` the handle uniformly.
-    pub fn submit(&self, label: String) -> oneshot::Receiver<Result<T>> {
-        match self.enqueue(label) {
+    pub fn submit(&self, input: I) -> oneshot::Receiver<Result<T>> {
+        match self.enqueue(input) {
             Ok(rx) => rx,
             Err(_full) => {
                 let (tx, rx) = oneshot::channel();
@@ -84,16 +85,16 @@ impl<T: Send + 'static> TurnController<T> {
     ///
     /// Use this for backpressure: the engine can report the rejection to the
     /// client rather than silently queuing without bound.
-    pub fn try_submit(&self, label: String) -> Result<oneshot::Receiver<Result<T>>> {
-        self.enqueue(label)
+    pub fn try_submit(&self, input: I) -> Result<oneshot::Receiver<Result<T>>> {
+        self.enqueue(input)
     }
 
     // --- internal ---
 
-    fn enqueue(&self, label: String) -> Result<oneshot::Receiver<Result<T>>> {
+    fn enqueue(&self, input: I) -> Result<oneshot::Receiver<Result<T>>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let job = Job {
-            label,
+            input,
             reply: reply_tx,
         };
         self.tx

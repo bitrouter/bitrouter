@@ -11,10 +11,9 @@
 //! - `initialize` → minimal [`AgentCapabilities`].
 //! - `session/new` → returns the session's `record_id` as the manager-facing
 //!   session id. The upstream `acp_session_id` stays internal.
-//! - `session/prompt` → concatenate the `ContentBlock::Text` parts and call
-//!   [`Session::prompt`]. **v1 limitation:** non-text content blocks (images,
-//!   resources, resource links, …) are dropped; faithful multi-modal forwarding
-//!   is a follow-up.
+//! - `session/prompt` → forward the prompt's content blocks **verbatim** via
+//!   [`Session::prompt_blocks`] — text, images, resources, and resource links
+//!   all reach the upstream agent unmodified.
 //! - `session/cancel` → [`Session::cancel`].
 //! - `fs/*`, `terminal/*`, and any other method → answered with a JSON-RPC
 //!   "method not found" error (spec §11 / R1). We never silently drop. Sandboxed
@@ -77,22 +76,6 @@ use crate::engine::Session;
 /// `fs/` and `terminal/` namespaces (and any unknown method) gets a JSON-RPC
 /// "method not found" reply via the dispatch catch-all.
 const METHOD_SESSION_CANCEL: &str = "session/cancel";
-
-/// Concatenate the text of a prompt's content blocks.
-///
-/// **v1 limitation:** only [`ContentBlock::Text`] parts contribute; every other
-/// variant (image, audio, resource, resource link, …) is dropped. The substrate
-/// `Session` is text-in/text-out for now, so faithful multi-modal forwarding is a
-/// follow-up.
-fn prompt_text(blocks: &[ContentBlock]) -> String {
-    let mut out = String::new();
-    for block in blocks {
-        if let ContentBlock::Text(t) = block {
-            out.push_str(&t.text);
-        }
-    }
-    out
-}
 
 /// A transport wrapper that fires a one-shot when the inner transport's
 /// **incoming** stream ends (the manager's write side / our stdin hit EOF).
@@ -241,7 +224,6 @@ fn serve_on(
                   cx: ConnectionTo<Client>| {
                 let session = Arc::clone(&session_prompt);
                 async move {
-                    let text = prompt_text(&req.prompt);
                     // Drive the turn OUTSIDE the dispatch loop: a prompt can run
                     // long and triggers mid-turn `session/update` /
                     // `request_permission` traffic that must keep flowing while
@@ -249,7 +231,8 @@ fn serve_on(
                     // responder from inside the spawned task keeps the dispatch
                     // loop responsive (mirrors the up.rs command-loop discipline).
                     cx.spawn(async move {
-                        match session.prompt(&text).await {
+                        // Forward the content blocks verbatim (multi-modal).
+                        match session.prompt_blocks(req.prompt).await {
                             Ok(resp) => responder.respond(resp),
                             Err(e) => responder
                                 .respond_with_error(agent_client_protocol::util::internal_error(e)),
@@ -401,32 +384,6 @@ fn spawn_permission_forwarder(
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
-
-    #[test]
-    fn prompt_text_concatenates_text_blocks() {
-        let blocks = vec![
-            ContentBlock::Text(TextContent::new("hello ".to_string())),
-            ContentBlock::Text(TextContent::new("world".to_string())),
-        ];
-        assert_eq!(prompt_text(&blocks), "hello world");
-    }
-
-    #[test]
-    fn prompt_text_drops_non_text_blocks() {
-        // A resource-link block carries no text and must be dropped (v1 limit),
-        // leaving only the text parts.
-        use agent_client_protocol::schema::v1::ResourceLink;
-        let blocks = vec![
-            ContentBlock::Text(TextContent::new("keep".to_string())),
-            ContentBlock::ResourceLink(ResourceLink::new("x", "file:///x")),
-        ];
-        assert_eq!(prompt_text(&blocks), "keep");
-    }
-
-    #[test]
-    fn prompt_text_empty_for_no_text() {
-        assert_eq!(prompt_text(&[]), "");
-    }
 
     /// Launch a real [`Session`] whose upstream agent is a bash ACP stub running
     /// `stub`. Shared by the duplex `serve_on`↔client tests below. No worktree is
@@ -700,6 +657,114 @@ mod tests {
                         assert!(
                             chose.contains("chose:allow"),
                             "expected allow option chosen, got: {chose}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// Non-text content blocks survive the manager→substrate→upstream path
+    /// verbatim. The manager prompts with a text block **and** a resource-link
+    /// block; the upstream stub echoes `sawlink` only if the `session/prompt`
+    /// line it received contains a `resource_link` block.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_forwards_non_text_prompt_blocks_verbatim() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, NewSessionRequest, PromptRequest, ResourceLink,
+            SessionNotification, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const LINK_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                    case "$line" in
+                      *resource_link*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"sawlink"}}}}\n';;
+                      *)               printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"nolink"}}}}\n';;
+                    esac
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(LINK_STUB).await;
+
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                let (update_tx, mut update_rx) =
+                    futures::channel::mpsc::unbounded::<SessionNotification>();
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .on_receive_notification(
+                        move |notif: SessionNotification, _cx: ConnectionTo<Agent>| {
+                            let update_tx = update_tx.clone();
+                            async move {
+                                let _ = update_tx.unbounded_send(notif);
+                                Ok(())
+                            }
+                        },
+                        agent_client_protocol::on_receive_notification!(),
+                    )
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        let new_session = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                new_session.session_id.clone(),
+                                vec![
+                                    ContentBlock::Text(TextContent::new("look at".to_string())),
+                                    ContentBlock::ResourceLink(ResourceLink::new(
+                                        "x",
+                                        "file:///x.rs",
+                                    )),
+                                ],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+                        let mut echoed = None;
+                        for _ in 0..8 {
+                            match update_rx.next().await {
+                                Some(n) => {
+                                    let s = format!("{:?}", n.update);
+                                    if s.contains("sawlink") || s.contains("nolink") {
+                                        echoed = Some(s);
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        let echoed = echoed.expect("upstream echoed a block probe");
+                        assert!(
+                            echoed.contains("sawlink"),
+                            "resource_link block must reach the upstream verbatim; got: {echoed}"
                         );
                         Ok(())
                     })

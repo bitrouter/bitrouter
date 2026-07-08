@@ -93,8 +93,9 @@ pub struct Session {
     conn: Arc<UpstreamConnection>,
     /// The SDK routing/execution pipeline for this session.
     pipeline: Arc<Pipeline>,
-    /// Serialises prompts into ordered turns, each yielding a [`PromptResponse`].
-    turn: TurnController<PromptResponse>,
+    /// Serialises prompts into ordered turns, each carrying the prompt's
+    /// content blocks verbatim and yielding a [`PromptResponse`].
+    turn: TurnController<Vec<ContentBlock>, PromptResponse>,
     /// The worktree this session runs in, if one was created. Removed on
     /// shutdown.
     worktree: Option<PathBuf>,
@@ -199,14 +200,15 @@ impl Session {
         );
 
         // ── Turn queue ─────────────────────────────────────────────────────
-        // Each turn builds an `AcpRequest` for `text` and drives it through the
-        // pipeline, returning the typed `PromptResponse`.
+        // Each turn builds an `AcpRequest` for the prompt's content blocks
+        // (forwarded verbatim — multi-modal, not text-flattened) and drives it
+        // through the pipeline, returning the typed `PromptResponse`.
         let turn = {
             let pipeline = Arc::clone(&pipeline);
             let record_id = state.record_id.clone();
             let acp_session_id = acp_session_id.clone();
             let caller = CallerContext::local();
-            TurnController::new(TURN_QUEUE_BOUND, move |text: String| {
+            TurnController::new(TURN_QUEUE_BOUND, move |blocks: Vec<ContentBlock>| {
                 let pipeline = Arc::clone(&pipeline);
                 let record_id = record_id.clone();
                 let acp_session_id = acp_session_id.clone();
@@ -216,7 +218,7 @@ impl Session {
                         record_id,
                         AcpRequestPayload::Prompt(PromptRequest::new(
                             SessionId::new(acp_session_id),
-                            vec![ContentBlock::Text(TextContent::new(text))],
+                            blocks,
                         )),
                         caller,
                     );
@@ -243,9 +245,20 @@ impl Session {
         })
     }
 
-    /// Enqueue a prompt, await its turn, and return the typed [`PromptResponse`].
+    /// Enqueue a text prompt, await its turn, and return the typed
+    /// [`PromptResponse`]. Convenience over [`prompt_blocks`](Self::prompt_blocks).
     pub async fn prompt(&self, text: &str) -> anyhow::Result<PromptResponse> {
-        let rx = self.turn.submit(text.to_string());
+        self.prompt_blocks(vec![ContentBlock::Text(TextContent::new(text.to_string()))])
+            .await
+    }
+
+    /// Enqueue a prompt carrying arbitrary content blocks (text, images,
+    /// resources, …) **verbatim**, await its turn, and return the typed
+    /// [`PromptResponse`]. The down-facing `SessionAgent` forwards each
+    /// manager `session/prompt` through this, so multi-modal content reaches
+    /// the upstream agent unmodified.
+    pub async fn prompt_blocks(&self, blocks: Vec<ContentBlock>) -> anyhow::Result<PromptResponse> {
+        let rx = self.turn.submit(blocks);
         rx.await
             .map_err(|_| anyhow::anyhow!("turn worker dropped the reply"))?
     }
