@@ -1,6 +1,6 @@
 //! `bitrouter acp` subcommands — headless ACP session surface.
 //!
-//! Two entry points:
+//! Three entry points:
 //!
 //! - [`serve`] — launch a session and expose it as a vanilla ACP Agent over
 //!   **stdio** until the manager disconnects. Used by GUIs and orchestrating
@@ -10,6 +10,9 @@
 //!   stream each event as a self-describing **NDJSON** line to `out`. Exits
 //!   after the prompt resolves (or immediately after submission when `no_wait`
 //!   is true).
+//!
+//! - [`sessions`] — list the durable session records under the current repo's
+//!   `.bitrouter/sessions/`, newest first.
 //!
 //! ## NDJSON format
 //!
@@ -247,6 +250,85 @@ where
         .await
         .context("shutting down acp session")?;
     Ok(())
+}
+
+// ── sessions ──────────────────────────────────────────────────────────────────
+
+/// List the session records under the current repo's `.bitrouter/sessions/`,
+/// newest first: short record id, agent, status, age, and worktree.
+///
+/// A record left `running` by a substrate process that died without shutting
+/// down is shown as `dead` (its pid no longer exists) rather than trusted.
+pub async fn sessions<W>(out: &mut W) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    use bitrouter_substrate::record::{RecordStatus, RecordStore, now_unix};
+
+    let base = std::env::current_dir().context("resolving current directory")?;
+    let store = RecordStore::new(&base);
+    let mut records = store.list().await?;
+    if records.is_empty() {
+        out.write_all(b"no sessions recorded under .bitrouter/sessions\n")
+            .await
+            .context("writing output")?;
+        return Ok(());
+    }
+    records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+
+    let now = now_unix();
+    let mut buf = String::from("RECORD    AGENT             STATUS   AGE      WORKTREE\n");
+    for r in records {
+        let status = match r.status {
+            RecordStatus::Exited => "exited",
+            RecordStatus::Running if pid_alive(r.pid) => "running",
+            RecordStatus::Running => "dead",
+        };
+        let short_id: String = r.record_id.chars().take(8).collect();
+        let worktree = r
+            .worktree
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        buf.push_str(&format!(
+            "{short_id:<9} {agent:<17} {status:<8} {age:<8} {worktree}\n",
+            agent = r.agent_id,
+            age = format_age(now.saturating_sub(r.started_at)),
+        ));
+    }
+    out.write_all(buf.as_bytes()).await.context("writing output")
+}
+
+/// Whether `pid` is a live process. Used to demote a stale `running` record
+/// (left behind by a killed substrate) to `dead` in the listing.
+fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // `kill -0` probes existence without signalling. EPERM (owned by
+        // another user) exits non-zero, which conservatively reads as dead —
+        // acceptable, since substrate sessions run as the invoking user.
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Render an age in seconds as a compact human unit (`42s`, `7m`, `3h`, `2d`).
+fn format_age(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

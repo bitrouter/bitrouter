@@ -48,6 +48,7 @@ use futures::Stream;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::executor::SessionExecutor;
+use crate::record::{RecordStatus, RecordStore, SessionRecord, now_unix};
 use crate::session::{SessionState, SessionStatus};
 use crate::telemetry::{RequestCompleted, TelemetryHook};
 use crate::translate::SessionUpdateKind;
@@ -99,6 +100,10 @@ pub struct Session {
     remove_worktree_on_shutdown: bool,
     /// Manages the worktree lifecycle (rooted at the base repo).
     worktrees: WorktreeManager,
+    /// The session's durable on-disk record; updated to `Exited` at shutdown.
+    record: SessionRecord,
+    /// Persists [`Self::record`] under `<base_repo>/.bitrouter/sessions/`.
+    records: RecordStore,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
@@ -218,17 +223,21 @@ impl Session {
         // through the pipeline, returning the typed `PromptResponse`.
         let turn = {
             let pipeline = Arc::clone(&pipeline);
-            let record_id = state.record_id.clone();
+            // The request's agent field carries the configured agent id — the
+            // pinned table resolves any name to this session's target, and the
+            // telemetry hook reports this field, so it must be the real agent
+            // name (not the record id).
+            let agent = agent_id.to_string();
             let acp_session_id = acp_session_id.clone();
             let caller = CallerContext::local();
             TurnController::new(TURN_QUEUE_BOUND, move |blocks: Vec<ContentBlock>| {
                 let pipeline = Arc::clone(&pipeline);
-                let record_id = record_id.clone();
+                let agent = agent.clone();
                 let acp_session_id = acp_session_id.clone();
                 let caller = caller.clone();
                 async move {
                     let req = AcpRequest::new(
-                        record_id,
+                        agent,
                         AcpRequestPayload::Prompt(PromptRequest::new(
                             SessionId::new(acp_session_id),
                             blocks,
@@ -244,6 +253,26 @@ impl Session {
             })
         };
 
+        // ── Durable session record ─────────────────────────────────────────
+        // Best-effort: a record-write failure must not fail the launch, but it
+        // is surfaced because `bitrouter acp sessions` (and v2 session/load)
+        // depend on records existing.
+        let record = SessionRecord {
+            record_id: state.record_id.clone(),
+            agent_id: state.agent_id.clone(),
+            acp_session_id: state.acp_session_id.clone(),
+            agent_session_id: state.agent_session_id.clone(),
+            worktree: worktree_path.clone(),
+            pid: std::process::id(),
+            started_at: now_unix(),
+            status: RecordStatus::Running,
+            ended_at: None,
+        };
+        let records = RecordStore::new(&base_repo);
+        if let Err(e) = records.write(&record).await {
+            tracing::warn!(error = %e, "failed to write session record");
+        }
+
         Ok(Self {
             state,
             conn,
@@ -255,6 +284,8 @@ impl Session {
             // the session's own shutdown removal is equivalent to the one
             // `launch` keeps for error-path cleanup.
             worktrees: WorktreeManager::new(base_repo),
+            record,
+            records,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
         })
     }
@@ -334,6 +365,8 @@ impl Session {
             worktree,
             remove_worktree_on_shutdown,
             worktrees,
+            mut record,
+            records,
             ..
         } = self;
 
@@ -357,6 +390,13 @@ impl Session {
                 // The worktree holds the agent's work; surface where it lives.
                 tracing::info!(path = %path.display(), "worktree retained");
             }
+        }
+
+        // Settle the durable record last so it reflects the final state.
+        record.status = RecordStatus::Exited;
+        record.ended_at = Some(now_unix());
+        if let Err(e) = records.write(&record).await {
+            tracing::warn!(error = %e, "failed to update session record");
         }
         Ok(())
     }
@@ -575,6 +615,34 @@ mod tests {
             !worktree_path.exists(),
             "a newly created worktree must be removed when launch fails"
         );
+    }
+
+    #[tokio::test]
+    async fn session_record_written_running_then_exited() {
+        use crate::record::{RecordStatus, RecordStore};
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let catalog = stub_catalog();
+
+        let session = Session::launch(&catalog, "stub", base.path().to_path_buf(), None)
+            .await
+            .expect("launch");
+        let record_id = session.state().record_id.clone();
+
+        let store = RecordStore::new(base.path());
+        let records = store.list().await.expect("list");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].record_id, record_id);
+        assert_eq!(records[0].status, RecordStatus::Running);
+        assert_eq!(records[0].pid, std::process::id());
+        assert!(records[0].ended_at.is_none());
+
+        session.shutdown().await.expect("shutdown");
+
+        let records = store.list().await.expect("list");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, RecordStatus::Exited);
+        assert!(records[0].ended_at.is_some());
     }
 
     #[tokio::test]

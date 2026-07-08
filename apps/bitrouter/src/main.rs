@@ -577,6 +577,10 @@ enum AcpCmd {
         /// The prompt text to send.
         text: String,
     },
+    /// List the session records under the current repo's
+    /// `.bitrouter/sessions/`, newest first. A `running` record whose process
+    /// no longer exists is shown as `dead`.
+    Sessions,
 }
 
 #[tokio::main]
@@ -2132,6 +2136,10 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 &mut stdout,
             )
             .await
+        }
+        AcpCmd::Sessions => {
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::sessions(&mut stdout).await
         }
     }
 }
