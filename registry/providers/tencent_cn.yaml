@@ -11,8 +11,8 @@ metadata:
 # Tencent Cloud "TokenHub" China (Guangzhou station) — an OpenAI-
 # compatible model marketplace re-serving DeepSeek / GLM / Kimi / MiniMax.
 # Bearer-token auth (OpenAI transport). Prices below are the Guangzhou-station
-# USD-per-1M-token rates. Manual provider (no auto_sync): TokenHub's catalog is
-# recorded here from the vendor's published model + price list.
+# USD-per-1M-token rates. Refreshed by models.dev's `tencent-tokenhub` catalog;
+# manually keep provider extras that are absent from that feed.
 # Official: https://cloud.tencent.com/ (TI / MaaS TokenHub)
 api_protocol:
   - minimax/minimax-m3: [openai, responses, anthropic]
@@ -157,6 +157,18 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: tencent/hy3
+    provider_model_id: hy3
+    pricing:
+      input_tokens:
+        no_cache: 0
+        cache_read: 0
+        cache_write: 0
+      output_tokens:
+        text: 0
 status: active
 weight: 1
 submitted_at: 2026-05-23
+auto_sync:
+  feed: models_dev
+  key: tencent-tokenhub

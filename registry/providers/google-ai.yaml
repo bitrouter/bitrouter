@@ -43,3 +43,6 @@ status: active
 auth:
   kind: oauth
   handler: google-ai
+auto_sync:
+  feed: models_dev
+  key: google
