@@ -127,16 +127,7 @@ pub async fn serve(
     )
     .await
     .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    // Take the telemetry receiver BEFORE wrapping in Arc so we don't need &mut
-    // through the shared reference. Drain-and-log to stderr; tracing already
-    // goes to stderr for both acp modes so stdout (ACP JSON-RPC) stays clean.
-    if let Some(mut rx) = session.telemetry() {
-        tokio::spawn(async move {
-            while let Some(r) = rx.recv().await {
-                drain_telemetry_record(r);
-            }
-        });
-    }
+    let exporter = attach_observability(&config, agent_id, &session).await;
     let session = Arc::new(session);
 
     // Warm: bind the reattach socket up front so the record advertises it for
@@ -209,6 +200,10 @@ pub async fn serve(
             .await
             .context("shutting down acp session")?,
         Err(_) => tracing::warn!("session still referenced after serve; skipping shutdown"),
+    }
+    if let Some(exporter) = exporter {
+        // Flush the span batch before exit; spans are lost otherwise.
+        exporter.shutdown();
     }
     served.map_err(|e| anyhow::anyhow!("acp serve: {e}"))
 }
@@ -299,16 +294,7 @@ where
         bitrouter_substrate::engine::Session::launch(&catalog, agent_id, base_repo, options)
             .await
             .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    // Drain telemetry records to stderr (tracing → stderr) so stdout stays clean
-    // (NDJSON output). The task ends naturally when the session/pipeline drops,
-    // closing the sender and causing `recv()` to return `None`.
-    if let Some(mut rx) = session.telemetry() {
-        tokio::spawn(async move {
-            while let Some(r) = rx.recv().await {
-                drain_telemetry_record(r);
-            }
-        });
-    }
+    let exporter = attach_observability(&config, agent_id, &session).await;
 
     if no_wait {
         // v1 no-wait: emit ack, then shut down immediately. The agent child is
@@ -319,10 +305,18 @@ where
             .shutdown()
             .await
             .context("shutting down acp session")?;
+        if let Some(exporter) = exporter {
+            exporter.shutdown();
+        }
         return Ok(());
     }
 
-    prompt_wait(session, text, out).await
+    let outcome = prompt_wait(session, text, out).await;
+    if let Some(exporter) = exporter {
+        // Flush the span batch before exit; spans are lost otherwise.
+        exporter.shutdown();
+    }
+    outcome
 }
 
 /// Inner implementation for the wait (non-`--no-wait`) path. Separated so the
@@ -468,6 +462,80 @@ fn format_age(secs: u64) -> String {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Attach observability to a session when the observe config opts telemetry
+/// in: every turn is drained to stderr (always) and, with an exporter,
+/// emitted as an OTel GenAI `invoke_agent` span; tool calls become
+/// `execute_tool` spans from the translated update stream. Returns the
+/// exporter so the caller can flush it (`shutdown`) before exit.
+async fn attach_observability(
+    config: &Config,
+    agent_id: &str,
+    session: &bitrouter_substrate::engine::Session,
+) -> Option<Arc<bitrouter_observe::otel::OtelExporter>> {
+    let exporter = crate::assemble::build_otel_exporter_standalone(config).await;
+    let recorder = exporter.as_ref().map(|exporter| {
+        Arc::new(bitrouter_observe::acp::AcpSpanRecorder::new(
+            exporter,
+            agent_id,
+            session.state().record_id.clone(),
+        ))
+    });
+
+    // Telemetry drain: stderr log per turn (always) + invoke_agent span.
+    if let Some(mut rx) = session.telemetry() {
+        let recorder = recorder.clone();
+        tokio::spawn(async move {
+            while let Some(record) = rx.recv().await {
+                if let Some(recorder) = &recorder {
+                    recorder.turn_completed(&bitrouter_observe::acp::TurnRecord {
+                        stop_reason: record.stop_reason.clone(),
+                        latency: std::time::Duration::from_millis(record.latency_ms),
+                        context_used: record.context.map(|c| c.used),
+                        context_size: record.context.map(|c| c.size),
+                    });
+                }
+                drain_telemetry_record(record);
+            }
+        });
+    }
+
+    // Tool spans from the translated update stream (exporter-gated: without
+    // one there is nothing to emit to).
+    if let Some(recorder) = recorder {
+        let mut updates = session.updates();
+        tokio::spawn(async move {
+            use bitrouter_substrate::translate::ToolStatus;
+            while let Some(update) = updates.next().await {
+                match update {
+                    SessionUpdateKind::ToolCall {
+                        id, title, status, ..
+                    } => match status {
+                        ToolStatus::Pending | ToolStatus::Running => {
+                            recorder.tool_started(id, title);
+                        }
+                        ToolStatus::Ok => recorder.tool_finished(&id, true, Some(&title)),
+                        ToolStatus::Failed => recorder.tool_finished(&id, false, Some(&title)),
+                    },
+                    SessionUpdateKind::ToolCallUpdate {
+                        id, status, title, ..
+                    } => match status {
+                        Some(ToolStatus::Ok) => {
+                            recorder.tool_finished(&id, true, title.as_deref());
+                        }
+                        Some(ToolStatus::Failed) => {
+                            recorder.tool_finished(&id, false, title.as_deref());
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    exporter
+}
 
 /// Emit one telemetry record to stderr via tracing. Stdout must stay clean
 /// (ACP JSON-RPC for `serve`, NDJSON for `prompt`), so telemetry goes to

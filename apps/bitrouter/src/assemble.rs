@@ -857,6 +857,42 @@ enum BearerPlan {
     StaticOnly,
 }
 
+/// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
+/// serve|prompt`). Same config resolution as the daemon path (telemetry
+/// opt-in / `otel:` block / legacy shim / env vars), including the live
+/// account-bearer plan. Returns `None` when nothing opts telemetry in;
+/// telemetry failures are surfaced as warnings, never as session failures.
+pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
+    let plan = match build_otel_config(config) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!("telemetry: invalid observe config, exporting disabled: {e:#}");
+            return None;
+        }
+    };
+    let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
+        BearerPlan::LiveSource { warn_if_unmet } => {
+            let source = crate::cloud::cloud_bearer_source().await;
+            if source.is_none() && warn_if_unmet {
+                tracing::warn!(
+                    "telemetry: attribution=account but no signed-in session is available — \
+                     exporting anonymously (sign in with `bitrouter cloud login`)"
+                );
+            }
+            source
+        }
+        BearerPlan::StaticOnly => None,
+    };
+    match OtelExporter::new(plan.config, bearer) {
+        Ok(exporter) => Some(Arc::new(exporter)),
+        Err(e) => {
+            tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
+            None
+        }
+    }
+}
+
 /// An exporter config plus the account-bearer resolution plan for it. Returned
 /// by [`build_otel_config`] so the async `OtelExporter::new` call site can decide
 /// whether to build a live bearer source (which needs `.await` + network I/O,
