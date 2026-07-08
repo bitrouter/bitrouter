@@ -44,15 +44,15 @@ async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"
 thiserror.workspace = true
+http.workspace = true
+axum.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 wiremock = "0.6"
 futures.workspace = true
 tower = { workspace = true, features = ["util"] }
-axum.workspace = true
 axum-test = "20"
-http.workspace = true
 serde-saphyr.workspace = true
 # OTLP/HTTP+protobuf decoding for full-stack tests that inspect the trace
 # bodies the observe plugin pushes to the configured collector.

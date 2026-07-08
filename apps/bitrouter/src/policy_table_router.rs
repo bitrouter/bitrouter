@@ -24,13 +24,59 @@
 //! the kind of thing an operator keeps under version control.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
-use bitrouter_sdk::PromptTransform;
-use bitrouter_sdk::config::PolicyTableConfig;
+use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
+use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::adequacy::AdequacyLedger;
+use crate::workflow_state::online::OnlineWorkflowState;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyDecisionReason {
+    StaticTable,
+    ExplorationTrial,
+    ExplorationLocked,
+    AdequacyPin,
+    ToolGuardrail,
+    NoMatch,
+}
+
+impl PolicyDecisionReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::StaticTable => "static_table",
+            Self::ExplorationTrial => "exploration_trial",
+            Self::ExplorationLocked => "exploration_locked",
+            Self::AdequacyPin => "adequacy_pin",
+            Self::ToolGuardrail => "tool_guardrail",
+            Self::NoMatch => "no_match",
+        }
+    }
+}
+
+impl fmt::Display for PolicyDecisionReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyDecision {
+    pub key_strategy: PolicyKeyStrategy,
+    pub request_key: String,
+    pub legacy_fingerprint: String,
+    pub workflow_state_kind: String,
+    pub static_tier: Option<String>,
+    pub selected_tier: Option<String>,
+    pub selected_model: Option<String>,
+    pub reason: PolicyDecisionReason,
+    pub pinned: bool,
+    pub locked: bool,
+    pub trialed: bool,
+}
 
 /// The resolved, immutable policy spec — the fingerprint→tier→model table plus
 /// the guardrail and (for adaptive routing) the escalation tier and a reverse
@@ -57,9 +103,15 @@ pub struct PolicyTable {
     explore_tier: Option<String>,
     /// Whether aggressive downgrade discovery is enabled.
     exploration_enabled: bool,
+    /// Whether the opening turn is eligible for exploration.
+    explore_opening: bool,
+    /// Future task-reward guardrail for opening downgrades.
+    min_semantic_successes_for_opening: u32,
     /// Reverse index model id → tier name, for mapping a served model back to
     /// its tier at observe time.
     model_to_tier: HashMap<String, String>,
+    /// The request key family used by `fingerprints` and adequacy state.
+    key_strategy: PolicyKeyStrategy,
 }
 
 impl PolicyTable {
@@ -93,7 +145,13 @@ impl PolicyTable {
             escalation_tier,
             explore_tier: config.adequacy.explore_tier.clone(),
             exploration_enabled,
+            explore_opening: config.adequacy.explore_opening,
+            min_semantic_successes_for_opening: config
+                .adequacy
+                .min_semantic_successes_for_opening
+                .max(1),
             model_to_tier,
+            key_strategy: config.key_strategy,
         }))
     }
 
@@ -109,13 +167,17 @@ impl PolicyTable {
     /// Apply the hard tool-use guardrail: a tool-carrying request whose `tier` is
     /// not tool-safe is clamped up to `tool_use_tier`. Returns the effective tier.
     fn guardrail<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> &'a str {
+        self.guardrail_with_status(tier, prompt).0
+    }
+
+    fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
         if !prompt.tools.is_empty()
             && !self.tool_safe_tiers.iter().any(|t| t == tier)
             && let Some(floor) = self.tool_use_tier.as_deref()
         {
-            return floor;
+            return (floor, floor != tier);
         }
-        tier
+        (tier, false)
     }
 
     /// The model id a tier routes to.
@@ -135,14 +197,26 @@ impl PolicyTable {
         self.escalation_tier.as_deref()
     }
 
-    /// The tier the *static* table (fingerprint → tier → guardrail, before any
-    /// adequacy adaptation) would route this prompt to. The observer uses it to
-    /// confirm a request was a genuine policy-router downgrade — the served tier
-    /// matches the static decision — before crediting its outcome, so a caller's
-    /// explicit route or a coincidental model match is not mistaken for one.
-    pub(crate) fn static_tier(&self, prompt: &Prompt) -> Option<&str> {
-        let fingerprint = Self::fingerprint(prompt);
-        self.static_tier_for(&fingerprint, prompt)
+    pub(crate) fn static_tier_with_headers(
+        &self,
+        prompt: &Prompt,
+        headers: &HeaderMap,
+    ) -> Option<&str> {
+        let key = self.request_key(prompt, headers);
+        self.static_tier_for(key.as_str(), prompt)
+    }
+
+    pub(crate) fn request_key(&self, prompt: &Prompt, headers: &HeaderMap) -> String {
+        match self.key_strategy {
+            PolicyKeyStrategy::LegacyFingerprint => Self::fingerprint(prompt),
+            PolicyKeyStrategy::WorkflowState => OnlineWorkflowState::from_headers(headers, prompt)
+                .routing_key()
+                .to_string(),
+        }
+    }
+
+    pub(crate) fn key_strategy(&self) -> PolicyKeyStrategy {
+        self.key_strategy
     }
 
     /// [`Self::static_tier`] for an already-computed fingerprint.
@@ -160,6 +234,10 @@ impl PolicyTable {
     /// Whether aggressive downgrade discovery is live.
     pub(crate) fn exploration_enabled(&self) -> bool {
         self.exploration_enabled
+    }
+
+    fn can_explore_opening(&self) -> bool {
+        self.explore_opening && self.min_semantic_successes_for_opening >= 1
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -243,85 +321,128 @@ impl PolicyTableRouter {
     /// when the fingerprint resolves to no tier, or when the prompt is already on
     /// the resolved tier's model.
     pub fn apply(&self, prompt: &mut Prompt) -> bool {
-        // An explicit `provider:model` route (including the `claude-code:`
-        // subscription route) is the caller's deliberate choice and wins over
-        // the soft policy table. Skipping it also makes re-application safe when
-        // a tier resolves to a `provider:`-pinned model.
-        if is_explicitly_routed(&prompt.model) {
-            return false;
-        }
-        // A request carrying a bitrouter server-tool declaration is owned by
-        // that server-tool flow — most visibly the `bitrouter/fusion` alias,
-        // which (earlier in the transform chain) rewrites the model to a chosen
-        // outer model and injects its `fusion` declaration. That outer model is
-        // deliberate, so the policy table must not re-tier it.
-        if carries_bitrouter_server_tool(prompt) {
-            return false;
-        }
-        let fingerprint = PolicyTable::fingerprint(prompt);
-        // The static decision (fingerprint → tier → guardrail). No tier ⇒ no-op.
-        let Some(static_tier) = self.table.static_tier_for(&fingerprint, prompt) else {
-            return false;
+        self.route_prompt(prompt, &HeaderMap::new())
+    }
+
+    pub fn decision_for(&self, prompt: &Prompt, headers: &HeaderMap) -> PolicyDecision {
+        let online = OnlineWorkflowState::from_headers(headers, prompt);
+        let legacy_fingerprint = online.legacy_fingerprint().to_string();
+        let request_key = match self.table.key_strategy() {
+            PolicyKeyStrategy::LegacyFingerprint => legacy_fingerprint.clone(),
+            PolicyKeyStrategy::WorkflowState => online.routing_key().to_string(),
         };
-        // Layer the ledger's adaptation on top (escalation pin / exploration);
-        // without a ledger this is exactly the static tier. Reading the ledger is
-        // sync and lock-cheap.
-        let tier = match &self.ledger {
-            Some(ledger) => self.adapt(ledger, &fingerprint, static_tier, prompt),
-            None => static_tier,
+        let mut decision = PolicyDecision {
+            key_strategy: self.table.key_strategy(),
+            request_key,
+            legacy_fingerprint,
+            workflow_state_kind: online.ir.state_kind.to_string(),
+            static_tier: None,
+            selected_tier: None,
+            selected_model: None,
+            reason: PolicyDecisionReason::NoMatch,
+            pinned: false,
+            locked: false,
+            trialed: false,
         };
-        let Some(model) = self.table.model_of_tier(tier) else {
-            // Unreachable for a config that passed `validate_policy_table`, but
-            // a no-op is the safe fallback rather than a panic.
+
+        if is_explicitly_routed(&prompt.model) || carries_bitrouter_server_tool(prompt) {
+            return decision;
+        }
+
+        let Some(raw_static_tier) = self.table.tier_for_fingerprint(&decision.request_key) else {
+            return decision;
+        };
+        decision.static_tier = Some(raw_static_tier.to_string());
+        let (mut selected_tier, static_clamped) =
+            self.table.guardrail_with_status(raw_static_tier, prompt);
+        decision.reason = if static_clamped {
+            PolicyDecisionReason::ToolGuardrail
+        } else {
+            PolicyDecisionReason::StaticTable
+        };
+
+        if let Some(ledger) = &self.ledger {
+            decision.pinned = ledger.is_pinned(&decision.request_key);
+            decision.locked = ledger.is_locked(&decision.request_key);
+            if decision.pinned {
+                if let Some(escalation) = self.table.escalation_tier() {
+                    (selected_tier, _) = self.table.guardrail_with_status(escalation, prompt);
+                    decision.reason = PolicyDecisionReason::AdequacyPin;
+                }
+            } else if self.table.exploration_enabled()
+                && Some(selected_tier) == self.table.escalation_tier()
+                && self.exploration_allowed_for(&decision)
+                && let Some(explore) = self.table.explore_tier()
+            {
+                let should_trial = ledger.should_trial(&decision.request_key);
+                if decision.locked || should_trial {
+                    let (guarded_explore, explore_clamped) =
+                        self.table.guardrail_with_status(explore, prompt);
+                    selected_tier = guarded_explore;
+                    decision.trialed = should_trial && !decision.locked;
+                    decision.reason = if explore_clamped {
+                        PolicyDecisionReason::ToolGuardrail
+                    } else if decision.locked {
+                        PolicyDecisionReason::ExplorationLocked
+                    } else {
+                        PolicyDecisionReason::ExplorationTrial
+                    };
+                }
+            }
+        }
+
+        decision.selected_tier = Some(selected_tier.to_string());
+        decision.selected_model = self
+            .table
+            .model_of_tier(selected_tier)
+            .map(ToString::to_string);
+        if decision.selected_model.is_none() {
+            decision.reason = PolicyDecisionReason::NoMatch;
+        }
+        decision
+    }
+
+    fn exploration_allowed_for(&self, decision: &PolicyDecision) -> bool {
+        if decision.legacy_fingerprint == "opening" || decision.workflow_state_kind == "opening" {
+            return self.table.can_explore_opening();
+        }
+        true
+    }
+
+    fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
+        let decision = self.decision_for(prompt, headers);
+        tracing::debug!(
+            key_strategy = ?decision.key_strategy,
+            request_key = %decision.request_key,
+            legacy_fingerprint = %decision.legacy_fingerprint,
+            workflow_state = %decision.workflow_state_kind,
+            static_tier = ?decision.static_tier,
+            selected_tier = ?decision.selected_tier,
+            selected_model = ?decision.selected_model,
+            reason = %decision.reason,
+            pinned = decision.pinned,
+            locked = decision.locked,
+            trialed = decision.trialed,
+            "policy routing decision"
+        );
+        let Some(model) = decision.selected_model else {
             return false;
         };
         if prompt.model == model {
             return false;
         }
-        prompt.model = model.to_string();
+        prompt.model = model;
         true
-    }
-
-    /// Adapt the `static_tier` using the ledger's learned state. Safety wins
-    /// first: a *pinned* fingerprint escalates. Otherwise, an exploration
-    /// *candidate* (one the static table routes to the escalation tier) is routed
-    /// to the explore tier when it is locked (a learned downgrade) or due for a
-    /// trial. Every override is re-guardrailed; an inapplicable case returns the
-    /// static tier unchanged.
-    fn adapt<'a>(
-        &'a self,
-        ledger: &AdequacyLedger,
-        fingerprint: &str,
-        static_tier: &'a str,
-        prompt: &Prompt,
-    ) -> &'a str {
-        // Safety half: a pinned downgrade escalates.
-        if ledger.is_pinned(fingerprint)
-            && let Some(escalation) = self.table.escalation_tier()
-        {
-            return self.table.guardrail(escalation, prompt);
-        }
-        // Aggressive half: trial / lock a downgrade for a candidate fingerprint
-        // (the static decision is the escalation tier — the operator left it
-        // capable, so it is eligible for cheaper trials).
-        if self.table.exploration_enabled()
-            && Some(static_tier) == self.table.escalation_tier()
-            && let Some(explore) = self.table.explore_tier()
-            && (ledger.is_locked(fingerprint) || ledger.should_trial(fingerprint))
-        {
-            return self.table.guardrail(explore, prompt);
-        }
-        static_tier
     }
 }
 
 impl PromptTransform for PolicyTableRouter {
     fn apply(&self, prompt: &mut Prompt) {
-        // The server applies every transform; discard the matched flag — a
-        // non-matching request is a no-op. The fingerprint comes from the body
-        // alone, so the header-aware `apply_with_headers` default (which
-        // delegates here) needs no override.
         PolicyTableRouter::apply(self, prompt);
+    }
+
+    fn apply_with_headers(&self, prompt: &mut Prompt, headers: &HeaderMap) {
+        self.route_prompt(prompt, headers);
     }
 }
 
@@ -357,14 +478,20 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adequacy::Outcome;
+    use crate::adequacy::{InadequacyCause, Outcome};
+    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::workflow_state::online::OnlineWorkflowState;
+    use bitrouter_sdk::HeaderMap;
+    use bitrouter_sdk::config::PolicyKeyStrategy;
     use bitrouter_sdk::language_model::types::{GenerationParams, Message, ProviderMetadata, Tool};
+    use http::HeaderValue;
 
     /// A policy table with a cheap and a flagship tier: `opening` and tool-heavy
     /// steps stay flagship, a read step goes cheap, and only flagship is
     /// tool-safe.
     fn config() -> PolicyTableConfig {
         PolicyTableConfig {
+            key_strategy: Default::default(),
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("flagship".to_string(), "vendor/flagship".to_string()),
@@ -382,6 +509,15 @@ mod tests {
 
     fn router() -> PolicyTableRouter {
         PolicyTableRouter::from_config(&config()).expect("tiers are configured")
+    }
+
+    fn claude_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("claude-code-20250219,tools-2024-05-16"),
+        );
+        headers
     }
 
     /// `config()` with online adequacy learning enabled, escalating pinned
@@ -561,6 +697,7 @@ mod tests {
         // No default_tier and an unmapped fingerprint → the caller's model is
         // left as-is.
         let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
             tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
             fingerprints: HashMap::from([("opening".to_string(), "cheap".to_string())]),
             default_tier: None,
@@ -620,6 +757,7 @@ mod tests {
         // A tier that resolves to a `provider:model` (colon) id: the first pass
         // routes to it, and the second pass skips it as an explicit route.
         let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
             tiers: HashMap::from([("flagship".to_string(), "vendor:exact".to_string())]),
             fingerprints: HashMap::from([("opening".to_string(), "flagship".to_string())]),
             default_tier: None,
@@ -641,6 +779,7 @@ mod tests {
         // With no `tool_use_tier`, the guardrail is off: a tool-carrying request
         // routes by fingerprint like any other (here `after_read_file` → cheap).
         let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("flagship".to_string(), "vendor/flagship".to_string()),
@@ -688,6 +827,219 @@ mod tests {
         p.model
     }
 
+    fn route_with_headers(
+        router: &PolicyTableRouter,
+        messages: Vec<Message>,
+        headers: &HeaderMap,
+    ) -> String {
+        let mut p = prompt("inbound");
+        p.messages = messages;
+        router.apply_with_headers(&mut p, headers);
+        p.model
+    }
+
+    #[test]
+    fn workflow_state_key_strategy_uses_ir_key_for_lookup() {
+        let mut cfg = config();
+        cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
+        cfg.fingerprints.clear();
+        cfg.default_tier = Some("flagship".to_string());
+
+        let mut probe = prompt("inbound");
+        probe.messages = vec![user("fix"), assistant_calls("Bash")];
+        let headers = claude_headers();
+        let key = OnlineWorkflowState::from_prompt(
+            &headers,
+            &probe,
+            Some(HarnessId::ClaudeCode),
+            ProtocolKind::Messages,
+        )
+        .routing_key()
+        .to_string();
+        cfg.fingerprints.insert(key, "cheap".to_string());
+
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        assert_eq!(
+            route_with_headers(
+                &router,
+                vec![user("fix"), assistant_calls("Bash")],
+                &headers
+            ),
+            "vendor/cheap"
+        );
+    }
+
+    #[test]
+    fn decision_reason_static_table() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+
+        let decision = router.decision_for(&p, &HeaderMap::new());
+
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/cheap"));
+    }
+
+    #[test]
+    fn decision_reason_tool_guardrail() {
+        let router = router();
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+        p.tools = vec![a_tool()];
+
+        let decision = router.decision_for(&p, &HeaderMap::new());
+
+        assert_eq!(decision.reason, PolicyDecisionReason::ToolGuardrail);
+        assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+    }
+
+    #[test]
+    fn decision_reason_no_match() {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
+            fingerprints: HashMap::from([("opening".to_string(), "cheap".to_string())]),
+            default_tier: None,
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut p = prompt("inbound");
+        p.messages = vec![user("hi"), assistant_calls("grep")];
+
+        let decision = router.decision_for(&p, &HeaderMap::new());
+
+        assert_eq!(decision.reason, PolicyDecisionReason::NoMatch);
+        assert_eq!(decision.selected_tier, None);
+        assert_eq!(decision.selected_model, None);
+    }
+
+    #[tokio::test]
+    async fn decision_reason_adequacy_pin() {
+        let table = PolicyTable::from_config(&config_with_escalation()).expect("configured");
+        let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
+        let router = PolicyTableRouter::new(table, Some(ledger.clone()));
+        ledger
+            .observe(
+                "after_read_file",
+                Outcome::StaticDowngrade {
+                    cause: InadequacyCause::ProviderPermanent,
+                },
+            )
+            .await;
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+
+        let decision = router.decision_for(&p, &HeaderMap::new());
+
+        assert_eq!(decision.reason, PolicyDecisionReason::AdequacyPin);
+        assert!(decision.pinned);
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+    }
+
+    #[tokio::test]
+    async fn decision_reason_exploration_trial() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            cause: InadequacyCause::None,
+        };
+        ledger.observe("opening", non_trial()).await;
+        ledger.observe("opening", non_trial()).await;
+        let router = exploring_router(ledger);
+        let mut p = prompt("inbound");
+        p.messages = vec![user("start")];
+
+        let decision = router.decision_for(&p, &HeaderMap::new());
+
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplorationTrial);
+        assert!(decision.trialed);
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[tokio::test]
+    async fn opening_is_not_explored_without_explicit_opt_in() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        ledger
+            .observe(
+                "opening",
+                Outcome::Exploration {
+                    trialed: false,
+                    cause: InadequacyCause::None,
+                },
+            )
+            .await;
+        let table = PolicyTable::from_config(&config_with_exploration()).expect("configured");
+        let router = PolicyTableRouter::new(table, Some(ledger));
+
+        assert_eq!(route_with(&router, vec![user("start")]), "vendor/flagship");
+    }
+
+    #[tokio::test]
+    async fn decision_reason_exploration_locked() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
+        ledger.observe("opening", trial_ok()).await;
+        let router = exploring_router(ledger);
+        let mut p = prompt("inbound");
+        p.messages = vec![user("start")];
+
+        let decision = router.decision_for(&p, &HeaderMap::new());
+
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplorationLocked);
+        assert!(decision.locked);
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[tokio::test]
+    async fn workflow_state_key_strategy_uses_ir_key_for_ledger_pins() {
+        let mut cfg = config_with_escalation();
+        cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
+        cfg.fingerprints.clear();
+        cfg.default_tier = Some("flagship".to_string());
+
+        let mut probe = prompt("inbound");
+        probe.messages = read_step();
+        let headers = claude_headers();
+        let key = OnlineWorkflowState::from_prompt(
+            &headers,
+            &probe,
+            Some(HarnessId::ClaudeCode),
+            ProtocolKind::Messages,
+        )
+        .routing_key()
+        .to_string();
+        cfg.fingerprints.insert(key.clone(), "cheap".to_string());
+
+        let table = PolicyTable::from_config(&cfg).expect("configured");
+        let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
+        let router = PolicyTableRouter::new(table, Some(ledger.clone()));
+
+        assert_eq!(
+            route_with_headers(&router, read_step(), &headers),
+            "vendor/cheap"
+        );
+
+        ledger
+            .observe(
+                &key,
+                Outcome::StaticDowngrade {
+                    cause: InadequacyCause::ProviderPermanent,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            route_with_headers(&router, read_step(), &headers),
+            "vendor/flagship",
+            "workflow-state ledger pin escalates the matching IR key"
+        );
+    }
+
     #[tokio::test]
     async fn a_pinned_fingerprint_escalates_over_the_static_downgrade() {
         let table = PolicyTable::from_config(&config_with_escalation()).expect("configured");
@@ -701,7 +1053,9 @@ mod tests {
         ledger
             .observe(
                 "after_read_file",
-                Outcome::StaticDowngrade { inadequate: true },
+                Outcome::StaticDowngrade {
+                    cause: InadequacyCause::ProviderPermanent,
+                },
             )
             .await;
 
@@ -722,7 +1076,9 @@ mod tests {
         ledger
             .observe(
                 "after_read_file",
-                Outcome::StaticDowngrade { inadequate: true },
+                Outcome::StaticDowngrade {
+                    cause: InadequacyCause::ProviderPermanent,
+                },
             )
             .await; // pin only this fingerprint
 
@@ -757,15 +1113,22 @@ mod tests {
         cfg
     }
 
+    fn config_with_opening_exploration() -> PolicyTableConfig {
+        let mut cfg = config_with_exploration();
+        cfg.adequacy.explore_opening = true;
+        cfg
+    }
+
     fn exploring_router(ledger: Arc<AdequacyLedger>) -> PolicyTableRouter {
-        let table = PolicyTable::from_config(&config_with_exploration()).expect("configured");
+        let table =
+            PolicyTable::from_config(&config_with_opening_exploration()).expect("configured");
         PolicyTableRouter::new(table, Some(ledger))
     }
 
     fn trial_ok() -> Outcome {
         Outcome::Exploration {
             trialed: true,
-            inadequate: false,
+            cause: InadequacyCause::None,
         }
     }
 
@@ -782,7 +1145,7 @@ mod tests {
         // Two non-trial observations advance the cadence so a trial is due.
         let non_trial = || Outcome::Exploration {
             trialed: false,
-            inadequate: false,
+            cause: InadequacyCause::None,
         };
         ledger.observe("opening", non_trial()).await;
         ledger.observe("opening", non_trial()).await;
@@ -812,7 +1175,7 @@ mod tests {
                 "opening",
                 Outcome::Exploration {
                     trialed: true,
-                    inadequate: true,
+                    cause: InadequacyCause::ProviderPermanent,
                 },
             )
             .await;

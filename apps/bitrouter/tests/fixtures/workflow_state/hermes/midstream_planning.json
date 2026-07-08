@@ -1,0 +1,20 @@
+{
+  "id": "hermes-midstream-planning-001",
+  "harness": "hermes",
+  "protocol": "chat_completions",
+  "headers": {},
+  "raw_body": {
+    "model": "bitrouter-mvp-alias",
+    "messages": [
+      {"role": "user", "content": "inspect this repo"},
+      {"role": "assistant", "content": "I will inspect the layout first."},
+      {"role": "user", "content": "continue"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "planning",
+    "baseline_fingerprint": "midstream",
+    "confidence_min": 0.55
+  }
+}

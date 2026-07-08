@@ -36,13 +36,46 @@ use bitrouter_sdk::config::AdequacyConfig;
 
 use self::store::AdequacyStore;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InadequacyCause {
+    None,
+    ProviderTransient,
+    ProviderPermanent,
+    Protocol,
+    Auth,
+    Client,
+    Semantic,
+}
+
+impl InadequacyCause {
+    fn is_none(self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    fn is_ignored(self) -> bool {
+        matches!(self, Self::Auth | Self::Client)
+    }
+
+    fn is_transient(self) -> bool {
+        matches!(self, Self::ProviderTransient)
+    }
+
+    fn pins_immediately(self) -> bool {
+        matches!(self, Self::Semantic)
+    }
+
+    fn counts_as_non_transient_failure(self) -> bool {
+        matches!(self, Self::ProviderPermanent | Self::Protocol)
+    }
+}
+
 /// What the observer determined about one request, for the ledger to fold in.
 pub enum Outcome {
     /// A static (operator-configured) downgrade — the served tier is the cheap
     /// tier the static table assigned this fingerprint. Consecutive failures pin.
     StaticDowngrade {
-        /// Whether the request hard-failed.
-        inadequate: bool,
+        /// Why the request was inadequate, or `None` when it completed cleanly.
+        cause: InadequacyCause,
     },
     /// An exploration candidate — the static table routes this fingerprint to the
     /// escalation tier (the operator did not downgrade it). `trialed` is whether
@@ -51,8 +84,8 @@ pub enum Outcome {
     Exploration {
         /// Whether this request went to the explore tier.
         trialed: bool,
-        /// Whether the request hard-failed (only meaningful when `trialed`).
-        inadequate: bool,
+        /// Why the request was inadequate, or `None` when it completed cleanly.
+        cause: InadequacyCause,
     },
 }
 
@@ -81,6 +114,8 @@ struct State {
 struct Entry {
     /// Consecutive hard-failure tally toward a pin (pre-pin, transient).
     failures: u32,
+    /// Consecutive transient provider-failure tally toward a reliability pin.
+    transient_failures: u32,
     /// Unix seconds the escalation pin was applied; `None` = not pinned.
     pinned_at: Option<u64>,
     /// Exploration candidate requests observed (drives the trial cadence).
@@ -176,39 +211,23 @@ impl AdequacyLedger {
             let mut guard = self.state.write().unwrap_or_else(PoisonError::into_inner);
             let entry = guard.entries.entry(fingerprint.to_string()).or_default();
             match outcome {
-                Outcome::StaticDowngrade { inadequate } => {
-                    if inadequate {
-                        entry.failures += 1;
-                        (entry.failures >= self.threshold).then(|| pin(entry))
-                    } else {
-                        // A clean outcome resets the pre-pin tally; an existing
-                        // pin decays on its own cooldown.
-                        entry.failures = 0;
-                        None
-                    }
-                }
-                Outcome::Exploration {
-                    trialed,
-                    inadequate,
-                } => {
+                Outcome::StaticDowngrade { cause } => self.apply_failure_cause(entry, cause, false),
+                Outcome::Exploration { trialed, cause } => {
                     // Every candidate request (trialed or not) advances the cadence.
                     entry.observed = entry.observed.saturating_add(1);
                     if !trialed {
                         None
-                    } else if inadequate {
-                        // A failed trial / locked route: un-learn the downgrade
-                        // and escalate (sticky), like the safety path.
-                        entry.adequate_trials = 0;
-                        entry.locked = false;
-                        Some(pin(entry))
-                    } else if !entry.locked {
+                    } else if cause.is_none() {
+                        entry.failures = 0;
+                        entry.transient_failures = 0;
                         entry.adequate_trials += 1;
-                        if entry.adequate_trials >= self.explore_threshold {
+                        if !entry.locked && entry.adequate_trials >= self.explore_threshold {
                             entry.locked = true;
                         }
                         None
                     } else {
-                        None
+                        entry.adequate_trials = 0;
+                        self.apply_failure_cause(entry, cause, true)
                     }
                 }
             }
@@ -220,6 +239,54 @@ impl AdequacyLedger {
             let _ = store.upsert_pin(fingerprint, pinned_at as i64).await;
         }
     }
+
+    fn apply_failure_cause(
+        &self,
+        entry: &mut Entry,
+        cause: InadequacyCause,
+        exploration_failure: bool,
+    ) -> Option<u64> {
+        if cause.is_none() {
+            entry.failures = 0;
+            entry.transient_failures = 0;
+            return None;
+        }
+        if cause.is_ignored() {
+            return None;
+        }
+        if cause.pins_immediately() {
+            if exploration_failure {
+                entry.locked = false;
+            }
+            return Some(pin(entry));
+        }
+        if cause.is_transient() {
+            entry.transient_failures = entry.transient_failures.saturating_add(1);
+            entry.failures = 0;
+            if entry.transient_failures >= self.transient_threshold() {
+                if exploration_failure {
+                    entry.locked = false;
+                }
+                return Some(pin(entry));
+            }
+            return None;
+        }
+        if cause.counts_as_non_transient_failure() {
+            entry.failures = entry.failures.saturating_add(1);
+            entry.transient_failures = 0;
+            if entry.failures >= self.threshold {
+                if exploration_failure {
+                    entry.locked = false;
+                }
+                return Some(pin(entry));
+            }
+        }
+        None
+    }
+
+    fn transient_threshold(&self) -> u32 {
+        self.threshold.max(2)
+    }
 }
 
 /// Apply an escalation pin to `entry`, clearing the pre-pin tally, and return the
@@ -228,6 +295,7 @@ fn pin(entry: &mut Entry) -> u64 {
     let pinned_at = now_unix();
     entry.pinned_at = Some(pinned_at);
     entry.failures = 0;
+    entry.transient_failures = 0;
     pinned_at
 }
 
@@ -244,21 +312,35 @@ mod tests {
     use super::*;
 
     fn fail() -> Outcome {
-        Outcome::StaticDowngrade { inadequate: true }
+        Outcome::StaticDowngrade {
+            cause: InadequacyCause::ProviderPermanent,
+        }
     }
     fn ok() -> Outcome {
-        Outcome::StaticDowngrade { inadequate: false }
+        Outcome::StaticDowngrade {
+            cause: InadequacyCause::None,
+        }
     }
     fn trial(inadequate: bool) -> Outcome {
         Outcome::Exploration {
             trialed: true,
-            inadequate,
+            cause: if inadequate {
+                InadequacyCause::ProviderPermanent
+            } else {
+                InadequacyCause::None
+            },
+        }
+    }
+    fn trial_with(cause: InadequacyCause) -> Outcome {
+        Outcome::Exploration {
+            trialed: true,
+            cause,
         }
     }
     fn non_trial() -> Outcome {
         Outcome::Exploration {
             trialed: false,
-            inadequate: false,
+            cause: InadequacyCause::None,
         }
     }
 
@@ -271,6 +353,19 @@ mod tests {
         assert!(!ledger.is_pinned("after_edit"));
         ledger.observe("after_edit", fail()).await;
         assert!(ledger.is_pinned("after_edit"));
+    }
+
+    #[tokio::test]
+    async fn transient_provider_error_does_not_permanently_pin_on_first_failure() {
+        let ledger = AdequacyLedger::in_memory_explore(1, 300, 1, 3);
+        ledger
+            .observe(
+                "tool_followup",
+                trial_with(InadequacyCause::ProviderTransient),
+            )
+            .await;
+
+        assert!(!ledger.is_pinned("tool_followup"));
     }
 
     #[tokio::test]

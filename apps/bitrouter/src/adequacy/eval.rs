@@ -33,6 +33,7 @@ const CAPABLE: &str = "vendor/capable";
 /// one not.
 fn workload_table() -> Arc<PolicyTable> {
     let cfg = PolicyTableConfig {
+        key_strategy: Default::default(),
         tiers: HashMap::from([
             ("cheap".to_string(), CHEAP.to_string()),
             ("capable".to_string(), CAPABLE.to_string()),

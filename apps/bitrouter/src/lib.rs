@@ -30,6 +30,7 @@ pub mod skills;
 pub mod spawn;
 pub mod style;
 pub mod tools;
+pub mod workflow_state;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
 

@@ -255,6 +255,11 @@ enum Command {
         #[command(subcommand)]
         action: McpAction,
     },
+    /// Workflow-state trace/replay utilities.
+    WorkflowState {
+        #[command(subcommand)]
+        action: WorkflowStateAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -269,6 +274,28 @@ enum ConfigAction {
         /// `$BITROUTER_HOME` → `~/.bitrouter`).
         #[arg(short, long)]
         config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkflowStateAction {
+    /// Build a deterministic benchmark trace bundle.
+    Bundle {
+        /// Run label stored in `run-artifact.json`.
+        #[arg(long)]
+        run_label: String,
+        /// Daemon workflow trace JSONL.
+        #[arg(long)]
+        traces: PathBuf,
+        /// BitRouter Cloud usage snapshot JSONL.
+        #[arg(long)]
+        cloud_usage: PathBuf,
+        /// Benchmark outcome JSONL.
+        #[arg(long)]
+        outcomes: PathBuf,
+        /// Output directory for traces/cloud usage/outcomes/artifacts.
+        #[arg(long)]
+        output_dir: PathBuf,
     },
 }
 
@@ -619,6 +646,7 @@ async fn run() -> Result<()> {
         Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action).await,
         Command::Mcp { action } => mcp_cmd(action).await,
+        Command::WorkflowState { action } => workflow_state_cmd(action).await,
     }
 }
 
@@ -629,6 +657,47 @@ async fn config_cmd(action: ConfigAction) -> Result<()> {
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             validate_config(&source).await
+        }
+    }
+}
+
+async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
+    match action {
+        WorkflowStateAction::Bundle {
+            run_label,
+            traces,
+            cloud_usage,
+            outcomes,
+            output_dir,
+        } => {
+            use bitrouter::workflow_state::archive::{
+                CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
+            };
+            use bitrouter::workflow_state::real_trace::TraceSanitizer;
+            use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
+
+            let traces = TraceArchive::read_jsonl(&traces)
+                .with_context(|| format!("read workflow traces {}", traces.display()))?;
+            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
+                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
+            let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
+                .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
+            let artifact = WorkflowRunArtifact::write_bundle_with_outcomes(
+                run_label,
+                &output_dir,
+                &traces,
+                &usage,
+                &outcomes,
+                &TraceSanitizer::default(),
+            )
+            .with_context(|| format!("write workflow bundle {}", output_dir.display()))?;
+            println!(
+                "✓ wrote workflow bundle to {} (traces: {}, reward matches: {})",
+                output_dir.display(),
+                artifact.trace_count,
+                artifact.reward_join.matched_trace_count
+            );
+            Ok(())
         }
     }
 }
@@ -896,6 +965,14 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     if let Some(msg) = &assembled.otel_init_error {
         tracing::error!("{msg}");
     }
+    let workflow_trace_capture =
+        bitrouter::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
+    if let Some(_) = &workflow_trace_capture {
+        tracing::info!(
+            env = bitrouter::workflow_state::real_trace::WORKFLOW_TRACE_JSONL_ENV,
+            "workflow trace capture enabled"
+        );
+    }
     let app = Arc::new(assembled.app);
     let policy_store = assembled.policy_store;
     // Clone before moving the original into `run_control_socket` — we
@@ -928,13 +1005,23 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
         // trace-context propagation) so the inbound HTTP request becomes
         // the SERVER span parent of the bitrouter `chat` INTERNAL span.
-        http_app
-            .serve_with_router_wrapper(
-                &http_listen,
-                bitrouter_observe::otel::http_layer::router_wrapper(),
-            )
-            .await
-            .map_err(anyhow::Error::from)
+        let otel_wrapper = bitrouter_observe::otel::http_layer::router_wrapper();
+        match workflow_trace_capture {
+            Some(capture) => {
+                let workflow_wrapper = capture.router_wrapper();
+                http_app
+                    .serve_with_router_wrapper(&http_listen, move |router| {
+                        workflow_wrapper(otel_wrapper(router))
+                    })
+                    .await
+            }
+            None => {
+                http_app
+                    .serve_with_router_wrapper(&http_listen, otel_wrapper)
+                    .await
+            }
+        }
+        .map_err(anyhow::Error::from)
     };
     let control = daemon::run_control_socket(
         socket_path,

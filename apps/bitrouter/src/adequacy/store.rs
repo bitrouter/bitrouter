@@ -140,7 +140,12 @@ mod tests {
         // First ledger: a failure pins the fingerprint and persists it.
         let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
         ledger
-            .observe("after_edit", Outcome::StaticDowngrade { inadequate: true })
+            .observe(
+                "after_edit",
+                Outcome::StaticDowngrade {
+                    cause: crate::adequacy::InadequacyCause::ProviderPermanent,
+                },
+            )
             .await;
         assert!(ledger.is_pinned("after_edit"));
         // A fresh ledger over the same db warms its cache from the stored pin.

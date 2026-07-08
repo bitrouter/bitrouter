@@ -160,6 +160,11 @@ impl Default for RegistryConfig {
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PolicyTableConfig {
+    /// Which request key the policy table uses for `fingerprints`. The default
+    /// preserves the original coarse key (`opening`, `after_<tool>`,
+    /// `midstream`). `workflow_state` switches lookup and adequacy learning to
+    /// the cross-harness Workflow State IR routing key.
+    pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
     /// canonical id (resolved via the cascade/registry) or an explicit
@@ -189,6 +194,18 @@ pub struct PolicyTableConfig {
     /// offending fingerprint to a more capable tier — so an operator's downgrade
     /// that proves inadequate is self-correcting. Off by default.
     pub adequacy: AdequacyConfig,
+}
+
+/// Request-key family used by `policy_table.fingerprints`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyKeyStrategy {
+    /// The original coarse prompt fingerprint: `opening`, `midstream`, or
+    /// `after_<tool>`.
+    #[default]
+    LegacyFingerprint,
+    /// The cross-harness Workflow State IR routing key.
+    WorkflowState,
 }
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.
@@ -242,6 +259,14 @@ pub struct AdequacyConfig {
     /// Consecutive adequate trials before a fingerprint is locked to the cheap
     /// tier (the learned downgrade). Default `3`.
     pub explore_threshold: u32,
+    /// Whether the opening turn is eligible for aggressive exploration. Default
+    /// `false`, because opening/planning errors tend to propagate through the
+    /// whole task and Terminal-Bench showed this state is high leverage.
+    pub explore_opening: bool,
+    /// Future reward-stitching guardrail: minimum semantic successes required
+    /// before opening can be considered safe for downgrade. Parsed now so config
+    /// can converge, enforced once task-level rewards are wired online.
+    pub min_semantic_successes_for_opening: u32,
 }
 
 impl Default for AdequacyConfig {
@@ -255,6 +280,8 @@ impl Default for AdequacyConfig {
             explore_tier: None,
             explore_interval: 5,
             explore_threshold: 3,
+            explore_opening: false,
+            min_semantic_successes_for_opening: 1,
         }
     }
 }

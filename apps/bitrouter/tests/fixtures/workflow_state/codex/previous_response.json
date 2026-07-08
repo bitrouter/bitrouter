@@ -1,0 +1,17 @@
+{
+  "id": "codex-previous-response-001",
+  "harness": "codex",
+  "protocol": "responses",
+  "headers": {},
+  "raw_body": {
+    "model": "openai/gpt-5.5",
+    "previous_response_id": "resp_123",
+    "input": "continue",
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.5
+  }
+}

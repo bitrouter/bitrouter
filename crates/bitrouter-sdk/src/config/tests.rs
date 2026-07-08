@@ -467,9 +467,30 @@ fn policy_table_absent_leaves_section_empty() {
     .unwrap();
     assert!(cfg.policy_table.tiers.is_empty());
     assert!(cfg.policy_table.fingerprints.is_empty());
+    assert_eq!(
+        cfg.policy_table.key_strategy,
+        PolicyKeyStrategy::LegacyFingerprint
+    );
     assert!(cfg.policy_table.default_tier.is_none());
     assert!(cfg.policy_table.tool_use_tier.is_none());
     assert!(cfg.policy_table.tool_safe_tiers.is_empty());
+}
+
+#[test]
+fn parses_policy_table_workflow_state_key_strategy() {
+    let yaml = r#"
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    cheap: vendor/cheap
+  fingerprints:
+    "generic|unknown|opening|-|-|-|none|small|none|low|low|low|low|medium|medium|": cheap
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    assert_eq!(
+        cfg.policy_table.key_strategy,
+        PolicyKeyStrategy::WorkflowState
+    );
 }
 
 #[test]
@@ -581,6 +602,8 @@ policy_table:
     assert!(!adequacy.enabled);
     assert_eq!(adequacy.escalation_threshold, 1);
     assert_eq!(adequacy.pin_cooldown_secs, 1800);
+    assert!(!adequacy.explore_opening);
+    assert_eq!(adequacy.min_semantic_successes_for_opening, 1);
 }
 
 #[test]
@@ -633,6 +656,8 @@ policy_table:
     explore_tier: cheap
     explore_interval: 8
     explore_threshold: 4
+    explore_opening: true
+    min_semantic_successes_for_opening: 2
 "#;
     let cfg = parse_with(yaml, |_| None).unwrap();
     let adequacy = &cfg.policy_table.adequacy;
@@ -640,6 +665,8 @@ policy_table:
     assert_eq!(adequacy.explore_tier.as_deref(), Some("cheap"));
     assert_eq!(adequacy.explore_interval, 8);
     assert_eq!(adequacy.explore_threshold, 4);
+    assert!(adequacy.explore_opening);
+    assert_eq!(adequacy.min_semantic_successes_for_opening, 2);
 }
 
 #[test]

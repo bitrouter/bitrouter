@@ -11,12 +11,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use bitrouter_sdk::BitrouterError;
 use bitrouter_sdk::language_model::types::StreamPart;
 use bitrouter_sdk::language_model::{
     ObserveHook, Phase, PipelineContext, RequestOutcome, StreamContext,
 };
 
-use crate::adequacy::{AdequacyLedger, Outcome};
+use crate::adequacy::{AdequacyLedger, InadequacyCause, Outcome};
 use crate::policy_table_router::PolicyTable;
 
 /// Feeds the [`AdequacyLedger`] from request outcomes against the shared
@@ -42,22 +43,21 @@ impl ObserveHook for AdequacyObserveHook {
     async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
 
     async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
-        let inadequate = match outcome {
-            // A hard failure — an upstream error (including a mid-stream stream
-            // error, which the pipeline surfaces as `Failed`), a route / auth /
-            // policy failure, etc.
-            RequestOutcome::Failed(_) => true,
+        let cause = match outcome {
+            RequestOutcome::Failed(error) => classify_failure(error),
             // The client hanging up tells us nothing about the tier — skip.
             RequestOutcome::ClientDisconnected => return,
             // A completed request got a response: the route held.
-            RequestOutcome::Completed => false,
+            RequestOutcome::Completed => InadequacyCause::None,
         };
         // Which of the table's tiers actually served the request. Not one of
         // ours ⇒ nothing to learn.
         let Some(served_tier) = self.table.tier_of_model(ctx.model()) else {
             return;
         };
-        let static_tier = self.table.static_tier(ctx.prompt());
+        let static_tier = self
+            .table
+            .static_tier_with_headers(ctx.prompt(), ctx.headers());
         let escalation_tier = self.table.escalation_tier();
 
         // A genuine *static* (operator-configured) downgrade: the served tier is
@@ -65,9 +65,9 @@ impl ObserveHook for AdequacyObserveHook {
         // tier). This guards against a caller's explicit route / coincidental
         // model match being mistaken for one.
         if static_tier == Some(served_tier) && Some(served_tier) != escalation_tier {
-            let fingerprint = PolicyTable::fingerprint(ctx.prompt());
+            let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
             self.ledger
-                .observe(&fingerprint, Outcome::StaticDowngrade { inadequate })
+                .observe(&fingerprint, Outcome::StaticDowngrade { cause })
                 .await;
             return;
         }
@@ -86,18 +86,31 @@ impl ObserveHook for AdequacyObserveHook {
             // up to the tool-use tier — is intentionally not counted: a real trial
             // there would be clamped too, so exploration is correctly inert for it.
             if trialed || Some(served_tier) == escalation_tier {
-                let fingerprint = PolicyTable::fingerprint(ctx.prompt());
+                let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
                 self.ledger
-                    .observe(
-                        &fingerprint,
-                        Outcome::Exploration {
-                            trialed,
-                            inadequate,
-                        },
-                    )
+                    .observe(&fingerprint, Outcome::Exploration { trialed, cause })
                     .await;
             }
         }
+    }
+}
+
+fn classify_failure(error: &BitrouterError) -> InadequacyCause {
+    match error {
+        BitrouterError::Upstream { status, .. } => match *status {
+            408 | 429 | 500..=599 => InadequacyCause::ProviderTransient,
+            401 | 403 => InadequacyCause::Auth,
+            _ => InadequacyCause::ProviderPermanent,
+        },
+        BitrouterError::UpstreamTimeout
+        | BitrouterError::RateLimited { .. }
+        | BitrouterError::Internal(_) => InadequacyCause::ProviderTransient,
+        BitrouterError::UpstreamAuth { .. }
+        | BitrouterError::Unauthorized(_)
+        | BitrouterError::Forbidden(_)
+        | BitrouterError::PaymentRequired(_) => InadequacyCause::Auth,
+        BitrouterError::BadRequest { .. } => InadequacyCause::Protocol,
+        BitrouterError::NotFound(_) => InadequacyCause::Client,
     }
 }
 
@@ -107,16 +120,22 @@ mod tests {
     use std::collections::HashMap;
 
     use bitrouter_sdk::BitrouterError;
+    use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::config::PolicyTableConfig;
+    use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
     use bitrouter_sdk::language_model::types::{
         Content, GenerationParams, Message, PipelineRequest, Prompt, ProviderMetadata, Role,
     };
+    use http::HeaderValue;
+
+    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::workflow_state::online::OnlineWorkflowState;
 
     // A table: `opening` → capable (= the escalation tier, via default_tier),
     // `after_read_file` → cheap (a downgrade).
     fn table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("capable".to_string(), "vendor/capable".to_string()),
@@ -133,10 +152,27 @@ mod tests {
         PolicyTable::from_config(&cfg).expect("configured")
     }
 
+    fn workflow_table(workflow_key: String) -> Arc<PolicyTable> {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::WorkflowState,
+            tiers: HashMap::from([
+                ("cheap".to_string(), "vendor/cheap".to_string()),
+                ("capable".to_string(), "vendor/capable".to_string()),
+            ]),
+            fingerprints: HashMap::from([(workflow_key, "cheap".to_string())]),
+            default_tier: Some("capable".to_string()),
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: Default::default(),
+        };
+        PolicyTable::from_config(&cfg).expect("configured")
+    }
+
     // The same table with exploration on: `opening` (static = capable = the
     // escalation tier) is a candidate trialed toward `cheap`.
     fn explore_table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("capable".to_string(), "vendor/capable".to_string()),
@@ -197,8 +233,41 @@ mod tests {
         PipelineContext::new(request)
     }
 
+    fn ctx_with_headers(
+        served_model: &str,
+        messages: Vec<Message>,
+        headers: HeaderMap,
+    ) -> PipelineContext {
+        let mut request = PipelineRequest::new(
+            served_model.to_string(),
+            CallerContext::new("k", "u"),
+            prompt(messages),
+        );
+        request.headers = headers;
+        PipelineContext::new(request)
+    }
+
+    fn claude_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("claude-code-20250219,tools-2024-05-16"),
+        );
+        headers
+    }
+
     fn failed() -> RequestOutcome {
-        RequestOutcome::Failed(BitrouterError::internal("upstream boom"))
+        RequestOutcome::Failed(BitrouterError::Upstream {
+            status: 400,
+            message: "provider rejected the request".to_string(),
+        })
+    }
+
+    fn transient_failed() -> RequestOutcome {
+        RequestOutcome::Failed(BitrouterError::Upstream {
+            status: 502,
+            message: "provider temporarily unavailable".to_string(),
+        })
     }
 
     fn read_step() -> Vec<Message> {
@@ -214,6 +283,41 @@ mod tests {
         hook.on_request_end(&ctx("vendor/cheap", read_step()), &failed())
             .await;
         assert!(ledger.is_pinned("after_read_file"));
+    }
+
+    #[tokio::test]
+    async fn a_transient_provider_failure_does_not_pin_on_first_observation() {
+        let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
+        let hook = AdequacyObserveHook::new(table(), ledger.clone());
+        hook.on_request_end(&ctx("vendor/cheap", read_step()), &transient_failed())
+            .await;
+        assert!(!ledger.is_pinned("after_read_file"));
+    }
+
+    #[tokio::test]
+    async fn workflow_key_strategy_observes_pins_by_ir_key() {
+        let messages = read_step();
+        let prompt = prompt(messages.clone());
+        let headers = claude_headers();
+        let workflow_key = OnlineWorkflowState::from_prompt(
+            &headers,
+            &prompt,
+            Some(HarnessId::ClaudeCode),
+            ProtocolKind::Messages,
+        )
+        .routing_key()
+        .to_string();
+        let ledger = Arc::new(AdequacyLedger::in_memory(1, 0));
+        let hook = AdequacyObserveHook::new(workflow_table(workflow_key.clone()), ledger.clone());
+
+        hook.on_request_end(
+            &ctx_with_headers("vendor/cheap", messages, headers),
+            &failed(),
+        )
+        .await;
+
+        assert!(ledger.is_pinned(&workflow_key));
+        assert!(!ledger.is_pinned("after_read_file"));
     }
 
     #[tokio::test]

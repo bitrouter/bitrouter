@@ -15,8 +15,12 @@
 
 use axum_test::TestServer;
 use bitrouter::metering::entities::requests;
+use bitrouter::workflow_state::ir::ProtocolKind;
+use bitrouter::workflow_state::online::OnlineWorkflowState;
+use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
+use bitrouter_sdk::language_model::types::{Content, ProviderMetadata};
 use bitrouter_sdk::language_model::{GenerationParams, Message, PipelineRequest, Prompt, Role};
 use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -26,6 +30,10 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Stand up a wiremock upstream speaking Chat Completions.
 async fn mock_chat_completions_upstream() -> MockServer {
+    mock_chat_completions_upstream_with_content("hello from the mock upstream").await
+}
+
+async fn mock_chat_completions_upstream_with_content(content: &str) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -35,7 +43,7 @@ async fn mock_chat_completions_upstream() -> MockServer {
             "model": "test-model",
             "choices": [{
                 "index": 0,
-                "message": { "role": "assistant", "content": "hello from the mock upstream" },
+                "message": { "role": "assistant", "content": content },
                 "finish_reason": "stop",
             }],
             "usage": { "prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18 },
@@ -43,6 +51,41 @@ async fn mock_chat_completions_upstream() -> MockServer {
         .mount(&server)
         .await;
     server
+}
+
+fn prompt_for_policy_key(messages: Vec<Message>) -> Prompt {
+    Prompt {
+        model: "router-entry".to_string(),
+        system: None,
+        system_provider_metadata: Default::default(),
+        messages,
+        tools: Vec::new(),
+        params: GenerationParams::default(),
+        response_format: None,
+        tool_choice: None,
+        stream: false,
+    }
+}
+
+fn assistant_calls_for_policy_key(tool: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![Content::ToolCall {
+            id: format!("call_{tool}"),
+            name: tool.to_string(),
+            arguments: "{}".to_string(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: ProviderMetadata::new(),
+        }],
+    }
+}
+
+fn workflow_key_for(messages: Vec<Message>) -> String {
+    let prompt = prompt_for_policy_key(messages);
+    OnlineWorkflowState::from_prompt(&HeaderMap::new(), &prompt, None, ProtocolKind::Unknown)
+        .routing_key()
+        .to_string()
 }
 
 /// A config pointing one provider at the mock upstream, `skip_auth: true` and
@@ -189,6 +232,110 @@ async fn e2e_http_server_chat_completions_end_to_end() {
         text.contains("bitrouter-observe.otel"),
         "/metrics banner should point at the new config key; got:\n{text}"
     );
+}
+
+#[tokio::test]
+async fn workflow_state_policy_routes_by_ir_key() {
+    let strong = mock_chat_completions_upstream_with_content("strong").await;
+    let cheap = mock_chat_completions_upstream_with_content("cheap").await;
+    let opening_key = workflow_key_for(vec![Message::text(Role::User, "start")]);
+    let tool_followup_key = workflow_key_for(vec![
+        Message::text(Role::User, "fix"),
+        assistant_calls_for_policy_key("Bash"),
+    ]);
+
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  strong:
+    api_base: {strong_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: strong-model
+  cheap:
+    api_base: {cheap_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: cheap-model
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    capable: strong:strong-model
+    cheap_tool_safe: cheap:cheap-model
+  fingerprints:
+    "{opening_key}": capable
+    "{tool_followup_key}": cheap_tool_safe
+  default_tier: capable
+  tool_use_tier: capable
+  tool_safe_tiers:
+    - capable
+    - cheap_tool_safe
+"#,
+        strong_uri = strong.uri(),
+        cheap_uri = cheap.uri(),
+    );
+    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let server = TestServer::new(build_router(state));
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "router-entry",
+            "messages": [{ "role": "user", "content": "start" }],
+        }))
+        .await
+        .assert_status_ok();
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "router-entry",
+            "messages": [
+                { "role": "user", "content": "fix" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_Bash",
+                        "type": "function",
+                        "function": { "name": "Bash", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_Bash", "content": "done" }
+            ],
+        }))
+        .await
+        .assert_status_ok();
+
+    let strong_requests = strong.received_requests().await.unwrap_or_default();
+    let cheap_requests = cheap.received_requests().await.unwrap_or_default();
+    assert_eq!(strong_requests.len(), 1, "opening should route to strong");
+    assert_eq!(
+        cheap_requests.len(),
+        1,
+        "tool followup should route to cheap via workflow-state key"
+    );
+    let strong_body: Value = serde_json::from_slice(&strong_requests[0].body).unwrap();
+    let cheap_body: Value = serde_json::from_slice(&cheap_requests[0].body).unwrap();
+    assert_eq!(strong_body["model"], "strong-model");
+    assert_eq!(cheap_body["model"], "cheap-model");
 }
 
 #[tokio::test]
