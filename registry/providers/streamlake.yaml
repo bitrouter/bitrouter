@@ -1,17 +1,7 @@
-# SCAFFOLD — UNVERIFIED. status: staging (does not route until a human verifies
-# and flips to active). Researched 2026-07 from https://www.streamlake.com/ docs.
-# StreamLake (快手万擎 / Vanchin) is Kuaishou's enterprise MaaS. OpenAI-compatible.
-# PRICING: official rates are RMB per 1M tokens; converted to USD below at
-# ~7.2 CNY/USD — VERIFY on the live pricing page (changes frequently; last seen
-# 2026-07-07). OpenRouter's USD for kat-coder-pro-v2 ($0.30 in / $1.20 out)
-# corroborates the converted figures.
-# VERIFY BEFORE ACTIVATING:
-#   - Exact model-id casing the API accepts (docs use lowercase kat-coder-*).
-#   - RPM/TPM (not published), status page, and privacy-policy URL (not found).
-#   - Hosted DeepSeek/Kimi/Qwen/GLM are BYO-deployed inference endpoints (ep-...),
-#     NOT a fixed catalog — omitted here. Add only if confirmed in the console.
-#   - Anthropic (claude-code-proxy) surface exists but is per-model
-#     (.../v1/endpoints/<model>/claude-code-proxy) — not a provider-wide endpoint.
+# Verified 2026-07-08 from StreamLake/Vanchin docs. The pay-as-you-go OpenAI
+# base URL is `https://vanchin.streamlake.ai/api/gateway/v1/endpoints`; the
+# coding-plan URL is a separate subscription surface and is not represented here.
+# Pricing is official USD per 1M tokens from the StreamLake pricing page.
 name: streamlake
 display_name: StreamLake (Kuaishou Vanchin)
 metadata:
@@ -19,9 +9,10 @@ metadata:
   datacenters:
     - CN
   name: StreamLake
+  privacy_policy_url: https://www.streamlake.ai/document/DOC/mgkci47q13qr66h9i54
   slug: streamlake
   terms_of_service_url: https://www.streamlake.ai/document/DOC/mgkchnd89grpt1961fw
-api_base: https://wanqing.streamlakeapi.com/api/gateway/v1/endpoints
+api_base: https://vanchin.streamlake.ai/api/gateway/v1/endpoints
 api_protocol:
   - "*": openai
 auth_scheme: bearer
@@ -31,26 +22,27 @@ models:
     provider_model_id: kat-coder-pro-v2
     pricing:
       input_tokens:
-        no_cache: 0.29
-        cache_read: 0.058
+        no_cache: 0.3
+        cache_read: 0.06
+        cache_write: 0
       output_tokens:
-        text: 1.17
+        text: 1.2
   - id: kwaipilot/kat-coder-pro-v2.5
     provider_model_id: kat-coder-pro-v2.5
     pricing:
       input_tokens:
-        no_cache: 0.69
-        cache_read: 0.139
+        no_cache: 0.74
+        cache_read: 0.15
       output_tokens:
-        text: 2.78
+        text: 2.96
   - id: kwaipilot/kat-coder-air-v2.5
     provider_model_id: kat-coder-air-v2.5
     pricing:
       input_tokens:
-        no_cache: 0.14
-        cache_read: 0.028
+        no_cache: 0.15
+        cache_read: 0.03
       output_tokens:
-        text: 0.56
-status: staging
+        text: 0.6
+status: active
 weight: 1
 submitted_at: 2026-07-07
