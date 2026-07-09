@@ -83,9 +83,14 @@ fn assistant_calls_for_policy_key(tool: &str) -> Message {
 
 fn workflow_key_for(messages: Vec<Message>) -> String {
     let prompt = prompt_for_policy_key(messages);
-    OnlineWorkflowState::from_prompt(&HeaderMap::new(), &prompt, None, ProtocolKind::Unknown)
-        .routing_key()
-        .to_string()
+    OnlineWorkflowState::from_prompt(
+        &HeaderMap::new(),
+        &prompt,
+        None,
+        ProtocolKind::ChatCompletions,
+    )
+    .routing_key()
+    .to_string()
 }
 
 /// A config pointing one provider at the mock upstream, `skip_auth: true` and
@@ -770,6 +775,121 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     assert_eq!(json["jsonrpc"], "2.0");
     assert_eq!(json["id"], 1);
     assert_eq!(json["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
+    use async_trait::async_trait;
+    use bitrouter_sdk::App;
+    use bitrouter_sdk::language_model::types::{
+        ApiProtocol, AuthScheme, ExecutionResult, FinishReason, GenerateResult, RoutingTarget,
+        Usage,
+    };
+    use http::Request;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    struct EchoLmExecutor;
+    #[async_trait]
+    impl bitrouter_sdk::language_model::Executor for EchoLmExecutor {
+        async fn execute(
+            &self,
+            target: &RoutingTarget,
+            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
+        ) -> bitrouter_sdk::Result<ExecutionResult> {
+            Ok(ExecutionResult {
+                provider_id: target.provider_name.clone(),
+                model_id: target.service_id.clone(),
+                account_label: target.account_label.clone(),
+                result: GenerateResult {
+                    content: vec![Content::Text {
+                        text: "ok".to_string(),
+                        provider_metadata: ProviderMetadata::new(),
+                    }],
+                    usage: Some(Usage {
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        ..Default::default()
+                    }),
+                    finish_reason: Some(FinishReason::Stop),
+                    response_id: None,
+                    stop_details: None,
+                    provider_metadata: ProviderMetadata::new(),
+                },
+                latency_ms: 1,
+                generation_time_ms: 1,
+                server_tool_calls: Vec::new(),
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _target: &RoutingTarget,
+            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+        }
+    }
+
+    let table = Arc::new(bitrouter_sdk::language_model::StaticRoutingTable::new());
+    table.insert(
+        "gpt-5.5",
+        vec![RoutingTarget {
+            provider_name: "mock".to_string(),
+            service_id: "gpt-5.5".to_string(),
+            api_base: "http://unused.invalid".to_string(),
+            api_key: "unused".to_string(),
+            api_protocol: ApiProtocol::Responses,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: AuthScheme::Bearer,
+        }],
+    );
+
+    let app = App::builder()
+        .language_model(|lm| {
+            lm.routing_table(table.clone())
+                .executor(Arc::new(EchoLmExecutor));
+        })
+        .skip_auth(true)
+        .build()
+        .expect("app builds");
+    let state = AppState {
+        language_model: app.language_model().unwrap().clone(),
+        mcp: None,
+        skip_auth: true,
+        metrics_renderer: None,
+        prompt_transforms: Vec::new(),
+    };
+    let router = build_router(state);
+
+    let body = json!({
+        "model": "gpt-5.5",
+        "input": "say ok",
+        "stream": false
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .header("x-bitrouter-request-id", "bench-req-001")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["id"], "bench-req-001");
 }
 
 #[tokio::test]

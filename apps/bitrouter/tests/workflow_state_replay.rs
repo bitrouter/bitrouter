@@ -143,6 +143,11 @@ fn captured_real_agent_trace_serializes_to_replayable_fixture_and_redacts_secret
                 "x-bitrouter-workflow-session".to_string(),
                 "session-real-1".to_string(),
             ),
+            ("x-bitrouter-protocol".to_string(), "responses".to_string()),
+            (
+                "x-bitrouter-inbound-protocol".to_string(),
+                "responses".to_string(),
+            ),
         ]
         .into_iter()
         .collect(),
@@ -166,6 +171,11 @@ fn captured_real_agent_trace_serializes_to_replayable_fixture_and_redacts_secret
     assert_eq!(
         fixture_json["headers"]["user-agent"],
         "Hermes Agent v0.18.0"
+    );
+    assert_eq!(fixture_json["headers"]["x-bitrouter-protocol"], "responses");
+    assert_eq!(
+        fixture_json["headers"]["x-bitrouter-inbound-protocol"],
+        "responses"
     );
 
     let fixture = WorkflowTraceFixture::from_value(fixture_json).unwrap();

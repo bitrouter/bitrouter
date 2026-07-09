@@ -1,9 +1,10 @@
-//! Persistence for the adequacy ledger's escalation pins.
+//! Persistence for the adequacy ledger's escalation pins and exploration state.
 //!
-//! One row per pinned fingerprint in the `adequacy_pins` table. The ledger is
-//! the single writer; the only reader is the ledger's startup warm-up. Every
-//! query goes through sea-orm, so the store works unchanged on whichever backend
-//! `database.url` selects (SQLite / Postgres / MySQL), mirroring
+//! `adequacy_pins` stores negative safety state. `adequacy_exploration` stores
+//! positive learning state: trial cadence and learned cheap-route locks. The
+//! ledger is the single writer; the only reader is the ledger's startup warm-up.
+//! Every query goes through sea-orm, so the store works unchanged on whichever
+//! backend `database.url` selects (SQLite / Postgres / MySQL), mirroring
 //! [`crate::metering::MeteringStore`].
 
 use chrono::Utc;
@@ -12,6 +13,7 @@ use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use bitrouter_sdk::{BitrouterError, Result};
 
+use self::adequacy_exploration::Entity as Exploration;
 use self::adequacy_pins::Entity as Pins;
 
 /// sea-orm entity for the `adequacy_pins` table.
@@ -37,6 +39,43 @@ pub mod adequacy_pins {
     pub enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// sea-orm entity for the `adequacy_exploration` table.
+pub mod adequacy_exploration {
+    use sea_orm::entity::prelude::*;
+
+    /// Learned positive exploration state for one request fingerprint.
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "adequacy_exploration")]
+    pub struct Model {
+        /// The request fingerprint being explored.
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub fingerprint: String,
+        /// Candidate observations seen; drives deterministic trial cadence.
+        pub observed: i32,
+        /// Consecutive adequate cheap trials.
+        pub adequate_trials: i32,
+        /// Whether this fingerprint is learned safe and routes to the explore tier.
+        pub locked: bool,
+        /// RFC3339 timestamp of the last exploration-state update.
+        pub updated_at: String,
+        /// RFC3339 timestamp of the first time this fingerprint was observed.
+        pub created_at: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedExplorationState {
+    pub fingerprint: String,
+    pub observed: u32,
+    pub adequate_trials: u32,
+    pub locked: bool,
 }
 
 /// sea-orm-backed store over the `adequacy_pins` table.
@@ -65,6 +104,24 @@ impl AdequacyStore {
             .collect())
     }
 
+    /// Load every positive exploration state row. Called once at startup to
+    /// warm trial cadence and cheap-route locks.
+    pub async fn load_exploration_all(&self) -> Result<Vec<PersistedExplorationState>> {
+        let rows = Exploration::find()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("adequacy load_exploration_all: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PersistedExplorationState {
+                fingerprint: row.fingerprint,
+                observed: row.observed.max(0) as u32,
+                adequate_trials: row.adequate_trials.max(0) as u32,
+                locked: row.locked,
+            })
+            .collect())
+    }
+
     /// Upsert a pin, refreshing the cooldown clock (`pinned_at_unix`) without
     /// resetting `created_at`.
     pub async fn upsert_pin(&self, fingerprint: &str, pinned_at_unix: i64) -> Result<()> {
@@ -82,6 +139,38 @@ impl AdequacyStore {
             .exec(&self.db)
             .await
             .map_err(|e| BitrouterError::internal(format!("adequacy upsert_pin: {e}")))?;
+        Ok(())
+    }
+
+    /// Upsert positive exploration state for one fingerprint.
+    pub async fn upsert_exploration(
+        &self,
+        fingerprint: &str,
+        observed: u32,
+        adequate_trials: u32,
+        locked: bool,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let row = adequacy_exploration::ActiveModel {
+            fingerprint: Set(fingerprint.to_string()),
+            observed: Set(observed.min(i32::MAX as u32) as i32),
+            adequate_trials: Set(adequate_trials.min(i32::MAX as u32) as i32),
+            locked: Set(locked),
+            updated_at: Set(now.clone()),
+            created_at: Set(now),
+        };
+        Exploration::insert(row)
+            .on_conflict(
+                OnConflict::column(adequacy_exploration::Column::Fingerprint)
+                    .update_column(adequacy_exploration::Column::Observed)
+                    .update_column(adequacy_exploration::Column::AdequateTrials)
+                    .update_column(adequacy_exploration::Column::Locked)
+                    .update_column(adequacy_exploration::Column::UpdatedAt)
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("adequacy upsert_exploration: {e}")))?;
         Ok(())
     }
 }
@@ -153,6 +242,94 @@ mod tests {
         assert!(
             reloaded.is_pinned("after_edit"),
             "the pin must survive via persistence"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exploration_lock_survives_a_restart_via_persistence() {
+        let db = db::connect("sqlite::memory:").await.unwrap();
+        db::run_migrations(&db).await.unwrap();
+        let cfg = AdequacyConfig {
+            enabled: true,
+            escalation_tier: None,
+            escalation_threshold: 1,
+            pin_cooldown_secs: 0,
+            explore_enabled: true,
+            explore_tier: Some("cheap".to_string()),
+            explore_interval: 1,
+            explore_threshold: 2,
+            ..Default::default()
+        };
+
+        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        ledger
+            .observe(
+                "tool_followup",
+                Outcome::Exploration {
+                    trialed: true,
+                    cause: crate::adequacy::InadequacyCause::None,
+                },
+            )
+            .await;
+        ledger
+            .observe(
+                "tool_followup",
+                Outcome::Exploration {
+                    trialed: true,
+                    cause: crate::adequacy::InadequacyCause::None,
+                },
+            )
+            .await;
+        assert!(ledger.is_locked("tool_followup"));
+
+        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        assert!(
+            reloaded.is_locked("tool_followup"),
+            "learned cheap-route locks should survive daemon restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn exploration_cadence_survives_a_restart_via_persistence() {
+        let db = db::connect("sqlite::memory:").await.unwrap();
+        db::run_migrations(&db).await.unwrap();
+        let cfg = AdequacyConfig {
+            enabled: true,
+            escalation_tier: None,
+            escalation_threshold: 1,
+            pin_cooldown_secs: 0,
+            explore_enabled: true,
+            explore_tier: Some("cheap".to_string()),
+            explore_interval: 2,
+            explore_threshold: 3,
+            ..Default::default()
+        };
+
+        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        ledger
+            .observe(
+                "tool_followup",
+                Outcome::Exploration {
+                    trialed: false,
+                    cause: crate::adequacy::InadequacyCause::None,
+                },
+            )
+            .await;
+        ledger
+            .observe(
+                "tool_followup",
+                Outcome::Exploration {
+                    trialed: false,
+                    cause: crate::adequacy::InadequacyCause::None,
+                },
+            )
+            .await;
+        assert!(ledger.should_trial("tool_followup"));
+
+        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        assert!(
+            reloaded.should_trial("tool_followup"),
+            "trial cadence should survive daemon restart"
         );
     }
 }

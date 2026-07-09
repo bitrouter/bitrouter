@@ -11,6 +11,7 @@ use axum::extract::Request;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use bitrouter_sdk::Result;
+use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -19,6 +20,7 @@ use crate::workflow_state::ir::{HarnessId, ProtocolKind};
 use crate::workflow_state::replay::extract_fixture_ir;
 
 const MAX_CAPTURE_BODY_BYTES: usize = 16 * 1024 * 1024;
+const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 
 #[derive(Debug, Clone)]
 pub struct TraceCaptureOptions {
@@ -84,6 +86,8 @@ impl Default for TraceSanitizer {
             "x-bitrouter-agent",
             "x-bitrouter-cloud-request-id",
             "x-bitrouter-harness",
+            "x-bitrouter-inbound-protocol",
+            "x-bitrouter-protocol",
             "x-bitrouter-request-id",
             "x-bitrouter-workflow-session",
             "x-request-id",
@@ -137,9 +141,13 @@ impl RealTraceCapture {
     }
 
     async fn capture_request(self, req: Request, next: Next) -> Response {
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
         let method = parts.method.to_string();
         let path = parts.uri.path().to_string();
+        let request_id = request_id_from_headers(&parts.headers).unwrap_or_else(|| self.next_id());
+        if let Ok(value) = HeaderValue::from_str(&request_id) {
+            parts.headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
+        }
         let headers = headers_to_map(&parts.headers);
         let protocol = protocol_for_path(&path);
 
@@ -158,7 +166,7 @@ impl RealTraceCapture {
 
         if let (Some(protocol), Some(raw_body)) = (protocol, raw_body) {
             self.push_record(CapturedIngressTrace {
-                id: self.next_id(),
+                id: request_id,
                 harness: self.inner.options.harness.clone(),
                 protocol,
                 method,
@@ -310,6 +318,15 @@ fn headers_to_map(headers: &http::HeaderMap) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn request_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
+    headers
+        .get(BITROUTER_REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn append_sanitized_trace(
     path: &PathBuf,
     trace: &CapturedIngressTrace,
@@ -343,4 +360,74 @@ fn append_sanitized_trace(
     file.write_all(b"\n").map_err(|e| {
         bitrouter_sdk::BitrouterError::internal(format!("workflow trace archive append: {e}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::Router;
+    use axum::body::{Body, to_bytes};
+    use axum::extract::Json;
+    use axum::http::{HeaderMap, Request};
+    use axum::routing::post;
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn trace_capture_injects_request_id_visible_to_downstream_and_archive() {
+        let capture = RealTraceCapture::new(TraceCaptureOptions {
+            harness: HarnessId::Codex,
+            session_header: None,
+            archive_path: None,
+        });
+        let router = (capture.router_wrapper())(Router::new().route(
+            "/v1/responses",
+            post(|headers: HeaderMap| async move {
+                let request_id = headers
+                    .get("x-bitrouter-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("");
+                Json(json!({ "request_id": request_id }))
+            }),
+        ));
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-5.5",
+                            "input": "say ok",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response_body = to_bytes(response.into_body(), MAX_CAPTURE_BODY_BYTES)
+            .await
+            .unwrap();
+        let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+        let downstream_request_id = response_json["request_id"].as_str().unwrap();
+        assert!(
+            !downstream_request_id.is_empty(),
+            "capture must inject a request id before the SDK server handles the request"
+        );
+
+        let records = capture.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0]
+                .headers
+                .get("x-bitrouter-request-id")
+                .map(String::as_str),
+            Some(downstream_request_id)
+        );
+        assert_eq!(records[0].id, downstream_request_id);
+    }
 }

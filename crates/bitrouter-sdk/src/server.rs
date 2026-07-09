@@ -17,7 +17,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, serve};
@@ -32,6 +32,8 @@ use crate::language_model::stream::{SseFrame, SseKeepaliveStream};
 use crate::language_model::types::{ApiProtocol, PipelineRequest};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
+
+const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 
 /// Shared axum state.
 #[derive(Clone)]
@@ -622,11 +624,13 @@ async fn generate_content(
 /// reply back in the same inbound protocol.
 async fn handle(
     state: AppState,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     inbound: ApiProtocol,
     body: serde_json::Value,
     model_override: Option<String>,
 ) -> Response {
+    add_inbound_protocol_hint(&mut headers, &inbound);
+    let request_id = add_request_id_hint(&mut headers);
     let adapter = match inbound_adapter_for(&inbound) {
         Some(a) => a,
         None => {
@@ -663,6 +667,7 @@ async fn handle(
         CallerContext::anonymous()
     };
     let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
+    req.request_id = request_id;
     req.headers = headers;
     // Carry the inbound wire protocol so route resolution can prefer a native,
     // same-protocol upstream — a faithful round-trip instead of a lossy
@@ -689,6 +694,29 @@ async fn handle(
             Err(e) => e.into_response(),
         }
     }
+}
+
+fn add_inbound_protocol_hint(headers: &mut HeaderMap, inbound: &ApiProtocol) {
+    if let Ok(value) = HeaderValue::from_str(inbound.as_str()) {
+        headers.insert("x-bitrouter-inbound-protocol", value);
+    }
+}
+
+fn add_request_id_hint(headers: &mut HeaderMap) -> String {
+    if let Some(request_id) = headers
+        .get(BITROUTER_REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return request_id.to_string();
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
+    }
+    request_id
 }
 
 /// Build a `text/event-stream` response: pipe the canonical part stream through
@@ -872,6 +900,59 @@ mod tests {
         assert!(
             response.headers().get(header::RETRY_AFTER).is_none(),
             "no Retry-After when the daemon doesn't know how long to wait"
+        );
+    }
+
+    #[test]
+    fn inbound_protocol_hint_is_added_for_prompt_transforms_and_observers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-protocol", "responses".parse().unwrap());
+
+        add_inbound_protocol_hint(&mut headers, &ApiProtocol::Messages);
+
+        assert_eq!(
+            headers
+                .get("x-bitrouter-inbound-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("messages")
+        );
+        assert_eq!(
+            headers
+                .get("x-bitrouter-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("responses"),
+            "operator/client explicit protocol hint should remain available"
+        );
+    }
+
+    #[test]
+    fn request_id_hint_prefers_existing_capture_header_and_is_preserved() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-request-id", "bench-req-001".parse().unwrap());
+
+        let request_id = add_request_id_hint(&mut headers);
+
+        assert_eq!(request_id, "bench-req-001");
+        assert_eq!(
+            headers
+                .get("x-bitrouter-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("bench-req-001")
+        );
+    }
+
+    #[test]
+    fn request_id_hint_inserts_generated_id_when_missing() {
+        let mut headers = HeaderMap::new();
+
+        let request_id = add_request_id_hint(&mut headers);
+
+        assert!(!request_id.is_empty());
+        assert_eq!(
+            headers
+                .get("x-bitrouter-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some(request_id.as_str())
         );
     }
 }

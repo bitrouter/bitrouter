@@ -50,6 +50,17 @@ impl OnlineWorkflowState {
 }
 
 fn infer_online_context(headers: &HeaderMap) -> (Option<HarnessId>, ProtocolKind) {
+    let explicit_harness = header_value(headers, "x-bitrouter-harness").and_then(parse_harness);
+    let explicit_protocol = header_value(headers, "x-bitrouter-protocol")
+        .or_else(|| header_value(headers, "x-bitrouter-inbound-protocol"))
+        .and_then(parse_protocol);
+    if explicit_harness.is_some() || explicit_protocol.is_some() {
+        return (
+            explicit_harness,
+            explicit_protocol.unwrap_or(ProtocolKind::Unknown),
+        );
+    }
+
     if headers
         .get_all("anthropic-beta")
         .iter()
@@ -64,6 +75,33 @@ fn infer_online_context(headers: &HeaderMap) -> (Option<HarnessId>, ProtocolKind
     }
 
     (None, ProtocolKind::Unknown)
+}
+
+fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+fn parse_harness(value: &str) -> Option<HarnessId> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "generic" => Some(HarnessId::Generic),
+        "hermes" => Some(HarnessId::Hermes),
+        "claude" | "claude_code" | "claude-code" => Some(HarnessId::ClaudeCode),
+        "codex" => Some(HarnessId::Codex),
+        "openclaw" | "open_claw" | "open-claw" => Some(HarnessId::OpenClaw),
+        "unknown" => Some(HarnessId::Unknown),
+        _ => None,
+    }
+}
+
+fn parse_protocol(value: &str) -> Option<ProtocolKind> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "chat_completions" | "chat-completions" | "chat" => Some(ProtocolKind::ChatCompletions),
+        "messages" | "anthropic_messages" | "anthropic-messages" => Some(ProtocolKind::Messages),
+        "responses" | "openai_responses" | "openai-responses" => Some(ProtocolKind::Responses),
+        "openclaw_runtime" | "openclaw-runtime" => Some(ProtocolKind::OpenClawRuntime),
+        "unknown" => Some(ProtocolKind::Unknown),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -116,5 +154,23 @@ mod tests {
         assert_eq!(state.legacy_fingerprint(), "after_Bash");
         assert!(state.routing_key().contains("tool_followup"));
         assert_eq!(state.ir.last_tool_name.as_deref(), Some("Bash"));
+    }
+
+    #[test]
+    fn online_state_uses_explicit_harness_and_protocol_headers() {
+        let prompt = prompt_after_tool("exec_command");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-harness", "codex".parse().unwrap());
+        headers.insert("x-bitrouter-protocol", "responses".parse().unwrap());
+
+        let state = OnlineWorkflowState::from_headers(&headers, &prompt);
+
+        assert_eq!(state.ir.harness_id, HarnessId::Codex);
+        assert_eq!(state.ir.protocol, ProtocolKind::Responses);
+        assert!(
+            state
+                .routing_key()
+                .starts_with("codex|responses|tool_followup")
+        );
     }
 }

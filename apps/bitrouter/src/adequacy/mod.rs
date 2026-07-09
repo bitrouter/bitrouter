@@ -20,8 +20,8 @@
 //! lock-cheap because they run inside the ingress [`bitrouter_sdk::PromptTransform`];
 //! the write path ([`AdequacyLedger::observe`]) is async because a new pin is
 //! persisted, and runs from the [`observer::AdequacyObserveHook`] after each
-//! request. Pins persist across restarts (the safety state); locks are in-memory
-//! and re-discovered (an optimization, cheap to re-learn).
+//! request. Pins and positive exploration state persist across restarts, so
+//! policy rounds keep trial cadence and learned cheap-route locks.
 
 #[cfg(test)]
 mod eval;
@@ -136,6 +136,14 @@ impl AdequacyLedger {
                 entries.entry(fingerprint).or_default().pinned_at = Some(pinned_at.max(0) as u64);
             }
         }
+        if let Ok(rows) = store.load_exploration_all().await {
+            for row in rows {
+                let entry = entries.entry(row.fingerprint).or_default();
+                entry.observed = row.observed;
+                entry.adequate_trials = row.adequate_trials;
+                entry.locked = row.locked;
+            }
+        }
         Self {
             state: RwLock::new(State { entries }),
             store: Some(store),
@@ -207,6 +215,7 @@ impl AdequacyLedger {
     /// Fold a request's [`Outcome`] into the ledger. Async because a newly
     /// created pin is persisted.
     pub async fn observe(&self, fingerprint: &str, outcome: Outcome) {
+        let mut exploration_snapshot: Option<(String, u32, u32, bool)> = None;
         let newly_pinned = {
             let mut guard = self.state.write().unwrap_or_else(PoisonError::into_inner);
             let entry = guard.entries.entry(fingerprint.to_string()).or_default();
@@ -215,7 +224,7 @@ impl AdequacyLedger {
                 Outcome::Exploration { trialed, cause } => {
                     // Every candidate request (trialed or not) advances the cadence.
                     entry.observed = entry.observed.saturating_add(1);
-                    if !trialed {
+                    let newly_pinned = if !trialed {
                         None
                     } else if cause.is_none() {
                         entry.failures = 0;
@@ -228,7 +237,14 @@ impl AdequacyLedger {
                     } else {
                         entry.adequate_trials = 0;
                         self.apply_failure_cause(entry, cause, true)
-                    }
+                    };
+                    exploration_snapshot = Some((
+                        fingerprint.to_string(),
+                        entry.observed,
+                        entry.adequate_trials,
+                        entry.locked,
+                    ));
+                    newly_pinned
                 }
             }
         };
@@ -237,6 +253,13 @@ impl AdequacyLedger {
             // Best-effort: a failed write only means the pin won't survive a
             // restart, never a dropped or blocked request.
             let _ = store.upsert_pin(fingerprint, pinned_at as i64).await;
+        }
+        if let (Some((fingerprint, observed, adequate_trials, locked)), Some(store)) =
+            (exploration_snapshot, &self.store)
+        {
+            let _ = store
+                .upsert_exploration(&fingerprint, observed, adequate_trials, locked)
+                .await;
         }
     }
 
