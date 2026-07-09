@@ -237,3 +237,22 @@ async fn usage_export_writes_cloud_usage_compatible_jsonl() -> Result<()> {
     let _ = std::fs::remove_file(path);
     Ok(())
 }
+
+#[test]
+fn usage_price_override_imputes_missing_charges() {
+    let mut records = vec![super::MeteringUsageRecord {
+        id: Some("r1".to_string()),
+        request_id: Some("r1".to_string()),
+        provider_id: "openai-codex".to_string(),
+        model_id: "gpt-5.5".to_string(),
+        prompt_tokens: 21,
+        completion_tokens: 17,
+        final_charge_micro_usd: Some(0),
+        status: Some("completed".to_string()),
+    }];
+    let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
+
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+
+    assert_eq!(records[0].final_charge_micro_usd, Some(530));
+}

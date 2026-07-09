@@ -76,7 +76,31 @@ pub struct MeteringUsageRecord {
     pub status: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsagePriceOverride {
+    pub provider_id: String,
+    pub model_id: String,
+    pub input_micro_usd_per_token: f64,
+    pub output_micro_usd_per_token: f64,
+}
+
 impl MeteringUsageRecord {
+    pub fn apply_price_overrides(records: &mut [Self], prices: &[UsagePriceOverride]) {
+        for record in records {
+            if record.final_charge_micro_usd.unwrap_or(0) != 0 {
+                continue;
+            }
+            let Some(price) = prices.iter().find(|price| {
+                price.provider_id == record.provider_id && price.model_id == record.model_id
+            }) else {
+                continue;
+            };
+            let charge = record.prompt_tokens as f64 * price.input_micro_usd_per_token
+                + record.completion_tokens as f64 * price.output_micro_usd_per_token;
+            record.final_charge_micro_usd = Some(charge.round().max(0.0) as u64);
+        }
+    }
+
     pub fn write_jsonl(path: impl AsRef<Path>, records: &[Self]) -> Result<()> {
         if let Some(parent) = path.as_ref().parent()
             && !parent.as_os_str().is_empty()
@@ -106,6 +130,38 @@ impl MeteringUsageRecord {
         writer
             .flush()
             .map_err(|e| BitrouterError::internal(format!("metering usage jsonl flush: {e}")))
+    }
+}
+
+impl UsagePriceOverride {
+    pub fn parse(value: &str) -> Result<Self> {
+        let (route, prices) = value.split_once('=').ok_or_else(|| {
+            BitrouterError::bad_request(format!(
+                "invalid price override {value:?}; expected provider:model=input,output"
+            ))
+        })?;
+        let (provider_id, model_id) = route.split_once(':').ok_or_else(|| {
+            BitrouterError::bad_request(format!(
+                "invalid price override {value:?}; expected provider:model=input,output"
+            ))
+        })?;
+        let (input, output) = prices.split_once(',').ok_or_else(|| {
+            BitrouterError::bad_request(format!(
+                "invalid price override {value:?}; expected provider:model=input,output"
+            ))
+        })?;
+        let input_micro_usd_per_token = input.trim().parse::<f64>().map_err(|e| {
+            BitrouterError::bad_request(format!("invalid input price in override {value:?}: {e}"))
+        })?;
+        let output_micro_usd_per_token = output.trim().parse::<f64>().map_err(|e| {
+            BitrouterError::bad_request(format!("invalid output price in override {value:?}: {e}"))
+        })?;
+        Ok(Self {
+            provider_id: provider_id.trim().to_string(),
+            model_id: model_id.trim().to_string(),
+            input_micro_usd_per_token,
+            output_micro_usd_per_token,
+        })
     }
 }
 

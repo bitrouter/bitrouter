@@ -314,6 +314,9 @@ enum WorkflowStateAction {
         /// Output usage JSONL path.
         #[arg(long)]
         output: PathBuf,
+        /// Impute zero/missing charges as provider:model=input_micro_usd,output_micro_usd.
+        #[arg(long = "impute-price")]
+        impute_prices: Vec<String>,
         /// Inclusive RFC3339 lower bound. Defaults to the current UTC month.
         #[arg(long)]
         since: Option<String>,
@@ -743,11 +746,19 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
         WorkflowStateAction::MeteringUsage {
             database_url,
             output,
+            impute_prices,
             since,
             until,
         } => {
-            use bitrouter::metering::{MeteringStore, MeteringUsageRecord, TimeWindow};
+            use bitrouter::metering::{
+                MeteringStore, MeteringUsageRecord, TimeWindow, UsagePriceOverride,
+            };
 
+            let impute_prices = impute_prices
+                .iter()
+                .map(|value| UsagePriceOverride::parse(value))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(anyhow::Error::from)?;
             let window = match since {
                 Some(since) => {
                     let start = parse_rfc3339_utc(&since, "--since")?;
@@ -762,10 +773,11 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             let db = bitrouter::db::connect(&database_url)
                 .await
                 .with_context(|| format!("connect metering database {database_url}"))?;
-            let records = MeteringStore::new(db)
+            let mut records = MeteringStore::new(db)
                 .export_usage(window)
                 .await
                 .with_context(|| format!("export metering usage from {database_url}"))?;
+            MeteringUsageRecord::apply_price_overrides(&mut records, &impute_prices);
             MeteringUsageRecord::write_jsonl(&output, &records)
                 .with_context(|| format!("write metering usage {}", output.display()))?;
             println!(
