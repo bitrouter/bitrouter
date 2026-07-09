@@ -834,6 +834,9 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
         reason: "exploration_locked".to_string(),
         pinned: false,
+        request_qualified: true,
+        semantic_successes: 2,
+        semantic_success_threshold: 2,
         locked: true,
         trialed: false,
     }];
@@ -955,6 +958,9 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
         reason: "exploration_locked".to_string(),
         pinned: false,
+        request_qualified: true,
+        semantic_successes: 2,
+        semantic_success_threshold: 2,
         locked: true,
         trialed: false,
     }];
@@ -989,6 +995,88 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
     );
 
     let _ = std::fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn run_artifact_attributes_successful_task_to_policy_transition() {
+    let traces = vec![CapturedIngressTrace {
+        id: "trace-success-001".to_string(),
+        captured_at: None,
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: [
+            (
+                "x-bitrouter-request-id".to_string(),
+                "req-success-001".to_string(),
+            ),
+            (
+                "x-bitrouter-workflow-session".to_string(),
+                "trial-success-a".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        raw_body: json!({
+            "model": "gpt-5.5",
+            "input": "continue",
+            "stream": true
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    }];
+    let outcomes = vec![BenchmarkOutcomeRecord {
+        session_key: "trial-success-a".to_string(),
+        task_id: "terminal-bench/regex-log".to_string(),
+        reward: 1.0,
+        failed_reason: None,
+        finished_at: None,
+        trial_name: Some("trial-success-a".to_string()),
+        agent_started_at: None,
+        agent_finished_at: None,
+    }];
+    let decisions = vec![PolicyDecisionRecord {
+        captured_at: None,
+        request_id: Some("req-success-001".to_string()),
+        input_model: "gpt-5.5".to_string(),
+        key_strategy: "workflow_state".to_string(),
+        request_key: "codex|responses|tool_followup".to_string(),
+        legacy_fingerprint: "after_exec_command".to_string(),
+        workflow_state: "tool_followup".to_string(),
+        static_tier: Some("capable".to_string()),
+        static_model: Some("openai-codex:gpt-5.5".to_string()),
+        selected_tier: Some("cheap".to_string()),
+        selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        reason: "exploration_trial".to_string(),
+        pinned: false,
+        request_qualified: false,
+        semantic_successes: 0,
+        semantic_success_threshold: 2,
+        locked: false,
+        trialed: true,
+    }];
+
+    let artifact = WorkflowRunArtifact::build_with_decisions(
+        "successful-transition",
+        &traces,
+        &[],
+        &outcomes,
+        &decisions,
+    )
+    .unwrap();
+
+    assert_eq!(artifact.semantic_policy_transition_candidates.len(), 1);
+    let candidate = &artifact.semantic_policy_transition_candidates[0];
+    assert_eq!(candidate.task_id, "terminal-bench/regex-log");
+    assert_eq!(candidate.reward, 1.0);
+    assert_eq!(candidate.request_key, "codex|responses|tool_followup");
+    assert_eq!(
+        candidate.tier_transition.as_deref(),
+        Some("capable -> cheap")
+    );
 }
 
 #[test]

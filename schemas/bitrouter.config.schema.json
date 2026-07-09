@@ -107,6 +107,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "explore_opening": {
+          "default": false,
+          "description": "Whether the opening turn is eligible for aggressive exploration. Default\n`false`, because opening/planning errors tend to propagate through the\nwhole task and Terminal-Bench showed this state is high leverage.",
+          "type": "boolean"
+        },
         "explore_threshold": {
           "default": 3,
           "description": "Consecutive adequate trials before a fingerprint is locked to the cheap\ntier (the learned downgrade). Default `3`.",
@@ -121,6 +126,20 @@
             "string",
             "null"
           ]
+        },
+        "min_semantic_successes_for_lock": {
+          "default": 0,
+          "description": "Distinct benchmark tasks that must finish successfully after using a\ncheap replacement before a request-level lock becomes active. `0` keeps\nthe legacy request-only behavior. Default `0`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_semantic_successes_for_opening": {
+          "default": 1,
+          "description": "Minimum distinct benchmark-task successes required before an opening\nrequest-level lock becomes active. This is combined with\n[`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)\nby taking the stricter threshold. Default `1`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "pin_cooldown_secs": {
           "default": 1800,
@@ -397,6 +416,21 @@
       },
       "type": "array"
     },
+    "PolicyKeyStrategy": {
+      "description": "Request-key family used by `policy_table.fingerprints`.",
+      "oneOf": [
+        {
+          "const": "legacy_fingerprint",
+          "description": "The original coarse prompt fingerprint: `opening`, `midstream`, or\n`after_<tool>`.",
+          "type": "string"
+        },
+        {
+          "const": "workflow_state",
+          "description": "The cross-harness Workflow State IR routing key.",
+          "type": "string"
+        }
+      ]
+    },
     "PolicyTableConfig": {
       "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform fingerprints each request by its agent-loop step (the\nmost recent tool the model called, or the opening turn) and looks the\nfingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;\n[`tiers`](Self::tiers) then maps that tier to the model id the request is\nrewritten to. A hard tool-use guardrail keeps tool-carrying requests on a\ntier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
       "properties": {
@@ -419,6 +453,10 @@
           "default": {},
           "description": "Request fingerprint → tier name. A fingerprint is the agent-loop step:\n`opening` (no model turn yet), `after_<tool>` (the model last called\n`<tool>`), or `midstream` (a model turn with no tool call). A fingerprint\nabsent from this map falls back to [`default_tier`](Self::default_tier).",
           "type": "object"
+        },
+        "key_strategy": {
+          "$ref": "#/$defs/PolicyKeyStrategy",
+          "description": "Which request key the policy table uses for `fingerprints`. The default\npreserves the original coarse key (`opening`, `after_<tool>`,\n`midstream`). `workflow_state` switches lookup and adequacy learning to\nthe cross-harness Workflow State IR routing key."
         },
         "tiers": {
           "additionalProperties": {

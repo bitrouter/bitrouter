@@ -31,6 +31,12 @@ pub struct PolicyDecisionRecord {
     pub selected_model: Option<String>,
     pub reason: String,
     pub pinned: bool,
+    #[serde(default)]
+    pub request_qualified: bool,
+    #[serde(default)]
+    pub semantic_successes: u32,
+    #[serde(default)]
+    pub semantic_success_threshold: u32,
     pub locked: bool,
     pub trialed: bool,
 }
@@ -72,6 +78,9 @@ impl PolicyDecisionRecord {
         selected_model: Option<String>,
         reason: impl Into<String>,
         pinned: bool,
+        request_qualified: bool,
+        semantic_successes: u32,
+        semantic_success_threshold: u32,
         locked: bool,
         trialed: bool,
     ) -> Self {
@@ -89,6 +98,9 @@ impl PolicyDecisionRecord {
             selected_model,
             reason: reason.into(),
             pinned,
+            request_qualified,
+            semantic_successes,
+            semantic_success_threshold,
             locked,
             trialed,
         }

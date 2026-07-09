@@ -259,13 +259,18 @@ pub struct AdequacyConfig {
     /// Consecutive adequate trials before a fingerprint is locked to the cheap
     /// tier (the learned downgrade). Default `3`.
     pub explore_threshold: u32,
+    /// Distinct benchmark tasks that must finish successfully after using a
+    /// cheap replacement before a request-level lock becomes active. `0` keeps
+    /// the legacy request-only behavior. Default `0`.
+    pub min_semantic_successes_for_lock: u32,
     /// Whether the opening turn is eligible for aggressive exploration. Default
     /// `false`, because opening/planning errors tend to propagate through the
     /// whole task and Terminal-Bench showed this state is high leverage.
     pub explore_opening: bool,
-    /// Future reward-stitching guardrail: minimum semantic successes required
-    /// before opening can be considered safe for downgrade. Parsed now so config
-    /// can converge, enforced once task-level rewards are wired online.
+    /// Minimum distinct benchmark-task successes required before an opening
+    /// request-level lock becomes active. This is combined with
+    /// [`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)
+    /// by taking the stricter threshold. Default `1`.
     pub min_semantic_successes_for_opening: u32,
 }
 
@@ -280,6 +285,7 @@ impl Default for AdequacyConfig {
             explore_tier: None,
             explore_interval: 5,
             explore_threshold: 3,
+            min_semantic_successes_for_lock: 0,
             explore_opening: false,
             min_semantic_successes_for_opening: 1,
         }

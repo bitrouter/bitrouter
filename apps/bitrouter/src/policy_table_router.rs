@@ -78,6 +78,9 @@ pub struct PolicyDecision {
     pub selected_model: Option<String>,
     pub reason: PolicyDecisionReason,
     pub pinned: bool,
+    pub request_qualified: bool,
+    pub semantic_successes: u32,
+    pub semantic_success_threshold: u32,
     pub locked: bool,
     pub trialed: bool,
 }
@@ -150,10 +153,7 @@ impl PolicyTable {
             explore_tier: config.adequacy.explore_tier.clone(),
             exploration_enabled,
             explore_opening: config.adequacy.explore_opening,
-            min_semantic_successes_for_opening: config
-                .adequacy
-                .min_semantic_successes_for_opening
-                .max(1),
+            min_semantic_successes_for_opening: config.adequacy.min_semantic_successes_for_opening,
             model_to_tier,
             key_strategy: config.key_strategy,
         }))
@@ -260,7 +260,15 @@ impl PolicyTable {
     }
 
     fn can_explore_opening(&self) -> bool {
-        self.explore_opening && self.min_semantic_successes_for_opening >= 1
+        self.explore_opening
+    }
+
+    fn minimum_semantic_successes_for(&self, decision: &PolicyDecision) -> u32 {
+        if decision.legacy_fingerprint == "opening" || decision.workflow_state_kind == "opening" {
+            self.min_semantic_successes_for_opening
+        } else {
+            0
+        }
     }
 
     pub(crate) fn exploration_allowed_for_prompt(
@@ -401,6 +409,9 @@ impl PolicyTableRouter {
             selected_model: None,
             reason: PolicyDecisionReason::NoMatch,
             pinned: false,
+            request_qualified: false,
+            semantic_successes: 0,
+            semantic_success_threshold: 0,
             locked: false,
             trialed: false,
         };
@@ -426,8 +437,14 @@ impl PolicyTableRouter {
         };
 
         if let Some(ledger) = &self.ledger {
+            let state_semantic_minimum = self.table.minimum_semantic_successes_for(&decision);
             decision.pinned = ledger.is_pinned(&decision.request_key);
-            decision.locked = ledger.is_locked(&decision.request_key);
+            decision.request_qualified = ledger.is_request_qualified(&decision.request_key);
+            decision.semantic_successes = ledger.semantic_successes(&decision.request_key);
+            decision.semantic_success_threshold =
+                ledger.semantic_success_threshold(state_semantic_minimum);
+            decision.locked = ledger
+                .is_locked_with_semantic_threshold(&decision.request_key, state_semantic_minimum);
             if decision.pinned {
                 if let Some(escalation) = self.table.escalation_tier() {
                     (selected_tier, _) = self.table.guardrail_with_status(escalation, prompt);
@@ -494,6 +511,9 @@ impl PolicyTableRouter {
             selected_model = ?decision.selected_model,
             reason = %decision.reason,
             pinned = decision.pinned,
+            request_qualified = decision.request_qualified,
+            semantic_successes = decision.semantic_successes,
+            semantic_success_threshold = decision.semantic_success_threshold,
             locked = decision.locked,
             trialed = decision.trialed,
             "policy routing decision"
@@ -512,6 +532,9 @@ impl PolicyTableRouter {
                 decision.selected_model.clone(),
                 decision.reason.to_string(),
                 decision.pinned,
+                decision.request_qualified,
+                decision.semantic_successes,
+                decision.semantic_success_threshold,
                 decision.locked,
                 decision.trialed,
             );
@@ -1148,6 +1171,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn decision_exposes_semantic_gate_before_effective_lock() {
+        let mut cfg = config_with_opening_exploration();
+        cfg.adequacy.explore_threshold = 1;
+        cfg.adequacy.min_semantic_successes_for_lock = 1;
+        cfg.adequacy.min_semantic_successes_for_opening = 2;
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+        let store = crate::adequacy::store::AdequacyStore::new(db);
+        let ledger = Arc::new(AdequacyLedger::load(&cfg.adequacy, store.clone()).await);
+        ledger.observe("opening", trial_ok()).await;
+        let table = PolicyTable::from_config(&cfg).expect("configured");
+        let router = PolicyTableRouter::new(table, Some(ledger));
+        let mut p = prompt("inbound");
+        p.messages = vec![user("start")];
+
+        let gated = router.decision_for(&p, &HeaderMap::new());
+        assert!(gated.request_qualified);
+        assert_eq!(gated.semantic_successes, 0);
+        assert_eq!(gated.semantic_success_threshold, 2);
+        assert!(!gated.locked);
+        assert_eq!(gated.selected_tier.as_deref(), Some("flagship"));
+
+        store
+            .record_semantic_success("opening", "terminal-bench/regex-log")
+            .await
+            .unwrap();
+        let one_success = Arc::new(AdequacyLedger::load(&cfg.adequacy, store.clone()).await);
+        let router = PolicyTableRouter::new(
+            PolicyTable::from_config(&cfg).expect("configured"),
+            Some(one_success),
+        );
+        let still_gated = router.decision_for(&p, &HeaderMap::new());
+        assert_eq!(still_gated.semantic_successes, 1);
+        assert_eq!(still_gated.semantic_success_threshold, 2);
+        assert!(!still_gated.locked);
+
+        store
+            .record_semantic_success("opening", "terminal-bench/fix-git")
+            .await
+            .unwrap();
+        let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await);
+        let router = PolicyTableRouter::new(
+            PolicyTable::from_config(&cfg).expect("configured"),
+            Some(reloaded),
+        );
+
+        let confirmed = router.decision_for(&p, &HeaderMap::new());
+        assert!(confirmed.request_qualified);
+        assert_eq!(confirmed.semantic_successes, 2);
+        assert!(confirmed.locked);
+        assert_eq!(confirmed.reason, PolicyDecisionReason::ExplorationLocked);
+        assert_eq!(confirmed.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[tokio::test]
     async fn workflow_state_key_strategy_uses_ir_key_for_ledger_pins() {
         let mut cfg = config_with_escalation();
         cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
@@ -1268,6 +1346,7 @@ mod tests {
     fn config_with_opening_exploration() -> PolicyTableConfig {
         let mut cfg = config_with_exploration();
         cfg.adequacy.explore_opening = true;
+        cfg.adequacy.min_semantic_successes_for_opening = 0;
         cfg
     }
 

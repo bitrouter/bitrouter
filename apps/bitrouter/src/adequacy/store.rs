@@ -7,14 +7,17 @@
 //! backend `database.url` selects (SQLite / Postgres / MySQL), mirroring
 //! [`crate::metering::MeteringStore`].
 
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{DatabaseConnection, EntityTrait, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set};
 
 use bitrouter_sdk::{BitrouterError, Result};
 
 use self::adequacy_exploration::Entity as Exploration;
 use self::adequacy_pins::Entity as Pins;
+use self::adequacy_semantic_success::Entity as SemanticSuccess;
 
 /// sea-orm entity for the `adequacy_pins` table.
 pub mod adequacy_pins {
@@ -61,6 +64,25 @@ pub mod adequacy_exploration {
         /// RFC3339 timestamp of the last exploration-state update.
         pub updated_at: String,
         /// RFC3339 timestamp of the first time this fingerprint was observed.
+        pub created_at: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub mod adequacy_semantic_success {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "adequacy_semantic_success")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub evidence_id: String,
+        pub fingerprint: String,
+        pub task_id: String,
         pub created_at: String,
     }
 
@@ -120,6 +142,54 @@ impl AdequacyStore {
                 locked: row.locked,
             })
             .collect())
+    }
+
+    pub async fn load_semantic_success_counts(&self) -> Result<BTreeMap<String, u32>> {
+        let rows = SemanticSuccess::find().all(&self.db).await.map_err(|e| {
+            BitrouterError::internal(format!("adequacy load semantic successes: {e}"))
+        })?;
+        let mut counts = BTreeMap::new();
+        for row in rows {
+            let count = counts.entry(row.fingerprint).or_insert(0_u32);
+            *count = count.saturating_add(1);
+        }
+        Ok(counts)
+    }
+
+    pub async fn record_semantic_success(&self, fingerprint: &str, task_id: &str) -> Result<bool> {
+        let evidence_id = format!("{fingerprint}\n{task_id}");
+        let row = adequacy_semantic_success::ActiveModel {
+            evidence_id: Set(evidence_id),
+            fingerprint: Set(fingerprint.to_string()),
+            task_id: Set(task_id.to_string()),
+            created_at: Set(Utc::now().to_rfc3339()),
+        };
+        match SemanticSuccess::insert(row)
+            .on_conflict(
+                OnConflict::column(adequacy_semantic_success::Column::EvidenceId)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(DbErr::RecordNotInserted) => Ok(false),
+            Err(e) => Err(BitrouterError::internal(format!(
+                "adequacy record semantic success: {e}"
+            ))),
+        }
+    }
+
+    pub async fn clear_semantic_successes(&self, fingerprint: &str) -> Result<()> {
+        SemanticSuccess::delete_many()
+            .filter(adequacy_semantic_success::Column::Fingerprint.eq(fingerprint))
+            .exec(&self.db)
+            .await
+            .map_err(|e| {
+                BitrouterError::internal(format!("adequacy clear semantic successes: {e}"))
+            })?;
+        Ok(())
     }
 
     /// Upsert a pin, refreshing the cooldown clock (`pinned_at_unix`) without
@@ -331,5 +401,51 @@ mod tests {
             reloaded.should_trial("tool_followup"),
             "trial cadence should survive daemon restart"
         );
+    }
+
+    #[tokio::test]
+    async fn request_lock_waits_for_distinct_task_successes_when_configured() {
+        let db = db::connect("sqlite::memory:").await.unwrap();
+        db::run_migrations(&db).await.unwrap();
+        let cfg = AdequacyConfig {
+            enabled: true,
+            explore_enabled: true,
+            explore_tier: Some("cheap".to_string()),
+            explore_interval: 1,
+            explore_threshold: 1,
+            min_semantic_successes_for_lock: 2,
+            ..Default::default()
+        };
+        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let store = AdequacyStore::new(db.clone());
+        let ledger = AdequacyLedger::load(&cfg, store.clone()).await;
+
+        ledger
+            .observe(
+                request_key,
+                Outcome::Exploration {
+                    trialed: true,
+                    cause: crate::adequacy::InadequacyCause::None,
+                },
+            )
+            .await;
+        assert!(ledger.is_request_qualified(request_key));
+        assert!(!ledger.is_locked(request_key));
+
+        store
+            .record_semantic_success(request_key, "terminal-bench/regex-log")
+            .await
+            .unwrap();
+        let one_success = AdequacyLedger::load(&cfg, store.clone()).await;
+        assert_eq!(one_success.semantic_successes(request_key), 1);
+        assert!(!one_success.is_locked(request_key));
+
+        store
+            .record_semantic_success(request_key, "terminal-bench/fix-git")
+            .await
+            .unwrap();
+        let two_successes = AdequacyLedger::load(&cfg, store).await;
+        assert_eq!(two_successes.semantic_successes(request_key), 2);
+        assert!(two_successes.is_locked(request_key));
     }
 }

@@ -327,7 +327,7 @@ enum WorkflowStateAction {
         #[arg(long)]
         until: Option<String>,
     },
-    /// Pin failed cheap replacement transitions before the next policy round.
+    /// Apply task rewards to cheap replacement transitions before the next round.
     ApplyRewardFeedback {
         /// Database URL for the policy daemon DB, for example sqlite:///path/bitrouter.db.
         #[arg(long)]
@@ -823,7 +823,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             use bitrouter::workflow_state::archive::{TraceArchive, WorkflowRunArtifact};
             use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
-            use bitrouter::workflow_state::reward_feedback::apply_semantic_failure_pins;
+            use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
 
             let traces = TraceArchive::read_jsonl(&traces)
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
@@ -842,18 +842,23 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             let db = bitrouter::db::connect(&database_url)
                 .await
                 .with_context(|| format!("connect adequacy database {database_url}"))?;
-            let summary = apply_semantic_failure_pins(
+            let summary = apply_semantic_reward_feedback(
                 &AdequacyStore::new(db),
                 &artifact.semantic_policy_transition_candidates,
             )
             .await
             .context("apply reward feedback pins")?;
             println!(
-                "✓ applied reward feedback pins: {} candidates, {} pinned keys",
-                summary.candidate_count, summary.pinned_count
+                "✓ applied reward feedback: {} candidates, {} pinned keys, {} new task-success evidence rows",
+                summary.candidate_count,
+                summary.pinned_count,
+                summary.semantic_success_evidence_count
             );
             for key in summary.pinned_request_keys {
                 println!("  pinned {key}");
+            }
+            for key in summary.semantic_success_request_keys {
+                println!("  confirmed success {key}");
             }
             Ok(())
         }

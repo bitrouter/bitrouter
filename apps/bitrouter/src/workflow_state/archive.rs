@@ -12,6 +12,7 @@ use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
 use crate::workflow_state::reward::{
     BenchmarkOutcomeRecord, RewardJoin, RewardJoinSummary, SemanticInadequacyCandidate,
+    SemanticOutcomeCandidate,
 };
 use crate::workflow_state::shadow_policy::{ShadowPolicyEvaluator, ShadowPolicySummary};
 
@@ -302,7 +303,7 @@ impl WorkflowRunArtifact {
         let cost_join = CostJoinSummary::from_traces_and_usage(traces, usage);
         let reward_join = TraceArchive::join_outcomes(traces, outcomes);
         let semantic_policy_transition_candidates = semantic_policy_transition_candidates(
-            &reward_join.semantic_inadequacy_candidates,
+            &reward_join.semantic_outcome_candidates,
             traces,
             decisions,
         );
@@ -476,7 +477,7 @@ fn trace_request_id(trace: &CapturedIngressTrace) -> Option<String> {
 }
 
 fn semantic_policy_transition_candidates(
-    semantic_candidates: &[SemanticInadequacyCandidate],
+    semantic_candidates: &[SemanticOutcomeCandidate],
     traces: &[CapturedIngressTrace],
     decisions: &[PolicyDecisionRecord],
 ) -> Vec<SemanticPolicyTransitionCandidate> {

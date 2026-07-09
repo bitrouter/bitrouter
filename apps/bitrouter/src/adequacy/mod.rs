@@ -104,6 +104,8 @@ pub struct AdequacyLedger {
     explore_interval: u32,
     /// Consecutive adequate trials before a fingerprint locks to the cheap tier.
     explore_threshold: u32,
+    /// Distinct task-level successes required before a request lock is effective.
+    min_semantic_successes_for_lock: u32,
 }
 
 #[derive(Default)]
@@ -126,6 +128,8 @@ struct Entry {
     adequate_trials: u32,
     /// Locked to the explore tier — a discovered, learned downgrade.
     locked: bool,
+    /// Distinct successful benchmark tasks attributed to this cheap transition.
+    semantic_successes: u32,
 }
 
 impl AdequacyLedger {
@@ -146,6 +150,11 @@ impl AdequacyLedger {
                 entry.locked = row.locked;
             }
         }
+        if let Ok(counts) = store.load_semantic_success_counts().await {
+            for (fingerprint, semantic_successes) in counts {
+                entries.entry(fingerprint).or_default().semantic_successes = semantic_successes;
+            }
+        }
         Self {
             state: RwLock::new(State { entries }),
             store: Some(store),
@@ -153,6 +162,7 @@ impl AdequacyLedger {
             cooldown_secs: config.pin_cooldown_secs,
             explore_interval: config.explore_interval.max(1),
             explore_threshold: config.explore_threshold.max(1),
+            min_semantic_successes_for_lock: config.min_semantic_successes_for_lock,
         }
     }
 
@@ -179,6 +189,7 @@ impl AdequacyLedger {
             cooldown_secs,
             explore_interval: explore_interval.max(1),
             explore_threshold: explore_threshold.max(1),
+            min_semantic_successes_for_lock: 0,
         }
     }
 
@@ -197,8 +208,40 @@ impl AdequacyLedger {
 
     /// Whether `fingerprint` is locked to the explore tier (a learned downgrade).
     pub fn is_locked(&self, fingerprint: &str) -> bool {
+        self.is_locked_with_semantic_threshold(fingerprint, 0)
+    }
+
+    pub fn is_locked_with_semantic_threshold(
+        &self,
+        fingerprint: &str,
+        minimum_semantic_successes: u32,
+    ) -> bool {
+        let guard = self.state.read().unwrap_or_else(PoisonError::into_inner);
+        let threshold = self.semantic_success_threshold(minimum_semantic_successes);
+        guard
+            .entries
+            .get(fingerprint)
+            .is_some_and(|e| e.locked && e.semantic_successes >= threshold)
+    }
+
+    /// Whether request-level completion evidence has qualified the cheap route,
+    /// independent of the task-level semantic-success gate.
+    pub fn is_request_qualified(&self, fingerprint: &str) -> bool {
         let guard = self.state.read().unwrap_or_else(PoisonError::into_inner);
         guard.entries.get(fingerprint).is_some_and(|e| e.locked)
+    }
+
+    pub fn semantic_successes(&self, fingerprint: &str) -> u32 {
+        let guard = self.state.read().unwrap_or_else(PoisonError::into_inner);
+        guard
+            .entries
+            .get(fingerprint)
+            .map_or(0, |entry| entry.semantic_successes)
+    }
+
+    pub fn semantic_success_threshold(&self, minimum_semantic_successes: u32) -> u32 {
+        self.min_semantic_successes_for_lock
+            .max(minimum_semantic_successes)
     }
 
     /// Whether the next request for an exploration candidate `fingerprint` should

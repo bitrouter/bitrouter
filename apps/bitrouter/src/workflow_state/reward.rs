@@ -43,10 +43,20 @@ pub struct SemanticInadequacyCandidate {
     pub failed_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticOutcomeCandidate {
+    pub trace_id: String,
+    pub session_key: String,
+    pub task_id: String,
+    pub reward: f64,
+    pub failed_reason: Option<String>,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RewardJoin {
     pub summary: RewardJoinSummary,
     pub semantic_inadequacy_candidates: Vec<SemanticInadequacyCandidate>,
+    pub semantic_outcome_candidates: Vec<SemanticOutcomeCandidate>,
 }
 
 impl BenchmarkOutcomeRecord {
@@ -202,7 +212,8 @@ impl RewardJoin {
             outcome_count: outcomes.len(),
             ..RewardJoinSummary::default()
         };
-        let mut candidates = Vec::new();
+        let mut inadequacy_candidates = Vec::new();
+        let mut outcome_candidates = Vec::new();
         for trace in traces {
             let mut matched = Vec::new();
             if let Some(session_key) = trace_session_key(trace)
@@ -231,8 +242,15 @@ impl RewardJoin {
             }
             summary.matched_trace_count += 1;
             for outcome in matched {
+                outcome_candidates.push(SemanticOutcomeCandidate {
+                    trace_id: trace.id.clone(),
+                    session_key: outcome.session_key.clone(),
+                    task_id: outcome.task_id.clone(),
+                    reward: outcome.reward,
+                    failed_reason: outcome.failed_reason.clone(),
+                });
                 if outcome.reward < 1.0 {
-                    candidates.push(SemanticInadequacyCandidate {
+                    inadequacy_candidates.push(SemanticInadequacyCandidate {
                         trace_id: trace.id.clone(),
                         session_key: outcome.session_key.clone(),
                         task_id: outcome.task_id.clone(),
@@ -247,7 +265,8 @@ impl RewardJoin {
 
         Self {
             summary,
-            semantic_inadequacy_candidates: candidates,
+            semantic_inadequacy_candidates: inadequacy_candidates,
+            semantic_outcome_candidates: outcome_candidates,
         }
     }
 }

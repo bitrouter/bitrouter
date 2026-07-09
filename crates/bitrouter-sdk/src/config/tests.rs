@@ -603,6 +603,7 @@ policy_table:
     assert_eq!(adequacy.escalation_threshold, 1);
     assert_eq!(adequacy.pin_cooldown_secs, 1800);
     assert!(!adequacy.explore_opening);
+    assert_eq!(adequacy.min_semantic_successes_for_lock, 0);
     assert_eq!(adequacy.min_semantic_successes_for_opening, 1);
 }
 
@@ -656,6 +657,7 @@ policy_table:
     explore_tier: cheap
     explore_interval: 8
     explore_threshold: 4
+    min_semantic_successes_for_lock: 3
     explore_opening: true
     min_semantic_successes_for_opening: 2
 "#;
@@ -665,6 +667,7 @@ policy_table:
     assert_eq!(adequacy.explore_tier.as_deref(), Some("cheap"));
     assert_eq!(adequacy.explore_interval, 8);
     assert_eq!(adequacy.explore_threshold, 4);
+    assert_eq!(adequacy.min_semantic_successes_for_lock, 3);
     assert!(adequacy.explore_opening);
     assert_eq!(adequacy.min_semantic_successes_for_opening, 2);
 }
