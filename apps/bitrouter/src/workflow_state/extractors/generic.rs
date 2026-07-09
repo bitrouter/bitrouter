@@ -14,10 +14,15 @@ pub struct GenericPromptExtractor;
 impl WorkflowStateExtractor for GenericPromptExtractor {
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let prompt = input.prompt;
-        let (state_kind, last_tool_name, state_evidence) = classify_state(prompt);
+        let (mut state_kind, last_tool_name, state_evidence) = classify_state(prompt);
         let context_size = context_size_bucket(prompt);
         let tool_density = tool_density(prompt);
         let recovery_signal = recovery_signal(prompt);
+        if recovery_signal == RecoverySignal::LikelyRecovery
+            && matches!(state_kind, WorkflowStateKind::ToolFollowup)
+        {
+            state_kind = WorkflowStateKind::Recovery;
+        }
         let mut capability_constraints = CapabilityConstraints {
             tool_reliability: if tool_density == ToolDensity::None {
                 RequirementLevel::Low
@@ -193,6 +198,8 @@ fn recovery_signal(prompt: &Prompt) -> RecoverySignal {
         "failed",
         "traceback",
         "exit code 1",
+        "command not found",
+        "no such file or directory",
         "nonzero",
         "panic",
         "exception",
@@ -341,6 +348,22 @@ mod tests {
         );
         let ir = extract(&prompt);
         assert_eq!(ir.recovery_signal, RecoverySignal::LikelyRecovery);
+    }
+
+    #[test]
+    fn generic_splits_command_not_found_tool_followup_into_recovery_state() {
+        let prompt = prompt(
+            vec![
+                user("verify the regex"),
+                assistant_calls("bash"),
+                tool_result("/bin/bash: line 1: python3: command not found"),
+            ],
+            Vec::new(),
+        );
+        let ir = extract(&prompt);
+        assert_eq!(ir.recovery_signal, RecoverySignal::LikelyRecovery);
+        assert_eq!(ir.state_kind, WorkflowStateKind::Recovery);
+        assert_eq!(ir.last_tool_name.as_deref(), Some("bash"));
     }
 
     #[test]
