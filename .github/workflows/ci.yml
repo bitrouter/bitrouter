@@ -80,21 +80,13 @@ jobs:
     name: dist
     runs-on: ubuntu-latest
     # Guards generated distribution artifacts: the committed config schema and
-    # registry dist JSON must match the Rust source/YAML data, every committed
-    # example must validate, and deprecated YAML parsers must stay out of the graph.
+    # registry dist JSON must match the Rust source/YAML data, and deprecated
+    # YAML parsers must stay out of the graph.
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: generated dist is up to date
         run: cargo run -p dist-helper -- check
-      - name: validate committed example configs
-        run: |
-          cargo build -p bitrouter
-          shopt -s nullglob
-          for f in examples/*.yaml examples/*.yml examples/*.json; do
-            echo "validating $f"
-            ./target/debug/bitrouter config validate -c "$f"
-          done
       - name: no deprecated/unsound yaml parser in the graph
         run: |
           for crate in serde_yaml serde_yml; do

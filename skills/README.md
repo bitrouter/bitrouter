@@ -7,7 +7,7 @@ a skill change ships in the same PR as the change that motivates it.
 
 ## What's here
 
-One skill, following the [Agent Skills specification](https://agentskills.io/specification).
+Skills follow the [Agent Skills specification](https://agentskills.io/specification).
 
 ### `/bitrouter`, at [`bitrouter/`](bitrouter/)
 
@@ -25,6 +25,18 @@ skills/bitrouter/
 
 Covers the Local-or-Cloud decision, install, daemon lifecycle, cloud onboarding,
 provider config, migration off other gateways, diagnostics, and per-harness wiring.
+
+### `/verify`, at [`verify/`](verify/)
+
+```
+skills/verify/
+└── SKILL.md          # entry point
+```
+
+Verifies `bitrouter acp`/`agents` CLI changes end-to-end against a real ACP
+agent (claude-code-acp) — build, real-agent workspace setup, and the flows worth
+driving under `crates/bitrouter-substrate` and `apps/bitrouter`'s
+`acp_cli`/`agents` surfaces.
 
 ## Install
 

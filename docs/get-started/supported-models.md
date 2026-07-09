@@ -18,6 +18,13 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `anthropic/claude-opus-4.8` | Anthropic: Claude Opus 4.8 | 1M | text, image | — | $5 | $25 |
 | `anthropic/claude-sonnet-4.6` | Anthropic: Claude Sonnet 4.6 | 1M | text, image | — | $3 | $15 |
 | `anthropic/claude-sonnet-5` | Anthropic: Claude Sonnet 5 | 1M | text, image | — | $2 | $10 |
+| `baidu/ernie-5.1` | ERNIE 5.1 | 119K | text, image | — | — | — |
+| `bytedance/doubao-seed-2.0-code` | Doubao Seed 2.0 Code | 256K | text, image | — | — | — |
+| `bytedance/doubao-seed-2.0-lite` | Doubao Seed 2.0 Lite | 256K | text, image | — | — | — |
+| `bytedance/doubao-seed-2.0-mini` | Doubao Seed 2.0 Mini | 256K | text, image | — | — | — |
+| `bytedance/doubao-seed-2.0-pro` | Doubao Seed 2.0 Pro | 256K | text, image | — | $0.83 | $4.17 |
+| `bytedance/doubao-seed-2.1-pro` | Doubao Seed 2.1 Pro | 256K | text, image | — | — | — |
+| `bytedance/doubao-seed-2.1-turbo` | Doubao Seed 2.1 Turbo | 256K | text, image | — | — | — |
 | `deepseek/deepseek-v3.2` | DeepSeek: DeepSeek V3.2 | 128K | text | ✅ | $0.21 | $0.315 |
 | `deepseek/deepseek-v4-flash` | DeepSeek: DeepSeek V4 Flash | 256K | text | ✅ | $0.09 | $0.18 |
 | `deepseek/deepseek-v4-pro` | DeepSeek: DeepSeek V4 Pro | 256K | text | ✅ | $0.435 | $0.87 |
@@ -28,11 +35,13 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `inclusionai/ling-2.6-1t` | Ling 2.6 1T | 256K | text | ✅ | $0.075 | $0.625 |
 | `inclusionai/ling-2.6-flash` | Ling 2.6 Flash | 256K | text | ✅ | $0.01 | $0.03 |
 | `inclusionai/ring-2.6-1t` | Ring 2.6 1T | 256K | text | ✅ | $0.075 | $0.625 |
+| `kuaishou/kat-coder-pro-v2` | KAT Coder Pro V2 | 256K | text | — | — | — |
 | `meituan/longcat-2.0` | LongCat 2.0 | 1M | text | ✅ | — | — |
 | `meta/muse-spark-1.1` | Meta: Muse Spark 1.1 | 1M | text, image | — | $1.25 | $4.25 |
 | `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $0.9 |
 | `minimax/minimax-m2.7` | MiniMax: M2.7 | 192K | text | ✅ | $0.225 | $0.9 |
 | `minimax/minimax-m3` | MiniMax: M3 | 1M | text, image | ✅ | $0.3 | $1.2 |
+| `mistralai/mistral-medium-3-5` | Mistral Medium 3.5 | 256K | text, image | ✅ | — | — |
 | `moonshotai/kimi-k2.5` | Kimi: K2.5 | 256K | text, image | ✅ | $0.375 | $2.025 |
 | `moonshotai/kimi-k2.6` | Kimi: K2.6 | 256K | text | ✅ | $0.66 | $3.41 |
 | `moonshotai/kimi-k2.7-code` | Kimi: K2.7 Code | 256K | text, image | ✅ | $0.612 | $3.069 |
