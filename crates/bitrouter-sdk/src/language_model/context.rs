@@ -740,6 +740,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_stream_with_zero_usage_bills_estimated_usage() {
+        let user = "12345678";
+        let ctx = ctx_from_prompt(prompt_with_text(None, user));
+        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
+
+        proc.process_part(StreamPart::TextDelta {
+            text: "abcdefgh".into(),
+        })
+        .await
+        .expect("text delta passes through with no hooks");
+        proc.process_part(StreamPart::Usage {
+            usage: Usage::default(),
+        })
+        .await
+        .expect("zero usage frame passes through with no hooks");
+        proc.finish(StreamOutcome::Completed).await;
+
+        let usage = proc
+            .context()
+            .final_usage
+            .expect("completed stream should have usage");
+        assert_eq!(usage.prompt_tokens, 2);
+        assert_eq!(usage.completion_tokens, 2);
+    }
+
+    #[tokio::test]
     async fn authoritative_usage_overrides_disconnect_estimate() {
         // A real upstream usage frame must win over the disconnect estimate,
         // even when the stream then ends as a client disconnect.
