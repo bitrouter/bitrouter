@@ -32,6 +32,7 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::adequacy::AdequacyLedger;
+use crate::adequacy::settlement::{PendingAdequacyDecision, PendingAdequacyStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::WorkflowStateKind;
 use crate::workflow_state::online::OnlineWorkflowState;
@@ -331,6 +332,7 @@ pub struct PolicyTableRouter {
     table: Arc<PolicyTable>,
     ledger: Option<Arc<AdequacyLedger>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+    pending_adequacy: Option<Arc<PendingAdequacyStore>>,
 }
 
 impl PolicyTableRouter {
@@ -343,6 +345,7 @@ impl PolicyTableRouter {
             table,
             ledger: None,
             decision_recorder: None,
+            pending_adequacy: None,
         })
     }
 
@@ -353,11 +356,20 @@ impl PolicyTableRouter {
             table,
             ledger,
             decision_recorder: None,
+            pending_adequacy: None,
         }
     }
 
     pub fn with_decision_recorder(mut self, recorder: PolicyDecisionJsonlRecorder) -> Self {
         self.decision_recorder = Some(Arc::new(recorder));
+        self
+    }
+
+    pub(crate) fn with_pending_adequacy_store(
+        mut self,
+        pending: Arc<PendingAdequacyStore>,
+    ) -> Self {
+        self.pending_adequacy = Some(pending);
         self
     }
 
@@ -498,6 +510,15 @@ impl PolicyTableRouter {
             if let Err(error) = recorder.record(&record) {
                 tracing::warn!(%error, "policy decision recorder failed");
             }
+        }
+        if let (Some(request_id), Some(pending)) = (request_id, &self.pending_adequacy) {
+            pending.insert(PendingAdequacyDecision {
+                request_id: request_id.to_string(),
+                request_key: decision.request_key.clone(),
+                static_tier: decision.static_tier.clone(),
+                selected_tier: decision.selected_tier.clone(),
+                exploration_allowed: self.exploration_allowed_for(&decision),
+            });
         }
         let Some(model) = decision.selected_model else {
             return false;

@@ -108,6 +108,18 @@ impl SettlementRecorder for CountingRecorder {
     }
 }
 
+struct RequestEndCountingObserver(Arc<AtomicUsize>);
+#[async_trait]
+impl ObserveHook for RequestEndCountingObserver {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, _outcome: &RequestOutcome) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 /// Records the `(prompt_tokens, completion_tokens)` seen by every settlement
 /// call so a test can assert what was actually billed.
 struct UsageCapturingRecorder(Arc<std::sync::Mutex<Vec<(u64, u64)>>>);
@@ -586,6 +598,41 @@ async fn drain_awaits_pending_disconnect_settlements() {
         *ended.lock().unwrap(),
         vec!["disconnected"],
         "the settlement task ran and the StreamHook saw ClientDisconnected"
+    );
+}
+
+#[tokio::test]
+async fn dropped_stream_still_fires_request_end_observers() {
+    let observed_end = Arc::new(AtomicUsize::new(0));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |b| {
+            b.observe_hook(RequestEndCountingObserver(observed_end.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("ok");
+    drop(stream);
+
+    let drained = pipeline.drain_pending_settlements().await;
+    assert!(
+        drained >= 1,
+        "stream drop must detach a settlement task that can be drained"
+    );
+    assert_eq!(
+        observed_end.load(Ordering::SeqCst),
+        1,
+        "request-end observers must run for disconnected streams"
     );
 }
 

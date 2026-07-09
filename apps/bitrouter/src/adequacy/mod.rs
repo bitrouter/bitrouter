@@ -26,6 +26,7 @@
 #[cfg(test)]
 mod eval;
 pub mod observer;
+pub mod settlement;
 pub mod store;
 
 use std::collections::HashMap;

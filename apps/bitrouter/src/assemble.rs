@@ -418,12 +418,13 @@ pub async fn build_app_with_path(
         }
         _ => None,
     };
-    // The adequacy observe hook learns from request outcomes. Built before the
-    // builder closure so it can be moved into it; `None` unless learning is on.
-    let adequacy_observe = match (&policy_table, &adequacy_ledger) {
-        (Some(table), Some(ledger)) => Some(crate::adequacy::observer::AdequacyObserveHook::new(
-            table.clone(),
-            ledger.clone(),
+    // The adequacy learner records the policy decision at ingress and folds it
+    // into the ledger from the always-run settlement path. That is more robust
+    // for streaming clients that drop the response body immediately after their
+    // final event: settlement still runs, so learning advances with metering.
+    let adequacy_pending = match (&policy_table, &adequacy_ledger) {
+        (Some(_), Some(_)) => Some(Arc::new(
+            crate::adequacy::settlement::PendingAdequacyStore::default(),
         )),
         _ => None,
     };
@@ -436,6 +437,9 @@ pub async fn build_app_with_path(
             "policy decision JSONL recording enabled"
         );
     }
+    let adequacy_settlement_table = policy_table.clone();
+    let adequacy_settlement_ledger = adequacy_ledger.clone();
+    let adequacy_settlement_pending = adequacy_pending.clone();
 
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
@@ -482,12 +486,21 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
-            // Online adequacy learning: observe each request's outcome and pin a
-            // downgraded fingerprint that keeps hard-failing, so the policy
-            // router (below) escalates it next time. Wired only when
-            // `policy_table.adequacy.enabled`.
-            if let Some(hook) = adequacy_observe {
-                lm.observe_hook(hook);
+            // Online adequacy learning: use settlement as the source of truth so
+            // request completion, metering, and adequacy cannot diverge on
+            // streaming client-disconnect paths.
+            if let (Some(table), Some(ledger), Some(pending)) = (
+                &adequacy_settlement_table,
+                &adequacy_settlement_ledger,
+                &adequacy_settlement_pending,
+            ) {
+                lm.settlement_recorder(
+                    crate::adequacy::settlement::AdequacySettlementRecorder::new(
+                        table.clone(),
+                        ledger.clone(),
+                        pending.clone(),
+                    ),
+                );
             }
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
@@ -540,6 +553,9 @@ pub async fn build_app_with_path(
                 crate::policy_table_router::PolicyTableRouter::new(table, adequacy_ledger);
             if let Some(recorder) = policy_decision_recorder {
                 router = router.with_decision_recorder(recorder);
+            }
+            if let Some(pending) = adequacy_pending {
+                router = router.with_pending_adequacy_store(pending);
             }
             app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
         }

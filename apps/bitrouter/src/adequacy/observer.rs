@@ -257,7 +257,7 @@ impl ObserveHook for AdequacyObserveHook {
     }
 }
 
-fn classify_failure(error: &BitrouterError) -> InadequacyCause {
+pub(crate) fn classify_failure(error: &BitrouterError) -> InadequacyCause {
     match error {
         BitrouterError::Upstream { status, .. } => match *status {
             408 | 429 | 500..=599 => InadequacyCause::ProviderTransient,
