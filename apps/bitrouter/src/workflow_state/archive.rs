@@ -6,6 +6,7 @@ use std::path::Path;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
@@ -64,6 +65,7 @@ pub struct WorkflowRunArtifact {
     pub trace_count: usize,
     pub replay: ReplaySummary,
     pub shadow_policy: ShadowPolicySummary,
+    pub policy_decisions: PolicyDecisionSummary,
     pub cost: CloudUsageSummary,
     pub cost_join: CostJoinSummary,
     pub reward_join: RewardJoinSummary,
@@ -262,9 +264,20 @@ impl WorkflowRunArtifact {
         usage: &[CloudUsageRecord],
         outcomes: &[BenchmarkOutcomeRecord],
     ) -> Result<Self> {
+        Self::build_with_decisions(run_label, traces, usage, outcomes, &[])
+    }
+
+    pub fn build_with_decisions(
+        run_label: impl Into<String>,
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+        outcomes: &[BenchmarkOutcomeRecord],
+        decisions: &[PolicyDecisionRecord],
+    ) -> Result<Self> {
         let fixtures = TraceArchive::to_replay_fixtures(traces)?;
         let replay = ReplayEvaluator::default().run(&fixtures);
         let shadow_policy = ShadowPolicyEvaluator::default().run(&fixtures);
+        let policy_decisions = PolicyDecisionSummary::from_records(decisions);
         let cost = CloudUsageSummary::from_records(usage);
         let cost_join = CostJoinSummary::from_traces_and_usage(traces, usage);
         let reward_join = TraceArchive::join_outcomes(traces, outcomes);
@@ -278,6 +291,7 @@ impl WorkflowRunArtifact {
             trace_count: traces.len(),
             replay,
             shadow_policy,
+            policy_decisions,
             cost,
             cost_join,
             reward_join: reward_join.summary,
@@ -304,6 +318,26 @@ impl WorkflowRunArtifact {
         outcomes: &[BenchmarkOutcomeRecord],
         sanitizer: &TraceSanitizer,
     ) -> Result<Self> {
+        Self::write_bundle_with_decisions(
+            run_label,
+            output_dir,
+            traces,
+            usage,
+            outcomes,
+            &[],
+            sanitizer,
+        )
+    }
+
+    pub fn write_bundle_with_decisions(
+        run_label: impl Into<String>,
+        output_dir: impl AsRef<Path>,
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+        outcomes: &[BenchmarkOutcomeRecord],
+        decisions: &[PolicyDecisionRecord],
+        sanitizer: &TraceSanitizer,
+    ) -> Result<Self> {
         let output_dir = output_dir.as_ref();
         fs::create_dir_all(output_dir).map_err(|e| {
             BitrouterError::internal(format!(
@@ -315,12 +349,14 @@ impl WorkflowRunArtifact {
         TraceArchive::write_jsonl(output_dir.join("traces.jsonl"), traces, sanitizer)?;
         write_jsonl_records(output_dir.join("cloud-usage.jsonl"), usage)?;
         write_jsonl_records(output_dir.join("benchmark-outcomes.jsonl"), outcomes)?;
+        PolicyDecisionRecord::write_jsonl(output_dir.join("policy-decisions.jsonl"), decisions)?;
 
         let sanitized_traces = traces
             .iter()
             .map(|trace| sanitizer.sanitize_trace(trace))
             .collect::<Vec<_>>();
-        let artifact = Self::build_with_outcomes(run_label, &sanitized_traces, usage, outcomes)?;
+        let artifact =
+            Self::build_with_decisions(run_label, &sanitized_traces, usage, outcomes, decisions)?;
         artifact.write_json(output_dir.join("run-artifact.json"))?;
         write_pretty_json(
             output_dir.join("shadow-policy.json"),

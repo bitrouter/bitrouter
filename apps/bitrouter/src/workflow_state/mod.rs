@@ -1,6 +1,7 @@
 //! Experimental workflow-state extraction for cross-harness cost optimization.
 
 pub mod archive;
+pub mod decision;
 pub mod extractors;
 pub mod fixture;
 pub mod ir;

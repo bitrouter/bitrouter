@@ -5,6 +5,7 @@ use axum::Json;
 use axum::routing::post;
 use axum_test::TestServer;
 use bitrouter::workflow_state::archive::{CloudUsageRecord, TraceArchive, WorkflowRunArtifact};
+use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::real_trace::{
@@ -782,6 +783,95 @@ fn run_artifact_bundle_writes_fixed_benchmark_layout() {
     )
     .unwrap();
     assert_eq!(run_artifact["shadow_policy"]["total"], 1);
+
+    let _ = std::fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn run_artifact_bundle_includes_policy_decision_summary() {
+    let output_dir = temp_path("workflow-run-bundle-decisions");
+    let traces = vec![CapturedIngressTrace {
+        id: "trace-001".to_string(),
+        captured_at: None,
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: [("x-bitrouter-request-id".to_string(), "req-001".to_string())]
+            .into_iter()
+            .collect(),
+        raw_body: json!({
+            "model": "gpt-5.5",
+            "input": "reply ok",
+            "stream": true
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    }];
+    let usage = vec![CloudUsageRecord {
+        id: Some("usage-row-1".to_string()),
+        request_id: Some("req-001".to_string()),
+        provider_id: "bitrouter".to_string(),
+        model_id: "moonshotai/kimi-k2.7-code".to_string(),
+        prompt_tokens: 100,
+        completion_tokens: 10,
+        final_charge_micro_usd: Some(42),
+        status: Some("succeeded".to_string()),
+    }];
+    let decisions = vec![PolicyDecisionRecord {
+        captured_at: None,
+        request_id: Some("req-001".to_string()),
+        input_model: "gpt-5.5".to_string(),
+        key_strategy: "workflow_state".to_string(),
+        request_key: "codex|responses|tool_followup|-|-|bash|low|small|none|high|low|low|low|medium|medium|requires_structured_tools".to_string(),
+        legacy_fingerprint: "after_bash".to_string(),
+        workflow_state: "tool_followup".to_string(),
+        static_tier: Some("capable".to_string()),
+        selected_tier: Some("cheap".to_string()),
+        selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        reason: "exploration_locked".to_string(),
+        pinned: false,
+        locked: true,
+        trialed: false,
+    }];
+
+    let summary = PolicyDecisionSummary::from_records(&decisions);
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.by_selected_tier.get("cheap"), Some(&1));
+    assert_eq!(summary.by_reason.get("exploration_locked"), Some(&1));
+
+    let artifact = WorkflowRunArtifact::write_bundle_with_decisions(
+        "run-a",
+        &output_dir,
+        &traces,
+        &usage,
+        &[],
+        &decisions,
+        &TraceSanitizer::default(),
+    )
+    .unwrap();
+
+    assert_eq!(artifact.policy_decisions.total, 1);
+    assert_eq!(
+        artifact
+            .policy_decisions
+            .by_selected_model
+            .get("bitrouter:moonshotai/kimi-k2.7-code"),
+        Some(&1)
+    );
+    assert!(output_dir.join("policy-decisions.jsonl").exists());
+
+    let run_artifact: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(output_dir.join("run-artifact.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(run_artifact["policy_decisions"]["total"], 1);
+    assert_eq!(
+        run_artifact["policy_decisions"]["by_reason"]["exploration_locked"],
+        1
+    );
 
     let _ = std::fs::remove_dir_all(&output_dir);
 }

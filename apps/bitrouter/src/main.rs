@@ -302,6 +302,9 @@ enum WorkflowStateAction {
         /// Benchmark outcome JSONL.
         #[arg(long)]
         outcomes: PathBuf,
+        /// Optional policy routing decision JSONL from BITROUTER_POLICY_DECISION_JSONL.
+        #[arg(long)]
+        policy_decisions: Option<PathBuf>,
         /// Output directory for traces/cloud usage/outcomes/artifacts.
         #[arg(long)]
         output_dir: PathBuf,
@@ -712,11 +715,13 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             traces,
             cloud_usage,
             outcomes,
+            policy_decisions,
             output_dir,
         } => {
             use bitrouter::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
+            use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::real_trace::TraceSanitizer;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 
@@ -726,12 +731,18 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
             let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
                 .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
-            let artifact = WorkflowRunArtifact::write_bundle_with_outcomes(
+            let decisions = match policy_decisions {
+                Some(path) => PolicyDecisionRecord::load_jsonl(&path)
+                    .with_context(|| format!("read policy decisions {}", path.display()))?,
+                None => Vec::new(),
+            };
+            let artifact = WorkflowRunArtifact::write_bundle_with_decisions(
                 run_label,
                 &output_dir,
                 &traces,
                 &usage,
                 &outcomes,
+                &decisions,
                 &TraceSanitizer::default(),
             )
             .with_context(|| format!("write workflow bundle {}", output_dir.display()))?;

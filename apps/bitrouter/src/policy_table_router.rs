@@ -32,6 +32,7 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::adequacy::AdequacyLedger;
+use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::online::OnlineWorkflowState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +296,7 @@ impl PolicyTable {
 pub struct PolicyTableRouter {
     table: Arc<PolicyTable>,
     ledger: Option<Arc<AdequacyLedger>>,
+    decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
 }
 
 impl PolicyTableRouter {
@@ -306,13 +308,23 @@ impl PolicyTableRouter {
         PolicyTable::from_config(config).map(|table| Self {
             table,
             ledger: None,
+            decision_recorder: None,
         })
     }
 
     /// Build a router over a shared [`PolicyTable`] and an optional
     /// [`AdequacyLedger`] (the adaptive wiring).
     pub fn new(table: Arc<PolicyTable>, ledger: Option<Arc<AdequacyLedger>>) -> Self {
-        Self { table, ledger }
+        Self {
+            table,
+            ledger,
+            decision_recorder: None,
+        }
+    }
+
+    pub fn with_decision_recorder(mut self, recorder: PolicyDecisionJsonlRecorder) -> Self {
+        self.decision_recorder = Some(Arc::new(recorder));
+        self
     }
 
     /// Apply the policy table to a prompt, returning whether the model was
@@ -410,13 +422,16 @@ impl PolicyTableRouter {
     }
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
+        let input_model = prompt.model.clone();
         let decision = self.decision_for(prompt, headers);
         let request_id = headers
             .get("x-bitrouter-request-id")
             .and_then(|value| value.to_str().ok())
-            .unwrap_or("-");
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let request_id_for_log = request_id.unwrap_or("-");
         tracing::info!(
-            request_id,
+            request_id = request_id_for_log,
             key_strategy = ?decision.key_strategy,
             request_key = %decision.request_key,
             legacy_fingerprint = %decision.legacy_fingerprint,
@@ -430,6 +445,26 @@ impl PolicyTableRouter {
             trialed = decision.trialed,
             "policy routing decision"
         );
+        if let Some(recorder) = &self.decision_recorder {
+            let record = PolicyDecisionRecord::now(
+                request_id.map(ToString::to_string),
+                input_model,
+                key_strategy_name(decision.key_strategy),
+                decision.request_key.clone(),
+                decision.legacy_fingerprint.clone(),
+                decision.workflow_state_kind.clone(),
+                decision.static_tier.clone(),
+                decision.selected_tier.clone(),
+                decision.selected_model.clone(),
+                decision.reason.to_string(),
+                decision.pinned,
+                decision.locked,
+                decision.trialed,
+            );
+            if let Err(error) = recorder.record(&record) {
+                tracing::warn!(%error, "policy decision recorder failed");
+            }
+        }
         let Some(model) = decision.selected_model else {
             return false;
         };
@@ -438,6 +473,13 @@ impl PolicyTableRouter {
         }
         prompt.model = model;
         true
+    }
+}
+
+fn key_strategy_name(strategy: PolicyKeyStrategy) -> &'static str {
+    match strategy {
+        PolicyKeyStrategy::LegacyFingerprint => "legacy_fingerprint",
+        PolicyKeyStrategy::WorkflowState => "workflow_state",
     }
 }
 
@@ -484,6 +526,7 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::adequacy::{InadequacyCause, Outcome};
+    use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
     use crate::workflow_state::ir::{HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
@@ -621,6 +664,17 @@ mod tests {
         p.model
     }
 
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "bitrouter-policy-table-{name}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
     #[test]
     fn opening_request_routes_to_its_tier() {
         // No model turn yet → `opening` → flagship.
@@ -715,6 +769,35 @@ mod tests {
         p.messages = vec![user("hi"), assistant_calls("grep")];
         assert!(!r.apply(&mut p));
         assert_eq!(p.model, "inbound");
+    }
+
+    #[test]
+    fn route_prompt_writes_policy_decision_jsonl_when_recorder_is_configured() {
+        let path = temp_path("decisions.jsonl");
+        let table = PolicyTable::from_config(&config()).expect("configured");
+        let recorder = PolicyDecisionJsonlRecorder::new(path.clone()).unwrap();
+        let r = PolicyTableRouter::new(table, None).with_decision_recorder(recorder);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-request-id",
+            HeaderValue::from_static("req-001"),
+        );
+        let mut p = prompt("inbound");
+        p.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+
+        assert!(r.route_prompt(&mut p, &headers));
+        assert_eq!(p.model, "vendor/cheap");
+
+        let records =
+            crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&path).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].request_id.as_deref(), Some("req-001"));
+        assert_eq!(records[0].input_model, "inbound");
+        assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
+        assert_eq!(records[0].reason, "static_table");
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

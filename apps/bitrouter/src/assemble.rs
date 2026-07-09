@@ -427,6 +427,15 @@ pub async fn build_app_with_path(
         )),
         _ => None,
     };
+    let policy_decision_recorder =
+        crate::workflow_state::decision::PolicyDecisionJsonlRecorder::from_env()
+            .map_err(anyhow::Error::from)?;
+    if policy_decision_recorder.is_some() {
+        tracing::info!(
+            env = crate::workflow_state::decision::POLICY_DECISION_JSONL_ENV,
+            "policy decision JSONL recording enabled"
+        );
+    }
 
     // Optional ACP pure-routing pipeline — wired only when the config
     // declares at least one upstream agent. Mirrors the MCP wiring above;
@@ -527,7 +536,11 @@ pub async fn build_app_with_path(
     // declaration (the `bitrouter/fusion` alias's injected tool).
     let app = match policy_table {
         Some(table) => {
-            let router = crate::policy_table_router::PolicyTableRouter::new(table, adequacy_ledger);
+            let mut router =
+                crate::policy_table_router::PolicyTableRouter::new(table, adequacy_ledger);
+            if let Some(recorder) = policy_decision_recorder {
+                router = router.with_decision_recorder(recorder);
+            }
             app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
         }
         None => app,
