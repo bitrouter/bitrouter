@@ -9,5 +9,6 @@ pub mod online;
 pub mod real_trace;
 pub mod replay;
 pub mod reward;
+pub mod reward_feedback;
 pub mod session;
 pub mod shadow_policy;

@@ -327,6 +327,21 @@ enum WorkflowStateAction {
         #[arg(long)]
         until: Option<String>,
     },
+    /// Pin failed cheap replacement transitions before the next policy round.
+    ApplyRewardFeedback {
+        /// Database URL for the policy daemon DB, for example sqlite:///path/bitrouter.db.
+        #[arg(long)]
+        database_url: String,
+        /// Daemon workflow trace JSONL for the just-finished benchmark group.
+        #[arg(long)]
+        traces: PathBuf,
+        /// Benchmark outcome JSONL for the just-finished benchmark group.
+        #[arg(long)]
+        outcomes: PathBuf,
+        /// Policy routing decision JSONL from BITROUTER_POLICY_DECISION_JSONL.
+        #[arg(long)]
+        policy_decisions: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -796,6 +811,50 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 records.len(),
                 output.display()
             );
+            Ok(())
+        }
+        WorkflowStateAction::ApplyRewardFeedback {
+            database_url,
+            traces,
+            outcomes,
+            policy_decisions,
+        } => {
+            use bitrouter::adequacy::store::AdequacyStore;
+            use bitrouter::workflow_state::archive::{TraceArchive, WorkflowRunArtifact};
+            use bitrouter::workflow_state::decision::PolicyDecisionRecord;
+            use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
+            use bitrouter::workflow_state::reward_feedback::apply_semantic_failure_pins;
+
+            let traces = TraceArchive::read_jsonl(&traces)
+                .with_context(|| format!("read workflow traces {}", traces.display()))?;
+            let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
+                .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
+            let decisions = PolicyDecisionRecord::load_jsonl(&policy_decisions)
+                .with_context(|| format!("read policy decisions {}", policy_decisions.display()))?;
+            let artifact = WorkflowRunArtifact::build_with_decisions(
+                "reward-feedback",
+                &traces,
+                &[],
+                &outcomes,
+                &decisions,
+            )
+            .context("build workflow artifact for reward feedback")?;
+            let db = bitrouter::db::connect(&database_url)
+                .await
+                .with_context(|| format!("connect adequacy database {database_url}"))?;
+            let summary = apply_semantic_failure_pins(
+                &AdequacyStore::new(db),
+                &artifact.semantic_policy_transition_candidates,
+            )
+            .await
+            .context("apply reward feedback pins")?;
+            println!(
+                "✓ applied reward feedback pins: {} candidates, {} pinned keys",
+                summary.candidate_count, summary.pinned_count
+            );
+            for key in summary.pinned_request_keys {
+                println!("  pinned {key}");
+            }
             Ok(())
         }
     }
