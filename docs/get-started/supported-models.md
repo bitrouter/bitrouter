@@ -29,6 +29,7 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `inclusionai/ling-2.6-flash` | Ling 2.6 Flash | 256K | text | ✅ | $0.01 | $0.03 |
 | `inclusionai/ring-2.6-1t` | Ring 2.6 1T | 256K | text | ✅ | $0.075 | $0.625 |
 | `meituan/longcat-2.0` | LongCat 2.0 | 1M | text | ✅ | — | — |
+| `meta/muse-spark-1.1` | Meta: Muse Spark 1.1 | 1M | text, image | — | $1.25 | $4.25 |
 | `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $0.9 |
 | `minimax/minimax-m2.7` | MiniMax: M2.7 | 192K | text | ✅ | $0.225 | $0.9 |
 | `minimax/minimax-m3` | MiniMax: M3 | 1M | text, image | ✅ | $0.3 | $1.2 |
@@ -81,9 +82,9 @@ BitRouter runs its own **self-hosted provider** for open models, priced **25% be
 
 ### 25% off by default
 
-Every model **except** the closed-source families — OpenAI (`gpt-*`), Anthropic (`claude-*`), Google (`gemini-*`), and xAI (`grok-*`) — is served by BitRouter's self-hosted provider at **25% below the model's official price**.
+Every model **except** the closed-source families — OpenAI (`gpt-*`), Anthropic (`claude-*`), Google (`gemini-*`), xAI (`grok-*`), and Meta (`muse-spark-*`) — is served by BitRouter's self-hosted provider at **25% below the model's official price**.
 
-This takes **no suffix and no configuration**. Because the self-hosted provider is the cheapest source for these models, normal routing already sends your requests there and bills the discounted rate. (The four closed-source families above aren't on the self-hosted provider, so they route to their usual upstreams at standard pricing.)
+This takes **no suffix and no configuration**. Because the self-hosted provider is the cheapest source for these models, normal routing already sends your requests there and bills the discounted rate. (The five closed-source families above aren't on the self-hosted provider, so they route to their usual upstreams at standard pricing.)
 
 ### Pin to the self-hosted provider with `:discount`
 
