@@ -189,7 +189,26 @@ impl PolicyTable {
     /// The tier a served model id belongs to (reverse of [`Self::model_of_tier`]).
     /// Used by the adequacy observer to map an outcome back to a tier.
     pub(crate) fn tier_of_model(&self, model: &str) -> Option<&str> {
-        self.model_to_tier.get(model).map(String::as_str)
+        if let Some(tier) = self.model_to_tier.get(model) {
+            return Some(tier.as_str());
+        }
+        if model.contains(':') {
+            return None;
+        }
+        let mut matched = None;
+        for (tier, route_model) in &self.tiers {
+            let Some((_, service_id)) = route_model.split_once(':') else {
+                continue;
+            };
+            if service_id != model {
+                continue;
+            }
+            if matched.is_some() {
+                return None;
+            }
+            matched = Some(tier.as_str());
+        }
+        matched
     }
 
     /// The tier a pinned fingerprint escalates to. Used by the router (to apply a

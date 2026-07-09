@@ -191,6 +191,30 @@ mod tests {
         PolicyTable::from_config(&cfg).expect("configured")
     }
 
+    fn explicit_route_explore_table() -> Arc<PolicyTable> {
+        let cfg = PolicyTableConfig {
+            key_strategy: Default::default(),
+            tiers: HashMap::from([
+                (
+                    "cheap".to_string(),
+                    "bitrouter:moonshotai/kimi-k2.7-code".to_string(),
+                ),
+                ("capable".to_string(), "openai-codex:gpt-5.5".to_string()),
+            ]),
+            fingerprints: HashMap::from([("opening".to_string(), "capable".to_string())]),
+            default_tier: Some("capable".to_string()),
+            tool_use_tier: None,
+            tool_safe_tiers: Vec::new(),
+            adequacy: bitrouter_sdk::config::AdequacyConfig {
+                enabled: true,
+                explore_enabled: true,
+                explore_tier: Some("cheap".to_string()),
+                ..Default::default()
+            },
+        };
+        PolicyTable::from_config(&cfg).expect("configured")
+    }
+
     fn user(text: &str) -> Message {
         Message::text(Role::User, text)
     }
@@ -409,5 +433,27 @@ mod tests {
             .await;
         }
         assert!(ledger.should_trial("opening"), "the cadence advanced");
+    }
+
+    #[tokio::test]
+    async fn explicit_provider_route_service_id_advances_exploration_cadence() {
+        // Real providers report the served service id (`gpt-5.5`) in the
+        // pipeline/settlement context, while the policy tier stores the explicit
+        // route (`openai-codex:gpt-5.5`). The observer must still map the
+        // completed capable request back to the capable tier; otherwise
+        // exploration never learns from subscription-backed models.
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        let hook = AdequacyObserveHook::new(explicit_route_explore_table(), ledger.clone());
+
+        hook.on_request_end(
+            &ctx("gpt-5.5", vec![user("start")]),
+            &RequestOutcome::Completed,
+        )
+        .await;
+
+        assert!(
+            ledger.should_trial("opening"),
+            "served service id must advance the explicit route tier's cadence"
+        );
     }
 }
