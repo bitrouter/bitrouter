@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-attestation"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "async-trait",
  "dcap-qvl",
@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-attestation-plugin"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "async-trait",
  "bitrouter-attestation",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-bedrock"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-cloud-sdk"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "async-trait",
  "bitrouter-sdk",
@@ -1062,7 +1062,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-mcp"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-observe"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "async-trait",
  "axum 0.8.9",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-providers"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "agent-client-protocol-schema",
  "async-stream",
@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-skills"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -1178,7 +1178,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-substrate"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "dist-helper"
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 dependencies = [
  "anyhow",
  "bitrouter-sdk",

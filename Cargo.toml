@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "plugins/*", "apps/*", "mcp", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.21"
+version = "1.0.0-alpha.22"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -15,16 +15,16 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.21", default-features = false }
-bitrouter-attestation = { path = "crates/bitrouter-attestation", version = "1.0.0-alpha.21" }
-bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.21" }
-bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.21" }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.21" }
-bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.21" }
-bitrouter-substrate = { path = "crates/bitrouter-substrate", version = "1.0.0-alpha.21" }
-bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.21" }
-bitrouter-attestation-plugin = { path = "plugins/bitrouter-attestation", version = "1.0.0-alpha.21" }
-bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.21", default-features = false }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.22", default-features = false }
+bitrouter-attestation = { path = "crates/bitrouter-attestation", version = "1.0.0-alpha.22" }
+bitrouter-bedrock = { path = "crates/bitrouter-bedrock", version = "1.0.0-alpha.22" }
+bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.22" }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.22" }
+bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.22" }
+bitrouter-substrate = { path = "crates/bitrouter-substrate", version = "1.0.0-alpha.22" }
+bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.22" }
+bitrouter-attestation-plugin = { path = "plugins/bitrouter-attestation", version = "1.0.0-alpha.22" }
+bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.22", default-features = false }
 
 # ACP SDK crates
 agent-client-protocol = "1.0"
