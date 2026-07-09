@@ -909,6 +909,48 @@
           }
         },
         {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "anthropic.claude-sonnet-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "claude-sonnet-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -1059,6 +1101,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.167,
+              "no_cache": 0.83
+            },
+            "output_tokens": {
+              "text": 4.17
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "bytedance/doubao-seed-2.0-pro"
+        },
         {
           "api_protocol": "openai",
           "pricing": {
@@ -2655,6 +2711,20 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 4.25
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "meta/muse-spark-1.1"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -3415,7 +3485,25 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "mistralai/mistral-medium-3-5"
+        }
+      ],
       "release_date": "2026-04-30"
     },
     {
@@ -4822,6 +4910,21 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-5.6-luna"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses"
@@ -4868,6 +4971,25 @@
           ],
           "provider": "openai-codex",
           "provider_model_id": "gpt-5.6-luna"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-5.6-luna"
         }
       ],
       "release_date": "2026-06-25"
@@ -4888,6 +5010,21 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-5.6-sol"
+        },
         {
           "api_protocol": [
             "openai",
@@ -4935,6 +5072,25 @@
           ],
           "provider": "openai-codex",
           "provider_model_id": "gpt-5.6-sol"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-5.6-sol"
         }
       ],
       "release_date": "2026-06-25"
@@ -4955,6 +5111,21 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-5.6-terra"
+        },
         {
           "api_protocol": [
             "openai",
@@ -5002,6 +5173,25 @@
           ],
           "provider": "openai-codex",
           "provider_model_id": "gpt-5.6-terra"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-5.6-terra"
         }
       ],
       "release_date": "2026-06-25"
@@ -6507,6 +6697,52 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "x-ai/grok-4.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "grok-4.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "x-ai/grok-4.5"
+        },
+        {
           "api_protocol": [
             "responses",
             "openai"
@@ -6916,6 +7152,25 @@
           "api_protocol": "openai",
           "provider": "alibaba_coding_plan",
           "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "zai.glm-4.7",
           "rate_limits": {
             "requests_per_minute": 60
           }

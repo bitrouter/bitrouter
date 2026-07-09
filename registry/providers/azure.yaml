@@ -142,6 +142,15 @@ models:
         no_cache: 0.95
       output_tokens:
         text: 4
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
 auto_sync:
   feed: models_dev
   key: azure

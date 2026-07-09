@@ -233,6 +233,14 @@ models:
         cache_read: 0.1
       output_tokens:
         text: 2.2
+  - id: x-ai/grok-4.5
+    provider_model_id: grok-4.5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 community: false
