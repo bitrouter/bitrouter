@@ -84,6 +84,9 @@ impl ObserveHook for AdequacyObserveHook {
         if self.table.exploration_enabled()
             && escalation_tier.is_some()
             && static_tier == escalation_tier
+            && self
+                .table
+                .exploration_allowed_for_prompt(ctx.prompt(), ctx.headers())
         {
             let trialed = self.table.explore_tier() == Some(served_tier);
             // Count only a trial (served the explore tier) or a cadence-advance
@@ -194,6 +197,7 @@ mod tests {
                 enabled: true,
                 explore_enabled: true,
                 explore_tier: Some("cheap".to_string()),
+                explore_opening: true,
                 ..Default::default()
             },
         };
@@ -305,6 +309,10 @@ mod tests {
 
     fn read_step() -> Vec<Message> {
         vec![user("fix the bug"), assistant_calls("read_file")]
+    }
+
+    fn bash_step() -> Vec<Message> {
+        vec![user("run command"), assistant_calls("bash")]
     }
 
     #[tokio::test]
@@ -454,6 +462,20 @@ mod tests {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
         let hook = AdequacyObserveHook::new(explicit_route_explore_table(), ledger.clone());
 
+        hook.on_request_end(&ctx("gpt-5.5", bash_step()), &RequestOutcome::Completed)
+            .await;
+
+        assert!(
+            ledger.should_trial("after_bash"),
+            "served service id must advance the explicit route tier's cadence"
+        );
+    }
+
+    #[tokio::test]
+    async fn opening_candidate_does_not_advance_when_opening_exploration_is_disabled() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        let hook = AdequacyObserveHook::new(explicit_route_explore_table(), ledger.clone());
+
         hook.on_request_end(
             &ctx("gpt-5.5", vec![user("start")]),
             &RequestOutcome::Completed,
@@ -461,8 +483,8 @@ mod tests {
         .await;
 
         assert!(
-            ledger.should_trial("opening"),
-            "served service id must advance the explicit route tier's cadence"
+            !ledger.should_trial("opening"),
+            "opening must not accumulate exploration cadence unless explicitly enabled"
         );
     }
 
@@ -476,13 +498,13 @@ mod tests {
         let hook = AdequacyObserveHook::new(explicit_route_explore_table(), ledger.clone());
 
         hook.on_request_end(
-            &ctx("gpt-5.5", vec![user("start")]),
+            &ctx("gpt-5.5", bash_step()),
             &RequestOutcome::ClientDisconnected,
         )
         .await;
 
         assert!(
-            ledger.should_trial("opening"),
+            ledger.should_trial("after_bash"),
             "capable stream disconnect should still advance exploration cadence"
         );
     }

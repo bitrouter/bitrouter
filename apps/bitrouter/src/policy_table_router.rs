@@ -33,6 +33,7 @@ use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::adequacy::AdequacyLedger;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
+use crate::workflow_state::ir::WorkflowStateKind;
 use crate::workflow_state::online::OnlineWorkflowState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +259,20 @@ impl PolicyTable {
 
     fn can_explore_opening(&self) -> bool {
         self.explore_opening && self.min_semantic_successes_for_opening >= 1
+    }
+
+    pub(crate) fn exploration_allowed_for_prompt(
+        &self,
+        prompt: &Prompt,
+        headers: &HeaderMap,
+    ) -> bool {
+        let online = OnlineWorkflowState::from_headers(headers, prompt);
+        if online.legacy_fingerprint() == "opening"
+            || online.ir.state_kind == WorkflowStateKind::Opening
+        {
+            return self.can_explore_opening();
+        }
+        true
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
