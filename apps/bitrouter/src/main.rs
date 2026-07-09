@@ -306,6 +306,21 @@ enum WorkflowStateAction {
         #[arg(long)]
         output_dir: PathBuf,
     },
+    /// Export daemon metering rows as usage JSONL for benchmark bundles.
+    MeteringUsage {
+        /// Database URL for the daemon metering DB, for example sqlite:///path/bitrouter.db.
+        #[arg(long)]
+        database_url: String,
+        /// Output usage JSONL path.
+        #[arg(long)]
+        output: PathBuf,
+        /// Inclusive RFC3339 lower bound. Defaults to the current UTC month.
+        #[arg(long)]
+        since: Option<String>,
+        /// Exclusive RFC3339 upper bound. Only used with --since; defaults to now.
+        #[arg(long)]
+        until: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -725,7 +740,48 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             );
             Ok(())
         }
+        WorkflowStateAction::MeteringUsage {
+            database_url,
+            output,
+            since,
+            until,
+        } => {
+            use bitrouter::metering::{MeteringStore, MeteringUsageRecord, TimeWindow};
+
+            let window = match since {
+                Some(since) => {
+                    let start = parse_rfc3339_utc(&since, "--since")?;
+                    let end = match until {
+                        Some(until) => parse_rfc3339_utc(&until, "--until")?,
+                        None => chrono::Utc::now(),
+                    };
+                    TimeWindow::Custom { start, end }
+                }
+                None => TimeWindow::ThisMonth,
+            };
+            let db = bitrouter::db::connect(&database_url)
+                .await
+                .with_context(|| format!("connect metering database {database_url}"))?;
+            let records = MeteringStore::new(db)
+                .export_usage(window)
+                .await
+                .with_context(|| format!("export metering usage from {database_url}"))?;
+            MeteringUsageRecord::write_jsonl(&output, &records)
+                .with_context(|| format!("write metering usage {}", output.display()))?;
+            println!(
+                "✓ wrote {} metering usage records to {}",
+                records.len(),
+                output.display()
+            );
+            Ok(())
+        }
     }
+}
+
+fn parse_rfc3339_utc(value: &str, flag: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .with_context(|| format!("{flag} must be RFC3339, got {value:?}"))
 }
 
 /// Validate a config file and print a short summary. Returns `Err` (→ exit 1)

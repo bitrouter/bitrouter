@@ -11,11 +11,17 @@
 //! sidesteps that entirely. The metering windows are bounded (at most one
 //! month) so the row counts stay modest for a local-first deployment.
 
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
+use std::path::Path;
+
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QuerySelect, Set,
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
+use serde::{Deserialize, Serialize};
 
 use bitrouter_sdk::{BitrouterError, Result};
 
@@ -53,6 +59,54 @@ pub struct TokenUsage {
     pub completion_tokens: u64,
     /// Sum of prompt + completion.
     pub total_tokens: u64,
+}
+
+/// A settled request exported in the workflow bundle's usage-record shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeteringUsageRecord {
+    pub id: Option<String>,
+    pub request_id: Option<String>,
+    pub provider_id: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
+    pub final_charge_micro_usd: Option<u64>,
+    pub status: Option<String>,
+}
+
+impl MeteringUsageRecord {
+    pub fn write_jsonl(path: impl AsRef<Path>, records: &[Self]) -> Result<()> {
+        if let Some(parent) = path.as_ref().parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|e| {
+                BitrouterError::internal(format!(
+                    "metering usage jsonl mkdir {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        let file = File::create(path.as_ref()).map_err(|e| {
+            BitrouterError::internal(format!(
+                "metering usage jsonl create {}: {e}",
+                path.as_ref().display()
+            ))
+        })?;
+        let mut writer = BufWriter::new(file);
+        for record in records {
+            serde_json::to_writer(&mut writer, record).map_err(|e| {
+                BitrouterError::internal(format!("metering usage jsonl serialize: {e}"))
+            })?;
+            writer.write_all(b"\n").map_err(|e| {
+                BitrouterError::internal(format!("metering usage jsonl write: {e}"))
+            })?;
+        }
+        writer
+            .flush()
+            .map_err(|e| BitrouterError::internal(format!("metering usage jsonl flush: {e}")))
+    }
 }
 
 /// Request / token rate over the trailing minute.
@@ -154,6 +208,25 @@ impl MeteringStore {
         })
     }
 
+    /// Export settled request rows in a JSONL-friendly shape compatible with
+    /// `workflow-state bundle`'s cloud usage input.
+    pub async fn export_usage(&self, window: TimeWindow) -> Result<Vec<MeteringUsageRecord>> {
+        let start = window_start(window).to_rfc3339();
+        let mut query = requests::Entity::find()
+            .filter(requests::Column::CreatedAt.gte(start))
+            .order_by_asc(requests::Column::CreatedAt)
+            .order_by_asc(requests::Column::RequestId);
+        if let TimeWindow::Custom { end, .. } = window {
+            query = query.filter(requests::Column::CreatedAt.lt(end.to_rfc3339()));
+        }
+        let rows = query
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("export_usage: {e}")))?;
+
+        Ok(rows.into_iter().map(MeteringUsageRecord::from).collect())
+    }
+
     /// Record one settled request. The single writer.
     pub async fn record_request(&self, record: RequestMetric) -> Result<()> {
         let row = requests::ActiveModel {
@@ -202,6 +275,26 @@ impl MeteringStore {
             .await
             .map_err(|e| BitrouterError::internal(format!("record_request: {e}")))?;
         Ok(())
+    }
+}
+
+impl From<requests::Model> for MeteringUsageRecord {
+    fn from(row: requests::Model) -> Self {
+        let status = if row.error.is_some() {
+            "failed"
+        } else {
+            "completed"
+        };
+        Self {
+            id: Some(row.request_id.clone()),
+            request_id: Some(row.request_id),
+            provider_id: row.provider_id,
+            model_id: row.model_id,
+            prompt_tokens: row.prompt_tokens.max(0) as u64,
+            completion_tokens: row.completion_tokens.max(0) as u64,
+            final_charge_micro_usd: Some(row.estimated_charge_micro_usd.max(0) as u64),
+            status: Some(status.to_string()),
+        }
     }
 }
 

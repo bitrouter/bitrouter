@@ -13,6 +13,7 @@ use axum::response::Response;
 use bitrouter_sdk::Result;
 use chrono::{SecondsFormat, Utc};
 use http::HeaderValue;
+use http::header::HeaderName;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -166,7 +167,6 @@ impl RealTraceCapture {
         {
             parts.headers.insert(BITROUTER_PROTOCOL_HEADER, value);
         }
-        let headers = headers_to_map(&parts.headers);
 
         let body_bytes = match to_bytes(body, MAX_CAPTURE_BODY_BYTES).await {
             Ok(bytes) => bytes,
@@ -178,6 +178,16 @@ impl RealTraceCapture {
             }
         };
         let raw_body = serde_json::from_slice::<serde_json::Value>(&body_bytes).ok();
+        if let Some(raw_body) = raw_body.as_ref()
+            && let Some(session_header) = self.inner.options.session_header.as_deref()
+            && !parts.headers.contains_key(session_header)
+            && let Some(session) = session_from_raw_body(&self.inner.options.harness, raw_body)
+            && let Ok(name) = HeaderName::from_bytes(session_header.as_bytes())
+            && let Ok(value) = HeaderValue::from_str(&session)
+        {
+            parts.headers.insert(name, value);
+        }
+        let headers = headers_to_map(&parts.headers);
         let req = Request::from_parts(parts, Body::from(body_bytes));
         let response = next.run(req).await;
 
@@ -367,6 +377,35 @@ fn protocol_header_value(protocol: &ProtocolKind) -> &'static str {
     }
 }
 
+fn session_from_raw_body(harness: &HarnessId, raw_body: &serde_json::Value) -> Option<String> {
+    match harness {
+        HarnessId::Codex => json_str(raw_body, &["previous_response_id"]),
+        HarnessId::ClaudeCode => claude_session_from_metadata(raw_body),
+        HarnessId::Hermes => json_str(raw_body, &["metadata", "job_id"]),
+        HarnessId::Generic | HarnessId::OpenClaw | HarnessId::Unknown => None,
+    }
+}
+
+fn claude_session_from_metadata(raw_body: &serde_json::Value) -> Option<String> {
+    let user_id = json_str(raw_body, &["metadata", "user_id"])?;
+    serde_json::from_str::<serde_json::Value>(&user_id)
+        .ok()
+        .and_then(|value| json_str(&value, &["session_id"]))
+        .or(Some(user_id))
+}
+
+fn json_str(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn append_sanitized_trace(
     path: &PathBuf,
     trace: &CapturedIngressTrace,
@@ -488,5 +527,57 @@ mod tests {
             .as_deref()
             .expect("trace capture records timestamp");
         chrono::DateTime::parse_from_rfc3339(captured_at).expect("captured_at is RFC3339");
+    }
+
+    #[tokio::test]
+    async fn trace_capture_injects_session_header_from_codex_previous_response_id() {
+        let capture = RealTraceCapture::new(TraceCaptureOptions {
+            harness: HarnessId::Codex,
+            session_header: Some("x-bitrouter-workflow-session".to_string()),
+            archive_path: None,
+        });
+        let router = (capture.router_wrapper())(Router::new().route(
+            "/v1/responses",
+            post(|headers: HeaderMap| async move {
+                let session = headers
+                    .get("x-bitrouter-workflow-session")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("");
+                Json(json!({ "session": session }))
+            }),
+        ));
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-5.5",
+                            "previous_response_id": "resp_123",
+                            "input": "continue",
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response_body = to_bytes(response.into_body(), MAX_CAPTURE_BODY_BYTES)
+            .await
+            .unwrap();
+        let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+
+        assert_eq!(response_json["session"].as_str(), Some("resp_123"));
+        let records = capture.records();
+        assert_eq!(
+            records[0]
+                .headers
+                .get("x-bitrouter-workflow-session")
+                .map(String::as_str),
+            Some("resp_123")
+        );
     }
 }

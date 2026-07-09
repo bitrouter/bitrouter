@@ -520,6 +520,63 @@ fn run_artifact_joins_trace_to_benchmark_outcome_by_agent_time_window() {
 }
 
 #[test]
+fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
+    let traces = vec![CapturedIngressTrace {
+        id: "trace-001".to_string(),
+        captured_at: Some("2026-07-09T08:01:30Z".to_string()),
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: [(
+            "x-bitrouter-request-id".to_string(),
+            "trace-001".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        raw_body: json!({
+            "model": "gpt-5.5",
+            "input": "solve the task",
+            "stream": true
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    }];
+    let outcomes = vec![
+        BenchmarkOutcomeRecord {
+            session_key: "regex-log__abc123".to_string(),
+            task_id: "terminal-bench/regex-log".to_string(),
+            reward: 0.0,
+            failed_reason: Some("verifier_failed".to_string()),
+            finished_at: Some("2026-07-09T08:05:00Z".to_string()),
+            trial_name: Some("regex-log__abc123".to_string()),
+            agent_started_at: Some("2026-07-09T08:00:00Z".to_string()),
+            agent_finished_at: Some("2026-07-09T08:04:00Z".to_string()),
+        },
+        BenchmarkOutcomeRecord {
+            session_key: "fix-git__def456".to_string(),
+            task_id: "terminal-bench/fix-git".to_string(),
+            reward: 1.0,
+            failed_reason: None,
+            finished_at: Some("2026-07-09T08:05:10Z".to_string()),
+            trial_name: Some("fix-git__def456".to_string()),
+            agent_started_at: Some("2026-07-09T08:01:00Z".to_string()),
+            agent_finished_at: Some("2026-07-09T08:04:30Z".to_string()),
+        },
+    ];
+
+    let artifact =
+        WorkflowRunArtifact::build_with_outcomes("run-a", &traces, &[], &outcomes).unwrap();
+
+    assert_eq!(artifact.reward_join.matched_trace_count, 0);
+    assert_eq!(artifact.reward_join.unmatched_trace_count, 1);
+    assert_eq!(artifact.reward_join.unmatched_outcome_count, 2);
+    assert!(artifact.semantic_inadequacy_candidates.is_empty());
+}
+
+#[test]
 fn harbor_result_dir_exports_benchmark_outcomes_with_trial_windows() {
     let run_dir = temp_path("harbor-result-dir");
     let trial_dir = run_dir.join("regex-log__abc123");

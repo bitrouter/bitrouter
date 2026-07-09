@@ -214,11 +214,14 @@ impl RewardJoin {
                 }
             }
             if matched.is_empty() {
-                for (idx, outcome) in outcomes.iter().enumerate() {
-                    if trace_captured_during_outcome(trace, outcome) {
-                        matched_outcome_indices.insert(idx);
-                        matched.push(outcome);
-                    }
+                let time_matches = outcomes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, outcome)| trace_captured_during_outcome(trace, outcome))
+                    .collect::<Vec<_>>();
+                if let [(idx, outcome)] = time_matches.as_slice() {
+                    matched_outcome_indices.insert(*idx);
+                    matched.push(*outcome);
                 }
             }
 
