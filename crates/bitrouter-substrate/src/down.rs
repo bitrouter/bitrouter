@@ -542,7 +542,7 @@ async fn replay_transcript(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{ContentBlock, TextContent};

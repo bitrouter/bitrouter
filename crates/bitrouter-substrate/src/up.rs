@@ -901,7 +901,7 @@ async fn health_check_inner(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use futures::StreamExt;

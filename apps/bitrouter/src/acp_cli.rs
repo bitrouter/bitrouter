@@ -158,38 +158,47 @@ pub async fn serve(
         None => None,
     };
 
-    let mut served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
+    let served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
 
     // Warm loop: the stdio manager is gone; accept reattach connections until
-    // the idle timeout elapses with no manager.
+    // the idle timeout elapses with no manager. (Shadows `served` so the
+    // binding stays immutable on non-unix targets, where this block compiles
+    // away — `--warm` was already rejected up top there.)
     #[cfg(unix)]
-    if let (Some(warm), Some((listener, socket_path))) = (&warm, &reattach) {
-        use agent_client_protocol::ByteStreams;
-        use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-        loop {
-            match tokio::time::timeout(warm.idle_timeout, listener.accept()).await {
-                Err(_) => {
-                    tracing::info!(
-                        idle = ?warm.idle_timeout,
-                        "no manager reattached within the idle timeout; shutting down"
-                    );
-                    break;
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "reattach accept failed; shutting down");
-                    break;
-                }
-                Ok(Ok((stream, _addr))) => {
-                    tracing::info!("manager reattached over {}", socket_path.display());
-                    let (read_half, write_half) = stream.into_split();
-                    let transport = ByteStreams::new(write_half.compat_write(), read_half.compat());
-                    served =
-                        bitrouter_substrate::down::serve_on(Arc::clone(&session), transport).await;
+    let served = match (&warm, &reattach) {
+        (Some(warm), Some((listener, socket_path))) => {
+            use agent_client_protocol::ByteStreams;
+            use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+            let mut served = served;
+            loop {
+                match tokio::time::timeout(warm.idle_timeout, listener.accept()).await {
+                    Err(_) => {
+                        tracing::info!(
+                            idle = ?warm.idle_timeout,
+                            "no manager reattached within the idle timeout; shutting down"
+                        );
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "reattach accept failed; shutting down");
+                        break;
+                    }
+                    Ok(Ok((stream, _addr))) => {
+                        tracing::info!("manager reattached over {}", socket_path.display());
+                        let (read_half, write_half) = stream.into_split();
+                        let transport =
+                            ByteStreams::new(write_half.compat_write(), read_half.compat());
+                        served =
+                            bitrouter_substrate::down::serve_on(Arc::clone(&session), transport)
+                                .await;
+                    }
                 }
             }
+            let _ = tokio::fs::remove_file(socket_path).await;
+            served
         }
-        let _ = tokio::fs::remove_file(socket_path).await;
-    }
+        _ => served,
+    };
 
     // No manager left: shut the session down deliberately so the worktree
     // policy is honored (same semantics as `prompt`). Once serving ends, the
