@@ -141,6 +141,11 @@ impl SettlementRecorder for AdequacySettlementRecorder {
             "adequacy settlement recorded"
         );
         self.ledger.observe(&pending.request_key, outcome).await;
+        tracing::debug!(
+            request_id = %ctx.request_id,
+            request_key = %pending.request_key,
+            "adequacy settlement completed"
+        );
         Ok(())
     }
 }

@@ -602,6 +602,60 @@ async fn drain_awaits_pending_disconnect_settlements() {
 }
 
 #[tokio::test]
+async fn early_stream_drop_runs_every_settlement_recorder() {
+    struct LabelledRecorder {
+        label: &'static str,
+        recorded: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for LabelledRecorder {
+        async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
+            tokio::task::yield_now().await;
+            self.recorded.lock().unwrap().push(self.label);
+            Ok(())
+        }
+    }
+
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder
+                .settlement_recorder(LabelledRecorder {
+                    label: "adequacy",
+                    recorded: recorded.clone(),
+                })
+                .settlement_recorder(LabelledRecorder {
+                    label: "metering",
+                    recorded: recorded.clone(),
+                });
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    assert!(stream.next().await.unwrap().is_ok());
+    assert!(stream.next().await.unwrap().is_ok());
+    drop(stream);
+
+    pipeline.drain_pending_settlements().await;
+    assert_eq!(
+        recorded.lock().unwrap().as_slice(),
+        &["adequacy", "metering"]
+    );
+}
+
+#[tokio::test]
 async fn dropped_stream_still_fires_request_end_observers() {
     let observed_end = Arc::new(AtomicUsize::new(0));
     let pipeline = pipeline_with(

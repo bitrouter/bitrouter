@@ -52,6 +52,7 @@ struct CaptureInner {
     options: TraceCaptureOptions,
     records: Mutex<Vec<CapturedIngressTrace>>,
     archive_lock: Mutex<()>,
+    run_id: uuid::Uuid,
     next_id: AtomicU64,
 }
 
@@ -112,6 +113,7 @@ impl RealTraceCapture {
                 options,
                 records: Mutex::new(Vec::new()),
                 archive_lock: Mutex::new(()),
+                run_id: uuid::Uuid::new_v4(),
                 next_id: AtomicU64::new(1),
             }),
         }
@@ -217,7 +219,7 @@ impl RealTraceCapture {
 
     fn next_id(&self) -> String {
         let n = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        format!("real-agent-trace-{n:04}")
+        format!("real-agent-trace-{}-{n:04}", self.inner.run_id.simple())
     }
 
     fn push_record(&self, record: CapturedIngressTrace) {
@@ -452,6 +454,14 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn generated_request_ids_are_unique_across_capture_instances() {
+        let first = RealTraceCapture::new(TraceCaptureOptions::default());
+        let second = RealTraceCapture::new(TraceCaptureOptions::default());
+
+        assert_ne!(first.next_id(), second.next_id());
+    }
 
     #[tokio::test]
     async fn trace_capture_injects_request_id_visible_to_downstream_and_archive() {
