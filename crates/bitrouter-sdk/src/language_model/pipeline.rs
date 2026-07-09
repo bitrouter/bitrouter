@@ -4,6 +4,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{future::Future, mem};
 
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt};
@@ -51,10 +52,10 @@ pub struct Pipeline {
     /// pipeline strictly single-shot.
     pub(crate) server_tool_loop: Option<Arc<ServerToolLoop>>,
     pub(crate) keepalive_interval: Duration,
-    /// Detached settlement tasks spawned when a streaming client disconnects
-    /// (`StreamSettlementGuard::drop` —.5: no lost streaming
-    /// settlement). [`Pipeline::drain_pending_settlements`] awaits them all
-    /// on graceful shutdown so the process doesn't exit mid-settlement.
+    /// Detached stream-finalization tasks. Every terminal stream moves its
+    /// settlement here before awaiting it, so a client disconnect cannot cancel
+    /// recorders after the terminal SSE frame has already been delivered.
+    /// [`Pipeline::drain_pending_settlements`] awaits them on graceful shutdown.
     pub(crate) pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
     /// Detached **non-streaming** executions ([`Pipeline::execute_detached`]).
     /// A `TaskTracker` (not the `JoinSet` above) because *every* non-streaming
@@ -141,7 +142,7 @@ impl Pipeline {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            std::mem::take(&mut *guard)
+            mem::take(&mut *guard)
         };
         let mut drained = 0;
         while taken.join_next().await.is_some() {
@@ -158,6 +159,22 @@ impl Pipeline {
         self.detached_executions.wait().await;
 
         drained
+    }
+
+    fn spawn_stream_finalization<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let future = future.instrument(tracing::Span::current());
+        match self.pending_settlements.lock() {
+            Ok(mut set) => {
+                while set.try_join_next().is_some() {}
+                set.spawn(future);
+            }
+            Err(_poisoned) => {
+                tokio::spawn(future);
+            }
+        }
     }
 
     /// Execute a non-streaming request that **always runs to completion**, even
@@ -639,17 +656,34 @@ impl StreamSettlementGuard {
 
     /// Finalise inline on a normal/errored/aborted termination.
     async fn finalize(&mut self, outcome: StreamOutcome) {
-        if let Some((mut processor, mut ctx)) = self.state.take() {
-            // Surface whether the request actually succeeded to `on_request_end`,
-            // computed before `processor.finish` consumes the outcome.
-            let request_outcome = request_outcome_for(&outcome);
-            processor.finish(outcome).await;
-            ctx.absorb_stream(processor.into_context());
-            self.pipeline.run_settlement(&mut ctx, true, None).await;
-            self.pipeline.observe_after(Phase::Settlement, &ctx).await;
-            self.pipeline.observe_end(&ctx, request_outcome).await;
+        if let Some((processor, ctx)) = self.state.take() {
+            // Move finalization out of the response-body future before awaiting
+            // it. A client commonly closes the SSE connection immediately after
+            // the terminal frame; cancellation of this waiter must not cancel a
+            // recorder midway through its database write.
+            let pipeline = self.pipeline.clone();
+            let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+            self.pipeline.spawn_stream_finalization(async move {
+                finalize_stream(pipeline, processor, ctx, outcome).await;
+                let _ = finished_tx.send(());
+            });
+            let _ = finished_rx.await;
         }
     }
+}
+
+async fn finalize_stream(
+    pipeline: Arc<Pipeline>,
+    mut processor: StreamProcessor,
+    mut ctx: PipelineContext,
+    outcome: StreamOutcome,
+) {
+    let request_outcome = request_outcome_for(&outcome);
+    processor.finish(outcome).await;
+    ctx.absorb_stream(processor.into_context());
+    pipeline.run_settlement(&mut ctx, true, None).await;
+    pipeline.observe_after(Phase::Settlement, &ctx).await;
+    pipeline.observe_end(&ctx, request_outcome).await;
 }
 
 /// Map a terminal [`StreamOutcome`] to the [`RequestOutcome`] observers see at
@@ -674,28 +708,11 @@ impl Drop for StreamSettlementGuard {
         // `Pipeline::drain_pending_settlements` can await every in-flight
         // detached settlement during graceful shutdown — otherwise SIGTERM
         // could cut a settlement task mid-await and the receipt would be lost.
-        if let Some((mut processor, mut ctx)) = self.state.take() {
+        if let Some((processor, ctx)) = self.state.take() {
             let pipeline = self.pipeline.clone();
-            let fut = async move {
-                processor.finish(StreamOutcome::ClientDisconnected).await;
-                ctx.absorb_stream(processor.into_context());
-                pipeline.run_settlement(&mut ctx, true, None).await;
-                pipeline
-                    .observe_end(&ctx, RequestOutcome::ClientDisconnected)
-                    .await;
-            };
-            // The mutex is held only long enough to call `spawn` (which is
-            // synchronous); no `.await` is held across the lock. If the lock
-            // is poisoned we fall through to a bare `tokio::spawn` so the
-            // settlement still runs (the unhappy case beats losing it).
-            match self.pipeline.pending_settlements.lock() {
-                Ok(mut set) => {
-                    set.spawn(fut);
-                }
-                Err(_poisoned) => {
-                    tokio::spawn(fut);
-                }
-            }
+            self.pipeline.spawn_stream_finalization(async move {
+                finalize_stream(pipeline, processor, ctx, StreamOutcome::ClientDisconnected).await;
+            });
         }
     }
 }
