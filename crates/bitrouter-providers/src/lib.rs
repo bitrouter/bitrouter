@@ -77,6 +77,8 @@
 
 #[cfg(feature = "pkce")]
 pub mod anthropic;
+#[cfg(feature = "pkce")]
+pub mod antigravity;
 mod apply;
 pub mod builtin;
 #[cfg(feature = "pkce")]

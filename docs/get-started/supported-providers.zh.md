@@ -24,7 +24,7 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `github-copilot` | GitHub | US | openai | Subscription | 14 |
 | `gmicloud` | GMI Cloud | US | openai | Per-token | 13 |
 | `google` | Google | US | google, openai | Per-token | 4 |
-| `google-ai` | Google | US | google, openai | Subscription | 3 |
+| `google-ai` | Google | US | antigravity | Subscription | 3 |
 | `minimax` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `minimax_cn` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 3 |
