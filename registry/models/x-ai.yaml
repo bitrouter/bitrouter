@@ -20,6 +20,17 @@
   release_date: 2026-03-12
   open_weights: false
   family: grok
+- id: x-ai/grok-4.5
+  name: 'xAI: Grok 4.5'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 500000
+  release_date: 2026-07-08
+  open_weights: false
+  family: grok
 - id: x-ai/grok-4.3
   name: 'xAI: Grok 4.3'
   input_modalities:

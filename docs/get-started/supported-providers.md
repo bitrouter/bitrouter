@@ -9,19 +9,19 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 
 | Provider | Name | HQ | Protocols | Billing | Models |
 | --- | --- | --- | --- | --- | --- |
-| `alibaba` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 4 |
-| `alibaba_cn` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 4 |
-| `alibaba_coding_plan` | Alibaba Cloud | CN | openai | Subscription | 7 |
+| `alibaba` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 8 |
+| `alibaba_cn` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 13 |
+| `alibaba_coding_plan` | Alibaba Cloud | CN | openai | Subscription | 8 |
 | `ambient` | Ambient | US | openai | Per-token | 2 |
 | `anthropic` | Anthropic | US | anthropic | Per-token | 8 |
-| `atlascloud` | Atlas Cloud | US | openai | Per-token | 14 |
-| `bitrouter` | BitRouter | US | — | Per-token | 0 |
+| `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
+| `bitrouter` | BitRouter | US | openai | Per-token | 49 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
-| `cerebras` | Cerebras | US | openai | Per-token | 1 |
+| `cerebras` | Cerebras | US | openai | Per-token | 3 |
 | `chutes` | Chutes | US | openai | Per-token | 7 |
 | `claude-code` | Anthropic | US | anthropic | Subscription | 7 |
 | `deepseek` | DeepSeek | CN | anthropic, openai | Per-token | 2 |
-| `github-copilot` | GitHub | US | openai | Subscription | 13 |
+| `github-copilot` | GitHub | US | openai | Subscription | 14 |
 | `gmicloud` | GMI Cloud | US | openai | Per-token | 13 |
 | `google` | Google | US | google, openai | Per-token | 4 |
 | `google-ai` | Google | US | google, openai | Subscription | 3 |
@@ -30,14 +30,15 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 3 |
 | `moonshotai_coding_plan` | Moonshot AI | CN | openai | Subscription | 1 |
 | `novita` | Novita AI | US | openai | Per-token | 18 |
-| `openai` | OpenAI | US | openai, responses | Per-token | 3 |
-| `openai-codex` | OpenAI | US | responses | Subscription | 3 |
+| `openai` | OpenAI | US | openai, responses | Per-token | 6 |
+| `openai-codex` | OpenAI | US | responses | Subscription | 6 |
 | `opencode-go` | OpenCode | US | openai | Subscription | 18 |
-| `opencode-zen` | OpenCode | US | openai | Per-token | 24 |
-| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 39 |
+| `opencode-zen` | OpenCode | US | openai | Per-token | 26 |
+| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 52 |
 | `phala` | Phala | US | openai | Per-token | 5 |
-| `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 3 |
-| `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 6 |
+| `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 8 |
+| `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 9 |
+| `redpill` | RedPill | SG | openai | Per-token | 5 |
 | `siliconflow` | SiliconFlow | CN | openai | Per-token | 17 |
 | `siliconflow_cn` | SiliconFlow | CN | openai | Per-token | 13 |
 | `stepfun` | StepFun | CN | anthropic, openai | Per-token | 2 |
@@ -45,18 +46,18 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `stepfun_step_plan` | StepFun | CN | anthropic, openai | Subscription | 2 |
 | `stepfun_step_plan_cn` | StepFun | CN | anthropic, openai | Subscription | 2 |
 | `streamlake` | StreamLake | CN | openai | Per-token | 3 |
-| `supergrok` | xAI | US | openai, responses | Subscription | 4 |
+| `supergrok` | xAI | US | openai, responses | Subscription | 5 |
 | `tencent` | Tencent Cloud | CN | anthropic, openai, responses | Per-token | 11 |
-| `tencent_cn` | Tencent Cloud | CN | anthropic, openai, responses | Per-token | 11 |
-| `tinfoil` | Tinfoil | US | openai | Per-token | 3 |
+| `tencent_cn` | Tencent Cloud | CN | anthropic, openai, responses | Per-token | 12 |
+| `tinfoil` | Tinfoil | US | openai | Per-token | 5 |
 | `volcengine` | Volcengine | CN | openai | Per-token | 2 |
-| `xai` | xAI | US | openai, responses | Per-token | 4 |
+| `xai` | xAI | US | openai, responses | Per-token | 5 |
 | `xiaomi` | Xiaomi | CN | anthropic, openai, responses | Per-token | 5 |
 | `xiaomi_token_plan` | Xiaomi | CN | anthropic, openai, responses | Subscription | 2 |
 | `xiaomi_token_plan_cn` | Xiaomi | CN | anthropic, openai, responses | Subscription | 2 |
 | `xiaomi_token_plan_eu` | Xiaomi | CN | anthropic, openai, responses | Subscription | 2 |
-| `zai` | Z.ai | CN | anthropic, openai | Per-token | 3 |
-| `zai_coding_plan` | Z.ai | CN | anthropic, openai | Subscription | 3 |
+| `zai` | Z.ai | CN | anthropic, openai | Per-token | 4 |
+| `zai_coding_plan` | Z.ai | CN | anthropic, openai | Subscription | 4 |
 
 ## Register your own
 
