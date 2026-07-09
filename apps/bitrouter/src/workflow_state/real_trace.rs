@@ -11,6 +11,7 @@ use axum::extract::Request;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use bitrouter_sdk::Result;
+use chrono::{SecondsFormat, Utc};
 use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -54,6 +55,8 @@ struct CaptureInner {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapturedIngressTrace {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_at: Option<String>,
     pub harness: HarnessId,
     pub protocol: ProtocolKind,
     pub method: String,
@@ -167,6 +170,7 @@ impl RealTraceCapture {
         if let (Some(protocol), Some(raw_body)) = (protocol, raw_body) {
             self.push_record(CapturedIngressTrace {
                 id: request_id,
+                captured_at: Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
                 harness: self.inner.options.harness.clone(),
                 protocol,
                 method,
@@ -256,6 +260,7 @@ impl CapturedIngressTrace {
                 "source": "real_agent_http",
                 "method": self.method,
                 "path": self.path,
+                "captured_at": self.captured_at,
                 "outcome": self.outcome,
             },
             "expected": {
@@ -429,5 +434,10 @@ mod tests {
             Some(downstream_request_id)
         );
         assert_eq!(records[0].id, downstream_request_id);
+        let captured_at = records[0]
+            .captured_at
+            .as_deref()
+            .expect("trace capture records timestamp");
+        chrono::DateTime::parse_from_rfc3339(captured_at).expect("captured_at is RFC3339");
     }
 }

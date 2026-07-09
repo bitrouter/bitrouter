@@ -279,6 +279,15 @@ enum ConfigAction {
 
 #[derive(Subcommand)]
 enum WorkflowStateAction {
+    /// Convert a Harbor run directory into benchmark outcome JSONL.
+    HarborOutcomes {
+        /// Harbor group run directory containing per-trial result.json files.
+        #[arg(long)]
+        harbor_run_dir: PathBuf,
+        /// Output benchmark outcome JSONL path.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Build a deterministic benchmark trace bundle.
     Bundle {
         /// Run label stored in `run-artifact.json`.
@@ -663,6 +672,23 @@ async fn config_cmd(action: ConfigAction) -> Result<()> {
 
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     match action {
+        WorkflowStateAction::HarborOutcomes {
+            harbor_run_dir,
+            output,
+        } => {
+            use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
+
+            let outcomes = BenchmarkOutcomeRecord::load_harbor_run_dir(&harbor_run_dir)
+                .with_context(|| format!("read Harbor run {}", harbor_run_dir.display()))?;
+            BenchmarkOutcomeRecord::write_jsonl(&output, &outcomes)
+                .with_context(|| format!("write benchmark outcomes {}", output.display()))?;
+            println!(
+                "✓ wrote {} benchmark outcomes to {}",
+                outcomes.len(),
+                output.display()
+            );
+            Ok(())
+        }
         WorkflowStateAction::Bundle {
             run_label,
             traces,

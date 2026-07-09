@@ -131,6 +131,7 @@ fn replay_summary_matches_current_experiment_fixture_set() {
 fn captured_real_agent_trace_serializes_to_replayable_fixture_and_redacts_secrets() {
     let trace = CapturedIngressTrace {
         id: "real-hermes-http-001".to_string(),
+        captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
@@ -190,6 +191,7 @@ fn trace_archive_round_trips_sanitized_jsonl_and_replay_fixtures() {
     let path = temp_path("trace-archive.jsonl");
     let traces = vec![CapturedIngressTrace {
         id: "trace-001".to_string(),
+        captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
@@ -332,6 +334,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
     let traces = vec![
         CapturedIngressTrace {
             id: "trace-001".to_string(),
+            captured_at: None,
             harness: HarnessId::Hermes,
             protocol: ProtocolKind::ChatCompletions,
             method: "POST".to_string(),
@@ -360,6 +363,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
         },
         CapturedIngressTrace {
             id: "trace-002".to_string(),
+            captured_at: None,
             harness: HarnessId::Hermes,
             protocol: ProtocolKind::ChatCompletions,
             method: "POST".to_string(),
@@ -423,6 +427,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
 fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
     let traces = vec![CapturedIngressTrace {
         id: "trace-001".to_string(),
+        captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
@@ -449,6 +454,9 @@ fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
         reward: 0.0,
         failed_reason: Some("verifier_failed".to_string()),
         finished_at: None,
+        trial_name: None,
+        agent_started_at: None,
+        agent_finished_at: None,
     }];
 
     let artifact =
@@ -461,6 +469,110 @@ fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
         artifact.semantic_inadequacy_candidates[0].task_id,
         "filter-js-from-html"
     );
+}
+
+#[test]
+fn run_artifact_joins_trace_to_benchmark_outcome_by_agent_time_window() {
+    let traces = vec![CapturedIngressTrace {
+        id: "trace-001".to_string(),
+        captured_at: Some("2026-07-09T08:01:30Z".to_string()),
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: [(
+            "x-bitrouter-request-id".to_string(),
+            "trace-001".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        raw_body: json!({
+            "model": "gpt-5.5",
+            "input": "solve the task",
+            "stream": true
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    }];
+    let outcomes = vec![BenchmarkOutcomeRecord {
+        session_key: "regex-log__abc123".to_string(),
+        task_id: "terminal-bench/regex-log".to_string(),
+        reward: 0.0,
+        failed_reason: Some("verifier_failed".to_string()),
+        finished_at: Some("2026-07-09T08:05:00Z".to_string()),
+        trial_name: Some("regex-log__abc123".to_string()),
+        agent_started_at: Some("2026-07-09T08:00:00Z".to_string()),
+        agent_finished_at: Some("2026-07-09T08:04:00Z".to_string()),
+    }];
+
+    let artifact =
+        WorkflowRunArtifact::build_with_outcomes("run-a", &traces, &[], &outcomes).unwrap();
+
+    assert_eq!(artifact.reward_join.matched_trace_count, 1);
+    assert_eq!(artifact.reward_join.unmatched_outcome_count, 0);
+    assert_eq!(artifact.semantic_inadequacy_candidates.len(), 1);
+    assert_eq!(
+        artifact.semantic_inadequacy_candidates[0].session_key,
+        "regex-log__abc123"
+    );
+}
+
+#[test]
+fn harbor_result_dir_exports_benchmark_outcomes_with_trial_windows() {
+    let run_dir = temp_path("harbor-result-dir");
+    let trial_dir = run_dir.join("regex-log__abc123");
+    std::fs::create_dir_all(&trial_dir).unwrap();
+    std::fs::write(
+        run_dir.join("result.json"),
+        json!({
+            "id": "job-1",
+            "n_total_trials": 1,
+            "stats": {
+                "evals": {
+                    "codex__gpt-5.5__terminal-bench/terminal-bench-2-1": {
+                        "reward_stats": { "reward": { "1.0": ["regex-log__abc123"] } }
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        trial_dir.join("result.json"),
+        json!({
+            "task_name": "terminal-bench/regex-log",
+            "trial_name": "regex-log__abc123",
+            "finished_at": "2026-07-09T08:05:00Z",
+            "agent_execution": {
+                "started_at": "2026-07-09T08:00:00Z",
+                "finished_at": "2026-07-09T08:04:00Z"
+            },
+            "verifier_result": { "rewards": { "reward": 1.0 } },
+            "exception_info": null
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let outcomes = BenchmarkOutcomeRecord::load_harbor_run_dir(&run_dir).unwrap();
+
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].session_key, "regex-log__abc123");
+    assert_eq!(outcomes[0].task_id, "terminal-bench/regex-log");
+    assert_eq!(outcomes[0].reward, 1.0);
+    assert_eq!(
+        outcomes[0].agent_started_at.as_deref(),
+        Some("2026-07-09T08:00:00Z")
+    );
+    assert_eq!(
+        outcomes[0].agent_finished_at.as_deref(),
+        Some("2026-07-09T08:04:00Z")
+    );
+
+    let _ = std::fs::remove_dir_all(&run_dir);
 }
 
 #[test]
@@ -492,6 +604,7 @@ fn benchmark_outcome_jsonl_reader_parses_records() {
 fn run_artifact_embeds_offline_shadow_policy_summary() {
     let traces = vec![CapturedIngressTrace {
         id: "trace-001".to_string(),
+        captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
@@ -545,6 +658,7 @@ fn run_artifact_bundle_writes_fixed_benchmark_layout() {
     let output_dir = temp_path("workflow-run-bundle");
     let traces = vec![CapturedIngressTrace {
         id: "trace-001".to_string(),
+        captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
@@ -620,6 +734,7 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
     let output_dir = temp_path("workflow-run-bundle-outcomes");
     let traces = vec![CapturedIngressTrace {
         id: "trace-001".to_string(),
+        captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
@@ -646,6 +761,9 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
         reward: 0.0,
         failed_reason: Some("verifier_failed".to_string()),
         finished_at: None,
+        trial_name: None,
+        agent_started_at: None,
+        agent_finished_at: None,
     }];
 
     let artifact = WorkflowRunArtifact::write_bundle_with_outcomes(
