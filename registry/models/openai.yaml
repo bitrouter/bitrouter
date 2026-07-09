@@ -1,3 +1,48 @@
+# GPT-5.6 family (Sol/Terra/Luna) — preview from 2026-06-25, general release
+# ~2026-07-09. Pricing is confirmed from OpenAI's launch catalog (see
+# providers/openai.yaml). OpenAI has not published an official spec sheet, so the
+# max_*_tokens and knowledge_cutoff below are the figures reported post-launch
+# (~1M context on Sol/Terra, ~400K on Luna; 128K output; ~May 2026 cutoff) and
+# should be reconciled once models.dev/OpenAI confirm.
+- id: openai/gpt-5.6-sol
+  name: 'OpenAI: GPT-5.6 Sol'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-06-25
+  knowledge_cutoff: 2026-05-31
+  open_weights: false
+  family: gpt
+- id: openai/gpt-5.6-terra
+  name: 'OpenAI: GPT-5.6 Terra'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-06-25
+  knowledge_cutoff: 2026-05-31
+  open_weights: false
+  family: gpt
+- id: openai/gpt-5.6-luna
+  name: 'OpenAI: GPT-5.6 Luna'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 400000
+  max_output_tokens: 128000
+  release_date: 2026-06-25
+  knowledge_cutoff: 2026-05-31
+  open_weights: false
+  family: gpt
 - id: openai/gpt-5.4-mini
   name: 'OpenAI: GPT-5.4 Mini'
   input_modalities:

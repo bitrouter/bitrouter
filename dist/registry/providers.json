@@ -2889,6 +2889,69 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.meta.ai/v1",
+      "auth": {
+        "env": "META_API_KEY",
+        "kind": "bearer"
+      },
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Meta Model API",
+      "doc_url": "https://dev.meta.ai/docs/getting-started/overview",
+      "id": "meta-ai",
+      "kind": "first_party",
+      "metadata": {
+        "headquarters": "US",
+        "name": "Meta",
+        "privacy_policy_url": "https://www.facebook.com/about/privacy/",
+        "slug": "meta",
+        "terms_of_service_url": "https://www.facebook.com/policies/"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools",
+            "structured_outputs",
+            "image_input",
+            "video_input",
+            "file_input",
+            "web_search"
+          ],
+          "id": "meta/muse-spark-1.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 4.25
+            }
+          },
+          "provider_model_id": "muse-spark-1.1",
+          "rate_limits": {
+            "requests_per_minute": 60,
+            "tokens_per_minute": 2000000
+          }
+        }
+      ],
+      "name": "meta-ai",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-09",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://api.minimax.io/anthropic/v1",
       "auth_scheme": "x-api-key",
       "billing": "usage_token",
@@ -3540,6 +3603,123 @@
             "structured_outputs",
             "tools"
           ],
+          "id": "openai/gpt-5.6-sol",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 1.0,
+                  "cache_write": 12.5,
+                  "no_cache": 10.0
+                },
+                "output_tokens": {
+                  "text": 45.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider_model_id": "gpt-5.6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "openai/gpt-5.6-terra",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.5,
+                  "cache_write": 6.25,
+                  "no_cache": 5.0
+                },
+                "output_tokens": {
+                  "text": 22.5
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "gpt-5.6-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "id": "openai/gpt-5.6-luna",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.2,
+                  "cache_write": 2.5,
+                  "no_cache": 2.0
+                },
+                "output_tokens": {
+                  "text": 9.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "gpt-5.6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
           "id": "openai/gpt-5.5",
           "pricing": {
             "input_tokens": {
@@ -3645,6 +3825,33 @@
         "terms_of_service_url": "https://openai.com/terms"
       },
       "models": [
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "openai/gpt-5.6-sol",
+          "provider_model_id": "gpt-5.6-sol"
+        },
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "openai/gpt-5.6-terra",
+          "provider_model_id": "gpt-5.6-terra"
+        },
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "id": "openai/gpt-5.6-luna",
+          "provider_model_id": "gpt-5.6-luna"
+        },
         {
           "api_protocol": "responses",
           "capabilities": [
@@ -6556,6 +6763,18 @@
             "reasoning",
             "tools"
           ],
+          "id": "x-ai/grok-4.5",
+          "provider_model_id": "grok-4.5"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "id": "x-ai/grok-4.20-multi-agent",
           "provider_model_id": "grok-4.20-multi-agent"
         },
@@ -7445,6 +7664,30 @@
             "reasoning",
             "tools"
           ],
+          "id": "x-ai/grok-4.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "grok-4.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
           "id": "x-ai/grok-4.3",
           "pricing": {
             "input_tokens": {
@@ -7494,6 +7737,7 @@
           "id": "x-ai/grok-build-0.1",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 1.0
             },
             "output_tokens": {
@@ -7517,6 +7761,7 @@
           "id": "x-ai/grok-4.20-multi-agent",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 1.25
             },
             "output_tokens": {

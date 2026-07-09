@@ -2174,6 +2174,55 @@
       "release_date": "2026-06-30"
     },
     {
+      "family": "muse-spark",
+      "id": "meta/muse-spark-1.1",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 32000,
+      "name": "Meta: Muse Spark 1.1",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools",
+            "structured_outputs",
+            "image_input",
+            "video_input",
+            "file_input",
+            "web_search"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 4.25
+            }
+          },
+          "provider": "meta-ai",
+          "provider_model_id": "muse-spark-1.1",
+          "rate_limits": {
+            "requests_per_minute": 60,
+            "tokens_per_minute": 2000000
+          }
+        }
+      ],
+      "release_date": "2026-07-09"
+    },
+    {
       "family": "minimax",
       "id": "minimax/minimax-m2.5",
       "input_modalities": [
@@ -4098,6 +4147,207 @@
       "release_date": "2026-04-23"
     },
     {
+      "family": "gpt",
+      "id": "openai/gpt-5.6-luna",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-05-31",
+      "max_input_tokens": 400000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-5.6 Luna",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.2,
+                  "cache_write": 2.5,
+                  "no_cache": 2.0
+                },
+                "output_tokens": {
+                  "text": 9.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "openai",
+          "provider_model_id": "gpt-5.6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "openai-codex",
+          "provider_model_id": "gpt-5.6-luna"
+        }
+      ],
+      "release_date": "2026-06-25"
+    },
+    {
+      "family": "gpt",
+      "id": "openai/gpt-5.6-sol",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-05-31",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-5.6 Sol",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 1.0,
+                  "cache_write": 12.5,
+                  "no_cache": 10.0
+                },
+                "output_tokens": {
+                  "text": 45.0
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "openai",
+          "provider_model_id": "gpt-5.6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "openai-codex",
+          "provider_model_id": "gpt-5.6-sol"
+        }
+      ],
+      "release_date": "2026-06-25"
+    },
+    {
+      "family": "gpt",
+      "id": "openai/gpt-5.6-terra",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-05-31",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-5.6 Terra",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.5,
+                  "cache_write": 6.25,
+                  "no_cache": 5.0
+                },
+                "output_tokens": {
+                  "text": 22.5
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "openai",
+          "provider_model_id": "gpt-5.6-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "responses",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "openai-codex",
+          "provider_model_id": "gpt-5.6-terra"
+        }
+      ],
+      "release_date": "2026-06-25"
+    },
+    {
       "description": "Qwen3.5 open-source native vision-language MoE (122B total, 10B active).",
       "family": "qwen3.5",
       "id": "qwen/qwen3.5-122b-a10b",
@@ -5436,6 +5686,7 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 1.25
             },
             "output_tokens": {
@@ -5564,6 +5815,59 @@
     },
     {
       "family": "grok",
+      "id": "x-ai/grok-4.5",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 500000,
+      "name": "xAI: Grok 4.5",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "supergrok",
+          "provider_model_id": "grok-4.5"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "xai",
+          "provider_model_id": "grok-4.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-07-08"
+    },
+    {
+      "family": "grok",
       "id": "x-ai/grok-build-0.1",
       "input_modalities": [
         "text"
@@ -5642,6 +5946,7 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 1.0
             },
             "output_tokens": {
