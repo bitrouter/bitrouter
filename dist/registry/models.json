@@ -2174,6 +2174,55 @@
       "release_date": "2026-06-30"
     },
     {
+      "family": "muse-spark",
+      "id": "meta/muse-spark-1.1",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 32000,
+      "name": "Meta: Muse Spark 1.1",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools",
+            "structured_outputs",
+            "image_input",
+            "video_input",
+            "file_input",
+            "web_search"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 4.25
+            }
+          },
+          "provider": "meta-ai",
+          "provider_model_id": "muse-spark-1.1",
+          "rate_limits": {
+            "requests_per_minute": 60,
+            "tokens_per_minute": 2000000
+          }
+        }
+      ],
+      "release_date": "2026-07-09"
+    },
+    {
       "family": "minimax",
       "id": "minimax/minimax-m2.5",
       "input_modalities": [

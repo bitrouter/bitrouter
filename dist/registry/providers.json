@@ -2889,6 +2889,69 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.meta.ai/v1",
+      "auth": {
+        "env": "META_API_KEY",
+        "kind": "bearer"
+      },
+      "auth_scheme": "x-api-key",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "Meta Model API",
+      "doc_url": "https://dev.meta.ai/docs/getting-started/overview",
+      "id": "meta-ai",
+      "kind": "first_party",
+      "metadata": {
+        "headquarters": "US",
+        "name": "Meta",
+        "privacy_policy_url": "https://www.facebook.com/about/privacy/",
+        "slug": "meta",
+        "terms_of_service_url": "https://www.facebook.com/policies/"
+      },
+      "models": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools",
+            "structured_outputs",
+            "image_input",
+            "video_input",
+            "file_input",
+            "web_search"
+          ],
+          "id": "meta/muse-spark-1.1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 4.25
+            }
+          },
+          "provider_model_id": "muse-spark-1.1",
+          "rate_limits": {
+            "requests_per_minute": 60,
+            "tokens_per_minute": 2000000
+          }
+        }
+      ],
+      "name": "meta-ai",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-07-09",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://api.minimax.io/anthropic/v1",
       "auth_scheme": "x-api-key",
       "billing": "usage_token",
