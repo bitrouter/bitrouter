@@ -17,7 +17,7 @@ metadata:
 api_protocol:
   - minimax/minimax-m3: [openai, responses, anthropic]
   - "*": [openai, anthropic]
-api_base: https://tokenhub-intl.tencentmaas.com/v1
+api_base: https://tokenhub-intl.tencentcloudmaas.com/v1
 rate_limits:
   - "*":
       requests_per_minute: 60

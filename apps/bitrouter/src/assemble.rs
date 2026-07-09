@@ -11,7 +11,6 @@ use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
-use bitrouter_sdk::acp::{AcpStdioExecutor, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
@@ -442,23 +441,6 @@ pub async fn build_app_with_path(
         .and_then(FusionAliasConfig::from_settings)
         .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
 
-    // Optional ACP pure-routing pipeline — wired only when the config
-    // declares at least one upstream agent. Mirrors the MCP wiring above;
-    // the `bitrouter agent-proxy <id>` CLI dispatches against this pipeline.
-    let acp_routing = if config.agents.is_empty() {
-        None
-    } else {
-        Some(Arc::new(
-            ConfigAcpRoutingTable::from_configs(
-                config.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
-            )
-            .context("building the ACP routing table from config.agents")?,
-        ))
-    };
-    let acp_executor: Option<Arc<AcpStdioExecutor>> = acp_routing
-        .as_ref()
-        .map(|_| Arc::new(AcpStdioExecutor::new()));
-
     let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -538,14 +520,6 @@ pub async fn build_app_with_path(
                 app
             }
         }
-        _ => app,
-    };
-    // ACP pipeline — separate match because it's an independent optional
-    // configuration step on the same builder.
-    let app = match (acp_routing, acp_executor) {
-        (Some(table), Some(exec)) => app.acp(move |a| {
-            a.routing_table(table).executor(exec);
-        }),
         _ => app,
     };
     let app = app.build().context("building the App")?;
@@ -966,6 +940,42 @@ enum BearerPlan {
     /// No live source — static `Authorization` header (or anonymous). The
     /// credential store is never read.
     StaticOnly,
+}
+
+/// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
+/// serve|prompt`). Same config resolution as the daemon path (telemetry
+/// opt-in / `otel:` block / legacy shim / env vars), including the live
+/// account-bearer plan. Returns `None` when nothing opts telemetry in;
+/// telemetry failures are surfaced as warnings, never as session failures.
+pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
+    let plan = match build_otel_config(config) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!("telemetry: invalid observe config, exporting disabled: {e:#}");
+            return None;
+        }
+    };
+    let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
+        BearerPlan::LiveSource { warn_if_unmet } => {
+            let source = crate::cloud::cloud_bearer_source().await;
+            if source.is_none() && warn_if_unmet {
+                tracing::warn!(
+                    "telemetry: attribution=account but no signed-in session is available — \
+                     exporting anonymously (sign in with `bitrouter cloud login`)"
+                );
+            }
+            source
+        }
+        BearerPlan::StaticOnly => None,
+    };
+    match OtelExporter::new(plan.config, bearer) {
+        Ok(exporter) => Some(Arc::new(exporter)),
+        Err(e) => {
+            tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
+            None
+        }
+    }
 }
 
 /// An exporter config plus the account-bearer resolution plan for it. Returned

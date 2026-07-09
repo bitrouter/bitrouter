@@ -15,77 +15,92 @@
 //! - Initialization + capability negotiation:
 //!   <https://agentclientprotocol.com/protocol/initialization>
 //!
-//! ## Where the concrete executor lives
+//! ## Feature-gated components
 //!
 //! The `Pipeline`, `Builder`, hook traits, and request/response types are
-//! always available — they have no external dependencies. The bundled
-//! [`AcpStdioExecutor`] (and its persistent subprocess pool) live behind
-//! the `acp` feature; see [`stdio_executor`] for the wire layer and
-//! [`config_routing::ConfigAcpRoutingTable`] for the config-driven routing
-//! table the binary registers at startup.
+//! always available — they have no external dependencies. The
+//! [`config_routing::ConfigAcpRoutingTable`] lives behind the `acp` feature
+//! and provides the config-driven routing table the binary registers at
+//! startup. Typed health-checking (initialize-only) is provided by
+//! `bitrouter-substrate::up::health_check`.
 
+#[cfg(feature = "acp")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
+#[cfg(feature = "acp")]
+use agent_client_protocol_schema::v1::{PromptRequest, PromptResponse};
+
 use crate::caller::CallerContext;
-use crate::error::{BitrouterError, Result};
+#[cfg(feature = "acp")]
+use crate::error::BitrouterError;
+use crate::error::Result;
+#[cfg(feature = "acp")]
 use crate::language_model::HookDecision;
 
 pub mod transport;
 
 #[cfg(feature = "acp")]
 pub mod config_routing;
-#[cfg(feature = "acp")]
-pub mod stdio_executor;
 
 pub use transport::{AcpAgentConfig, AcpTransport};
 
 #[cfg(feature = "acp")]
 pub use config_routing::ConfigAcpRoutingTable;
-#[cfg(feature = "acp")]
-pub use stdio_executor::AcpStdioExecutor;
 
-/// An inbound ACP request — a JSON-RPC call against a named agent.
+/// The request-plane methods the conductor pipeline routes.
+#[cfg(feature = "acp")]
+#[derive(Debug, Clone)]
+pub enum AcpRequestPayload {
+    /// A `session/prompt` turn directed at the named agent.
+    Prompt(PromptRequest),
+    /// A `session/cancel` notification for the given session.
+    Cancel {
+        /// The session to cancel.
+        session_id: String,
+    },
+}
+
+/// An inbound ACP request — a typed routing payload addressed to a named agent.
+#[cfg(feature = "acp")]
 #[derive(Debug, Clone)]
 pub struct AcpRequest {
     /// Unique request id.
     pub request_id: String,
     /// The agent name being addressed.
     pub agent: String,
-    /// The JSON-RPC method (e.g. `session/new`, `session/prompt`).
-    pub method: String,
-    /// The JSON-RPC params.
-    pub params: serde_json::Value,
+    /// The typed request-plane payload.
+    pub payload: AcpRequestPayload,
     /// The authenticated / synthesised caller.
     pub caller: CallerContext,
 }
 
+#[cfg(feature = "acp")]
 impl AcpRequest {
     /// Build a request with a fresh uuid id.
     pub fn new(
         agent: impl Into<String>,
-        method: impl Into<String>,
-        params: serde_json::Value,
+        payload: AcpRequestPayload,
         caller: CallerContext,
     ) -> Self {
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
             agent: agent.into(),
-            method: method.into(),
-            params,
+            payload,
             caller,
         }
     }
 }
 
-/// An ACP response — the JSON-RPC result.
+/// An ACP response — the typed `session/prompt` result.
+#[cfg(feature = "acp")]
 #[derive(Debug, Clone)]
 pub struct AcpResponse {
     /// The request id this answers.
     pub request_id: String,
-    /// The JSON-RPC `result`.
-    pub result: serde_json::Value,
+    /// The typed prompt response.
+    pub result: PromptResponse,
 }
 
 /// One resolved ACP routing target — a concrete agent endpoint.
@@ -106,7 +121,8 @@ pub trait RoutingTable: Send + Sync {
     async fn resolve(&self, agent: &str, caller: &CallerContext) -> Result<AcpTarget>;
 }
 
-/// Performs the actual upstream ACP JSON-RPC call (stdio session pool).
+/// Performs the actual upstream ACP call (stdio session pool).
+#[cfg(feature = "acp")]
 #[async_trait]
 pub trait Executor: Send + Sync {
     /// Execute `request` against `target`.
@@ -114,6 +130,7 @@ pub trait Executor: Send + Sync {
 }
 
 /// Stage 1 — ACP pre-request checks. Independent of the other protocols' hooks.
+#[cfg(feature = "acp")]
 #[async_trait]
 pub trait PreRequestHook: Send + Sync {
     /// Inspect the request and allow or deny it.
@@ -121,6 +138,7 @@ pub trait PreRequestHook: Send + Sync {
 }
 
 /// Stage 2 — ACP route resolution / mutation (agent discovery).
+#[cfg(feature = "acp")]
 #[async_trait]
 pub trait RouteHook: Send + Sync {
     /// Resolve / mutate the routing target.
@@ -128,6 +146,7 @@ pub trait RouteHook: Send + Sync {
 }
 
 /// Stage 3 — ACP execution observation.
+#[cfg(feature = "acp")]
 #[async_trait]
 pub trait ExecutionHook: Send + Sync {
     /// Called when an upstream ACP call succeeds.
@@ -135,13 +154,17 @@ pub trait ExecutionHook: Send + Sync {
 }
 
 /// The ACP pipeline context.
+#[cfg(feature = "acp")]
 pub struct AcpContext {
     request: AcpRequest,
     /// The resolved target (Stage 2).
     pub target: Option<AcpTarget>,
     events: crate::event::EventBus,
+    /// When this context was created (pipeline entry).
+    started_at: std::time::Instant,
 }
 
+#[cfg(feature = "acp")]
 impl AcpContext {
     /// Build a context from an inbound request.
     pub fn new(request: AcpRequest) -> Self {
@@ -149,12 +172,19 @@ impl AcpContext {
             request,
             target: None,
             events: crate::event::EventBus::new(),
+            started_at: std::time::Instant::now(),
         }
     }
 
     /// The inbound request.
     pub fn request(&self) -> &AcpRequest {
         &self.request
+    }
+
+    /// When this context was created (pipeline entry). Execution hooks derive
+    /// per-turn latency from it.
+    pub fn started_at(&self) -> std::time::Instant {
+        self.started_at
     }
 
     /// The caller.
@@ -174,6 +204,7 @@ impl AcpContext {
 }
 
 /// The `acp` pure-routing pipeline: PreRequest → Route → Execute. No settlement.
+#[cfg(feature = "acp")]
 pub struct Pipeline {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     route_hooks: Vec<Arc<dyn RouteHook>>,
@@ -182,6 +213,7 @@ pub struct Pipeline {
     executor: Arc<dyn Executor>,
 }
 
+#[cfg(feature = "acp")]
 impl Pipeline {
     /// Execute an ACP request through the three-stage pure-routing pipeline.
     pub async fn execute(&self, request: AcpRequest) -> Result<AcpResponse> {
@@ -212,6 +244,7 @@ impl Pipeline {
 }
 
 /// Builds a [`Pipeline`] for the `acp` protocol.
+#[cfg(feature = "acp")]
 #[derive(Default)]
 pub struct PipelineBuilder {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
@@ -221,6 +254,7 @@ pub struct PipelineBuilder {
     executor: Option<Arc<dyn Executor>>,
 }
 
+#[cfg(feature = "acp")]
 impl PipelineBuilder {
     /// A fresh builder.
     pub fn new() -> Self {
@@ -279,9 +313,10 @@ impl PipelineBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "acp"))]
 mod tests {
     use super::*;
+    use agent_client_protocol_schema::v1::{ContentBlock, SessionId, StopReason, TextContent};
 
     struct StaticTable;
     #[async_trait]
@@ -308,7 +343,7 @@ mod tests {
         async fn execute(&self, _target: &AcpTarget, request: &AcpRequest) -> Result<AcpResponse> {
             Ok(AcpResponse {
                 request_id: request.request_id.clone(),
-                result: serde_json::json!({ "method": request.method }),
+                result: PromptResponse::new(StopReason::EndTurn),
             })
         }
     }
@@ -316,8 +351,10 @@ mod tests {
     fn req(agent: &str) -> AcpRequest {
         AcpRequest::new(
             agent,
-            "session/new",
-            serde_json::json!({}),
+            AcpRequestPayload::Prompt(PromptRequest::new(
+                SessionId::new("s"),
+                vec![ContentBlock::Text(TextContent::new("hello".to_string()))],
+            )),
             CallerContext::new("k", "u"),
         )
     }
@@ -329,7 +366,7 @@ mod tests {
             .executor(Arc::new(EchoExecutor));
         let pipeline = b.build().unwrap();
         let resp = pipeline.execute(req("code-agent")).await.unwrap();
-        assert_eq!(resp.result["method"], "session/new");
+        assert_eq!(resp.result.stop_reason, StopReason::EndTurn);
     }
 
     #[tokio::test]

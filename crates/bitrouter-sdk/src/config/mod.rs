@@ -71,9 +71,8 @@ pub struct Config {
     /// LLM requests and executes itself. Empty by default — the pipeline stays
     /// single-shot.
     pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
-    /// Upstream ACP agents, keyed by agent id. Looked up by the `acp`
-    /// pipeline's routing table; the `bitrouter agent-proxy <id>` CLI
-    /// dispatches against this. Empty by default.
+    /// Upstream ACP agents, keyed by agent id. Surfaced by the
+    /// `bitrouter agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,

@@ -990,21 +990,7 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.59
-            },
-            "output_tokens": {
-              "text": 2.65
-            }
-          },
-          "provider": "qianfan",
-          "provider_model_id": "ernie-5.1"
-        }
-      ],
+      "providers": [],
       "release_date": "2026-05-10"
     },
     {
@@ -1144,6 +1130,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.13,
               "no_cache": 0.26
             },
             "output_tokens": {
@@ -1260,6 +1247,20 @@
         {
           "api_protocol": "openai",
           "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0252,
+              "no_cache": 0.252
+            },
+            "output_tokens": {
+              "text": 0.378
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "deepseek-v3.2"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
             "context_tiers": [
               {
                 "above_input_tokens": 32000,
@@ -1272,7 +1273,6 @@
               }
             ],
             "input_tokens": {
-              "cache_read": 0.056,
               "no_cache": 0.28
             },
             "output_tokens": {
@@ -1401,6 +1401,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.028,
               "no_cache": 0.14
             },
             "output_tokens": {
@@ -1553,6 +1554,50 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.0197,
+              "no_cache": 0.0983
+            },
+            "output_tokens": {
+              "text": 0.1966
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "qianfan_cn",
+          "provider_model_id": "deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 0.4
+            }
+          },
+          "provider": "redpill",
+          "provider_model_id": "deepseek/deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.028,
               "no_cache": 0.14
             },
@@ -1668,6 +1713,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.13,
               "no_cache": 1.68
             },
             "output_tokens": {
@@ -1820,7 +1866,20 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.139,
+              "cache_read": 0.063,
+              "no_cache": 0.7605
+            },
+            "output_tokens": {
+              "text": 1.521
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "no_cache": 1.67
             },
             "output_tokens": {
@@ -1829,6 +1888,23 @@
           },
           "provider": "qianfan_cn",
           "provider_model_id": "deepseek-v4-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 5.25
+            }
+          },
+          "provider": "redpill",
+          "provider_model_id": "deepseek/deepseek-v4-pro"
         },
         {
           "api_protocol": "openai",
@@ -2609,6 +2685,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.06,
               "no_cache": 0.295
             },
             "output_tokens": {
@@ -2772,6 +2849,19 @@
           },
           "provider": "openrouter",
           "provider_model_id": "minimax/minimax-m2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.29
+            },
+            "output_tokens": {
+              "text": 1.17
+            }
+          },
+          "provider": "qianfan_cn",
+          "provider_model_id": "minimax-m2.5"
         },
         {
           "api_protocol": "openai",
@@ -3071,7 +3161,20 @@
         {
           "api_protocol": "openai",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.12,
+                  "no_cache": 0.6
+                },
+                "output_tokens": {
+                  "text": 2.4
+                }
+              }
+            ],
             "input_tokens": {
+              "cache_read": 0.06,
               "no_cache": 0.3
             },
             "output_tokens": {
@@ -3314,6 +3417,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 0.49
             },
             "output_tokens": {
@@ -3474,6 +3578,19 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "no_cache": 0.56
+            },
+            "output_tokens": {
+              "text": 2.92
+            }
+          },
+          "provider": "qianfan_cn",
+          "provider_model_id": "kimi-k2.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "no_cache": 0.45
             },
             "output_tokens": {
@@ -3605,6 +3722,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.16,
               "no_cache": 0.95
             },
             "output_tokens": {
@@ -3778,6 +3896,7 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.37,
               "no_cache": 1.09
             },
             "output_tokens": {
@@ -3791,15 +3910,33 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.153,
-              "no_cache": 0.9
+              "cache_read": 0.144,
+              "no_cache": 0.684
             },
             "output_tokens": {
-              "text": 3.75
+              "text": 3.42
             }
           },
-          "provider": "qianfan_cn",
+          "provider": "qianfan",
           "provider_model_id": "kimi-k2.6"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.37,
+              "no_cache": 1.09
+            },
+            "output_tokens": {
+              "text": 4.6
+            }
+          },
+          "provider": "redpill",
+          "provider_model_id": "moonshotai/kimi-k2.6"
         },
         {
           "api_protocol": "openai",
@@ -3942,6 +4079,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.16,
               "no_cache": 0.95
             },
             "output_tokens": {
@@ -4061,6 +4199,20 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.025,
+              "no_cache": 0.25
+            },
+            "output_tokens": {
+              "text": 1.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "nex-agi/nex-n2-pro"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -4097,6 +4249,19 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.08
+            },
+            "output_tokens": {
+              "text": 0.45
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -4130,6 +4295,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.2
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
+        },
         {
           "api_protocol": [
             "openai",
@@ -5157,6 +5336,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.5,
               "no_cache": 2.5
             },
             "output_tokens": {
@@ -5325,7 +5505,20 @@
         {
           "api_protocol": "openai",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 262144,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
             "input_tokens": {
+              "cache_read": 0.08,
               "no_cache": 0.4
             },
             "output_tokens": {
@@ -5700,6 +5893,20 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.0261,
+              "no_cache": 0.066
+            },
+            "output_tokens": {
+              "text": 0.26
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "hy3-preview"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.029,
               "no_cache": 0.066
             },
@@ -5920,7 +6127,20 @@
         {
           "api_protocol": "openai",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 200000,
+                "input_tokens": {
+                  "cache_read": 0.4,
+                  "no_cache": 2.5
+                },
+                "output_tokens": {
+                  "text": 5.0
+                }
+              }
+            ],
             "input_tokens": {
+              "cache_read": 0.2,
               "no_cache": 1.25
             },
             "output_tokens": {
@@ -6673,6 +6893,20 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.14,
+              "no_cache": 0.7
+            },
+            "output_tokens": {
+              "text": 2.24
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "glm-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "no_cache": 0.95
             },
             "output_tokens": {
@@ -6827,10 +7061,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.95
+              "cache_read": 0.234,
+              "no_cache": 1.26
             },
             "output_tokens": {
-              "text": 3.15
+              "text": 3.96
             }
           },
           "provider": "atlascloud",
@@ -6944,6 +7179,7 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.6,
               "no_cache": 1.21
             },
             "output_tokens": {
@@ -6951,6 +7187,62 @@
             }
           },
           "provider": "phala",
+          "provider_model_id": "z-ai/glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.182,
+              "no_cache": 0.98
+            },
+            "output_tokens": {
+              "text": 3.08
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 32000,
+                "input_tokens": {
+                  "no_cache": 1.11
+                },
+                "output_tokens": {
+                  "text": 3.89
+                }
+              }
+            ],
+            "input_tokens": {
+              "no_cache": 0.83
+            },
+            "output_tokens": {
+              "text": 3.33
+            }
+          },
+          "provider": "qianfan_cn",
+          "provider_model_id": "glm-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.6,
+              "no_cache": 1.21
+            },
+            "output_tokens": {
+              "text": 4.2
+            }
+          },
+          "provider": "redpill",
           "provider_model_id": "z-ai/glm-5.1"
         },
         {
@@ -7130,10 +7422,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "no_cache": 1.26
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "output_tokens": {
-              "text": 3.96
+              "text": 4.4
             }
           },
           "provider": "atlascloud",
@@ -7226,6 +7519,7 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.7,
               "no_cache": 1.4
             },
             "output_tokens": {
@@ -7233,6 +7527,38 @@
             }
           },
           "provider": "phala",
+          "provider_model_id": "z-ai/glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.208,
+              "no_cache": 1.12
+            },
+            "output_tokens": {
+              "text": 3.96
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "glm-5.2"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.7,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider": "redpill",
           "provider_model_id": "z-ai/glm-5.2"
         },
         {

@@ -357,7 +357,15 @@ agents:
       args: ["-y", "@zed-industries/codex-acp@latest"]
 ```
 
-Editors spawn the bridge with `bitrouter agent-proxy <id>`. `bitrouter agents list` shows the bundled catalog (use `bitrouter agents install <id>` to print a paste-ready stub).
+`bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bitrouter agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bitrouter agents check` verifies each configured agent answers `initialize`.
+
+Agents declared here are referenced by `--agent <id>` when launching a per-session substrate. Managers (GUI, AI agents, editors) spawn one process per session:
+
+```bash
+bitrouter acp serve --agent claude [--worktree <name>] [--config PATH]
+```
+
+Each spawned process is one session, exposes vanilla ACP over stdio, and exits when the manager disconnects. For headless one-shot use, `bitrouter acp prompt --agent claude <text>` streams NDJSON to stdout. See `references/sessions.md` for the full substrate model.
 
 ## Apply changes
 

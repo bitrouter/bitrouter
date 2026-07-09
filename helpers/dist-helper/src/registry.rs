@@ -2620,6 +2620,33 @@ auto_sync:
     }
 
     #[test]
+    fn tencent_tokenhub_base_urls_match_official_hosts() {
+        let root = crate::workspace_root();
+        let loaded = load_registry(&root).expect("loads checked-in registry");
+        let api_base = |name: &str| {
+            loaded
+                .providers
+                .iter()
+                .find(|provider| provider.data.name == name)
+                .unwrap_or_else(|| panic!("missing provider {name}"))
+                .data
+                .api_base
+                .as_deref()
+                .unwrap_or_else(|| panic!("provider {name} must set api_base"))
+                .to_string()
+        };
+
+        assert_eq!(
+            api_base("tencent"),
+            "https://tokenhub-intl.tencentcloudmaas.com/v1"
+        );
+        assert_eq!(
+            api_base("tencent_cn"),
+            "https://tokenhub.tencentmaas.com/v1"
+        );
+    }
+
+    #[test]
     fn agentic_sync_without_urls_is_invalid() {
         let root = test_root("agentic-missing-urls");
         write(

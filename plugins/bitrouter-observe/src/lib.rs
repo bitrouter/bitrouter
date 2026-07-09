@@ -21,6 +21,8 @@ compile_error!(
 );
 
 #[cfg(feature = "otel-base")]
+pub mod acp;
+#[cfg(feature = "otel-base")]
 pub mod otel;
 
 /// Whether the OpenTelemetry exporter is compiled in (under any transport).

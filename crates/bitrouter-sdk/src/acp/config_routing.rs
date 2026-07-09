@@ -32,15 +32,13 @@ impl ConfigAcpRoutingTable {
         Ok(Self { agents })
     }
 
-    /// True if no agents are configured. The binary uses this to decide
-    /// whether to call `app_builder.acp(...)` at all.
+    /// True if no agents are configured.
     pub fn is_empty(&self) -> bool {
         self.agents.is_empty()
     }
 
-    /// Direct transport lookup, used by CLI verbs and the `agent-proxy`
-    /// bridge that want to introspect configuration without going through
-    /// a [`super::Pipeline`].
+    /// Direct transport lookup, for callers that want to introspect
+    /// configuration without going through a [`super::Pipeline`].
     pub fn lookup(&self, agent: &str) -> Option<&AcpTransport> {
         self.agents.get(agent)
     }
