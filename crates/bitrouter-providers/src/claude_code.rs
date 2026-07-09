@@ -67,10 +67,35 @@ use crate::oauth::refresh::{needs_refresh, refresh};
 /// lives in [`crate::oauth::registry`]).
 pub const PROVIDER_ID: &str = "claude-code";
 
+/// Claude Code's official long-lived OAuth token environment variable.
+///
+/// Tokens created by `claude setup-token` are process credentials, so bitrouter
+/// treats them as in-memory, non-refreshable OAuth bearers.
+pub const OAUTH_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+
 /// The OAuth-client id used to look up the client_id + token endpoint in
 /// [`crate::oauth::registry::find`]. The Anthropic OAuth client config lives
 /// under `"anthropic"`, not under [`PROVIDER_ID`].
 const OAUTH_CLIENT_ID: &str = "anthropic";
+
+/// Whether the current process carries a usable Claude Code OAuth token in the
+/// official environment variable.
+pub fn oauth_token_env_present() -> bool {
+    env_oauth_token().is_some()
+}
+
+fn env_oauth_token() -> Option<OAuthToken> {
+    let access_token = std::env::var(OAUTH_TOKEN_ENV).ok()?;
+    let access_token = access_token.trim();
+    if access_token.is_empty() {
+        return None;
+    }
+    Some(OAuthToken {
+        access_token: access_token.to_string(),
+        expires_at: 0,
+        refresh_token: None,
+    })
+}
 
 /// `AuthApplier` for the Claude Pro/Max subscription (`provider_name ==
 /// "claude-code"`).
@@ -109,6 +134,9 @@ pub struct ClaudeCodeAuthApplier {
     /// write any refresh back to the same source, so bitrouter and Claude Code
     /// share one credential. `None` only when no home directory resolves.
     claude_code: Option<ClaudeCodeStore>,
+    /// Long-lived OAuth token captured from [`OAUTH_TOKEN_ENV`] at applier
+    /// construction. This is intentionally process-local and non-refreshable.
+    env_oauth_token: Option<OAuthToken>,
 }
 
 impl ClaudeCodeAuthApplier {
@@ -142,6 +170,7 @@ impl ClaudeCodeAuthApplier {
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
             claude_code: ClaudeCodeStore::system(),
+            env_oauth_token: env_oauth_token(),
         })
     }
 
@@ -163,7 +192,14 @@ impl ClaudeCodeAuthApplier {
             cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             refresh_gates: Arc::new(Mutex::new(std::collections::HashMap::new())),
             claude_code,
+            env_oauth_token: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_env_oauth_token(mut self, token: Option<OAuthToken>) -> Self {
+        self.env_oauth_token = token;
+        self
     }
 
     /// Per-label single-flight gate. Cloned out under the std mutex (no
@@ -207,6 +243,12 @@ impl ClaudeCodeAuthApplier {
     /// the token endpoint (and risk having the server invalidate the
     /// older refresh token, per RFC 6749 §6).
     async fn resolve_credential(&self, label: &str) -> Result<Option<OAuthToken>> {
+        // Claude Code's `claude setup-token` flow exposes a long-lived OAuth
+        // bearer via CLAUDE_CODE_OAUTH_TOKEN for CI / headless environments.
+        // Keep it in memory only and never refresh it; the CLI owns rotation.
+        if let Some(token) = &self.env_oauth_token {
+            return Ok(Some(token.clone()));
+        }
         // 1. Cheap in-memory cache check — no locks held across awaits.
         if let Some(cached) = self.cached_fresh(label) {
             return Ok(Some(cached));
@@ -596,6 +638,38 @@ mod tests {
         assert!(
             msg.contains("bitrouter providers login claude-code"),
             "expected helpful hint, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn env_oauth_token_applies_bearer_without_store_credential() {
+        let path = tmp_store_path();
+        let applier = ClaudeCodeAuthApplier::new(&path)
+            .unwrap()
+            .with_env_oauth_token(Some(OAuthToken {
+                access_token: "sk-ant-oat-env".into(),
+                expires_at: 0,
+                refresh_token: None,
+            }));
+        let mut req = cc_request();
+        req.headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("stale-key"));
+
+        let authed = applier.apply(req, &cc_target(None)).await.unwrap();
+
+        let headers = authed.headers();
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer sk-ant-oat-env")
+        );
+        assert!(headers.get("x-api-key").is_none());
+        assert!(
+            headers
+                .get("anthropic-beta")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|beta| beta.contains("oauth-2025-04-20"))
         );
     }
 
