@@ -10,7 +10,8 @@
 
 #![forbid(unsafe_code)]
 
-pub mod agent_proxy;
+pub mod acp_cli;
+pub mod agent_registry;
 pub mod agents;
 pub mod assemble;
 pub mod auth;

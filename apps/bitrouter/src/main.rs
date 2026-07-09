@@ -3,7 +3,7 @@
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
 //! `policy create` / `providers (list|login|logout)` / `agents` /
-//! `agent-proxy` / `spawn` / `cloud` / `skills`. Cloud-account sign-in lives under
+//! `spawn` / `cloud` / `skills`. Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
 //! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
 //! (a Unix domain socket, or a Windows named pipe) — `start` spawns `serve`
@@ -25,7 +25,8 @@ use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
 use bitrouter::output::reports::agents::{
-    AgentCheckRow, AgentInstallReport, AgentRow, AgentsCheckReport, AgentsListReport,
+    AgentCheckRow, AgentInstallReport, AgentRegistryRow, AgentRow, AgentsCheckReport,
+    AgentsListReport,
 };
 use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
@@ -202,25 +203,10 @@ enum Command {
     // match arm in `run` when wiring OWS in.
     // Wallet,
     /// ACP agent lifecycle — list the catalog, check configured agents,
-    /// print install stubs. `bitrouter agent-proxy <id>` is the separate
-    /// stdio bridge an editor spawns.
+    /// print install stubs.
     Agents {
         #[command(subcommand)]
         action: AgentsAction,
-    },
-    /// Stdio bridge between an ACP-aware editor and a configured upstream
-    /// agent. Routes inbound JSON-RPC requests through the `acp` pipeline,
-    /// relays upstream notifications back to the editor.
-    #[command(name = "agent-proxy")]
-    AgentProxy {
-        /// Agent id (must exist under `agents:` in the config).
-        agent: String,
-        /// Path to `bitrouter.yaml`. When omitted, the binary resolves
-        /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
-        /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bitrouter init` is the explicit way to scaffold a file).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
     },
     /// Launch a coding-agent harness (Claude Code or Codex) as a child process
     /// with its API base URL pointed at the local BitRouter daemon — no agent
@@ -306,6 +292,14 @@ enum Command {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+    /// Per-session ACP substrate — headless agent session management.
+    ///
+    /// `serve` exposes one agent session as a vanilla ACP Agent over stdio.
+    /// `prompt` launches a session, sends one prompt, and streams NDJSON output.
+    Acp {
+        #[command(subcommand)]
+        cmd: AcpCmd,
     },
 }
 
@@ -412,9 +406,14 @@ impl From<McpClient> for bitrouter_mcp::install::Client {
 
 #[derive(Subcommand)]
 enum AgentsAction {
-    /// Show the bundled v1.0 catalog of well-known agents and which of
-    /// them are present under `agents:` in the loaded config.
+    /// Show the bundled catalog of well-known agents and which of them are
+    /// present under `agents:` in the loaded config. With `--remote`, also
+    /// fetch and list the official ACP agent registry.
     List {
+        /// Also fetch the ACP agent registry
+        /// (cdn.agentclientprotocol.com) and list its agents.
+        #[arg(long)]
+        remote: bool,
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
@@ -431,10 +430,11 @@ enum AgentsAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Print a YAML stub for an agent in the catalog (paste under
-    /// `agents:` in `bitrouter.yaml`).
+    /// Print a YAML stub for an agent (paste under `agents:` in
+    /// `bitrouter.yaml`). Resolves from the bundled catalog first, then the
+    /// ACP registry (`npx`/`uvx` distributions only).
     Install {
-        /// Agent id from the catalog (see `bitrouter agents list`).
+        /// Agent id (see `bitrouter agents list` / `list --remote`).
         id: String,
     },
 }
@@ -561,6 +561,101 @@ enum ProviderAction {
     },
 }
 
+#[derive(Subcommand)]
+enum AcpCmd {
+    /// Serve one agent session as a vanilla ACP Agent over **stdio** until the
+    /// manager disconnects. Intended for GUIs and orchestrating agents that
+    /// speak ACP directly.
+    Serve {
+        /// Agent id — must exist under `agents:` in the config.
+        #[arg(long)]
+        agent: String,
+        /// Name of a git worktree to provision inside the repo before
+        /// launching (created, or reused when it already exists). When
+        /// omitted the session runs in the current directory.
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Remove the worktree when the session ends. Off by default: the
+        /// worktree holds the agent's work, and removal discards anything
+        /// uncommitted. Only a worktree created by this session is removed.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
+        /// Disable the durable session transcript
+        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        /// Keep the session alive after the manager disconnects and accept
+        /// reattach connections on `.bitrouter/sessions/<record_id>.sock`
+        /// (same stdio JSON-RPC framing over a unix socket; reconnect with
+        /// `bitrouter acp attach <record>` and rejoin history via
+        /// `session/load`). Unix-only.
+        #[arg(long)]
+        warm: bool,
+        /// Shut a warm session down after this many seconds with no manager
+        /// attached.
+        #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
+        idle_timeout: u64,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Launch a session, send one prompt, and stream NDJSON output to stdout.
+    ///
+    /// Each streamed agent update is emitted as one JSON object per line with
+    /// a `type` field (e.g. `message_chunk`, `tool_call`). The final line has
+    /// `type: result` with a `stop_reason` field.
+    Prompt {
+        /// Agent id — must exist under `agents:` in the config.
+        #[arg(long)]
+        agent: String,
+        /// Name of a git worktree to provision inside the repo before
+        /// launching (created, or reused when it already exists).
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Remove the worktree when the session ends. Off by default: the
+        /// worktree holds the agent's work, and removal discards anything
+        /// uncommitted. Only a worktree created by this session is removed.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
+        /// Disable the durable session transcript
+        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        /// Return immediately after submitting the prompt (emit
+        /// `{"type":"submitted"}`). The session is torn down after ack.
+        #[arg(long)]
+        no_wait: bool,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// The prompt text to send.
+        text: String,
+    },
+    /// List the session records under the current repo's
+    /// `.bitrouter/sessions/`, newest first. A `running` record whose process
+    /// no longer exists is shown as `dead`.
+    Sessions,
+    /// Reattach to a warm session: bridge this terminal's stdio to the
+    /// session's unix socket. Speak ACP as usual; `session/load` replays the
+    /// conversation so far. Unix-only.
+    Attach {
+        /// Session record id (or unique prefix) from `bitrouter acp sessions`.
+        record: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     // Parse once here so the global `--json` / `--human` flags are available to
@@ -590,7 +685,20 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // construction, so registering it before the exporter exists would
     // lock the bridge to the default no-op and silently drop every later
     // span. The two-stage init is the simplest way around that.
-    if !matches!(cli.command, Command::Serve { .. }) {
+    //
+    // Both `acp` subcommands keep stdout exclusively for their machine-readable
+    // protocol — JSON-RPC for `acp serve`, NDJSON for `acp prompt` — so their
+    // logging must go to stderr instead of the default (stdout) writer, or it
+    // would interleave with and corrupt that stream. The exclusion of
+    // `Command::Serve` mirrors how it defers its subscriber init to after the
+    // OTel exporter is available.
+    let is_acp = matches!(&cli.command, Command::Acp { .. });
+    if matches!(cli.command, Command::Serve { .. }) {
+        // `Command::Serve` defers its init — handled inside `serve()`.
+    } else if is_acp {
+        // Any `acp` subcommand: init with stderr so stdout stays pristine.
+        init_stderr_tracing_subscriber();
+    } else {
         init_basic_tracing_subscriber();
     }
 
@@ -675,10 +783,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         }
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
-        Command::AgentProxy { agent, config } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            agent_proxy_cmd(&agent, &source).await
-        }
         Command::Spawn {
             agent,
             config,
@@ -713,6 +817,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
         Command::Mcp { action } => mcp_cmd(action).await,
+        Command::Acp { cmd } => acp_cmd(cmd).await,
         Command::Update {
             check,
             tag,
@@ -890,11 +995,26 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 // ===== tracing subscriber init =====
 
 /// Install a basic fmt-only tracing subscriber. Used for every command
-/// except `serve` — see [`init_serve_tracing_subscriber`].
+/// except `serve` and the `acp` subcommands — see
+/// [`init_serve_tracing_subscriber`] and [`init_stderr_tracing_subscriber`].
 fn init_basic_tracing_subscriber() {
     tracing_subscriber::fmt()
         // Diagnostics MUST go to stderr so stdout stays a pure JSON result
         // surface (`tracing_subscriber::fmt()` otherwise defaults to stdout).
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
+/// Install a tracing subscriber that writes to **stderr**. Used for the `acp`
+/// subcommands, which keep stdout exclusively for their machine-readable
+/// protocol stream (JSON-RPC for `acp serve`, NDJSON for `acp prompt`) —
+/// logging on stdout would corrupt the stream the caller parses.
+fn init_stderr_tracing_subscriber() {
+    tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1850,11 +1970,6 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     }
 }
 
-async fn agent_proxy_cmd(agent: &str, source: &bitrouter::paths::ConfigSource) -> Result<()> {
-    let cfg = bitrouter::paths::load_config(source).await?;
-    bitrouter::agent_proxy::run(cfg, agent).await
-}
-
 // ===== observe =====
 
 async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
@@ -1897,7 +2012,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
-        AgentsAction::List { config } => {
+        AgentsAction::List { remote, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let agents = agents_cmd::list(&cfg)
@@ -1909,7 +2024,27 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                     description: row.description,
                 })
                 .collect();
-            output.emit(&AgentsListReport { agents })?;
+            // `--remote`: append the ACP registry as an optional section of the
+            // same report (one JSON document either way).
+            let registry = if remote {
+                let fetched =
+                    bitrouter::agent_registry::fetch(bitrouter::agent_registry::REGISTRY_URL)
+                        .await?;
+                Some(
+                    agents_cmd::registry_rows(&fetched)
+                        .into_iter()
+                        .map(|row| AgentRegistryRow {
+                            id: row.id,
+                            version: row.version,
+                            install: row.install.to_string(),
+                            description: row.description,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            output.emit(&AgentsListReport { agents, registry })?;
             Ok(())
         }
         AgentsAction::Check { config } => {
@@ -1939,8 +2074,86 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                 output.emit(&AgentInstallReport { id, yaml })?;
                 Ok(())
             }
-            Err(e) => anyhow::bail!(e),
+            // Not in the compiled catalog: fall back to the ACP registry
+            // (npx/uvx distributions only).
+            Err(catalog_miss) => {
+                let registry = match bitrouter::agent_registry::fetch(
+                    bitrouter::agent_registry::REGISTRY_URL,
+                )
+                .await
+                {
+                    Ok(registry) => registry,
+                    Err(fetch_err) => {
+                        anyhow::bail!(
+                            "{catalog_miss}\n(also failed to consult the ACP registry: {fetch_err})"
+                        )
+                    }
+                };
+                match agents_cmd::install_from_registry(&registry, &id) {
+                    Ok(yaml) => {
+                        output.emit(&AgentInstallReport { id, yaml })?;
+                        Ok(())
+                    }
+                    Err(e) => anyhow::bail!(e),
+                }
+            }
         },
+    }
+}
+
+// ===== `bitrouter acp …` (per-session ACP substrate) =====
+
+async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
+    match cmd {
+        AcpCmd::Serve {
+            agent,
+            worktree,
+            rm_worktree,
+            no_transcript,
+            turn_timeout,
+            warm,
+            idle_timeout,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let options = bitrouter::acp_cli::launch_options(
+                worktree.as_deref(),
+                rm_worktree,
+                no_transcript,
+                turn_timeout,
+            );
+            let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
+                idle_timeout: std::time::Duration::from_secs(idle_timeout),
+            });
+            bitrouter::acp_cli::serve(cfg, &agent, options, warm).await
+        }
+        AcpCmd::Prompt {
+            agent,
+            worktree,
+            rm_worktree,
+            no_transcript,
+            turn_timeout,
+            no_wait,
+            config,
+            text,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let options = bitrouter::acp_cli::launch_options(
+                worktree.as_deref(),
+                rm_worktree,
+                no_transcript,
+                turn_timeout,
+            );
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::prompt(cfg, &agent, options, &text, no_wait, &mut stdout).await
+        }
+        AcpCmd::Sessions => {
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::sessions(&mut stdout).await
+        }
+        AcpCmd::Attach { record } => bitrouter::acp_cli::attach(&record).await,
     }
 }
 
