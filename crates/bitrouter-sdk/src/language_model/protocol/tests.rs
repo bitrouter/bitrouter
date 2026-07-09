@@ -2745,8 +2745,8 @@ fn regression_227_messages_system_accepts_string_or_array() {
     assert_eq!(p2.system.as_deref(), Some("line one\nline two"));
 }
 
-/// #364 — `tool_result.content` accepts a string or an array; `thinking`
-/// blocks round-trip.
+/// #364 — `tool_result.content` accepts a string or an array; signed
+/// `thinking` blocks round-trip.
 #[test]
 fn regression_364_tool_result_array_and_thinking() {
     let adapter = adapter_for(ApiProtocol::Messages);
@@ -2755,7 +2755,11 @@ fn regression_364_tool_result_array_and_thinking() {
         "messages": [
             {
                 "role": "assistant",
-                "content": [{ "type": "thinking", "thinking": "pondering" }],
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "pondering",
+                    "signature": "SIG-364",
+                }],
             },
             {
                 "role": "user",
@@ -2792,6 +2796,35 @@ fn regression_364_tool_result_array_and_thinking() {
             value: "42".to_string()
         }),
         "text-only array tool_result content flattens to a Text output"
+    );
+}
+
+#[test]
+fn messages_parse_request_drops_unsigned_thinking_blocks() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude",
+        "messages": [{
+            "role": "assistant",
+            "content": [
+                { "type": "thinking", "thinking": "weak-model scratchpad" },
+                { "type": "text", "text": "visible answer" },
+            ],
+        }],
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let content: Vec<_> = prompt.messages.iter().flat_map(|m| &m.content).collect();
+    assert!(
+        !content
+            .iter()
+            .any(|c| matches!(c, Content::Reasoning { .. })),
+        "unsigned thinking must not be replayed to Anthropic"
+    );
+    assert!(
+        content
+            .iter()
+            .any(|c| matches!(c, Content::Text { text, .. } if text == "visible answer")),
+        "ordinary visible content should survive"
     );
 }
 
