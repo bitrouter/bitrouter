@@ -16,9 +16,12 @@
 //!   `~/.claude/.credentials.json`. See [`claude_code`].
 //! - Codex — macOS Keychain `Codex Auth`, else `$CODEX_HOME/auth.json`
 //!   (default `~/.codex/auth.json`). See [`codex`].
+//! - Grok — `$GROK_HOME/auth.json` (default `~/.grok/auth.json`), the OIDC
+//!   (SuperGrok subscription) entry. See [`grok`].
 
 pub mod claude_code;
 pub mod codex;
+pub mod grok;
 mod keychain;
 
 use std::path::PathBuf;
