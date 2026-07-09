@@ -73,6 +73,7 @@ pub struct PolicyDecision {
     pub legacy_fingerprint: String,
     pub workflow_state_kind: String,
     pub static_tier: Option<String>,
+    pub static_model: Option<String>,
     pub selected_tier: Option<String>,
     pub selected_model: Option<String>,
     pub reason: PolicyDecisionReason,
@@ -395,6 +396,7 @@ impl PolicyTableRouter {
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
             static_tier: None,
+            static_model: None,
             selected_tier: None,
             selected_model: None,
             reason: PolicyDecisionReason::NoMatch,
@@ -411,6 +413,10 @@ impl PolicyTableRouter {
             return decision;
         };
         decision.static_tier = Some(raw_static_tier.to_string());
+        decision.static_model = self
+            .table
+            .model_of_tier(raw_static_tier)
+            .map(ToString::to_string);
         let (mut selected_tier, static_clamped) =
             self.table.guardrail_with_status(raw_static_tier, prompt);
         decision.reason = if static_clamped {
@@ -483,6 +489,7 @@ impl PolicyTableRouter {
             legacy_fingerprint = %decision.legacy_fingerprint,
             workflow_state = %decision.workflow_state_kind,
             static_tier = ?decision.static_tier,
+            static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
             selected_model = ?decision.selected_model,
             reason = %decision.reason,
@@ -500,6 +507,7 @@ impl PolicyTableRouter {
                 decision.legacy_fingerprint.clone(),
                 decision.workflow_state_kind.clone(),
                 decision.static_tier.clone(),
+                decision.static_model.clone(),
                 decision.selected_tier.clone(),
                 decision.selected_model.clone(),
                 decision.reason.to_string(),
@@ -849,6 +857,7 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].request_id.as_deref(), Some("req-001"));
         assert_eq!(records[0].input_model, "inbound");
+        assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].reason, "static_table");
 

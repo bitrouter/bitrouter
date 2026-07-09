@@ -70,7 +70,27 @@ pub struct WorkflowRunArtifact {
     pub cost_join: CostJoinSummary,
     pub reward_join: RewardJoinSummary,
     pub semantic_inadequacy_candidates: Vec<SemanticInadequacyCandidate>,
+    pub semantic_policy_transition_candidates: Vec<SemanticPolicyTransitionCandidate>,
     pub route_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticPolicyTransitionCandidate {
+    pub trace_id: String,
+    pub request_id: String,
+    pub session_key: String,
+    pub task_id: String,
+    pub reward: f64,
+    pub failed_reason: Option<String>,
+    pub request_key: String,
+    pub workflow_state: String,
+    pub static_tier: Option<String>,
+    pub selected_tier: Option<String>,
+    pub tier_transition: Option<String>,
+    pub static_model: Option<String>,
+    pub selected_model: Option<String>,
+    pub model_transition: Option<String>,
+    pub reason: String,
 }
 
 impl TraceArchive {
@@ -281,6 +301,11 @@ impl WorkflowRunArtifact {
         let cost = CloudUsageSummary::from_records(usage);
         let cost_join = CostJoinSummary::from_traces_and_usage(traces, usage);
         let reward_join = TraceArchive::join_outcomes(traces, outcomes);
+        let semantic_policy_transition_candidates = semantic_policy_transition_candidates(
+            &reward_join.semantic_inadequacy_candidates,
+            traces,
+            decisions,
+        );
         let route_counts = cost
             .by_model_provider
             .iter()
@@ -296,6 +321,7 @@ impl WorkflowRunArtifact {
             cost_join,
             reward_join: reward_join.summary,
             semantic_inadequacy_candidates: reward_join.semantic_inadequacy_candidates,
+            semantic_policy_transition_candidates,
             route_counts,
         })
     }
@@ -447,6 +473,72 @@ fn trace_request_id(trace: &CapturedIngressTrace) -> Option<String> {
     ]
     .into_iter()
     .find_map(|name| header_value(&trace.headers, name))
+}
+
+fn semantic_policy_transition_candidates(
+    semantic_candidates: &[SemanticInadequacyCandidate],
+    traces: &[CapturedIngressTrace],
+    decisions: &[PolicyDecisionRecord],
+) -> Vec<SemanticPolicyTransitionCandidate> {
+    let request_id_by_trace_id = traces
+        .iter()
+        .filter_map(|trace| {
+            trace_request_id(trace).map(|request_id| (trace.id.clone(), request_id))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let decisions_by_request_id = decisions
+        .iter()
+        .filter_map(|decision| {
+            decision
+                .request_id
+                .as_ref()
+                .map(|request_id| (request_id.clone(), decision))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    semantic_candidates
+        .iter()
+        .filter_map(|candidate| {
+            let request_id = request_id_by_trace_id.get(&candidate.trace_id)?;
+            let decision = decisions_by_request_id.get(request_id)?;
+            let tier_changed = changed(&decision.static_tier, &decision.selected_tier);
+            let model_changed = changed(&decision.static_model, &decision.selected_model);
+            if !tier_changed && !model_changed {
+                return None;
+            }
+            Some(SemanticPolicyTransitionCandidate {
+                trace_id: candidate.trace_id.clone(),
+                request_id: request_id.clone(),
+                session_key: candidate.session_key.clone(),
+                task_id: candidate.task_id.clone(),
+                reward: candidate.reward,
+                failed_reason: candidate.failed_reason.clone(),
+                request_key: decision.request_key.clone(),
+                workflow_state: decision.workflow_state.clone(),
+                static_tier: decision.static_tier.clone(),
+                selected_tier: decision.selected_tier.clone(),
+                tier_transition: transition_option(&decision.static_tier, &decision.selected_tier),
+                static_model: decision.static_model.clone(),
+                selected_model: decision.selected_model.clone(),
+                model_transition: transition_option(
+                    &decision.static_model,
+                    &decision.selected_model,
+                ),
+                reason: decision.reason.clone(),
+            })
+        })
+        .collect()
+}
+
+fn changed(left: &Option<String>, right: &Option<String>) -> bool {
+    left.is_some() && right.is_some() && left != right
+}
+
+fn transition_option(left: &Option<String>, right: &Option<String>) -> Option<String> {
+    match (left.as_deref(), right.as_deref()) {
+        (Some(left), Some(right)) => Some(format!("{left} -> {right}")),
+        _ => None,
+    }
 }
 
 fn header_value(headers: &BTreeMap<String, String>, name: &str) -> Option<String> {

@@ -829,6 +829,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         static_tier: Some("capable".to_string()),
+        static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
         selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
         reason: "exploration_locked".to_string(),
@@ -871,6 +872,120 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
     assert_eq!(
         run_artifact["policy_decisions"]["by_reason"]["exploration_locked"],
         1
+    );
+
+    let _ = std::fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn policy_decision_summary_counts_static_to_selected_replacements() {
+    let path = temp_path("policy-decision-transitions.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"captured_at":null,"request_id":"req-001","input_model":"gpt-5.5","key_strategy":"workflow_state","request_key":"codex|responses|tool_followup","legacy_fingerprint":"after_bash","workflow_state":"tool_followup","static_tier":"capable","static_model":"openai-codex:gpt-5.5","selected_tier":"cheap","selected_model":"bitrouter:moonshotai/kimi-k2.7-code","reason":"exploration_locked","pinned":false,"locked":true,"trialed":false}
+"#,
+    )
+    .unwrap();
+    let records = PolicyDecisionRecord::load_jsonl(&path).unwrap();
+
+    let summary = PolicyDecisionSummary::from_records(&records);
+    let value = serde_json::to_value(&summary).unwrap();
+
+    assert_eq!(value["static_tier_replaced_count"], 1);
+    assert_eq!(value["by_tier_transition"]["capable -> cheap"], 1);
+    assert_eq!(value["static_model_replaced_count"], 1);
+    assert_eq!(
+        value["by_model_transition"]["openai-codex:gpt-5.5 -> bitrouter:moonshotai/kimi-k2.7-code"],
+        1
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn run_artifact_attributes_failed_task_to_policy_transition() {
+    let output_dir = temp_path("workflow-run-bundle-semantic-policy-transition");
+    let traces = vec![CapturedIngressTrace {
+        id: "trace-001".to_string(),
+        captured_at: None,
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: [
+            ("x-bitrouter-request-id".to_string(), "req-001".to_string()),
+            (
+                "x-bitrouter-workflow-session".to_string(),
+                "trial-a".to_string(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        raw_body: json!({
+            "model": "gpt-5.5",
+            "input": "continue",
+            "stream": true
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    }];
+    let outcomes = vec![BenchmarkOutcomeRecord {
+        session_key: "trial-a".to_string(),
+        task_id: "filter-js-from-html".to_string(),
+        reward: 0.0,
+        failed_reason: Some("verifier_failed".to_string()),
+        finished_at: None,
+        trial_name: Some("trial-a".to_string()),
+        agent_started_at: None,
+        agent_finished_at: None,
+    }];
+    let decisions = vec![PolicyDecisionRecord {
+        captured_at: None,
+        request_id: Some("req-001".to_string()),
+        input_model: "gpt-5.5".to_string(),
+        key_strategy: "workflow_state".to_string(),
+        request_key: "codex|responses|tool_followup".to_string(),
+        legacy_fingerprint: "after_bash".to_string(),
+        workflow_state: "tool_followup".to_string(),
+        static_tier: Some("capable".to_string()),
+        static_model: Some("openai-codex:gpt-5.5".to_string()),
+        selected_tier: Some("cheap".to_string()),
+        selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
+        reason: "exploration_locked".to_string(),
+        pinned: false,
+        locked: true,
+        trialed: false,
+    }];
+
+    let artifact = WorkflowRunArtifact::write_bundle_with_decisions(
+        "run-a",
+        &output_dir,
+        &traces,
+        &[],
+        &outcomes,
+        &decisions,
+        &TraceSanitizer::default(),
+    )
+    .unwrap();
+    let value = serde_json::to_value(&artifact).unwrap();
+
+    assert_eq!(
+        value["semantic_policy_transition_candidates"][0]["task_id"],
+        "filter-js-from-html"
+    );
+    assert_eq!(
+        value["semantic_policy_transition_candidates"][0]["request_id"],
+        "req-001"
+    );
+    assert_eq!(
+        value["semantic_policy_transition_candidates"][0]["tier_transition"],
+        "capable -> cheap"
+    );
+    assert_eq!(
+        value["semantic_policy_transition_candidates"][0]["model_transition"],
+        "openai-codex:gpt-5.5 -> bitrouter:moonshotai/kimi-k2.7-code"
     );
 
     let _ = std::fs::remove_dir_all(&output_dir);

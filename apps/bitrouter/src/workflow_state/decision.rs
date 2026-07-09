@@ -24,6 +24,8 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub static_tier: Option<String>,
     #[serde(default)]
+    pub static_model: Option<String>,
+    #[serde(default)]
     pub selected_tier: Option<String>,
     #[serde(default)]
     pub selected_model: Option<String>,
@@ -42,6 +44,11 @@ pub struct PolicyDecisionSummary {
     pub trialed_count: usize,
     pub by_selected_tier: BTreeMap<String, usize>,
     pub by_selected_model: BTreeMap<String, usize>,
+    pub static_tier_replaced_count: usize,
+    pub static_model_replaced_count: usize,
+    pub by_tier_transition: BTreeMap<String, usize>,
+    pub by_model_transition: BTreeMap<String, usize>,
+    pub replacement_by_reason: BTreeMap<String, usize>,
     pub by_reason: BTreeMap<String, usize>,
     pub by_workflow_state: BTreeMap<String, usize>,
 }
@@ -60,6 +67,7 @@ impl PolicyDecisionRecord {
         legacy_fingerprint: impl Into<String>,
         workflow_state: impl Into<String>,
         static_tier: Option<String>,
+        static_model: Option<String>,
         selected_tier: Option<String>,
         selected_model: Option<String>,
         reason: impl Into<String>,
@@ -76,6 +84,7 @@ impl PolicyDecisionRecord {
             legacy_fingerprint: legacy_fingerprint.into(),
             workflow_state: workflow_state.into(),
             static_tier,
+            static_model,
             selected_tier,
             selected_model,
             reason: reason.into(),
@@ -173,11 +182,39 @@ impl PolicyDecisionSummary {
                     .entry(tier.to_string())
                     .or_insert(0) += 1;
             }
+            if let (Some(static_tier), Some(selected_tier)) = (
+                record.static_tier.as_deref(),
+                record.selected_tier.as_deref(),
+            ) {
+                *summary
+                    .by_tier_transition
+                    .entry(transition_key(static_tier, selected_tier))
+                    .or_insert(0) += 1;
+                if static_tier != selected_tier {
+                    summary.static_tier_replaced_count += 1;
+                    *summary
+                        .replacement_by_reason
+                        .entry(record.reason.clone())
+                        .or_insert(0) += 1;
+                }
+            }
             if let Some(model) = record.selected_model.as_deref() {
                 *summary
                     .by_selected_model
                     .entry(model.to_string())
                     .or_insert(0) += 1;
+            }
+            if let (Some(static_model), Some(selected_model)) = (
+                record.static_model.as_deref(),
+                record.selected_model.as_deref(),
+            ) {
+                *summary
+                    .by_model_transition
+                    .entry(transition_key(static_model, selected_model))
+                    .or_insert(0) += 1;
+                if static_model != selected_model {
+                    summary.static_model_replaced_count += 1;
+                }
             }
             *summary.by_reason.entry(record.reason.clone()).or_insert(0) += 1;
             *summary
@@ -187,6 +224,10 @@ impl PolicyDecisionSummary {
         }
         summary
     }
+}
+
+fn transition_key(from: &str, to: &str) -> String {
+    format!("{from} -> {to}")
 }
 
 impl PolicyDecisionJsonlRecorder {
