@@ -22,6 +22,8 @@ use crate::workflow_state::replay::extract_fixture_ir;
 
 const MAX_CAPTURE_BODY_BYTES: usize = 16 * 1024 * 1024;
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
+const BITROUTER_HARNESS_HEADER: &str = "x-bitrouter-harness";
+const BITROUTER_PROTOCOL_HEADER: &str = "x-bitrouter-protocol";
 
 #[derive(Debug, Clone)]
 pub struct TraceCaptureOptions {
@@ -151,8 +153,20 @@ impl RealTraceCapture {
         if let Ok(value) = HeaderValue::from_str(&request_id) {
             parts.headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
         }
-        let headers = headers_to_map(&parts.headers);
         let protocol = protocol_for_path(&path);
+        if !parts.headers.contains_key(BITROUTER_HARNESS_HEADER)
+            && let Ok(value) =
+                HeaderValue::from_str(harness_header_value(&self.inner.options.harness))
+        {
+            parts.headers.insert(BITROUTER_HARNESS_HEADER, value);
+        }
+        if !parts.headers.contains_key(BITROUTER_PROTOCOL_HEADER)
+            && let Some(protocol) = protocol.as_ref()
+            && let Ok(value) = HeaderValue::from_str(protocol_header_value(protocol))
+        {
+            parts.headers.insert(BITROUTER_PROTOCOL_HEADER, value);
+        }
+        let headers = headers_to_map(&parts.headers);
 
         let body_bytes = match to_bytes(body, MAX_CAPTURE_BODY_BYTES).await {
             Ok(bytes) => bytes,
@@ -332,6 +346,27 @@ fn request_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn harness_header_value(harness: &HarnessId) -> &'static str {
+    match harness {
+        HarnessId::Generic => "generic",
+        HarnessId::Hermes => "hermes",
+        HarnessId::ClaudeCode => "claude_code",
+        HarnessId::Codex => "codex",
+        HarnessId::OpenClaw => "openclaw",
+        HarnessId::Unknown => "unknown",
+    }
+}
+
+fn protocol_header_value(protocol: &ProtocolKind) -> &'static str {
+    match protocol {
+        ProtocolKind::ChatCompletions => "chat_completions",
+        ProtocolKind::Messages => "messages",
+        ProtocolKind::Responses => "responses",
+        ProtocolKind::OpenClawRuntime => "openclaw_runtime",
+        ProtocolKind::Unknown => "unknown",
+    }
+}
+
 fn append_sanitized_trace(
     path: &PathBuf,
     trace: &CapturedIngressTrace,
@@ -393,7 +428,19 @@ mod tests {
                     .get("x-bitrouter-request-id")
                     .and_then(|value| value.to_str().ok())
                     .unwrap_or("");
-                Json(json!({ "request_id": request_id }))
+                let harness = headers
+                    .get("x-bitrouter-harness")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("");
+                let protocol = headers
+                    .get("x-bitrouter-protocol")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("");
+                Json(json!({
+                    "request_id": request_id,
+                    "harness": harness,
+                    "protocol": protocol,
+                }))
             }),
         ));
 
@@ -434,6 +481,8 @@ mod tests {
             Some(downstream_request_id)
         );
         assert_eq!(records[0].id, downstream_request_id);
+        assert_eq!(response_json["harness"].as_str(), Some("codex"));
+        assert_eq!(response_json["protocol"].as_str(), Some("responses"));
         let captured_at = records[0]
             .captured_at
             .as_deref()
