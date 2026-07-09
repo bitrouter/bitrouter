@@ -411,7 +411,12 @@ impl PolicyTableRouter {
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
         let decision = self.decision_for(prompt, headers);
-        tracing::debug!(
+        let request_id = headers
+            .get("x-bitrouter-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("-");
+        tracing::info!(
+            request_id,
             key_strategy = ?decision.key_strategy,
             request_key = %decision.request_key,
             legacy_fingerprint = %decision.legacy_fingerprint,
