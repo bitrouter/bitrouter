@@ -15,6 +15,8 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `ambient` | Ambient | US | openai | Per-token | 2 |
 | `anthropic` | Anthropic | US | anthropic | Per-token | 8 |
 | `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
+| `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 12 |
+| `azure` | Microsoft Azure | US | openai, responses | Per-token | 14 |
 | `bitrouter` | BitRouter | US | openai | Per-token | 49 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
 | `cerebras` | Cerebras | US | openai | Per-token | 3 |
@@ -51,6 +53,7 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `tencent` | Tencent Cloud | CN | anthropic, openai, responses | Per-token | 11 |
 | `tencent_cn` | Tencent Cloud | CN | anthropic, openai, responses | Per-token | 12 |
 | `tinfoil` | Tinfoil | US | openai | Per-token | 5 |
+| `vertex` | Google Cloud | US | google | Per-token | 3 |
 | `volcengine` | Volcengine | CN | openai | Per-token | 2 |
 | `xai` | xAI | US | openai, responses | Per-token | 5 |
 | `xiaomi` | Xiaomi | CN | anthropic, openai, responses | Per-token | 5 |

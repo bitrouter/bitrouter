@@ -151,6 +151,7 @@ Before submitting:
 cargo run -p dist-helper -- registry validate   # advisories about non-curated
                                                  # provider models are expected
 cargo run -p dist-helper -- registry build      # regenerate dist/registry
+cargo run -p dist-helper -- registry docs        # regenerate supported-* docs tables
 ```
 
 Commit `dist/registry/` alongside your source changes. The daily automated sync
