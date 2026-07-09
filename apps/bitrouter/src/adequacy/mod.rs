@@ -70,6 +70,7 @@ impl InadequacyCause {
 }
 
 /// What the observer determined about one request, for the ledger to fold in.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// A static (operator-configured) downgrade — the served tier is the cheap
     /// tier the static table assigned this fingerprint. Consecutive failures pin.
@@ -252,14 +253,30 @@ impl AdequacyLedger {
         if let (Some(pinned_at), Some(store)) = (newly_pinned, &self.store) {
             // Best-effort: a failed write only means the pin won't survive a
             // restart, never a dropped or blocked request.
-            let _ = store.upsert_pin(fingerprint, pinned_at as i64).await;
+            if let Err(error) = store.upsert_pin(fingerprint, pinned_at as i64).await {
+                tracing::warn!(
+                    %error,
+                    fingerprint,
+                    "adequacy pin persistence failed"
+                );
+            }
         }
         if let (Some((fingerprint, observed, adequate_trials, locked)), Some(store)) =
             (exploration_snapshot, &self.store)
         {
-            let _ = store
+            if let Err(error) = store
                 .upsert_exploration(&fingerprint, observed, adequate_trials, locked)
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    %error,
+                    fingerprint,
+                    observed,
+                    adequate_trials,
+                    locked,
+                    "adequacy exploration persistence failed"
+                );
+            }
         }
     }
 

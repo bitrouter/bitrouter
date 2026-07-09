@@ -27,10 +27,178 @@ pub struct AdequacyObserveHook {
     ledger: Arc<AdequacyLedger>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ObservationDecision {
+    Record {
+        fingerprint: String,
+        outcome: Outcome,
+        served_tier: String,
+        static_tier: Option<String>,
+        escalation_tier: Option<String>,
+    },
+    Skip {
+        reason: &'static str,
+        fingerprint: String,
+        served_tier: Option<String>,
+        static_tier: Option<String>,
+        escalation_tier: Option<String>,
+        exploration_allowed: bool,
+        trialed: bool,
+    },
+}
+
 impl AdequacyObserveHook {
     /// Build the hook over the shared policy table and ledger.
     pub fn new(table: Arc<PolicyTable>, ledger: Arc<AdequacyLedger>) -> Self {
         Self { table, ledger }
+    }
+
+    fn observation_decision(
+        &self,
+        ctx: &PipelineContext,
+        outcome: &RequestOutcome,
+    ) -> ObservationDecision {
+        let client_disconnected = matches!(outcome, RequestOutcome::ClientDisconnected);
+        let cause = match outcome {
+            RequestOutcome::Failed(error) => classify_failure(error),
+            // A disconnect is not proof that a cheap response was adequate, but
+            // for an exploration candidate left on the escalation tier it can
+            // still advance the deterministic trial cadence below.
+            RequestOutcome::ClientDisconnected => InadequacyCause::None,
+            // A completed request got a response: the route held.
+            RequestOutcome::Completed => InadequacyCause::None,
+        };
+        let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
+        let served_tier = self.table.tier_of_model(ctx.model()).map(str::to_string);
+        let static_tier = self
+            .table
+            .static_tier_with_headers(ctx.prompt(), ctx.headers())
+            .map(str::to_string);
+        let escalation_tier = self.table.escalation_tier().map(str::to_string);
+        let Some(served_tier) = served_tier else {
+            return ObservationDecision::Skip {
+                reason: "served_model_not_in_policy_tiers",
+                fingerprint,
+                served_tier: None,
+                static_tier,
+                escalation_tier,
+                exploration_allowed: false,
+                trialed: false,
+            };
+        };
+
+        // A genuine *static* (operator-configured) downgrade: the served tier is
+        // exactly the static decision, and it is a downgrade (not the escalation
+        // tier). This guards against a caller's explicit route / coincidental
+        // model match being mistaken for one.
+        if static_tier.as_deref() == Some(served_tier.as_str())
+            && Some(served_tier.as_str()) != escalation_tier.as_deref()
+        {
+            if client_disconnected {
+                return ObservationDecision::Skip {
+                    reason: "static_downgrade_client_disconnected",
+                    fingerprint,
+                    served_tier: Some(served_tier),
+                    static_tier,
+                    escalation_tier,
+                    exploration_allowed: false,
+                    trialed: false,
+                };
+            }
+            return ObservationDecision::Record {
+                fingerprint,
+                outcome: Outcome::StaticDowngrade { cause },
+                served_tier,
+                static_tier,
+                escalation_tier,
+            };
+        }
+
+        if !self.table.exploration_enabled() {
+            return ObservationDecision::Skip {
+                reason: "exploration_disabled",
+                fingerprint,
+                served_tier: Some(served_tier),
+                static_tier,
+                escalation_tier,
+                exploration_allowed: false,
+                trialed: false,
+            };
+        }
+        let Some(escalation_tier_value) = escalation_tier.as_deref() else {
+            return ObservationDecision::Skip {
+                reason: "missing_escalation_tier",
+                fingerprint,
+                served_tier: Some(served_tier),
+                static_tier,
+                escalation_tier,
+                exploration_allowed: false,
+                trialed: false,
+            };
+        };
+        if static_tier.as_deref() != Some(escalation_tier_value) {
+            return ObservationDecision::Skip {
+                reason: "static_tier_not_escalation_tier",
+                fingerprint,
+                served_tier: Some(served_tier),
+                static_tier,
+                escalation_tier,
+                exploration_allowed: false,
+                trialed: false,
+            };
+        }
+        let exploration_allowed = self
+            .table
+            .exploration_allowed_for_prompt(ctx.prompt(), ctx.headers());
+        if !exploration_allowed {
+            return ObservationDecision::Skip {
+                reason: "exploration_not_allowed_for_prompt",
+                fingerprint,
+                served_tier: Some(served_tier),
+                static_tier,
+                escalation_tier,
+                exploration_allowed,
+                trialed: false,
+            };
+        }
+
+        let trialed = self.table.explore_tier() == Some(served_tier.as_str());
+        let served_escalation = Some(served_tier.as_str()) == escalation_tier.as_deref();
+        // Count only a trial (served the explore tier) or a cadence-advance
+        // (served the escalation tier). A candidate served on some third tier
+        // — e.g. a tool request whose explore-tier trial the guardrail clamped
+        // up to the tool-use tier — is intentionally not counted: a real trial
+        // there would be clamped too, so exploration is correctly inert for it.
+        if !trialed && !served_escalation {
+            return ObservationDecision::Skip {
+                reason: "served_tier_not_counted_for_exploration",
+                fingerprint,
+                served_tier: Some(served_tier),
+                static_tier,
+                escalation_tier,
+                exploration_allowed,
+                trialed,
+            };
+        }
+        if trialed && client_disconnected {
+            return ObservationDecision::Skip {
+                reason: "exploration_trial_client_disconnected",
+                fingerprint,
+                served_tier: Some(served_tier),
+                static_tier,
+                escalation_tier,
+                exploration_allowed,
+                trialed,
+            };
+        }
+
+        ObservationDecision::Record {
+            fingerprint,
+            outcome: Outcome::Exploration { trialed, cause },
+            served_tier,
+            static_tier,
+            escalation_tier,
+        }
     }
 }
 
@@ -43,65 +211,47 @@ impl ObserveHook for AdequacyObserveHook {
     async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
 
     async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
-        let client_disconnected = matches!(outcome, RequestOutcome::ClientDisconnected);
-        let cause = match outcome {
-            RequestOutcome::Failed(error) => classify_failure(error),
-            // A disconnect is not proof that a cheap response was adequate, but
-            // for an exploration candidate left on the escalation tier it can
-            // still advance the deterministic trial cadence below.
-            RequestOutcome::ClientDisconnected => InadequacyCause::None,
-            // A completed request got a response: the route held.
-            RequestOutcome::Completed => InadequacyCause::None,
-        };
-        // Which of the table's tiers actually served the request. Not one of
-        // ours ⇒ nothing to learn.
-        let Some(served_tier) = self.table.tier_of_model(ctx.model()) else {
-            return;
-        };
-        let static_tier = self
-            .table
-            .static_tier_with_headers(ctx.prompt(), ctx.headers());
-        let escalation_tier = self.table.escalation_tier();
-
-        // A genuine *static* (operator-configured) downgrade: the served tier is
-        // exactly the static decision, and it is a downgrade (not the escalation
-        // tier). This guards against a caller's explicit route / coincidental
-        // model match being mistaken for one.
-        if static_tier == Some(served_tier) && Some(served_tier) != escalation_tier {
-            if client_disconnected {
-                return;
+        match self.observation_decision(ctx, outcome) {
+            ObservationDecision::Record {
+                fingerprint,
+                outcome,
+                served_tier,
+                static_tier,
+                escalation_tier,
+            } => {
+                tracing::debug!(
+                    request_id = %ctx.request_id(),
+                    model = %ctx.model(),
+                    fingerprint = %fingerprint,
+                    served_tier = %served_tier,
+                    static_tier = ?static_tier,
+                    escalation_tier = ?escalation_tier,
+                    observation = ?outcome,
+                    "adequacy observation recorded"
+                );
+                self.ledger.observe(&fingerprint, outcome).await;
             }
-            let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
-            self.ledger
-                .observe(&fingerprint, Outcome::StaticDowngrade { cause })
-                .await;
-            return;
-        }
-
-        // An *exploration* candidate: the static decision is the escalation tier
-        // (the operator did not downgrade it). The request either trialed the
-        // explore tier or stayed on the escalation tier (advancing the cadence).
-        if self.table.exploration_enabled()
-            && escalation_tier.is_some()
-            && static_tier == escalation_tier
-            && self
-                .table
-                .exploration_allowed_for_prompt(ctx.prompt(), ctx.headers())
-        {
-            let trialed = self.table.explore_tier() == Some(served_tier);
-            // Count only a trial (served the explore tier) or a cadence-advance
-            // (served the escalation tier). A candidate served on some third tier
-            // — e.g. a tool request whose explore-tier trial the guardrail clamped
-            // up to the tool-use tier — is intentionally not counted: a real trial
-            // there would be clamped too, so exploration is correctly inert for it.
-            if trialed || Some(served_tier) == escalation_tier {
-                if trialed && client_disconnected {
-                    return;
-                }
-                let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
-                self.ledger
-                    .observe(&fingerprint, Outcome::Exploration { trialed, cause })
-                    .await;
+            ObservationDecision::Skip {
+                reason,
+                fingerprint,
+                served_tier,
+                static_tier,
+                escalation_tier,
+                exploration_allowed,
+                trialed,
+            } => {
+                tracing::debug!(
+                    request_id = %ctx.request_id(),
+                    model = %ctx.model(),
+                    fingerprint = %fingerprint,
+                    served_tier = ?served_tier,
+                    static_tier = ?static_tier,
+                    escalation_tier = ?escalation_tier,
+                    exploration_allowed,
+                    trialed,
+                    reason,
+                    "adequacy observation skipped"
+                );
             }
         }
     }
@@ -136,7 +286,7 @@ mod tests {
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
     use bitrouter_sdk::language_model::types::{
-        Content, GenerationParams, Message, PipelineRequest, Prompt, ProviderMetadata, Role,
+        Content, GenerationParams, Message, PipelineRequest, Prompt, ProviderMetadata, Role, Tool,
     };
     use http::HeaderValue;
 
@@ -228,6 +378,32 @@ mod tests {
         PolicyTable::from_config(&cfg).expect("configured")
     }
 
+    fn explicit_route_workflow_explore_table() -> Arc<PolicyTable> {
+        let cfg = PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::WorkflowState,
+            tiers: HashMap::from([
+                (
+                    "cheap".to_string(),
+                    "bitrouter:moonshotai/kimi-k2.7-code".to_string(),
+                ),
+                ("capable".to_string(), "openai-codex:gpt-5.5".to_string()),
+            ]),
+            fingerprints: HashMap::new(),
+            default_tier: Some("capable".to_string()),
+            tool_use_tier: None,
+            tool_safe_tiers: vec!["cheap".to_string(), "capable".to_string()],
+            adequacy: bitrouter_sdk::config::AdequacyConfig {
+                enabled: true,
+                escalation_tier: Some("capable".to_string()),
+                explore_enabled: true,
+                explore_tier: Some("cheap".to_string()),
+                explore_opening: false,
+                ..Default::default()
+            },
+        };
+        PolicyTable::from_config(&cfg).expect("configured")
+    }
+
     fn user(text: &str) -> Message {
         Message::text(Role::User, text)
     }
@@ -260,6 +436,13 @@ mod tests {
         }
     }
 
+    fn prompt_with_tools(messages: Vec<Message>, tools: Vec<Tool>) -> Prompt {
+        Prompt {
+            tools,
+            ..prompt(messages)
+        }
+    }
+
     /// A context for a request the pipeline served on `served_model`.
     fn ctx(served_model: &str, messages: Vec<Message>) -> PipelineContext {
         let request = PipelineRequest::new(
@@ -279,6 +462,21 @@ mod tests {
             served_model.to_string(),
             CallerContext::new("k", "u"),
             prompt(messages),
+        );
+        request.headers = headers;
+        PipelineContext::new(request)
+    }
+
+    fn ctx_with_headers_and_tools(
+        served_model: &str,
+        messages: Vec<Message>,
+        tools: Vec<Tool>,
+        headers: HeaderMap,
+    ) -> PipelineContext {
+        let mut request = PipelineRequest::new(
+            served_model.to_string(),
+            CallerContext::new("k", "u"),
+            prompt_with_tools(messages, tools),
         );
         request.headers = headers;
         PipelineContext::new(request)
@@ -313,6 +511,29 @@ mod tests {
 
     fn bash_step() -> Vec<Message> {
         vec![user("run command"), assistant_calls("bash")]
+    }
+
+    fn exec_command_medium_step() -> Vec<Message> {
+        vec![
+            user(&format!("run command {}", "x".repeat(12_000))),
+            assistant_calls("exec_command"),
+        ]
+    }
+
+    fn exec_command_tool() -> Tool {
+        Tool::Function {
+            name: "exec_command".to_string(),
+            description: None,
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "cmd": { "type": "string" }
+                },
+                "required": ["cmd"]
+            }),
+            strict: None,
+            provider_metadata: ProviderMetadata::new(),
+        }
     }
 
     #[tokio::test]
@@ -468,6 +689,41 @@ mod tests {
         assert!(
             ledger.should_trial("after_bash"),
             "served service id must advance the explicit route tier's cadence"
+        );
+    }
+
+    #[tokio::test]
+    async fn harbor_shaped_codex_tool_followup_is_an_exploration_observation() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
+        let hook = AdequacyObserveHook::new(explicit_route_workflow_explore_table(), ledger);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
+        headers.insert(
+            "x-bitrouter-protocol",
+            HeaderValue::from_static("responses"),
+        );
+
+        let ctx = ctx_with_headers_and_tools(
+            "gpt-5.5",
+            exec_command_medium_step(),
+            vec![exec_command_tool(), exec_command_tool()],
+            headers,
+        );
+        let decision = hook.observation_decision(&ctx, &RequestOutcome::Completed);
+
+        assert!(
+            matches!(
+                &decision,
+                ObservationDecision::Record {
+                    fingerprint,
+                    outcome: Outcome::Exploration {
+                        trialed: false,
+                        cause: InadequacyCause::None,
+                    },
+                    ..
+                } if fingerprint == "codex|responses|tool_followup|-|-|exec_command|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools"
+            ),
+            "Harbor-shaped Codex tool followups must advance exploration cadence, got {decision:?}"
         );
     }
 
