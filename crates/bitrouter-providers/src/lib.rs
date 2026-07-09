@@ -5,10 +5,13 @@
 //! the routing table by [`registry`] — auth scheme, wire protocol, base URL,
 //! model catalog, and pricing all travel in that data. Nothing is vendored into
 //! the binary. The lone compiled-in built-in is the hosted `bitrouter` cloud
-//! gateway, kept as a TOML (`providers/bitrouter.toml`) because its id shadows
-//! the registry's pool entry (see [`builtin`]). The same registry mapping is
-//! reused for a fetched provider on demand via [`builtin::entry_from_registry`]
-//! (e.g. `bitrouter login` resolving an OAuth handler + its public params).
+//! gateway, kept as TOML (`providers/bitrouter.toml`) for zero-config defaults
+//! and its local OAuth/API-key auth applier. The public registry also declares
+//! provider id `bitrouter`; the merge uses that public metadata without treating
+//! it as a synthetic "all canonical models" provider. The same registry mapping
+//! is reused for a fetched provider on demand via [`builtin::entry_from_registry`]
+//! (e.g. `bitrouter providers login` resolving an OAuth handler + its public
+//! params).
 //!
 //! ## Where a new provider lives — `AuthApplier` vs `Executor`
 //!
@@ -76,7 +79,6 @@
 pub mod anthropic;
 mod apply;
 pub mod builtin;
-pub mod catalog;
 #[cfg(feature = "pkce")]
 pub mod claude_code;
 #[cfg(feature = "pkce")]

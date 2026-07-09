@@ -1,0 +1,24 @@
+# Notify the bitrouter-docs site when published docs change.
+# Fires a repository_dispatch (event_type: docs-changed) that the docs repo's
+# sync-docs-dispatch.yml receives and turns into a Railway redeploy, which
+# re-runs `sync-docs` against this repo's docs/ tree.
+#
+# Requires a repo secret DOCS_DISPATCH_TOKEN: a fine-grained PAT (or classic
+# `repo` scope) authorized to dispatch on bitrouter/bitrouter-docs.
+name: Notify docs site
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**"]
+permissions: {}
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger bitrouter-docs rebuild
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${{ secrets.DOCS_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/bitrouter/bitrouter-docs/dispatches \
+            -d '{"event_type":"docs-changed"}'

@@ -1,0 +1,34 @@
+name: stepfun_step_plan_cn
+display_name: StepFun Step Plan (China)
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: StepFun
+  privacy_policy_url: https://platform.stepfun.com/docs/zh/agreement/userprivacy
+  slug: stepfun
+  terms_of_service_url: https://platform.stepfun.com/docs/zh/agreement/userservice
+billing: subscription
+api_base: https://api.stepfun.com/step_plan/v1
+api_protocol:
+  - "*": [openai, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: stepfun/step-3.7-flash
+    provider_model_id: step-3.7-flash
+    capabilities:
+      - structured_outputs
+  - id: stepfun/step-3.5-flash
+    provider_model_id: step-3.5-flash
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-07-06
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
+  key: stepfun

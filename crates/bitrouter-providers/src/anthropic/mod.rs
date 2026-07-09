@@ -11,7 +11,7 @@
 //! |---|---|
 //! | `Credential::ApiKey` stored under `"anthropic"` | `x-api-key: <value>`, `anthropic-version: 2023-06-01`. |
 //! | _no stored key_ | Fall back to the routing target's inline `api_key` (the `${ANTHROPIC_API_KEY}` env path). |
-//! | _neither_ | `401` pointing at `ANTHROPIC_API_KEY` / `bitrouter providers login anthropic`. |
+//! | _neither_ | `401` pointing at `ANTHROPIC_API_KEY` or an Anthropic API-key credential. |
 //!
 //! [`AnthropicApiKeyApplier::prepare_body`] is a no-op: the Platform API takes
 //! the caller's body verbatim.
@@ -95,8 +95,8 @@ impl AuthApplier for AnthropicApiKeyApplier {
                 if inline.is_empty() {
                     return Err(BitrouterError::Upstream {
                         status: 401,
-                        message: "no anthropic credential — set ANTHROPIC_API_KEY or run \
-                             `bitrouter providers login anthropic`"
+                        message: "no anthropic credential — set ANTHROPIC_API_KEY or store an \
+                             Anthropic API key with `bitrouter providers login anthropic`"
                             .into(),
                     });
                 }

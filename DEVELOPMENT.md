@@ -101,7 +101,7 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ## CLI Surface
 
-`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `key` / `models` / `tools` / `policy` / `providers` / `agents`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
+`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `verify` / `tools` / `observe` / `policy` / `providers` / `agents` / `acp` / `spawn` / `cloud` / `skills` / `mcp` / `update`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
 
 ## Where To Extend The System
 

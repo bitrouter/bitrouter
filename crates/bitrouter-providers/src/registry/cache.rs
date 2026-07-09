@@ -1,7 +1,7 @@
-//! File-based on-disk cache for the provider-registry distribution.
+//! File-based on-disk cache for the public registry distribution.
 //!
 //! Layout: a single JSON file `{ "fetched_at": <unix-secs>, "data": <RegistryData> }`.
-//! Default path: `$XDG_CACHE_HOME/bitrouter/provider-registry.json` (falling
+//! Default path: `$XDG_CACHE_HOME/bitrouter/registry.json` (falling
 //! back to `~/.cache/bitrouter/…` on Unix or
 //! `%LOCALAPPDATA%\bitrouter\cache\…` on Windows), per the XDG Base Directory
 //! spec (<https://specifications.freedesktop.org/basedir-spec/latest/>).
@@ -23,7 +23,7 @@ use crate::registry::types::RegistryData;
 pub const TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Default filename inside the bitrouter cache directory.
-pub const DEFAULT_FILENAME: &str = "provider-registry.json";
+pub const DEFAULT_FILENAME: &str = "registry.json";
 
 /// Errors raised by the disk cache.
 #[derive(Debug, thiserror::Error)]
@@ -168,18 +168,18 @@ mod tests {
             providers: vec![RegistryProvider {
                 name: "deepseek".into(),
                 display_name: None,
-                api_base: "https://api.deepseek.com/v1".into(),
+                api_base: Some("https://api.deepseek.com/v1".into()),
                 api_protocol: Vec::new(),
                 protocol_endpoints: None,
                 models: Vec::new(),
                 status: "active".into(),
                 kind: None,
                 auth: None,
+                required_config: Vec::new(),
                 doc_url: None,
                 community: false,
                 access: Some(RegistryAccess::ApiKey),
                 byok: Some(true),
-                auto_sync: None,
                 billing: Default::default(),
             }],
             canonical: vec![CanonicalModel {

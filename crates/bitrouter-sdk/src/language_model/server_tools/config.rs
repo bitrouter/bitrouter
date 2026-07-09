@@ -59,4 +59,22 @@ pub struct ServerToolsConfig {
     /// `bitrouter:web_search` tool is enabled, served by the configured search
     /// backends. Advertised per-request only when the caller declares it.
     pub web_search: Option<super::web_search::config::WebSearchSettings>,
+    /// Built-in `web_fetch` server tool (BYOK). When set, the
+    /// `bitrouter:web_fetch` tool is enabled, served by the configured fetch
+    /// backends. Advertised per-request only when the caller declares it.
+    pub web_fetch: Option<super::web_fetch::config::WebFetchSettings>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_tools_config_accepts_web_fetch() {
+        let s: ServerToolsConfig = serde_json::from_value(serde_json::json!({
+            "web_fetch": { "backends": [{ "kind": "exa" }] }
+        }))
+        .unwrap();
+        assert!(s.web_fetch.is_some());
+    }
 }

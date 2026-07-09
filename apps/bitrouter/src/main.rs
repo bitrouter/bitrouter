@@ -21,12 +21,37 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, RouteHop};
+use bitrouter::output::reports::admin::{
+    KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
+};
+use bitrouter::output::reports::agents::{
+    AgentCheckRow, AgentInstallReport, AgentRegistryRow, AgentRow, AgentsCheckReport,
+    AgentsListReport,
+};
+use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
+use bitrouter::output::reports::daemon::{
+    DaemonActionReport, RouteHopView, RouteReport, StatusReport,
+};
+use bitrouter::output::reports::observe::ObserveStatusReport;
+use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
+use bitrouter::output::reports::tools::{
+    ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
+    ToolsStatusReport,
+};
+use bitrouter::output::reports::verify::{Check, VerifyReport};
+use bitrouter::output::{CliReport, Output};
 use bitrouter_sdk::config;
 
 /// BitRouter — an LLM API router.
 #[derive(Parser)]
 #[command(name = "bitrouter", version, about)]
 struct Cli {
+    /// Force JSON output (the default; agent-native). Conflicts with `--human`.
+    #[arg(short = 'j', long, global = true, conflicts_with = "human")]
+    json: bool,
+    /// Render the human-readable view to stdout instead of JSON.
+    #[arg(short = 'H', long, global = true)]
+    human: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -183,12 +208,12 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness (Claude Code) as a child process with
-    /// its API base URL pointed at the local BitRouter daemon — no agent
+    /// Launch a coding-agent harness (Claude Code or Codex) as a child process
+    /// with its API base URL pointed at the local BitRouter daemon — no agent
     /// config files are touched. Follows `cargo run`'s separator convention:
     /// bitrouter options come before `--`, everything after `--` is forwarded
-    /// to the agent verbatim, e.g.
-    /// `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+    /// to the agent verbatim, e.g. `bitrouter spawn -a codex -- --model
+    /// openai/gpt-5-codex`.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
@@ -218,13 +243,17 @@ enum Command {
         /// regardless.)
         #[arg(long)]
         no_start: bool,
+        /// Check the agent binary, BitRouter base URL, and route compatibility
+        /// without launching the agent.
+        #[arg(long)]
+        check: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
     },
     /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
-    /// billing, policies, BYOK, OAuth clients. Start with `cloud login`.
+    /// billing, policies, and BYOK. Start with `cloud login`.
     Cloud {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
@@ -423,9 +452,6 @@ enum ObserveAction {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
-        /// Emit the snapshot as JSON instead of the human-readable block.
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -506,19 +532,26 @@ enum ProviderAction {
     },
     /// Log in to an upstream provider — interactive credential setup.
     ///
-    /// Per-provider methods are auto-derived from the catalog: `anthropic`
-    /// prompts for subscription (browser PKCE) or API-key paste;
-    /// `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the GitHub
-    /// device flow; everything else accepts a pasted API key. Logging in to
-    /// the built-in `bitrouter` provider runs the same cloud sign-in as
+    /// Per-provider methods are auto-derived from the catalog: `claude-code`
+    /// adopts the live Claude Code session; `anthropic` accepts an API-key
+    /// paste; `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the
+    /// GitHub device flow; everything else accepts a pasted API key. Logging
+    /// in to the built-in `bitrouter` provider runs the same cloud sign-in as
     /// `bitrouter cloud login`.
     Login {
-        /// Provider id (e.g. `anthropic`, `openai-codex`, `bitrouter`).
+        /// Provider id (e.g. `claude-code`, `openai-codex`, `bitrouter`).
         provider: String,
         /// Account label this credential is stored under (default `default`).
         /// Ignored for the `bitrouter` provider (it uses the cloud credential).
         #[arg(short, long, default_value = "default")]
         label: String,
+        /// Import an existing vendor CLI session without prompting for a
+        /// browser sign-in. Currently supported by openai-codex.
+        #[arg(long)]
+        import_existing: bool,
+        /// Do not run a browser-based provider OAuth flow.
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Log out of an upstream provider — clears every stored credential for
     /// it. For the built-in `bitrouter` provider this is `cloud logout`.
@@ -625,20 +658,23 @@ enum AcpCmd {
 
 #[tokio::main]
 async fn main() {
-    // Defer to `run` for the actual dispatch so the entry point can
-    // route the resulting `Result` through `error_report::report` instead
-    // of leaking anyhow's verbose `Debug` formatter to end users.
-    match run().await {
+    // Parse once here so the global `--json` / `--human` flags are available to
+    // render the *result* — a success report or the error envelope — through the
+    // single `Output` driver. Diagnostics during execution go to stderr; the
+    // result (this match) goes to stdout in the selected format, so
+    // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
+    let cli = Cli::parse();
+    let output = bitrouter::output::Output::from_flags(cli.json, cli.human);
+    match run(cli, &output).await {
         Ok(()) => {}
         Err(e) => {
-            bitrouter::error_report::report(&e);
+            let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
             std::process::exit(1);
         }
     }
 }
 
-async fn run() -> Result<()> {
-    let cli = Cli::parse();
+async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // Subscriber init splits by command: the long-running `serve` defers
     // its init until after the OTel exporter has installed a real tracer
     // provider globally (see `serve` below). Every other command — and
@@ -674,11 +710,13 @@ async fn run() -> Result<()> {
         Command::Start { config, log } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let log_path = resolve_log_path(source.home(), log.as_deref());
-            start(&source, &log_path).await
+            output.emit(&start(&source, &log_path, "start").await?)?;
+            Ok(())
         }
         Command::Stop { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            stop(&socket).await
+            output.emit(&stop(&socket).await?)?;
+            Ok(())
         }
         Command::Restart {
             config,
@@ -688,15 +726,18 @@ async fn run() -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             let log_path = resolve_log_path(source.home(), log.as_deref());
-            restart(&source, &socket, &log_path).await
+            output.emit(&restart(&source, &socket, &log_path).await?)?;
+            Ok(())
         }
         Command::Reload { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            reload(&socket).await
+            output.emit(&reload(&socket).await?)?;
+            Ok(())
         }
         Command::Status { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            status(&socket).await
+            output.emit(&status(&socket).await?)?;
+            Ok(())
         }
         Command::Route {
             model,
@@ -705,46 +746,76 @@ async fn run() -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
-            route(&model, &source, &socket).await
+            output.emit(&route(&model, &source, &socket).await?)?;
+            Ok(())
         }
-        Command::Init { config } => init(&config).await,
-        Command::Config { action } => config_cmd(action).await,
-        Command::Key { action } => key(action).await,
+        Command::Init { config } => {
+            output.emit(&init(&config).await?)?;
+            Ok(())
+        }
+        Command::Config { action } => {
+            let report = config_cmd(action).await?;
+            output.emit(&report)?;
+            if report.valid {
+                Ok(())
+            } else {
+                std::process::exit(1)
+            }
+        }
+        Command::Key { action } => {
+            output.emit(&key(action).await?)?;
+            Ok(())
+        }
         Command::Models { config, provider } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            models(&source, provider.as_deref()).await
+            output.emit(&models(&source, provider.as_deref()).await?)?;
+            Ok(())
         }
-        Command::Verify { model } => verify_attestation(&model).await,
-        Command::Tools { action } => tools(action).await,
-        Command::Observe { action } => observe(action).await,
-        Command::Policy { action } => policy(action).await,
-        Command::Providers { action } => providers(action).await,
-        Command::Agents { action } => agents_cmd(action).await,
+        Command::Verify { model } => {
+            output.emit(&verify_attestation(&model).await?)?;
+            Ok(())
+        }
+        Command::Tools { action } => tools(action, output).await,
+        Command::Observe { action } => observe(action, output).await,
+        Command::Policy { action } => {
+            output.emit(&policy(action).await?)?;
+            Ok(())
+        }
+        Command::Providers { action } => providers(action, output).await,
+        Command::Agents { action } => agents_cmd(action, output).await,
         Command::Spawn {
             agent,
             config,
             base_url,
             no_install,
             no_start,
+            check,
             agent_args,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            bitrouter::spawn::run(
-                &source,
-                &cfg,
-                bitrouter::spawn::SpawnOptions {
-                    agent,
-                    agent_args,
-                    base_url,
-                    no_install,
-                    no_start,
-                },
-            )
-            .await
+            let opts = bitrouter::spawn::SpawnOptions {
+                agent,
+                agent_args,
+                base_url,
+                no_install,
+                no_start,
+                check,
+            };
+            if opts.check {
+                let report = bitrouter::spawn::check(&cfg, &opts).await?;
+                output.emit(&report)?;
+                if report.exit_code() == 0 {
+                    Ok(())
+                } else {
+                    std::process::exit(report.exit_code());
+                }
+            } else {
+                bitrouter::spawn::run(&source, &cfg, opts).await
+            }
         }
-        Command::Cloud { action } => bitrouter::cloud::cli::run(action).await,
-        Command::Skills { action } => bitrouter::skills::cli::run(action).await,
+        Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
+        Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
         Command::Mcp { action } => mcp_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
         Command::Update {
@@ -765,18 +836,21 @@ async fn run() -> Result<()> {
             };
             let outcome = bitrouter::update::run(opts, &socket).await?;
             if outcome.restart_needed {
+                // Bring the daemon onto the new binary before emitting, so a
+                // restart failure surfaces as the error envelope. The restart's
+                // own report is folded into `outcome.report.daemon`.
                 let log_path = resolve_log_path(source.home(), None);
-                restart(&source, &socket, &log_path).await
-            } else {
-                Ok(())
+                restart(&source, &socket, &log_path).await?;
             }
+            output.emit(&outcome.report)?;
+            Ok(())
         }
     }
 }
 
 // ===== `bitrouter config …` (config tooling) =====
 
-async fn config_cmd(action: ConfigAction) -> Result<()> {
+async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     match action {
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -791,7 +865,7 @@ async fn config_cmd(action: ConfigAction) -> Result<()> {
 /// Validation runs the real parse path — deserialization, `${VAR}`
 /// substitution, `derives` resolution, and the upstream-URL (SSRF) gate. It
 /// does **not** load the JSON Schema (that artifact is for IDE autocomplete and
-/// the `xtask` drift check); structural validation here is what `serde` +
+/// the generated-dist drift check); structural validation here is what `serde` +
 /// `serde-saphyr` enforce.
 ///
 /// To validate without secrets present, any *unset* `${VAR}` is substituted
@@ -801,7 +875,7 @@ async fn config_cmd(action: ConfigAction) -> Result<()> {
 /// value is **not authoritative** — it must be re-checked at runtime once the
 /// real value is known. Whole-value `${VAR}` (the common case) is unaffected.
 /// Unresolved variables are listed as warnings.
-async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> {
+async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<ValidateReport> {
     use bitrouter::paths::ConfigSource;
     let path = match source {
         ConfigSource::File(p) => p,
@@ -827,30 +901,21 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<()> 
     let missing = missing.into_inner();
 
     match parsed {
-        Ok(cfg) => {
-            println!("✓ {} is valid", path.display());
-            println!(
-                "  providers: {}  models: {}  presets: {}  variants: {}",
-                cfg.providers.len(),
-                cfg.models.len(),
-                cfg.presets.len(),
-                cfg.variants.len(),
-            );
-            if !missing.is_empty() {
-                println!(
-                    "\n  note: {} unset environment variable(s) substituted with a \
-                     placeholder for validation (a value that embeds one mid-string, \
-                     e.g. an env-composed api_base, is not authoritatively checked — \
-                     re-validate at runtime):",
-                    missing.len()
-                );
-                for name in &missing {
-                    println!("    - ${{{name}}}");
-                }
-            }
-            Ok(())
-        }
-        Err(e) => anyhow::bail!("✗ {} is invalid: {e}", path.display()),
+        Ok(cfg) => Ok(ValidateReport::valid(
+            path.display().to_string(),
+            cfg.providers.len(),
+            cfg.models.len(),
+            cfg.presets.len(),
+            cfg.variants.len(),
+            missing
+                .into_iter()
+                .map(|name| UnsetVar { unset_env: name })
+                .collect(),
+        )),
+        Err(e) => Ok(ValidateReport::invalid(
+            path.display().to_string(),
+            e.to_string(),
+        )),
     }
 }
 
@@ -934,6 +999,9 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 /// [`init_serve_tracing_subscriber`] and [`init_stderr_tracing_subscriber`].
 fn init_basic_tracing_subscriber() {
     tracing_subscriber::fmt()
+        // Diagnostics MUST go to stderr so stdout stays a pure JSON result
+        // surface (`tracing_subscriber::fmt()` otherwise defaults to stdout).
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -1035,10 +1103,9 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // the registry merge so the merge fills the inserted provider's
     // `api_base` / `api_protocol` / auth from the fetched registry entry.
     bitrouter::claude_code::enable_if_logged_in(&mut cfg);
-    // Fetch + merge the provider registry (BYOK providers + the canonical model
-    // catalog) before assembly, so the daemon routes every credentialed
-    // provider's canonical models. Best-effort and cache-backed; a no-op when
-    // disabled or unreachable with no cache.
+    // Fetch + merge the public provider registry before assembly, so the daemon
+    // routes every credentialed provider's registered models. Best-effort and
+    // cache-backed; a no-op when disabled or unreachable with no cache.
     bitrouter::merge_registry_into(&mut cfg).await;
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
@@ -1079,6 +1146,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(bitrouter::reload::AppReloader::new(
         policy_store.clone(),
         assembled.routing_table,
+        assembled.upstream_executor,
         reload_source,
     ));
 
@@ -1205,7 +1273,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     result
 }
 
-async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Result<()> {
+async fn start(
+    source: &bitrouter::paths::ConfigSource,
+    log_path: &Path,
+    action: &'static str,
+) -> Result<DaemonActionReport> {
     // Make sure the bitrouter home exists *before* we open the log
     // file inside it. (Zero-config first-run lands here with the home
     // not yet created on disk.)
@@ -1249,20 +1321,14 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
     .await?;
 
     match outcome {
-        daemon::DaemonStartOutcome::Ready(info) => {
-            let p = bitrouter::style::Palette::for_stdout();
-            println!(
-                "{green}✓{reset} bitrouter daemon started (pid {pid}) — \
-                 listening on {listen}, {models} models — logs at {log}",
-                green = p.green,
-                reset = p.reset,
-                pid = info.pid,
-                listen = info.listen,
-                models = info.models,
-                log = log_path.display(),
-            );
-            Ok(())
-        }
+        daemon::DaemonStartOutcome::Ready(info) => Ok(DaemonActionReport::started(
+            action,
+            "started",
+            info.pid,
+            info.listen,
+            info.models,
+            log_path.display().to_string(),
+        )),
         // The process is alive but slow to answer — don't kill it; the daemon
         // may still be migrating / fetching the registry. Report and exit 0.
         daemon::DaemonStartOutcome::NotReadyInTime { pid } => {
@@ -1275,7 +1341,11 @@ async fn start(source: &bitrouter::paths::ConfigSource, log_path: &Path) -> Resu
                 secs = daemon::DAEMON_READY_TIMEOUT.as_secs(),
                 log = log_path.display(),
             );
-            Ok(())
+            Ok(DaemonActionReport::not_ready(
+                action,
+                pid,
+                log_path.display().to_string(),
+            ))
         }
         daemon::DaemonStartOutcome::Exited { status, log_tail } => {
             daemon::eprint_failure_log(log_path, &log_tail);
@@ -1373,9 +1443,9 @@ fn print_onboarding_hint() {
     eprintln!();
     eprintln!("  3. Or use a provider you already pay for, locally:");
     eprintln!();
-    eprintln!("       bitrouter login anthropic            # Claude Pro/Max subscription");
-    eprintln!("       bitrouter login github-copilot       # GitHub Copilot subscription");
-    eprintln!("       bitrouter login openai-codex         # ChatGPT subscription");
+    eprintln!("       bitrouter providers login claude-code     # Claude Pro/Max subscription");
+    eprintln!("       bitrouter providers login github-copilot  # GitHub Copilot subscription");
+    eprintln!("       bitrouter providers login openai-codex    # ChatGPT subscription");
     eprintln!();
     eprintln!("     …or set an API-key env var:");
     eprintln!();
@@ -1400,12 +1470,9 @@ fn other_provider_env_var_hints() -> Vec<String> {
     vars
 }
 
-async fn stop(socket: &Path) -> Result<()> {
+async fn stop(socket: &Path) -> Result<DaemonActionReport> {
     match daemon::send_command(socket, &DaemonCommand::Stop).await? {
-        DaemonResponse::Ok => {
-            println!("daemon stopped");
-            Ok(())
-        }
+        DaemonResponse::Ok => Ok(DaemonActionReport::simple("stop", "stopped")),
         DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
         other => Err(anyhow::anyhow!("unexpected response: {other:?}")),
     }
@@ -1415,14 +1482,14 @@ async fn restart(
     source: &bitrouter::paths::ConfigSource,
     socket: &Path,
     log_path: &Path,
-) -> Result<()> {
+) -> Result<DaemonActionReport> {
     // Stop is best-effort — a missing daemon is fine, we just go straight to
     // start. Any other error from the running daemon is fatal. `endpoint_in_use`
     // abstracts "is a daemon bound here?" across the Unix socket file and the
     // Windows named pipe.
     if daemon::endpoint_in_use(socket) {
         match daemon::send_command(socket, &DaemonCommand::Stop).await {
-            Ok(DaemonResponse::Ok) => println!("daemon stopped"),
+            Ok(DaemonResponse::Ok) => {}
             Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
             Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
             Err(e) => tracing::warn!(error = %e, "stop failed — proceeding to start"),
@@ -1443,7 +1510,7 @@ async fn restart(
             daemon::remove_pid_file(&pid_path).await;
         }
     }
-    start(source, log_path).await
+    start(source, log_path, "restart").await
 }
 
 /// Poll until the control endpoint is released (the old daemon drops the Unix
@@ -1460,7 +1527,7 @@ async fn wait_for_socket_release(socket: &Path, timeout: std::time::Duration) ->
     !daemon::endpoint_in_use(socket)
 }
 
-async fn reload(socket: &Path) -> Result<()> {
+async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     // Snapshot every env-var-credentialed built-in provider's key from
     // *this* (CLI) process and hand them to the daemon along with the
     // reload command, so `export OPENAI_API_KEY=…; bitrouter reload`
@@ -1478,93 +1545,43 @@ async fn reload(socket: &Path) -> Result<()> {
         })
         .collect();
     match daemon::send_command(socket, &DaemonCommand::Reload { env }).await? {
-        DaemonResponse::Ok => {
-            println!("config reloaded");
-            Ok(())
-        }
+        DaemonResponse::Ok => Ok(DaemonActionReport::simple("reload", "reloaded")),
         DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
         other => Err(anyhow::anyhow!("unexpected response: {other:?}")),
     }
 }
 
-async fn status(socket: &Path) -> Result<()> {
-    let p = bitrouter::style::Palette::for_stdout();
-    match daemon::send_command(socket, &DaemonCommand::Status).await {
+async fn status(socket: &Path) -> Result<StatusReport> {
+    let report = match daemon::send_command(socket, &DaemonCommand::Status).await {
         Ok(DaemonResponse::Status {
             pid,
             listen,
             models,
-        }) => print_status_running(&p, pid, &listen, models, socket),
+        }) => StatusReport::running(pid, listen, models, socket.display().to_string()),
         Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
         Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error.
         // Anything else (permission denied, malformed response, …) is a
         // real failure and bubbles to the pretty reporter.
-        Err(e) if daemon::is_not_reachable(&e) => print_status_stopped(&p, socket),
+        Err(e) if daemon::is_not_reachable(&e) => {
+            StatusReport::stopped(socket.display().to_string())
+        }
         Err(e) => return Err(e),
-    }
+    };
+    // #607 self-update nudge — emitted to stderr so stdout stays a pure JSON
+    // result (`status 2>/dev/null | jq` must not see the nudge).
     if let Ok(source) = bitrouter::paths::resolve_config(None) {
-        bitrouter::update::maybe_nudge(source.home(), &p).await;
+        bitrouter::update::maybe_nudge(source.home(), &bitrouter::style::Palette::for_stderr())
+            .await;
     }
-    Ok(())
+    Ok(report)
 }
 
-/// Render the running-daemon status block. Modelled on `systemctl
-/// status` — a coloured bullet + headline, then a short indented list
-/// of facts. Labels are dim so values are what the eye lands on.
-fn print_status_running(
-    p: &bitrouter::style::Palette,
-    pid: u32,
-    listen: &str,
-    models: usize,
+async fn route(
+    model: &str,
+    source: &bitrouter::paths::ConfigSource,
     socket: &Path,
-) {
-    println!(
-        "{green}●{reset} bitrouter is {bold}running{reset}",
-        green = p.green,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "pid", &pid.to_string());
-    print_status_row(p, "listen", listen);
-    print_status_row(p, "models", &format!("{models} routable"));
-    print_status_row(p, "socket", &socket.display().to_string());
-}
-
-/// Render the stopped-daemon status block. Hollow bullet (dim) +
-/// headline, the socket we *would* connect to, and a one-line next
-/// step. Exit code remains 0 — "stopped" is the answer to the
-/// question, not a failure.
-fn print_status_stopped(p: &bitrouter::style::Palette, socket: &Path) {
-    println!(
-        "{dim}○{reset} bitrouter is {bold}stopped{reset}",
-        dim = p.dim,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "socket", &socket.display().to_string());
-    println!();
-    println!(
-        "  {dim}Run `bitrouter start` to launch the daemon.{reset}",
-        dim = p.dim,
-        reset = p.reset,
-    );
-}
-
-/// One indented `label  value` row in a status block. The label column
-/// is left-padded to 8 chars so columns line up for the typical labels
-/// (`pid` / `listen` / `models` / `socket`).
-fn print_status_row(p: &bitrouter::style::Palette, label: &str, value: &str) {
-    println!(
-        "  {dim}{label:<8}{reset}  {value}",
-        dim = p.dim,
-        reset = p.reset,
-    );
-}
-
-async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Path) -> Result<()> {
+) -> Result<RouteReport> {
     // Try the running daemon first — its routing table reflects any `reload`s.
     if daemon::endpoint_in_use(socket) {
         match daemon::send_command(
@@ -1576,8 +1593,7 @@ async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Pa
         .await
         {
             Ok(DaemonResponse::Route { chain }) => {
-                print_route_chain(model, &chain, "live daemon");
-                return Ok(());
+                return Ok(route_report(model, "live daemon", chain));
             }
             Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
             Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
@@ -1595,24 +1611,22 @@ async fn route(model: &str, source: &bitrouter::paths::ConfigSource, socket: &Pa
     } else {
         "config"
     };
-    print_route_chain(model, &chain, label);
-    Ok(())
+    Ok(route_report(model, label, chain))
 }
 
-fn print_route_chain(model: &str, chain: &[RouteHop], source: &str) {
-    println!("model: {model}  (resolved via: {source})");
-    if chain.is_empty() {
-        println!("  (empty chain — no provider declares this model)");
-        return;
-    }
-    for (i, hop) in chain.iter().enumerate() {
-        println!(
-            "  {}. {} → {} ({})",
-            i + 1,
-            hop.provider,
-            hop.service_id,
-            hop.api_protocol
-        );
+/// Build a [`RouteReport`] from a resolved hop chain (wire-safe `RouteHop`s).
+fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteReport {
+    RouteReport {
+        model: model.to_string(),
+        resolved_via: resolved_via.to_string(),
+        chain: chain
+            .into_iter()
+            .map(|h| RouteHopView {
+                provider: h.provider,
+                service_id: h.service_id,
+                protocol: h.api_protocol,
+            })
+            .collect(),
     }
 }
 
@@ -1627,7 +1641,7 @@ fn print_route_chain(model: &str, chain: &[RouteHop], source: &str) {
 /// - `NEAR_BASE_MEASUREMENTS` — accepted base bundle(s), comma-separated; each
 ///   the hex of `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` (192 bytes). Required (issue #567)
 /// - `NVIDIA_EAT_KEY_PEM` — path to NVIDIA's NRAS EAT key (EC public PEM)
-async fn verify_attestation(model: &str) -> Result<()> {
+async fn verify_attestation(model: &str) -> Result<VerifyReport> {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1694,256 +1708,252 @@ async fn verify_attestation(model: &str) -> Result<()> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let verdict = verifier.attestation_cached(model, now).await?;
 
-    let p = bitrouter::style::Palette::for_stdout();
-    let mark = |ok: bool| {
-        if ok {
-            format!("{}✓{}", p.green, p.reset)
-        } else {
-            format!("{}✗{}", p.red, p.reset)
-        }
-    };
-    let opt_mark = |v: Option<bool>| match v {
-        Some(true) => format!("{}✓{}", p.green, p.reset),
-        Some(false) => format!("{}✗{}", p.red, p.reset),
-        None => format!("{}-{}", p.dim, p.reset),
-    };
-
-    println!(
-        "{bold}{model}{reset}  (trust boundary: {})",
-        if verdict.trust_boundary.is_empty() {
-            "unreachable"
-        } else {
-            &verdict.trust_boundary
-        },
-        bold = p.bold,
-        reset = p.reset,
-    );
     let c = &verdict.checks;
-    println!("  {} GPU NRAS attestation", mark(c.gpu_nras_pass));
-    println!("  {} Intel TDX DCAP quote", mark(c.dcap_quote_valid));
-    println!(
-        "  {} report_data binds key + nonce",
-        mark(c.report_data_binds_key_and_nonce)
-    );
-    println!(
-        "  {} compose matches measured config",
-        mark(c.compose_matches_mr_config)
-    );
-    println!(
-        "  {} event-log RTMR3 anchors policy fields",
-        opt_mark(c.event_log_rtmr_ok)
-    );
-    println!(
-        "  {} base measurements match pin (MRTD/RTMR0-2)",
-        mark(c.base_measurements_match)
-    );
-    println!(
-        "  {} policy accepts (KMS root + image/workload pin)",
-        mark(c.policy_accepts)
-    );
-    println!("  {} TD debug disabled", mark(c.debug_disabled));
-    println!(
-        "  {} TCB level acceptable{}",
-        mark(c.tcb_level_acceptable),
-        match &c.tcb_status {
-            Some(s) => format!(" ({s})"),
-            None => String::new(),
-        }
-    );
-    if !verdict.attested_addresses.is_empty() {
-        println!(
-            "  {dim}attested signer(s): {}{reset}",
-            verdict.attested_addresses.join(", "),
-            dim = p.dim,
-            reset = p.reset,
-        );
-    }
-    println!();
-    if verdict.verified {
-        println!(
-            "{}VERIFIED{} — genuine, policy-pinned TEE",
-            p.green, p.reset
-        );
-    } else {
-        println!(
-            "{}UNVERIFIED{} — not a confirmed legitimate TEE (see failing checks above)",
-            p.red, p.reset
-        );
-    }
-    Ok(())
+    let st = |b: bool| if b { "pass" } else { "fail" };
+    let opt_st = |v: Option<bool>| match v {
+        Some(true) => "pass",
+        Some(false) => "fail",
+        None => "skip",
+    };
+    let checks = vec![
+        Check {
+            name: "GPU NRAS attestation".into(),
+            status: st(c.gpu_nras_pass),
+        },
+        Check {
+            name: "Intel TDX DCAP quote".into(),
+            status: st(c.dcap_quote_valid),
+        },
+        Check {
+            name: "report_data binds key + nonce".into(),
+            status: st(c.report_data_binds_key_and_nonce),
+        },
+        Check {
+            name: "compose matches measured config".into(),
+            status: st(c.compose_matches_mr_config),
+        },
+        Check {
+            name: "event-log RTMR3 anchors policy fields".into(),
+            status: opt_st(c.event_log_rtmr_ok),
+        },
+        Check {
+            name: "base measurements match pin (MRTD/RTMR0-2)".into(),
+            status: st(c.base_measurements_match),
+        },
+        Check {
+            name: "policy accepts (KMS root + image/workload pin)".into(),
+            status: st(c.policy_accepts),
+        },
+        Check {
+            name: "TD debug disabled".into(),
+            status: st(c.debug_disabled),
+        },
+        Check {
+            name: match &c.tcb_status {
+                Some(s) => format!("TCB level acceptable ({s})"),
+                None => "TCB level acceptable".into(),
+            },
+            status: st(c.tcb_level_acceptable),
+        },
+    ];
+    Ok(VerifyReport {
+        model: model.to_string(),
+        trust_boundary: verdict.trust_boundary,
+        verified: verdict.verified,
+        checks,
+        signers: verdict.attested_addresses,
+    })
 }
 
 // ===== management commands =====
 
-async fn init(config_path: &Path) -> Result<()> {
+async fn init(config_path: &Path) -> Result<InitReport> {
     commands::init(config_path).await?;
-    println!("wrote starter config to {}", config_path.display());
-    println!("  (skip_auth is on — credential-less local requests are admitted)");
-    Ok(())
+    Ok(InitReport {
+        action: "init",
+        path: config_path.display().to_string(),
+        skip_auth: true,
+    })
 }
 
-async fn key(action: KeyAction) -> Result<()> {
+async fn key(action: KeyAction) -> Result<KeySignReport> {
     match action {
         KeyAction::Sign { user, db, policy } => {
             let key = commands::key_sign(&db, &user, policy.as_deref()).await?;
-            println!("created virtual key {} for user '{user}'", key.id);
-            println!();
-            println!("  {}", key.secret);
-            println!();
-            println!("This secret is shown ONCE — only its SHA-256 hash is stored.");
-            Ok(())
+            Ok(KeySignReport {
+                id: key.id,
+                user,
+                secret: key.secret,
+                policy,
+                hash_stored: true,
+            })
         }
     }
 }
 
-async fn models(source: &bitrouter::paths::ConfigSource, provider: Option<&str>) -> Result<()> {
+async fn models(
+    source: &bitrouter::paths::ConfigSource,
+    provider: Option<&str>,
+) -> Result<ModelsReport> {
     let cfg = bitrouter::paths::load_config(source).await?;
     let models = commands::list_models(&cfg, provider).await?;
-    if models.is_empty() {
-        match (provider, source.is_default()) {
-            (Some(p), _) => println!("(no routable models for provider '{p}')"),
-            (None, true) => {
-                println!("(no routable models — zero-config mode and no provider env vars are set)")
-            }
-            (None, false) => println!("(no routable models — configure providers in your config)"),
-        }
-    }
-    for (id, providers) in models {
-        println!("{id}\t{}", providers.join(", "));
-    }
-    Ok(())
+    Ok(ModelsReport {
+        models: models
+            .into_iter()
+            .map(|(id, providers)| ModelRow { id, providers })
+            .collect(),
+    })
 }
 
-async fn policy(action: PolicyAction) -> Result<()> {
+async fn policy(action: PolicyAction) -> Result<PolicyCreateReport> {
     match action {
         PolicyAction::Create { id, dir } => {
             let path = commands::create_policy(&dir, &id).await?;
-            println!("wrote starter policy to {}", path.display());
-            println!("  edit, then bind to a key with:");
-            println!("    bitrouter key sign --user <id> --policy {id}");
-            Ok(())
+            Ok(PolicyCreateReport {
+                id,
+                path: path.display().to_string(),
+                created: true,
+            })
         }
     }
 }
 
-async fn providers(action: ProviderAction) -> Result<()> {
+async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
     match action {
         ProviderAction::List { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let providers = commands::list_providers(&cfg);
-            if providers.is_empty() {
-                if source.is_default() {
-                    println!("(no providers — zero-config mode and no provider env vars set)");
-                } else {
-                    println!("(no providers configured)");
-                }
-                return Ok(());
-            }
-            // header
-            println!("{:<20} {:<8} {:<6} API_BASE", "ID", "MODELS", "ACTIVE");
-            for p in providers {
-                println!(
-                    "{:<20} {:<8} {:<6} {}",
-                    p.id,
-                    p.model_count,
-                    if p.active { "yes" } else { "no" },
-                    p.api_base
-                );
-            }
+            let providers = commands::list_providers(&cfg)
+                .into_iter()
+                .map(|p| ProviderRow {
+                    id: p.id,
+                    models: p.model_count,
+                    active: p.active,
+                    api_base: p.api_base,
+                })
+                .collect();
+            output.emit(&ProvidersReport { providers })?;
             Ok(())
         }
-        ProviderAction::Login { provider, label } => {
+        ProviderAction::Login {
+            provider,
+            label,
+            import_existing,
+            no_browser,
+        } => {
             // The built-in `bitrouter` provider authenticates with the cloud
             // OAuth credential, so logging into it IS the cloud sign-in
             // (`cloud login`); other providers use the per-provider store.
             if provider == "bitrouter" {
-                bitrouter::cloud::cli::run(bitrouter::cloud::cli::CloudAction::Login {
-                    authorization_server: None,
-                    client_id: None,
-                    scope: None,
-                })
+                if import_existing || no_browser {
+                    anyhow::bail!(
+                        "`bitrouter providers login bitrouter` uses BitRouter Cloud OAuth; \
+                         --import-existing/--no-browser apply to upstream provider logins"
+                    );
+                }
+                bitrouter::cloud::cli::run(
+                    bitrouter::cloud::cli::CloudAction::Login {
+                        authorization_server: None,
+                        client_id: None,
+                        scope: None,
+                    },
+                    output.format(),
+                )
                 .await
             } else {
-                bitrouter::commands::login_provider(&provider, &label).await
+                let outcome = bitrouter::commands::login_provider_with_options(
+                    &provider,
+                    &label,
+                    bitrouter::commands::ProviderLoginOptions {
+                        import_existing,
+                        no_browser,
+                    },
+                )
+                .await?;
+                output.emit(&ProviderLoginReport {
+                    provider: outcome.provider,
+                    label: outcome.label,
+                    method: outcome.method,
+                    credential: "saved",
+                    path: outcome.path,
+                })?;
+                Ok(())
             }
         }
         ProviderAction::Logout { provider } => {
             if provider == "bitrouter" {
-                bitrouter::cloud::cli::run(bitrouter::cloud::cli::CloudAction::Logout {
-                    authorization_server: None,
-                    client_id: None,
-                })
+                bitrouter::cloud::cli::run(
+                    bitrouter::cloud::cli::CloudAction::Logout {
+                        authorization_server: None,
+                        client_id: None,
+                    },
+                    output.format(),
+                )
                 .await
             } else {
-                bitrouter::commands::logout_provider(&provider).await
+                let removed = bitrouter::commands::logout_provider(&provider).await?;
+                output.emit(&ProviderLogoutReport { provider, removed })?;
+                Ok(())
             }
         }
     }
 }
 
-async fn tools(action: ToolsAction) -> Result<()> {
+async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     use bitrouter::tools as tools_cmd;
 
     match action {
         ToolsAction::List { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            if cfg.mcp_servers.is_empty() {
-                println!("(no MCP servers configured)");
-                println!("  add an `mcp_servers:` block to your bitrouter.yaml —");
-                println!("  see the commented stub in the starter config written by");
-                println!("  `bitrouter init`.");
-                return Ok(());
-            }
-            let rows = tools_cmd::list(&cfg).await;
-            for row in rows {
-                match row.outcome {
-                    Ok(tools) if tools.is_empty() => {
-                        println!("{} (no tools advertised)", row.server);
-                    }
-                    Ok(tools) => {
-                        println!("{} ({})", row.server, tools.len());
-                        for t in tools {
-                            if t.description.is_empty() {
-                                println!("  {}", t.name);
-                            } else {
-                                println!("  {} — {}", t.name, t.description);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("{}: ERROR — {e}", row.server);
-                    }
-                }
-            }
+            let servers = tools_cmd::list(&cfg)
+                .await
+                .into_iter()
+                .map(|row| match row.outcome {
+                    Ok(tools) => ServerToolsView {
+                        server: row.server,
+                        tools: Some(
+                            tools
+                                .into_iter()
+                                .map(|t| ToolInfo {
+                                    name: t.name,
+                                    description: t.description,
+                                })
+                                .collect(),
+                        ),
+                        error: None,
+                    },
+                    Err(e) => ServerToolsView {
+                        server: row.server,
+                        tools: None,
+                        error: Some(e),
+                    },
+                })
+                .collect();
+            output.emit(&ToolsListReport { servers })?;
             Ok(())
         }
         ToolsAction::Status { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            if cfg.mcp_servers.is_empty() {
-                println!("(no MCP servers configured)");
-                return Ok(());
-            }
-            let rows = tools_cmd::status(&cfg).await;
-            println!(
-                "{:<24} {:<8} {:<12} TRANSPORT",
-                "SERVER", "STATUS", "LATENCY"
-            );
-            for row in rows {
-                let (status, latency) = match row.outcome {
-                    Ok(d) => ("ok".to_string(), format!("{}ms", d.as_millis())),
-                    Err(_) => ("FAIL".to_string(), "-".to_string()),
-                };
-                println!(
-                    "{:<24} {:<8} {:<12} {}",
-                    row.server, status, latency, row.transport
-                );
-                if let Err(e) = row.outcome.as_ref() {
-                    eprintln!("  ↳ {e}");
-                }
-            }
+            let servers = tools_cmd::status(&cfg)
+                .await
+                .into_iter()
+                .map(|row| {
+                    let (ok, latency_ms, error) = match row.outcome {
+                        Ok(d) => (true, Some(d.as_millis()), None),
+                        Err(e) => (false, None, Some(e)),
+                    };
+                    ServerStatusView {
+                        server: row.server,
+                        ok,
+                        latency_ms,
+                        transport: row.transport,
+                        error,
+                    }
+                })
+                .collect();
+            output.emit(&ToolsStatusReport { servers })?;
             Ok(())
         }
         ToolsAction::Discover { server, config } => {
@@ -1951,7 +1961,7 @@ async fn tools(action: ToolsAction) -> Result<()> {
             let cfg = bitrouter::paths::load_config(&source).await?;
             match tools_cmd::discover(&cfg, &server).await {
                 Ok(yaml) => {
-                    print!("{yaml}");
+                    output.emit(&ToolsDiscoverReport { server, yaml })?;
                     Ok(())
                 }
                 Err(e) => anyhow::bail!("discover '{server}': {e}"),
@@ -1962,15 +1972,12 @@ async fn tools(action: ToolsAction) -> Result<()> {
 
 // ===== observe =====
 
-async fn observe(action: ObserveAction) -> Result<()> {
+async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
     match action {
-        ObserveAction::Status {
-            config,
-            socket,
-            json,
-        } => {
+        ObserveAction::Status { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            observe_status(&socket, json).await
+            output.emit(&observe_status(&socket).await?)?;
+            Ok(())
         }
     }
 }
@@ -1980,180 +1987,91 @@ async fn observe(action: ObserveAction) -> Result<()> {
 /// daemon is reachable, fall back to a "stopped" report that still
 /// carries the compile-time `OTEL_ENABLED` flag so the user can tell
 /// "feature off" from "daemon down."
-async fn observe_status(socket: &Path, as_json: bool) -> Result<()> {
+async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
     use bitrouter_observe::OTEL_ENABLED;
 
-    let payload = match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
-        Ok(DaemonResponse::ObserveStatus { payload }) => Some(payload),
-        Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-        Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-        Err(e) if daemon::is_not_reachable(&e) => None,
-        Err(e) => return Err(e),
-    };
-
-    if as_json {
-        let snapshot =
-            payload.unwrap_or_else(|| daemon::ObserveStatusPayload::unwired(OTEL_ENABLED));
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&snapshot).context("rendering observe status as JSON")?
-        );
-        return Ok(());
-    }
-
-    let p = bitrouter::style::Palette::for_stdout();
-    match payload {
-        Some(s) => print_observe_running(&p, &s, socket),
-        None => print_observe_stopped(&p, socket),
-    }
-    Ok(())
-}
-
-fn print_observe_running(
-    p: &bitrouter::style::Palette,
-    s: &daemon::ObserveStatusPayload,
-    socket: &Path,
-) {
-    let (bullet, headline) = if s.exporter_wired {
-        (
-            format!("{green}●{reset}", green = p.green, reset = p.reset),
-            "OTel exporter is wired",
-        )
-    } else if s.compiled_in {
-        (
-            format!("{dim}○{reset}", dim = p.dim, reset = p.reset),
-            "OTel feature compiled in, exporter not configured",
-        )
-    } else {
-        (
-            format!("{dim}○{reset}", dim = p.dim, reset = p.reset),
-            "OTel feature not compiled in",
-        )
-    };
-    println!(
-        "{bullet} bitrouter observe — {bold}{headline}{reset}",
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "compiled", if s.compiled_in { "yes" } else { "no" });
-    print_status_row(p, "wired", if s.exporter_wired { "yes" } else { "no" });
-    if let Some(endpoint) = &s.endpoint {
-        print_status_row(p, "endpoint", endpoint);
-    }
-    if let Some(service) = &s.service_name {
-        print_status_row(p, "service", service);
-    }
-    if let Some(sampler) = &s.sampler {
-        let val = match s.sampler_arg {
-            Some(arg) => format!("{sampler} (arg={arg})"),
-            None => sampler.clone(),
+    let (snapshot, daemon_reachable) =
+        match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
+            Ok(DaemonResponse::ObserveStatus { payload }) => (payload, true),
+            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
+            Err(e) if daemon::is_not_reachable(&e) => {
+                (daemon::ObserveStatusPayload::unwired(OTEL_ENABLED), false)
+            }
+            Err(e) => return Err(e),
         };
-        print_status_row(p, "sampler", &val);
-    }
-    print_status_row(p, "metrics", if s.metrics_enabled { "on" } else { "off" });
-    print_status_row(p, "headers", &s.header_count.to_string());
-    print_status_row(p, "res-attrs", &s.resource_attribute_count.to_string());
-    print_status_row(
-        p,
-        "api-keys",
-        &format!("{} / {}", s.api_key_count, s.api_key_cap),
-    );
-    print_status_row(
-        p,
-        "users",
-        &format!("{} / {}", s.user_id_count, s.user_id_cap),
-    );
-    print_status_row(p, "in-flight", &s.active_spans.to_string());
-    print_status_row(p, "socket", &socket.display().to_string());
+
+    Ok(ObserveStatusReport {
+        daemon_reachable,
+        snapshot,
+        socket: socket.display().to_string(),
+    })
 }
 
-fn print_observe_stopped(p: &bitrouter::style::Palette, socket: &Path) {
-    use bitrouter_observe::OTEL_ENABLED;
-    println!(
-        "{dim}○{reset} bitrouter observe — {bold}daemon stopped{reset}",
-        dim = p.dim,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    println!();
-    print_status_row(p, "compiled", if OTEL_ENABLED { "yes" } else { "no" });
-    print_status_row(p, "socket", &socket.display().to_string());
-    println!();
-    println!(
-        "  {dim}Run `bitrouter start` to launch the daemon, then re-run this command.{reset}",
-        dim = p.dim,
-        reset = p.reset,
-    );
-}
-
-async fn agents_cmd(action: AgentsAction) -> Result<()> {
+async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
         AgentsAction::List { remote, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let rows = agents_cmd::list(&cfg);
-            println!(
-                "{:<16} {:<12} {:<10} DESCRIPTION",
-                "ID", "CONFIGURED", "CATALOG"
-            );
-            for row in rows {
-                println!(
-                    "{:<16} {:<12} {:<10} {}",
-                    row.id,
-                    if row.configured { "yes" } else { "no" },
-                    if row.in_catalog { "yes" } else { "no" },
-                    row.description,
-                );
-            }
-            if remote {
-                let registry =
+            let agents = agents_cmd::list(&cfg)
+                .into_iter()
+                .map(|row| AgentRow {
+                    id: row.id,
+                    configured: row.configured,
+                    in_catalog: row.in_catalog,
+                    description: row.description,
+                })
+                .collect();
+            // `--remote`: append the ACP registry as an optional section of the
+            // same report (one JSON document either way).
+            let registry = if remote {
+                let fetched =
                     bitrouter::agent_registry::fetch(bitrouter::agent_registry::REGISTRY_URL)
                         .await?;
-                let rows = agents_cmd::registry_rows(&registry);
-                println!();
-                println!("ACP registry ({} agents):", rows.len());
-                println!(
-                    "{:<20} {:<12} {:<8} DESCRIPTION",
-                    "ID", "VERSION", "INSTALL"
-                );
-                for row in rows {
-                    println!(
-                        "{:<20} {:<12} {:<8} {}",
-                        row.id, row.version, row.install, row.description,
-                    );
-                }
-                println!();
-                println!("  install a stub with: bitrouter agents install <id>");
-            }
+                Some(
+                    agents_cmd::registry_rows(&fetched)
+                        .into_iter()
+                        .map(|row| AgentRegistryRow {
+                            id: row.id,
+                            version: row.version,
+                            install: row.install.to_string(),
+                            description: row.description,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            output.emit(&AgentsListReport { agents, registry })?;
             Ok(())
         }
         AgentsAction::Check { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            if cfg.agents.is_empty() {
-                println!("(no agents configured)");
-                println!("  install one with: bitrouter agents install <id>");
-                return Ok(());
-            }
-            let rows = agents_cmd::check(&cfg).await;
-            println!("{:<24} {:<8} LATENCY/ERROR", "AGENT", "STATUS");
-            for row in rows {
-                match row.outcome {
-                    Ok(d) => println!("{:<24} {:<8} {}ms", row.id, "ok", d.as_millis()),
-                    Err(e) => {
-                        println!("{:<24} {:<8} -", row.id, "FAIL");
-                        eprintln!("  ↳ {e}");
+            let agents = agents_cmd::check(&cfg)
+                .await
+                .into_iter()
+                .map(|row| {
+                    let (ok, latency_ms, error) = match row.outcome {
+                        Ok(d) => (true, Some(d.as_millis()), None),
+                        Err(e) => (false, None, Some(e)),
+                    };
+                    AgentCheckRow {
+                        id: row.id,
+                        ok,
+                        latency_ms,
+                        error,
                     }
-                }
-            }
+                })
+                .collect();
+            output.emit(&AgentsCheckReport { agents })?;
             Ok(())
         }
         AgentsAction::Install { id } => match agents_cmd::install(&id) {
             Ok(yaml) => {
-                print!("{yaml}");
+                output.emit(&AgentInstallReport { id, yaml })?;
                 Ok(())
             }
             // Not in the compiled catalog: fall back to the ACP registry
@@ -2173,7 +2091,7 @@ async fn agents_cmd(action: AgentsAction) -> Result<()> {
                 };
                 match agents_cmd::install_from_registry(&registry, &id) {
                     Ok(yaml) => {
-                        print!("{yaml}");
+                        output.emit(&AgentInstallReport { id, yaml })?;
                         Ok(())
                     }
                     Err(e) => anyhow::bail!(e),
@@ -2338,6 +2256,39 @@ mod tests {
                 assert!(!stable && !restart && !yes);
             }
             _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn provider_login_import_existing_flags_parse() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "providers",
+            "login",
+            "openai-codex",
+            "--import-existing",
+            "--no-browser",
+            "--label",
+            "work",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Providers {
+                action:
+                    ProviderAction::Login {
+                        provider,
+                        label,
+                        import_existing,
+                        no_browser,
+                    },
+            } => {
+                assert_eq!(provider, "openai-codex");
+                assert_eq!(label, "work");
+                assert!(import_existing);
+                assert!(no_browser);
+            }
+            _ => panic!("expected provider login"),
         }
     }
 }

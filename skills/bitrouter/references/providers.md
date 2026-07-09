@@ -17,38 +17,42 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `anthropic` | `ANTHROPIC_API_KEY` | Header `x-api-key` | Messages API |
 | `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API — **not** `GOOGLE_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `github-copilot` | — (local OAuth) | Device flow | `bitrouter login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter login openai-codex` |
+| `claude-code` | — (local OAuth) | Claude Code session | `bitrouter providers login claude-code`; Claude Pro/Max subscription provider, distinct from `anthropic` API-key billing |
+| `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
 Zero-config mode auto-enables every API-key provider whose env var is present;
 an API-key provider without its credential gets `active: false` and falls out of
-the routing table. Local-OAuth/PKCE providers (`github-copilot`, `openai-codex`)
-are enabled by `bitrouter login`, not an env var. **First run with no network
+the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
+`openai-codex`) are enabled by `bitrouter providers login`, not an env var. **First run with no network
 and no cache**: the registry is empty, so only fully-specified local providers
 and the in-binary `bitrouter` cloud gateway are available — the known-provider
 shorthand needs one prior successful fetch. Startup still succeeds.
 
 ## Provider registry (catalog + priority)
 
-BitRouter fetches the public provider registry
-(`https://github.com/bitrouter/provider-registry`) at startup and on reload: a
-curated, deterministic catalog of the providers above (their transport + auth),
-the canonical models, and which providers serve them. It is fetched from the
-generated `dist/` artifacts, disk-cached under
-`$XDG_CACHE_HOME/bitrouter/provider-registry.json` (24h TTL, stale-fallback on a
+BitRouter fetches the public provider registry from
+`https://github.com/bitrouter/bitrouter/tree/main/registry` at startup and on
+reload: a deterministic catalog of public providers (their transport + auth),
+the models, and which providers serve them. It is fetched from the generated
+`dist/registry/` artifacts, disk-cached under
+`$XDG_CACHE_HOME/bitrouter/registry.json` (24h TTL, stale-fallback on a
 network outage), and merged into the routing table. If a fetch fails the cache
 is reused; with no cache (first run, offline) the registry is empty and only
-locally-configured providers route. The merge routes a **canonical** model id
+locally-configured providers route. The merge routes a model id
 (e.g. `anthropic/claude-sonnet-4.6`) to a provider that serves it, translating
-to that provider's own upstream id.
+to that provider's own upstream id. Providers may serve models beyond the
+curated `registry/models` catalog (BYOK / BYO-subscription extras); those route
+the same way — the curated catalog is the blessed default set, not a routing
+gate.
 
 Rules:
 
 - **Public providers only.** Every public registry provider is merged; only
-  `private` ones (the pooled / invite-only entries, no public registration) are
-  skipped. The registry classifies each provider by how a caller obtains
+  `private` ones (invite-only entries, no public registration) are skipped. The
+  registry classifies each provider by how a caller obtains
   access: `api_key` (a portable key), `local_oauth` / `local_pkce` (a local
   interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.
 - **Credential-gated.** An `api_key` provider becomes routable only when its key
@@ -57,21 +61,21 @@ Rules:
   built-in's env var when the provider also has a built-in entry. No key ⇒ not
   enabled. Declare the provider explicitly with `api_key: ${MY_VAR}` to override
   the env-var name. A `local_oauth` / `local_pkce` provider is not env-gated —
-  it activates after `bitrouter login <provider>`.
+  it activates after `bitrouter providers login <provider>`.
 - **Full catalog via the sync channel.** A provider may declare an `auto_sync`
-  feed (the channel the registry itself curates from). BitRouter reads the same
-  channel to pull the provider's **full** catalog beyond the curated canonical
+  feed (the channel the registry itself syncs from). BitRouter reads the same
+  channel to pull the provider's **full** catalog beyond the registry seed
   subset: a `v1_models` feed (the gateways) is probed at `GET {api_base}/models`
   on startup; a `models_dev` feed pulls the provider's models from models.dev.
-  The curated canonical models keep the highest route priority.
-- **BitRouter Cloud serves everything.** When the `bitrouter` provider is
-  active (env key or `bitrouter auth login`), it is populated with every model
-  in the canonical list.
+  The registry seed models keep the highest route priority.
+- **BitRouter Cloud is a normal public provider.** The public registry entry is
+  still named `bitrouter`, but OSS treats it as BitRouter Cloud and discovers
+  its cloud-owned model list from `/models`.
 
 ```yaml
 registry:
   enabled: true            # default; set false (or inherit_defaults: false) to disable the merge
-  url: "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist"
+  url: "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry"
   provider_priority:       # default ladder, highest first
     - first-party-subscription
     - gateway-subscription
@@ -160,6 +164,43 @@ providers:
 ```
 
 Glob-prefix patterns, same precedence as `api_protocol`. Each `(provider, pattern)` bucket gets an independent window.
+
+## Upstream timeouts
+
+Global defaults for the outbound client that calls providers live under the
+top-level `upstream.timeouts` block; any provider overrides them under
+`providers.<id>.timeouts`. All fields are seconds and optional — an unset
+provider field inherits the resolved global value, and an unset global inherits
+the built-in default.
+
+```yaml
+upstream:
+  timeouts:
+    connect_secs: 10          # TCP connect (default 10)
+    read_secs: 120            # idle/per-read: fires when the upstream goes
+                              #   silent this long, INCLUDING mid-stream
+                              #   (the stream-idle guard). Default 120.
+    pool_idle_secs: 90        # idle pooled-connection eviction (default 90)
+    tcp_keepalive_secs: 60    # TCP keepalive probe interval (default 60)
+    # total_secs:            # overall wall-clock cap for the whole
+                              #   request/stream. Opt-in, OFF by default —
+                              #   setting it bounds total stream duration, so
+                              #   keep it generous for reasoning/agentic models.
+providers:
+  slow-reasoner:
+    timeouts:
+      read_secs: 300          # this provider tolerates longer silences
+      total_secs: 1800        # and gets its own 30-min wall-clock cap
+```
+
+Notes:
+- `read_secs` is a per-read (idle) timeout — it resets on every chunk, so it is
+  what catches an upstream that stalls mid-SSE-stream. A mid-stream fire maps to
+  a `504` upstream-timeout (and triggers fallback only if it happens before the
+  first byte; once bytes are streaming the request can't fall back).
+- `total_secs` is unset by default on purpose: an overall cap would kill
+  legitimately long agentic/reasoning streams.
+- Timeouts are **not** inherited via a provider's `derives:` chain.
 
 ## Tags & routing
 
@@ -272,6 +313,22 @@ server_tools:
 
 HTTP backends (`parallel` / `exa` / `firecrawl` / `tavily`) take an optional `api_key` (supports `${VAR}`) and `api_base`; a backend with no resolvable key is skipped. The `native` backend runs a nested completion (so it needs a routable model) — it forwards a provider's own search tool, making one provider's native web search usable from models that lack it.
 
+### Built-in web fetch (BYOK)
+
+The `web_fetch` server tool gives any model routed through BitRouter the ability to fetch and read a specific URL's full content, served by a BYOK extraction backend. Advertised only when the caller declares `{"type":"bitrouter:web_fetch"}` (optionally with `backend` / `max_content_tokens` overrides). The model calls `web_fetch` with a `url`; BitRouter fetches it and returns `{status, backend, url, title?, content, published?}`.
+
+```yaml
+server_tools:
+  web_fetch:
+    max_content_tokens: 25000   # default per-fetch content cap (caller may lower)
+    backends:                   # preference / failover order
+      - kind: exa               # POST /contents, key from api_key or EXA_API_KEY
+      - kind: firecrawl         # POST /v2/scrape, key from api_key or FIRECRAWL_API_KEY
+      - kind: tavily            # POST /extract, key from api_key or TAVILY_API_KEY
+```
+
+BYOK extraction happens on the provider's infrastructure (BitRouter does not dereference the URL itself), so the backends own the fetch safety surface.
+
 ## ACP agents
 
 ```yaml
@@ -305,7 +362,7 @@ Each spawned process is one session, exposes vanilla ACP over stdio, and exits w
 
 ```bash
 bitrouter reload                      # hot-reload running daemon
-# or SIGHUP to the daemon pid — same effect
+# SIGHUP also reloads daemon-side config, but does not forward new shell env vars
 # or `bitrouter restart` for a clean cycle
 ```
 

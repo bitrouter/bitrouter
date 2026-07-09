@@ -356,43 +356,45 @@ impl Pipeline {
         mut guard: StreamSettlementGuard,
     ) -> impl Stream<Item = Result<StreamPart>> + Send {
         async_stream::stream! {
-            // Set on every break path below; the loop only exits via `break`.
-            let outcome: StreamOutcome;
             'pump: loop {
-                let processor = guard.processor();
                 match upstream.next().await {
                     Some(Ok(part)) => {
                         let is_finish = part.is_terminal();
-                        match processor.process_part(part).await {
+                        let processed = guard.processor().process_part(part).await;
+                        match processed {
                             Ok(parts) => {
+                                if is_finish {
+                                    guard.finalize(StreamOutcome::Completed).await;
+                                }
                                 for p in parts {
                                     yield Ok(p);
                                 }
                             }
                             Err(abort_err) => {
-                                outcome = StreamOutcome::Aborted(abort_err.clone());
+                                guard
+                                    .finalize(StreamOutcome::Aborted(abort_err.clone()))
+                                    .await;
                                 yield Err(abort_err);
                                 break 'pump;
                             }
                         }
                         if is_finish {
-                            outcome = StreamOutcome::Completed;
                             break 'pump;
                         }
                     }
                     Some(Err(e)) => {
-                        outcome = StreamOutcome::UpstreamError(e.clone());
+                        guard
+                            .finalize(StreamOutcome::UpstreamError(e.clone()))
+                            .await;
                         yield Err(e);
                         break 'pump;
                     }
                     None => {
-                        outcome = StreamOutcome::Completed;
+                        guard.finalize(StreamOutcome::Completed).await;
                         break 'pump;
                     }
                 }
             }
-            // Normal/errored/aborted termination — finalise inline.
-            guard.finalize(outcome).await;
         }
     }
 
@@ -640,13 +642,24 @@ impl StreamSettlementGuard {
     /// Finalise inline on a normal/errored/aborted termination.
     async fn finalize(&mut self, outcome: StreamOutcome) {
         if let Some((mut processor, mut ctx)) = self.state.take() {
+            let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
             processor.finish(outcome).await;
             ctx.absorb_stream(processor.into_context());
-            self.pipeline.run_settlement(&mut ctx, true, None).await;
-            self.pipeline.observe_after(Phase::Settlement, &ctx).await;
             self.pipeline
-                .observe_end(&ctx, RequestOutcome::Completed)
+                .run_settlement(&mut ctx, true, settlement_error)
                 .await;
+            self.pipeline.observe_after(Phase::Settlement, &ctx).await;
+            self.pipeline.observe_end(&ctx, request_outcome).await;
+        }
+    }
+}
+
+fn stream_terminal_metadata(outcome: &StreamOutcome) -> (Option<BitrouterError>, RequestOutcome) {
+    match outcome {
+        StreamOutcome::Completed => (None, RequestOutcome::Completed),
+        StreamOutcome::ClientDisconnected => (None, RequestOutcome::ClientDisconnected),
+        StreamOutcome::Aborted(err) | StreamOutcome::UpstreamError(err) => {
+            (Some(err.clone()), RequestOutcome::Failed(err.clone()))
         }
     }
 }

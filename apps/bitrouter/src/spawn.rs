@@ -1,11 +1,12 @@
-//! `bitrouter spawn` — launch a coding-agent harness (Claude Code, …) as a
+//! `bitrouter spawn` — launch a coding-agent harness (Claude Code, Codex, …) as a
 //! child process with its API base URL pointed at the local BitRouter daemon.
 //!
 //! The agent's traffic then routes through BitRouter without ever touching the
-//! agent's own config files: instead of mutating `~/.claude/config.json` (the
+//! agent's own config files: instead of mutating `~/.claude/config.json` or
+//! `~/.codex/config.toml` (the
 //! "config takeover" model used by some switcher tools — invasive, needs
-//! backup/restore and crash recovery), we set `ANTHROPIC_BASE_URL` in the
-//! *child process environment only*. Nothing on disk changes, and if BitRouter
+//! backup/restore and crash recovery), we set per-process environment variables
+//! or one-shot CLI config overrides. Nothing on disk changes, and if BitRouter
 //! is down the user simply runs the agent directly.
 //!
 //! CLI shape follows `cargo run`'s separator convention so there is no
@@ -24,24 +25,35 @@
 //!   <https://code.claude.com/docs/en/settings#environment-variables>.
 //! - Install commands are the official native installers documented in the
 //!   Claude Code quickstart: <https://code.claude.com/docs/en/quickstart>.
+//!
+//! ## Codex integration
+//!
+//! - Codex custom providers are configured with `model_providers.<id>` and can
+//!   be overridden per invocation with repeated `-c key=value` flags.
+//! - Current Codex builds route custom providers through the Responses API, so
+//!   the BitRouter provider uses `wire_api = "responses"` and a `/v1` base URL.
+//!   See <https://developers.openai.com/codex/config-advanced#custom-model-providers>.
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use serde::Serialize;
 
+use crate::output::CliReport;
+use crate::output::human::Human;
 use crate::style::Palette;
 
-/// The coding-agent harnesses `bitrouter spawn` can launch. v1 ships Claude
-/// Code only; the enum is the extension point for `codex` / `gemini` later, so
-/// the dispatch, env-injection, and install machinery is written against the
-/// [`AgentSpec`] metadata rather than hard-coded to one agent.
+/// The coding-agent harnesses `bitrouter spawn` can launch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SpawnAgent {
     /// Anthropic's Claude Code CLI (`claude`).
     Claude,
+    /// OpenAI's Codex CLI (`codex`).
+    Codex,
 }
 
 impl SpawnAgent {
@@ -67,6 +79,15 @@ impl SpawnAgent {
                 base_url_env: "ANTHROPIC_BASE_URL",
                 auth_token_env: "ANTHROPIC_AUTH_TOKEN",
             },
+            SpawnAgent::Codex => AgentSpec {
+                agent: self,
+                id: "codex",
+                binary: "codex",
+                // Codex custom providers are configured through `-c` one-shot
+                // overrides rather than fixed endpoint env vars.
+                base_url_env: "",
+                auth_token_env: "",
+            },
         }
     }
 }
@@ -85,6 +106,15 @@ pub struct AgentSpec {
     /// Env var the agent reads its gateway bearer token from (sent as
     /// `Authorization: Bearer`), which is BitRouter's inbound auth scheme.
     pub auth_token_env: &'static str,
+}
+
+/// What `bitrouter spawn` injects into the child process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChildLaunch {
+    /// Environment overrides for the child process.
+    env: Vec<(&'static str, String)>,
+    /// Arguments inserted before the user's forwarded args.
+    args_prefix: Vec<String>,
 }
 
 /// BitRouter's own API-key env var (`brk_…`). When set, we forward it to the
@@ -117,6 +147,73 @@ pub struct SpawnOptions {
     /// warn. (Set by `--no-start`.) Has no effect for a non-local / `--base-url`
     /// target, which is never auto-started regardless.
     pub no_start: bool,
+    /// Check the spawn environment and route without launching the agent.
+    pub check: bool,
+}
+
+/// One preflight check outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpawnCheckStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+/// A single preflight row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpawnCheckRow {
+    pub name: String,
+    pub status: SpawnCheckStatus,
+    pub message: String,
+}
+
+/// Result of `bitrouter spawn --check`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpawnCheckReport {
+    pub agent: String,
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub checks: Vec<SpawnCheckRow>,
+}
+
+impl SpawnCheckReport {
+    fn has_failures(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|c| matches!(c.status, SpawnCheckStatus::Fail))
+    }
+}
+
+impl CliReport for SpawnCheckReport {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        h.line(&format!(
+            "spawn check for {} via {}",
+            self.agent, self.base_url
+        ))?;
+        if let Some(model) = &self.model {
+            h.line(&format!("  model: {model}"))?;
+        }
+        h.blank()?;
+        for check in &self.checks {
+            h.line(&format!(
+                "  {} {}: {}",
+                match check.status {
+                    SpawnCheckStatus::Pass => "✓",
+                    SpawnCheckStatus::Warn => "!",
+                    SpawnCheckStatus::Fail => "✗",
+                },
+                check.name,
+                check.message
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn exit_code(&self) -> i32 {
+        if self.has_failures() { 1 } else { 0 }
+    }
 }
 
 /// Run `bitrouter spawn`. Resolves the base URL from `cfg`, locates the agent
@@ -136,6 +233,18 @@ pub async fn run(
         Some(explicit) => explicit.clone(),
         None => derive_base_url(&cfg.server.listen),
     };
+
+    if opts.agent == SpawnAgent::Codex {
+        let conflicts = codex_forwarded_config_args(&opts.agent_args);
+        if !conflicts.is_empty() {
+            anyhow::bail!(
+                "codex forwarded config flags ({}) can override BitRouter's one-shot provider \
+                 injection. Remove those -c/--config flags and run `bitrouter spawn --agent \
+                 codex --check` to inspect the route before launching.",
+                conflicts.join(", ")
+            );
+        }
+    }
 
     // Locate the binary; prompt-to-install when it's missing.
     let binary = ensure_agent_installed(opts.agent, opts.no_install).await?;
@@ -157,9 +266,14 @@ pub async fn run(
 
     // Auth-token precedence (highest first): an auth token the user already
     // exported for this agent → the BitRouter API key → a local placeholder.
-    let parent_auth = nonempty_env(spec.auth_token_env);
+    // Codex has no fixed endpoint/auth env vars; it gets one-shot config args
+    // from `build_child_launch` below.
+    let parent_auth = match opts.agent {
+        SpawnAgent::Claude => nonempty_env(spec.auth_token_env),
+        SpawnAgent::Codex => None,
+    };
     let bitrouter_key = nonempty_env(BITROUTER_API_KEY_ENV);
-    let env = build_child_env(&spec, &base_url, parent_auth, bitrouter_key);
+    let launch = build_child_launch(&spec, &base_url, parent_auth, bitrouter_key);
 
     let p = Palette::for_stderr();
     eprintln!(
@@ -172,8 +286,9 @@ pub async fn run(
     );
 
     let mut cmd = tokio::process::Command::new(&binary);
+    cmd.args(&launch.args_prefix);
     cmd.args(&opts.agent_args);
-    for (k, v) in &env {
+    for (k, v) in &launch.env {
         cmd.env(k, v);
     }
     // Inherit the parent's stdio so the agent owns the terminal directly
@@ -191,6 +306,180 @@ pub async fn run(
     // Propagate the agent's exit code. A launcher should be transparent: the
     // shell sees the agent's status, not bitrouter's.
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Check a spawn invocation without launching the child process.
+pub async fn check(
+    cfg: &bitrouter_sdk::config::Config,
+    opts: &SpawnOptions,
+) -> Result<SpawnCheckReport> {
+    let spec = opts.agent.spec();
+    let base_url = opts
+        .base_url
+        .clone()
+        .unwrap_or_else(|| derive_base_url(&cfg.server.listen));
+    let model = (opts.agent == SpawnAgent::Codex)
+        .then(|| codex_requested_model(&opts.agent_args))
+        .flatten();
+    let mut checks = Vec::new();
+
+    checks.push(match resolve_binary(spec.binary) {
+        Some(path) => SpawnCheckRow {
+            name: "agent binary".to_string(),
+            status: SpawnCheckStatus::Pass,
+            message: format!("found {}", path.display()),
+        },
+        None => SpawnCheckRow {
+            name: "agent binary".to_string(),
+            status: SpawnCheckStatus::Fail,
+            message: format!("{} is not on PATH", spec.binary),
+        },
+    });
+
+    checks.push(check_base_url(&base_url).await);
+
+    if opts.agent == SpawnAgent::Codex {
+        let conflicts = codex_forwarded_config_args(&opts.agent_args);
+        checks.push(if conflicts.is_empty() {
+            SpawnCheckRow {
+                name: "codex config overrides".to_string(),
+                status: SpawnCheckStatus::Pass,
+                message: "no forwarded -c/--config flags detected".to_string(),
+            }
+        } else {
+            SpawnCheckRow {
+                name: "codex config overrides".to_string(),
+                status: SpawnCheckStatus::Fail,
+                message: format!(
+                    "forwarded {} can override BitRouter's provider injection",
+                    conflicts.join(", ")
+                ),
+            }
+        });
+
+        checks.push(match &model {
+            Some(model) => {
+                codex_route_check(model, crate::commands::resolve_route(cfg, model).await)
+            }
+            None => SpawnCheckRow {
+                name: "codex model route".to_string(),
+                status: SpawnCheckStatus::Warn,
+                message: "no --model/-m forwarded; Codex will choose its default model".to_string(),
+            },
+        });
+    }
+
+    Ok(SpawnCheckReport {
+        agent: spec.id.to_string(),
+        base_url,
+        model,
+        checks,
+    })
+}
+
+async fn check_base_url(base_url: &str) -> SpawnCheckRow {
+    let health = format!("{}/health", bitrouter_root_url(base_url));
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            return SpawnCheckRow {
+                name: "bitrouter base url".to_string(),
+                status: SpawnCheckStatus::Warn,
+                message: format!("could not build HTTP client: {e}"),
+            };
+        }
+    };
+    match client.get(&health).send().await {
+        Ok(resp) if resp.status().is_success() => SpawnCheckRow {
+            name: "bitrouter base url".to_string(),
+            status: SpawnCheckStatus::Pass,
+            message: format!("{health} responded {}", resp.status()),
+        },
+        Ok(resp) => SpawnCheckRow {
+            name: "bitrouter base url".to_string(),
+            status: SpawnCheckStatus::Fail,
+            message: format!("{health} responded {}", resp.status()),
+        },
+        Err(e) => SpawnCheckRow {
+            name: "bitrouter base url".to_string(),
+            status: SpawnCheckStatus::Fail,
+            message: format!("could not reach {health}: {e}"),
+        },
+    }
+}
+
+fn bitrouter_root_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
+}
+
+fn codex_requested_model(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--model" || arg == "-m" {
+            return iter.next().filter(|v| !v.is_empty()).cloned();
+        }
+        if let Some(value) = arg.strip_prefix("--model=")
+            && !value.is_empty()
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn codex_forwarded_config_args(args: &[String]) -> Vec<&'static str> {
+    args.iter()
+        .filter_map(|arg| match arg.as_str() {
+            "-c" => Some("-c"),
+            "--config" => Some("--config"),
+            s if s.starts_with("--config=") => Some("--config"),
+            _ => None,
+        })
+        .collect()
+}
+
+fn codex_route_check(model: &str, route: Result<Vec<crate::daemon::RouteHop>>) -> SpawnCheckRow {
+    match route {
+        Ok(chain) if chain.is_empty() => SpawnCheckRow {
+            name: "codex model route".to_string(),
+            status: SpawnCheckStatus::Fail,
+            message: format!("{model} resolved to an empty route chain"),
+        },
+        Ok(chain) => {
+            let providers = chain
+                .iter()
+                .map(|hop| format!("{}:{} ({})", hop.provider, hop.service_id, hop.api_protocol))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            if chain
+                .iter()
+                .any(|hop| hop.api_protocol.eq_ignore_ascii_case("responses"))
+            {
+                SpawnCheckRow {
+                    name: "codex model route".to_string(),
+                    status: SpawnCheckStatus::Pass,
+                    message: format!("{model} can route through Responses: {providers}"),
+                }
+            } else {
+                SpawnCheckRow {
+                    name: "codex model route".to_string(),
+                    status: SpawnCheckStatus::Fail,
+                    message: format!(
+                        "{model} has no responses-compatible endpoint for Codex: {providers}"
+                    ),
+                }
+            }
+        }
+        Err(e) => SpawnCheckRow {
+            name: "codex model route".to_string(),
+            status: SpawnCheckStatus::Fail,
+            message: format!("could not resolve {model}: {e:#}"),
+        },
+    }
 }
 
 /// Build the environment overrides layered on top of the inherited parent
@@ -218,6 +507,91 @@ fn build_child_env(
         (spec.base_url_env, base_url.to_string()),
         (spec.auth_token_env, token),
     ]
+}
+
+/// Build all per-agent child-process overrides. Claude Code uses environment
+/// variables; Codex uses transient `-c` config overrides because custom model
+/// providers are a Codex config concept.
+fn build_child_launch(
+    spec: &AgentSpec,
+    base_url: &str,
+    parent_auth: Option<String>,
+    bitrouter_key: Option<String>,
+) -> ChildLaunch {
+    match spec.agent {
+        SpawnAgent::Claude => ChildLaunch {
+            env: build_child_env(spec, base_url, parent_auth, bitrouter_key),
+            args_prefix: Vec::new(),
+        },
+        SpawnAgent::Codex => build_codex_child_launch(base_url, bitrouter_key),
+    }
+}
+
+fn build_codex_child_launch(base_url: &str, bitrouter_key: Option<String>) -> ChildLaunch {
+    let mut env = Vec::new();
+    let mut args_prefix = vec![
+        "-c".to_string(),
+        codex_config_string("model_provider", "bitrouter"),
+        "-c".to_string(),
+        codex_config_string("model_providers.bitrouter.name", "BitRouter"),
+        "-c".to_string(),
+        codex_config_string(
+            "model_providers.bitrouter.base_url",
+            &codex_api_base_url(base_url),
+        ),
+        "-c".to_string(),
+        codex_config_string("model_providers.bitrouter.wire_api", "responses"),
+    ];
+
+    match bitrouter_key {
+        Some(key) => {
+            env.push((BITROUTER_API_KEY_ENV, key));
+            args_prefix.push("-c".to_string());
+            args_prefix.push(codex_config_string(
+                "model_providers.bitrouter.env_key",
+                BITROUTER_API_KEY_ENV,
+            ));
+        }
+        None => {
+            args_prefix.push("-c".to_string());
+            args_prefix.push(codex_config_string(
+                "model_providers.bitrouter.experimental_bearer_token",
+                PLACEHOLDER_API_KEY,
+            ));
+        }
+    }
+
+    ChildLaunch { env, args_prefix }
+}
+
+fn codex_api_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1")
+    }
+}
+
+fn codex_config_string(key: &str, value: &str) -> String {
+    format!("{key}={}", toml_string(value))
+}
+
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Read an environment variable, treating an unset *or empty* value as absent.
@@ -454,9 +828,9 @@ fn home_dir() -> Option<PathBuf> {
 
 /// Ensure `agent`'s binary is installed — locating it on `PATH` (+
 /// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bitrouter spawn` and `bitrouter login
-/// anthropic` (which needs the `claude` CLI to sign the user in) so both go
-/// through one detect-and-install path.
+/// and return its path. Shared by `bitrouter spawn` and
+/// `bitrouter providers login claude-code` (which needs the `claude` CLI to
+/// sign the user in) so both go through one detect-and-install path.
 pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
     let spec = agent.spec();
     match resolve_binary(spec.binary) {
@@ -576,13 +950,19 @@ pub struct InstallCommand {
 impl InstallCommand {
     /// The official native installer for `agent` on the *current* platform.
     ///
-    /// Sources (Claude Code quickstart, "Native Install"):
-    /// <https://code.claude.com/docs/en/quickstart>
+    /// Sources:
+    /// - Claude Code quickstart, "Native Install":
+    ///   <https://code.claude.com/docs/en/quickstart>
     /// - macOS / Linux: `curl -fsSL https://claude.ai/install.sh | bash`
     /// - Windows:       `irm https://claude.ai/install.ps1 | iex`
+    /// - Codex quickstart:
+    ///   <https://developers.openai.com/codex/quickstart>
+    /// - macOS / Linux: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
+    /// - Windows:       `irm https://chatgpt.com/codex/install.ps1 | iex`
     pub fn for_agent(agent: SpawnAgent) -> Self {
         match agent {
             SpawnAgent::Claude => Self::claude(),
+            SpawnAgent::Codex => Self::codex(),
         }
     }
 
@@ -608,6 +988,36 @@ impl InstallCommand {
                 "-NoProfile".to_string(),
                 "-Command".to_string(),
                 "irm https://claude.ai/install.ps1 | iex".to_string(),
+            ],
+            human,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn codex() -> Self {
+        let human = "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string();
+        Self {
+            program: "sh",
+            args: vec![
+                "-c".to_string(),
+                "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string(),
+            ],
+            human,
+        }
+    }
+
+    #[cfg(windows)]
+    fn codex() -> Self {
+        let human =
+            r#"powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex""#
+                .to_string();
+        Self {
+            program: "powershell",
+            args: vec![
+                "-ExecutionPolicy".to_string(),
+                "ByPass".to_string(),
+                "-c".to_string(),
+                "irm https://chatgpt.com/codex/install.ps1 | iex".to_string(),
             ],
             human,
         }
@@ -769,6 +1179,140 @@ mod tests {
     }
 
     #[test]
+    fn codex_spec_uses_codex_binary() {
+        let spec = SpawnAgent::Codex.spec();
+        assert_eq!(spec.binary, "codex");
+        assert_eq!(spec.id, "codex");
+    }
+
+    #[test]
+    fn codex_launch_args_route_responses_to_bitrouter_v1() {
+        let spec = SpawnAgent::Codex.spec();
+        let launch = build_child_launch(&spec, "http://127.0.0.1:4356", None, None);
+        assert!(launch.args_prefix.contains(&"-c".to_string()));
+        assert!(
+            launch
+                .args_prefix
+                .contains(&"model_provider=\"bitrouter\"".to_string())
+        );
+        assert!(launch.args_prefix.contains(
+            &"model_providers.bitrouter.base_url=\"http://127.0.0.1:4356/v1\"".to_string()
+        ));
+        assert!(
+            launch
+                .args_prefix
+                .contains(&"model_providers.bitrouter.wire_api=\"responses\"".to_string())
+        );
+        assert!(launch.args_prefix.contains(
+            &"model_providers.bitrouter.experimental_bearer_token=\"bitrouter-local\"".to_string()
+        ));
+    }
+
+    #[test]
+    fn codex_launch_uses_env_key_when_bitrouter_key_exists() {
+        let spec = SpawnAgent::Codex.spec();
+        let launch = build_child_launch(
+            &spec,
+            "http://127.0.0.1:4356",
+            None,
+            Some("brk_test".into()),
+        );
+        assert!(
+            launch
+                .env
+                .iter()
+                .any(|(k, v)| *k == BITROUTER_API_KEY_ENV && v == "brk_test")
+        );
+        assert!(
+            launch
+                .args_prefix
+                .contains(&"model_providers.bitrouter.env_key=\"BITROUTER_API_KEY\"".to_string())
+        );
+        assert!(
+            launch
+                .args_prefix
+                .iter()
+                .all(|arg| !arg.contains("experimental_bearer_token"))
+        );
+    }
+
+    #[test]
+    fn codex_requested_model_reads_forwarded_model_args() {
+        assert_eq!(
+            codex_requested_model(&[
+                "exec".to_string(),
+                "--model".to_string(),
+                "gpt-5.5".to_string()
+            ])
+            .as_deref(),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            codex_requested_model(&[
+                "exec".to_string(),
+                "-m".to_string(),
+                "local-model".to_string()
+            ])
+            .as_deref(),
+            Some("local-model")
+        );
+        assert_eq!(codex_requested_model(&["exec".to_string()]), None);
+    }
+
+    #[test]
+    fn codex_forwarded_config_args_are_flagged_before_launch() {
+        let conflicts = codex_forwarded_config_args(&[
+            "exec".to_string(),
+            "-c".to_string(),
+            "foo=1".to_string(),
+        ]);
+        assert_eq!(conflicts, vec!["-c"]);
+
+        let conflicts = codex_forwarded_config_args(&[
+            "exec".to_string(),
+            "--config".to_string(),
+            "model_provider=\"openai\"".to_string(),
+        ]);
+        assert_eq!(conflicts, vec!["--config"]);
+    }
+
+    #[test]
+    fn bitrouter_root_url_strips_v1_for_preflight_health_probe() {
+        assert_eq!(
+            bitrouter_root_url("http://127.0.0.1:4356/v1"),
+            "http://127.0.0.1:4356"
+        );
+        assert_eq!(
+            bitrouter_root_url("http://127.0.0.1:4356"),
+            "http://127.0.0.1:4356"
+        );
+    }
+
+    #[test]
+    fn codex_route_check_accepts_any_responses_provider() {
+        let route = vec![crate::daemon::RouteHop {
+            provider: "openai".to_string(),
+            service_id: "gpt-5.5".to_string(),
+            api_protocol: "responses".to_string(),
+        }];
+        let check = codex_route_check("gpt-5.5", Ok(route));
+        assert_eq!(check.status, SpawnCheckStatus::Pass);
+        assert!(check.message.contains("openai"));
+    }
+
+    #[test]
+    fn codex_route_check_rejects_non_responses_provider() {
+        let route = vec![crate::daemon::RouteHop {
+            provider: "anthropic".to_string(),
+            service_id: "claude-sonnet".to_string(),
+            api_protocol: "messages".to_string(),
+        }];
+        let check = codex_route_check("claude-sonnet", Ok(route));
+        assert_eq!(check.status, SpawnCheckStatus::Fail);
+        assert!(check.message.contains("responses"));
+    }
+
+    #[test]
     fn install_command_is_the_official_native_installer() {
         let cmd = InstallCommand::for_agent(SpawnAgent::Claude);
         // Same canonical URL on every platform; the transport differs.
@@ -781,6 +1325,18 @@ mod tests {
         #[cfg(windows)]
         {
             assert!(cmd.display().contains("install.ps1"));
+        }
+
+        let codex = InstallCommand::for_agent(SpawnAgent::Codex);
+        assert!(codex.display().contains("chatgpt.com/codex/install"));
+        #[cfg(not(windows))]
+        {
+            assert!(codex.display().contains("install.sh"));
+            assert!(codex.display().contains("| sh"));
+        }
+        #[cfg(windows)]
+        {
+            assert!(codex.display().contains("install.ps1"));
         }
     }
 

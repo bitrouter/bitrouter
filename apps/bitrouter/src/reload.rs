@@ -55,6 +55,9 @@ pub struct AppReloader {
     /// built-in catalog can be applied above the SDK — and swap it in
     /// via `ConfigRoutingTable::replace_config`.
     routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
+    /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
+    /// config reload must rebuild the live executor's client set too.
+    upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
     source: ReloadSource,
 }
 
@@ -63,13 +66,27 @@ impl AppReloader {
     pub fn new(
         policy_store: Arc<PolicyStore>,
         routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
+        upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
         source: ReloadSource,
     ) -> Self {
         Self {
             policy_store,
             routing_table,
+            upstream_executor,
             source,
         }
+    }
+
+    async fn replace_routing_and_timeouts(
+        &self,
+        fresh: bitrouter_sdk::config::Config,
+    ) -> bitrouter_sdk::Result<()> {
+        let (global_timeouts, provider_timeouts) =
+            crate::assemble::resolved_upstream_timeouts(&fresh);
+        self.routing_table.replace_config(fresh).await?;
+        self.upstream_executor
+            .reload_provider_timeouts(global_timeouts, provider_timeouts)?;
+        Ok(())
     }
 }
 
@@ -105,7 +122,7 @@ impl DaemonReloader for AppReloader {
                     // them and the merge's `apply_builtin_defaults` would leave a
                     // keyless provider inactive. Runs after the merge.
                     activate_stored_credential_providers(&mut fresh);
-                    self.routing_table.replace_config(fresh).await
+                    self.replace_routing_and_timeouts(fresh).await
                 }
                 Err(e) => Err(e),
             },
@@ -134,7 +151,7 @@ impl DaemonReloader for AppReloader {
                 // credential (invisible to the registry's config/env credential
                 // gate), after the merge re-applies builtin defaults.
                 activate_stored_credential_providers(&mut fresh);
-                self.routing_table.replace_config(fresh).await
+                self.replace_routing_and_timeouts(fresh).await
             }
         };
         if let Err(e) = routing_outcome {
@@ -147,6 +164,145 @@ impl DaemonReloader for AppReloader {
             Ok(())
         } else {
             Err(anyhow::anyhow!(errors.join("; ")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitrouter_sdk::config::{self, ConfigRoutingTable};
+    use bitrouter_sdk::language_model::{
+        ApiProtocol, Executor, GenerationParams, HttpExecutor, HttpTimeouts, Message,
+        PipelineContext, PipelineRequest, Prompt, Role, RoutingTarget,
+    };
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn temp_config_path() -> (std::path::PathBuf, std::path::PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "bitrouter-reload-timeouts-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp config dir");
+        (dir.join("bitrouter.yaml"), dir)
+    }
+
+    fn config_yaml(read_secs: u64) -> String {
+        format!(
+            r#"
+inherit_defaults: false
+upstream:
+  timeouts:
+    read_secs: {read_secs}
+providers:
+  slow:
+    api_base: https://api.example.com/v1
+    api_key: k
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - {{ id: m }}
+"#
+        )
+    }
+
+    async fn stalled_json_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request_buf = [0_u8; 1024];
+            let _ = socket.read(&mut request_buf).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      content-type: application/json\r\n\
+                      content-length: 1024\r\n\
+                      \r\n\
+                      {\"id\":\"partial\"",
+                )
+                .await
+                .expect("write partial response");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        format!("http://{addr}/v1")
+    }
+
+    fn prompt() -> Prompt {
+        Prompt {
+            model: "m".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "hi")],
+            tools: vec![],
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_updates_live_upstream_timeout_clients() {
+        let (path, dir) = temp_config_path();
+        std::fs::write(&path, config_yaml(30)).expect("write initial config");
+        let initial = config::parse(&config_yaml(30)).expect("parse initial config");
+        let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
+        let executor = Arc::new(
+            HttpExecutor::new(HttpTimeouts {
+                read: Duration::from_secs(30),
+                ..HttpTimeouts::default()
+            })
+            .expect("build executor"),
+        );
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            routing_table,
+            executor.clone(),
+            ReloadSource::File(path.clone()),
+        );
+
+        std::fs::write(&path, config_yaml(1)).expect("write reloaded config");
+        reloader.reload().await.expect("reload config");
+
+        let api_base = stalled_json_server().await;
+        let target = RoutingTarget {
+            provider_name: "slow".into(),
+            service_id: "m".into(),
+            api_base,
+            api_key: "k".into(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        };
+        let prompt = prompt();
+        let ctx = PipelineContext::new(PipelineRequest::new(
+            "m",
+            bitrouter_sdk::caller::CallerContext::local(),
+            prompt.clone(),
+        ));
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(3),
+            executor.execute(&target, &prompt, &ctx),
+        )
+        .await
+        .expect("reloaded read_secs should bound the stalled body")
+        .expect_err("stalled body should timeout");
+        std::fs::remove_dir_all(dir).ok();
+
+        match err {
+            bitrouter_sdk::BitrouterError::UpstreamTimeout => {}
+            other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
     }
 }

@@ -1,0 +1,62 @@
+# OpenAI Codex — ChatGPT Plus/Pro subscription route, OAuth-only.
+#
+# NOT the same as `openai`: Codex lives at a different host
+# (`chatgpt.com/backend-api/codex`) reachable only with credentials minted by
+# the user's ChatGPT subscription via the `login openai-codex` PKCE flow
+# against `auth.openai.com`. The resulting Bearer JWT additionally needs a
+# `chatgpt-account-id` header (from the JWT), an `OpenAI-Beta` opt-in, and an
+# `originator` tag — all wired by the consumer's `openai-codex` handler.
+#
+# Reference implementations (public OAuth client + endpoints, header shape):
+# - https://developers.openai.com/codex/auth
+# - https://github.com/sst/opencode/blob/dev/packages/opencode/src/plugin/codex.ts
+#
+# Codex speaks the Responses API exclusively. The explicit model entries are listed
+# below (no per-token `pricing` — it's a flat-rate subscription). Keep this on
+# models.dev's `openai` catalog; do not wire `auto_sync: v1_models` here: the
+# backend `/models` endpoint requires the user's OAuth credential and is not a
+# public catalog endpoint.
+# `access: local_pkce` — credentials come from the local OAuth+PKCE flow against
+# the user's ChatGPT subscription, so there is no portable key to BYOK.
+name: openai-codex
+display_name: OpenAI Codex
+metadata:
+  headquarters: US
+  name: OpenAI
+  privacy_policy_url: https://openai.com/privacy
+  slug: openai
+  status_page_url: https://status.openai.com
+  terms_of_service_url: https://openai.com/terms
+kind: first_party
+billing: subscription
+access: local_pkce
+api_base: https://chatgpt.com/backend-api/codex
+doc_url: https://developers.openai.com/codex/auth
+api_protocol:
+  - "*": responses
+auth:
+  kind: oauth
+  handler: openai-codex
+  params:
+    # OAuth client id of the official Codex CLI (confirmed in opencode's
+    # plugin/codex.ts). Reused while bitrouter has no registered OpenAI app.
+    client_id: app_EMoamEEZ73f0CkXaXp7hrann
+    scope: openid profile email offline_access
+    authorize_endpoint: https://auth.openai.com/oauth/authorize
+    token_endpoint: https://auth.openai.com/oauth/token
+    # Loopback redirect on a pinned port, registered against the OAuth client.
+    redirect_uri: http://localhost:1455/auth/callback
+models:
+  - id: openai/gpt-5.5
+    provider_model_id: gpt-5.5
+    capabilities: [reasoning, tools]
+  - id: openai/gpt-5.4
+    provider_model_id: gpt-5.4
+    capabilities: [reasoning, tools]
+  - id: openai/gpt-5.4-mini
+    provider_model_id: gpt-5.4-mini
+    capabilities: [reasoning, tools]
+status: active
+auto_sync:
+  feed: models_dev
+  key: openai

@@ -1,0 +1,6 @@
+{
+  "title": "Get Started",
+  "icon": "Rocket",
+  "defaultOpen": true,
+  "pages": ["introduction", "configuration", "supported-models", "supported-providers", "faqs"]
+}

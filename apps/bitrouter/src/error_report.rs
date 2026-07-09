@@ -124,7 +124,7 @@ fn write_info(
 /// `Upstream { status, message }` renders as `"upstream error (502): …"`;
 /// the status is genuine debugging signal so we preserve the whole
 /// string rather than stripping a prefix.
-fn strip_status_prefix(msg: &str) -> &str {
+pub(crate) fn strip_status_prefix(msg: &str) -> &str {
     const PREFIXES: &[&str] = &[
         "bad request: ",
         "internal error: ",
@@ -145,7 +145,7 @@ fn strip_status_prefix(msg: &str) -> &str {
 /// next-step hint. Matches by anchored prefix or specific substring
 /// against the *stripped* root message so display-prefix churn doesn't
 /// break the table.
-fn hint_for(root: &str) -> Option<String> {
+pub(crate) fn hint_for(root: &str) -> Option<String> {
     // Undefined config env-var. Pull the var name out so the hint can
     // name it explicitly.
     if let Some(rest) = root.strip_prefix("config references undefined environment variable '")

@@ -25,7 +25,7 @@ bitrouter-providers = { workspace = true, features = ["pkce"] }
 bitrouter-skills.workspace = true
 bitrouter-guardrails.workspace = true
 bitrouter-observe = { workspace = true, features = ["otel-http"] }
-bitrouter-mcp = { path = "../../mcp", version = "1.0.0-alpha.19" }
+bitrouter-mcp = { path = "../../mcp", version = "1.0.0-alpha.21" }
 chrono.workspace = true
 sha2.workspace = true
 base64.workspace = true
@@ -41,6 +41,7 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"

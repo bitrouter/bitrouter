@@ -57,7 +57,7 @@ Continue to §2 (Install). Skip the Cloud paths below.
 
 3. **Permissionless wallet (Solana / EVM, no account).** Sign an SOL_EDDSA JWT with the user's wallet, hit `api.bitrouter.ai` directly, x402/MPP handles payment. Crypto-native flow; point the user at <https://bitrouter.ai> docs for details — don't try to script the JWT signing yourself.
 
-4. **Headless CLI (`bitrouter auth login`).** RFC 8628 device-flow OAuth, persists the credential to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (auto-refreshed). When the credentials file is present, the local daemon auto-adds the `bitrouter` provider in zero-config mode, so every entitled model is routable as `bitrouter:<model-id>` against `localhost:4356` — no manual `brk_*` paste, no `bitrouter.yaml` changes. `bitrouter cloud --help` then drives the full /v1/* management surface (keys / usage / billing / policy / budget / preset / byok / oauth-client). See `references/cloud-setup.md` path D.
+4. **Headless CLI (`bitrouter cloud login`).** RFC 8628 device-flow OAuth, persists the credential to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (auto-refreshed). When the credentials file is present, the local daemon auto-adds the `bitrouter` provider in zero-config mode, so every entitled model is routable as `bitrouter:<model-id>` against `localhost:4356` — no manual `brk_*` paste, no `bitrouter.yaml` changes. `bitrouter cloud --help` then drives the /v1/* management surface (keys / usage / billing / policy / budget / preset / byok). See `references/cloud-setup.md` path D.
 
 See `references/cloud-setup.md` for deeper detail (dashboard URLs, credit model, key rotation, wallet flow, CLI sign-in).
 
@@ -97,7 +97,7 @@ bitrouter update         # self-update the binary (prereleases by default); --ch
 
 The daemon writes its runtime files (`bitrouter.sock`, `bitrouter.pid`, `bitrouter.log`, optional `bitrouter.db`) into `~/.bitrouter/`.
 
-Beyond the built-ins, the daemon merges the public provider registry on startup: any registry **BYOK** provider whose key is present (convention `${NAME}_API_KEY`) becomes routable for the canonical models it serves, and providers are ranked by a configurable priority ladder. See `references/providers.md` → *Provider registry*.
+Beyond the built-ins, the daemon merges the public provider registry on startup: any registry **BYOK** provider whose key is present (convention `${NAME}_API_KEY`) becomes routable for the models it serves — the curated catalog plus any BYOK / BYO-subscription extras the provider lists beyond it — and providers are ranked by a configurable priority ladder. See `references/providers.md` → *Provider registry*.
 
 **With a config file.** When you want explicit control (multi-account, MCP servers, ACP agents, custom providers):
 
@@ -112,12 +112,14 @@ Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HO
 
 `bitrouter config validate` runs the real parse path — deserialization, `derives` resolution, and the upstream-URL (SSRF) gate — and exits non-zero on an invalid config. It does *not* load a JSON Schema; structural checking is what the parser enforces. Unset `${VAR}` references are substituted with a placeholder and reported as warnings, so it is safe to run in CI without secrets present.
 
-Separately, a JSON Schema for the config is committed at `schemas/bitrouter.config.schema.json` (regenerated with `cargo xtask generate-schema`). Add a `# yaml-language-server: $schema=…` header to a YAML config to get IDE autocomplete + inline validation against it.
+Separately, a JSON Schema for the config is committed at `dist/schema/bitrouter.config.schema.json` (regenerated with `cargo run -p dist-helper -- generate-schema`). Add a `# yaml-language-server: $schema=…` header to a YAML config to get IDE autocomplete + inline validation against it.
 
-**GitHub Copilot.** Different — OAuth device flow, not an env var:
+**Subscription / OAuth providers.** Different — local login, not env vars:
 
 ```bash
-bitrouter login github-copilot    # browser device flow, token stored on disk
+bitrouter providers login claude-code       # Claude Pro/Max via Claude Code session
+bitrouter providers login openai-codex      # ChatGPT/Codex subscription
+bitrouter providers login github-copilot    # browser device flow, token stored on disk
 ```
 
 ## 4. Connect your SDK
@@ -185,8 +187,8 @@ Read these on demand — don't load them all upfront.
 ## 7. Gotchas
 
 - **Always ask Local-or-Cloud first.** The default of "just install locally" is wrong for users who want managed billing — they should never install the daemon at all.
-- **Cloud sign-in is `bitrouter auth login`, not `bitrouter login`.** The top-level `bitrouter login <provider>` surface is still per-provider OAuth (today: `github-copilot`); the cloud bridge landed as a separate `bitrouter auth …` subcommand tree to avoid colliding with it. Bare `bitrouter login` / `bitrouter logout` / `bitrouter whoami` now print a redirect pointing at `bitrouter auth login` / `bitrouter auth logout` / `bitrouter auth whoami` and `bitrouter cloud whoami`.
-- **Cloud management is `bitrouter cloud …`.** After `bitrouter auth login`, run `bitrouter cloud --help` for the subcommand index: `keys`, `usage`, `requests`, `billing`, `policy`, `budget`, `preset`, `byok`, `oauth-client`. Every leaf accepts `--json`.
+- **Cloud sign-in is `bitrouter cloud login`.** Per-provider OAuth is `bitrouter providers login <provider>` (today: `claude-code`, `github-copilot`, and `openai-codex`), not a top-level `login` command.
+- **Cloud management is `bitrouter cloud …`.** After `bitrouter cloud login`, run `bitrouter cloud --help` for the subcommand index: `keys`, `usage`, `requests`, `billing`, `policy`, `budget`, `preset`, `byok`. Every leaf accepts `--json`.
 - **Local port: `127.0.0.1:4356`.** Old docs (and the upstream README) sometimes say 8787 — those are stale.
 - **Cloud endpoints:** `https://api.bitrouter.ai/v1` for the OpenAI shape; `https://api.bitrouter.ai` (no `/v1`) for the Anthropic SDK — same asymmetry as Local.
 - **Google's env var is `GEMINI_API_KEY`**, matching Google's own SDKs. `GOOGLE_API_KEY` is not auto-detected; override in `bitrouter.yaml` if you must.

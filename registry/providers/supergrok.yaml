@@ -1,0 +1,51 @@
+# SuperGrok — xAI's consumer subscription (grok.com / X Premium+), routed with
+# the user's subscription credentials rather than a metered API key. Modeled on
+# the `claude-code` / `openai-codex` subscription pattern: flat-rate (no
+# per-token pricing), activated by a local OAuth login.
+#
+# NOTE: the `supergrok` OAuth handler is not yet implemented in bitrouter — this
+# registry entry stages the provider; the handler (client id + endpoints) still
+# needs wiring before it is routable.
+name: supergrok
+display_name: SuperGrok (subscription)
+metadata:
+  headquarters: US
+  name: xAI
+  privacy_policy_url: https://x.ai/legal/privacy-policy
+  slug: xai
+  status_page_url: https://status.x.ai
+  terms_of_service_url: https://x.ai/legal/terms-of-service
+kind: first_party
+access: local_oauth
+billing: subscription
+api_base: https://api.x.ai/v1
+api_protocol:
+  - "*": [responses, openai]
+rate_limits: []
+models:
+  - id: x-ai/grok-4.20-multi-agent
+    provider_model_id: grok-4.20-multi-agent
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.20
+    provider_model_id: grok-4.20
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.3
+    provider_model_id: grok-4.3
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-build-0.1
+    provider_model_id: grok-build-0.1
+    capabilities:
+      - tools
+status: active
+auth:
+  kind: oauth
+  handler: supergrok
+auto_sync:
+  feed: models_dev
+  key: xai

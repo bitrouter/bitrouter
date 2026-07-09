@@ -1,0 +1,92 @@
+- id: anthropic/claude-fable-5
+  name: 'Anthropic: Claude Fable 5'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-06-09
+  knowledge_cutoff: 2026-01-31
+  open_weights: false
+  family: claude-fable
+- id: anthropic/claude-haiku-4.5
+  name: 'Anthropic: Claude Haiku 4.5'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 200000
+  max_output_tokens: 8192
+  release_date: 2025-10-15
+  knowledge_cutoff: 2025-02-28
+  open_weights: false
+  family: claude-haiku
+- id: anthropic/claude-opus-4.6
+  name: 'Anthropic: Claude Opus 4.6'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 200000
+  max_output_tokens: 16384
+  release_date: 2026-02-05
+  knowledge_cutoff: 2025-05-31
+  open_weights: false
+  family: claude-opus
+- id: anthropic/claude-opus-4.7
+  name: 'Anthropic: Claude Opus 4.7'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 200000
+  max_output_tokens: 16384
+  release_date: 2026-04-16
+  knowledge_cutoff: 2026-01-31
+  open_weights: false
+  family: claude-opus
+- id: anthropic/claude-opus-4.8
+  name: 'Anthropic: Claude Opus 4.8'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-05-28
+  open_weights: false
+  family: claude-opus
+- id: anthropic/claude-sonnet-5
+  name: 'Anthropic: Claude Sonnet 5'
+  description: Anthropic's Claude Sonnet 5.
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-06-30
+  knowledge_cutoff: 2026-01-31
+  open_weights: false
+  family: claude-sonnet
+- id: anthropic/claude-sonnet-4.6
+  name: 'Anthropic: Claude Sonnet 4.6'
+  description: Anthropic's Claude Sonnet 4.6.
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-02-17
+  knowledge_cutoff: 2025-08-31
+  open_weights: false
+  family: claude-sonnet

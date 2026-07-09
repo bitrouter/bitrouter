@@ -30,6 +30,8 @@ pub const ADVISOR_TOOL: &str = "advisor";
 pub const SUBAGENT_TOOL: &str = "subagent";
 /// Router-tool name the model calls to search the web.
 pub const WEB_SEARCH_TOOL: &str = "web_search";
+/// Router-tool name the model calls to fetch a URL's content.
+pub const WEB_FETCH_TOOL: &str = "web_fetch";
 
 /// Plugin id under which [`ServerToolDeclarations`] is stashed on the request
 /// context by the pre-request hook, for the toolsets to read back.
@@ -64,6 +66,19 @@ pub struct WebSearchDeclaration {
     pub max_results: Option<u32>,
 }
 
+/// Per-request Web-fetch config. Both fields are optional overrides: `backend`
+/// pins one of the configured fetch backends by name (else the default), and
+/// `max_content_tokens` lowers the per-call content cap. The URL itself rides the
+/// tool call's arguments, not the declaration.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WebFetchDeclaration {
+    /// Pin a configured backend by name (else the deployment default).
+    pub backend: Option<String>,
+    /// Cap on returned content for this request, in tokens (else the deployment
+    /// default).
+    pub max_content_tokens: Option<u32>,
+}
+
 /// Per-request Sub-agent config (worker model + instructions + tools).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubAgentConfig {
@@ -88,6 +103,8 @@ pub struct ServerToolDeclarations {
     pub fusion: Option<FusionConfig>,
     /// The web-search declaration, if any.
     pub web_search: Option<WebSearchDeclaration>,
+    /// The web-fetch declaration, if any.
+    pub web_fetch: Option<WebFetchDeclaration>,
     /// The outer request model — the default nested model.
     pub parent_model: String,
 }
@@ -130,6 +147,12 @@ impl ServerToolDeclarations {
                         max_results: u32_field(args, "max_results"),
                     });
                 }
+                Some(Kind::WebFetch) => {
+                    decls.web_fetch = Some(WebFetchDeclaration {
+                        backend: str_field(args, "backend"),
+                        max_content_tokens: u32_field(args, "max_content_tokens"),
+                    });
+                }
                 None => {}
             }
         }
@@ -149,6 +172,7 @@ impl ServerToolDeclarations {
             && self.subagent.is_none()
             && self.fusion.is_none()
             && self.web_search.is_none()
+            && self.web_fetch.is_none()
     }
 }
 
@@ -156,6 +180,7 @@ enum Kind {
     Advisor,
     SubAgent,
     WebSearch,
+    WebFetch,
 }
 
 /// Recognise an advisor / sub-agent / web-search declaration by tool name: the
@@ -173,6 +198,7 @@ fn server_tool_kind(name: &str) -> Option<Kind> {
         ADVISOR_TOOL => Some(Kind::Advisor),
         SUBAGENT_TOOL => Some(Kind::SubAgent),
         WEB_SEARCH_TOOL if is_bitrouter_namespaced(name) => Some(Kind::WebSearch),
+        WEB_FETCH_TOOL if is_bitrouter_namespaced(name) => Some(Kind::WebFetch),
         _ => None,
     }
 }
@@ -423,5 +449,39 @@ mod tests {
             PipelineContext::new(PipelineRequest::new("m", CallerContext::local(), prompt));
         ServerToolDeclarationsHook.check(&mut ctx).await.unwrap();
         assert!(ctx.get_metadata(declarations_plugin_id()).is_none());
+    }
+
+    #[test]
+    fn parses_web_fetch_declaration() {
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "bitrouter:web_fetch",
+            serde_json::json!({ "backend": "exa", "max_content_tokens": 2000 }),
+        )]));
+        assert!(!decls.is_empty());
+        let wf = decls.web_fetch.expect("web_fetch parsed");
+        assert_eq!(wf.backend.as_deref(), Some("exa"));
+        assert_eq!(wf.max_content_tokens, Some(2000));
+    }
+
+    #[test]
+    fn bare_web_fetch_is_not_a_declaration() {
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "web_fetch",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_fetch.is_none());
+        assert!(decls.is_empty());
+    }
+
+    #[test]
+    fn foreign_namespaced_web_fetch_is_not_a_declaration() {
+        // Only the explicit `bitrouter` namespace declares the built-in tool;
+        // another provider's namespaced `web_fetch` is left for the upstream.
+        let decls = ServerToolDeclarations::from_prompt(&prompt_with(vec![provider_tool(
+            "openai:web_fetch",
+            serde_json::json!({}),
+        )]));
+        assert!(decls.web_fetch.is_none());
+        assert!(decls.is_empty());
     }
 }

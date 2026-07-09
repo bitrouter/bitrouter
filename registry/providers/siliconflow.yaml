@@ -1,0 +1,143 @@
+name: siliconflow
+display_name: SiliconFlow
+metadata:
+  headquarters: CN
+  name: SiliconFlow
+  slug: siliconflow
+api_base: https://api.siliconflow.com/v1
+api_protocol:
+  - "*": openai
+kind: gateway
+# Catalog source: https://models.dev/api.json (provider key `siliconflow`,
+# api=https://api.siliconflow.com/v1). International endpoint; pricing is USD per
+# 1M tokens. Refreshed by the daily models_dev auto_sync. The China endpoint
+# (api.siliconflow.cn, RMB) is a separate `siliconflow-cn` provider if wanted.
+models:
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-ai/DeepSeek-V4-Pro
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+        cache_read: 0.145
+      output_tokens:
+        text: 3.48
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-ai/DeepSeek-V4-Flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-ai/DeepSeek-V3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.27
+      output_tokens:
+        text: 0.42
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: moonshotai/Kimi-K2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.45
+      output_tokens:
+        text: 2.25
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: moonshotai/Kimi-K2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.77
+        cache_read: 0.2
+      output_tokens:
+        text: 4
+  - id: qwen/qwen3.5-122b-a10b
+    provider_model_id: Qwen/Qwen3.5-122B-A10B
+    pricing:
+      input_tokens:
+        no_cache: 0.26
+      output_tokens:
+        text: 2.08
+  - id: qwen/qwen3.5-27b
+    provider_model_id: Qwen/Qwen3.5-27B
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+      output_tokens:
+        text: 2
+  - id: qwen/qwen3.6-27b
+    provider_model_id: Qwen/Qwen3.6-27B
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 3.2
+  - id: qwen/qwen3.6-35b-a3b
+    provider_model_id: Qwen/Qwen3.6-35B-A3B
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 1.6
+  - id: minimax/minimax-m2.5
+    provider_model_id: MiniMaxAI/MiniMax-M2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 1.2
+  - id: z-ai/glm-5
+    provider_model_id: zai-org/GLM-5
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+      output_tokens:
+        text: 2.55
+  - id: z-ai/glm-5.1
+    provider_model_id: zai-org/GLM-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+      output_tokens:
+        text: 4.4
+  - id: z-ai/glm-5.2
+    provider_model_id: zai-org/GLM-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+      output_tokens:
+        text: 4.4
+  - id: openai/gpt-oss-120b
+    provider_model_id: openai/gpt-oss-120b
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+      output_tokens:
+        text: 0.45
+  - id: stepfun/step-3.5-flash
+    provider_model_id: stepfun-ai/Step-3.5-Flash
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+      output_tokens:
+        text: 0.3
+  - id: tencent/hy3
+    provider_model_id: tencent/Hy3-preview
+    pricing:
+      input_tokens:
+        no_cache: 0.066
+        cache_read: 0.029
+      output_tokens:
+        text: 0.26
+  - id: google/gemma-4-31b
+    provider_model_id: google/gemma-4-31B-it
+    pricing:
+      input_tokens:
+        no_cache: 0.13
+      output_tokens:
+        text: 0.4
+status: active
+weight: 1
+submitted_at: 2026-07-07
+auto_sync:
+  feed: models_dev

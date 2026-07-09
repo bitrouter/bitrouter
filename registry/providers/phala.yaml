@@ -1,0 +1,75 @@
+name: phala
+display_name: Phala
+metadata:
+  headquarters: US
+  name: Phala
+  privacy_policy_url: https://phala.com/privacy
+  slug: phala
+  status_page_url: https://status.phala.network
+  terms_of_service_url: https://phala.network/terms
+api_base: https://inference.phala.com/v1
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: gateway
+# Phala Cloud confidential (GPU-TEE) inference gateway. Verified 2026-07-08
+# against the public `GET https://inference.phala.com/v1/models` catalog.
+# Distinct from the `redpill` provider, which uses `https://api.redpill.ai/v1`.
+# Prices below are the live catalog's per-token prices converted to USD per 1M.
+models:
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek/deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+      output_tokens:
+        text: 5.25
+    capabilities:
+      - reasoning
+      - tools
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek/deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+      output_tokens:
+        text: 0.4
+    capabilities:
+      - reasoning
+      - tools
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: moonshotai/kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 1.09
+        cache_read: 0.37
+      output_tokens:
+        text: 4.6
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.1
+    provider_model_id: z-ai/glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.21
+        cache_read: 0.6
+      output_tokens:
+        text: 4.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.2
+    provider_model_id: z-ai/glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.7
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-07-07

@@ -1,6 +1,6 @@
 # CLI reference
 
-Every subcommand the v1 binary actually exposes. Anything not listed here doesn't exist — don't suggest `bitrouter doctor`, `bitrouter providers add`, `bitrouter cloud connect`, or `bitrouter auth status` (cloud identity is `bitrouter auth whoami`, see below).
+Every subcommand the v1 binary actually exposes. Anything not listed here doesn't exist — don't suggest `bitrouter doctor`, `bitrouter providers add`, `bitrouter cloud connect`, or the old auth subcommand tree (cloud identity is `bitrouter cloud whoami`, see below).
 
 ## Daemon lifecycle
 
@@ -10,7 +10,7 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 | `bitrouter start [--config PATH] [--log PATH]` | Spawn `serve` as a detached background process. Stdout/stderr go to `~/.bitrouter/bitrouter.log` unless `--log` overrides. Refuses to start over a live daemon. |
 | `bitrouter stop [--config PATH] [--socket PATH]` | Graceful shutdown via the control socket. |
 | `bitrouter restart [--config PATH] [--log PATH] [--socket PATH]` | Stop, wait up to 30s for in-flight requests to drain, then start. Escalates to SIGKILL on timeout. |
-| `bitrouter reload [--config PATH] [--socket PATH]` | Hot-reload the running daemon's config + routing table. **Also re-pushes provider env vars** from the current shell into the daemon, so `export OPENAI_API_KEY=new...; bitrouter reload` rotates the key without a restart. SIGHUP to the daemon process has the same effect. |
+| `bitrouter reload [--config PATH] [--socket PATH]` | Hot-reload the running daemon's config + routing table. **Also re-pushes provider env vars** from the current shell into the daemon, so `export OPENAI_API_KEY=new...; bitrouter reload` rotates the key without a restart. SIGHUP reloads daemon-side config but cannot forward newly exported shell variables. |
 | `bitrouter status [--config PATH] [--socket PATH]` | `systemctl status`-style block: pid / listen / model count / socket. Reports `stopped` (exit 0) when no daemon is reachable. |
 
 ## Inspection
@@ -63,7 +63,7 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | Command | Effect |
 |---|---|
 | `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, all built-in providers stubbed as `{}` so they auto-enable when their env var is set. |
-| `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, and the upstream-URL (SSRF) gate. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `schemas/bitrouter.config.schema.json` / regenerated with `cargo xtask generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. |
+| `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, and the upstream-URL (SSRF) gate. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. |
 | `bitrouter providers use <id>` | **No-op** in v1 (kept for v0 compatibility). Prints a hint to edit `bitrouter.yaml` instead. |
 | `bitrouter policy create <id> [--dir DIR]` | Write a starter policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |
@@ -72,27 +72,24 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 
 | Command | Effect |
 |---|---|
-| `bitrouter login <provider>` | Per-provider OAuth. Today the only supported provider is **`github-copilot`** — runs the GitHub device flow and stores `ghu_…` under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. |
-| `bitrouter logout <provider>` | Remove the stored OAuth token for `<provider>`. |
-| `bitrouter login` (no arg) | Legacy shim. Prints a pointer to `bitrouter auth login` (for cloud sign-in) and `bitrouter key sign --user <id>` (for local virtual keys). |
-| `bitrouter logout` (no arg) | Legacy shim. Pointer to `bitrouter auth logout`. |
-| `bitrouter whoami` (no arg) | Legacy shim. Pointer to `bitrouter auth whoami` (offline local read) and `bitrouter cloud whoami` (local read + cloud base URL). |
+| `bitrouter providers login <provider>` | Per-provider OAuth. Supported providers include **`claude-code`**, **`github-copilot`**, and **`openai-codex`** — runs or adopts the provider's login flow and stores the refreshing token under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. |
+| `bitrouter providers logout <provider>` | Remove the stored OAuth token or credential for `<provider>`. |
 
-## BitRouter Cloud sign-in (`bitrouter auth …`)
+## BitRouter Cloud sign-in (`bitrouter cloud …`)
 
 OAuth 2.0 device-flow sign-in against the BitRouter Cloud authorization server. The persisted credential drives both the `bitrouter` provider in the local daemon and the management subcommands below.
 
 | Command | Effect |
 |---|---|
-| `bitrouter auth login [--oauth-as URL] [--client-id ID] [--scope SCOPE]` | RFC 8628 device-flow login. Prints an approval URL, polls the token endpoint, and persists access + refresh tokens to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Auto-refreshes within 60 s of access-token expiry on every subsequent call. Defaults: AS `https://api.bitrouter.ai`, client id `bitrouter-cli`, scope set covering `inference:invoke usage:read keys:* billing:read policy:* byok:* account:read`. Override the AS or scope for a self-hosted deployment or to opt into the sensitive scopes (`billing:write`, `account:write`, `clients:*`). |
-| `bitrouter auth logout` | Best-effort RFC 7009 revoke at the AS, then delete the local credentials file. |
-| `bitrouter auth whoami` | Print the local credential's AS, client id, scope, subject, expiry. Reads the on-disk file only — no network. |
+| `bitrouter cloud login [--oauth-as URL] [--client-id ID] [--scope SCOPE]` | RFC 8628 device-flow login. Prints an approval URL, polls the token endpoint, and persists access + refresh tokens to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Auto-refreshes within 60 s of access-token expiry on every subsequent call. Defaults: AS `https://api.bitrouter.ai`, client id `bitrouter-cli`, scope set covering `inference:invoke usage:read keys:* billing:read policy:* byok:* namespace:read`. Override the AS or scope for a self-hosted deployment or to opt into sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write`. |
+| `bitrouter cloud logout` | Best-effort RFC 7009 revoke at the AS, then delete the local credentials file. |
+| `bitrouter cloud whoami` | Print the local credential's AS, client id, scope, subject, expiry, namespace, and cloud base URL. Reads the on-disk file only — no network. |
 
 Side effect: when the credentials file exists, the local daemon auto-adds the `bitrouter` provider to the zero-config providers map, so every model your account is entitled to is routable as `bitrouter:<model-id>` against `localhost:4356` without further configuration.
 
 ## BitRouter Cloud management (`bitrouter cloud …`)
 
-Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter auth login` first. Every leaf accepts `--json` for raw response output; default is a `systemctl`-style key:value block (single resource) or a small table (lists). On a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter auth login --scope "<current> <s>"` hint.
+Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter cloud login` first. Every leaf accepts `--json` for raw response output; default is a `systemctl`-style key:value block (single resource) or a small table (lists). On a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint.
 
 | Command | Effect |
 |---|---|
@@ -106,15 +103,19 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 | `bitrouter cloud budget list/get/create/update/delete` | Typed sugar over budget-kind policies. |
 | `bitrouter cloud preset list/get/create/update/delete` | Typed sugar over preset-kind policies. |
 | `bitrouter cloud byok list/set/delete` | BYOK provider keys. `set` takes already-sealed ciphertext (`--ciphertext-b64` + `--kek-id` matching the cloud's current X25519 public key). Scope: `byok:read` / `byok:write`. |
-| `bitrouter cloud oauth-client list/register/update/delete` | Registered OAuth clients on the account. Confidential clients return `client_secret` exactly once at `register`. Scope: `clients:read` / `clients:write` (opt-in via `--scope`). |
+
+## Harness spawn
+
+| Command | Effect |
+|---|---|
+| `bitrouter spawn --agent <claude\|codex> [--config PATH] [--base-url URL] -- <agent args...>` | Launch a coding-agent CLI through BitRouter without editing agent config files. Claude uses child env overrides; Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. |
+
 
 ## Unimplemented in v1.0
 
 These print `not implemented in v1.0` today and are unlikely to land in the proxy binary:
 
 - `bitrouter wallet` — OWS wallet integration lives in the separate `ows` workspace, not in the proxy binary.
-
-The bare `bitrouter login` / `bitrouter logout` / `bitrouter whoami` (no argument) are **not** in this list — they print a redirect (exit 0) pointing the user at the right surface (`bitrouter auth …` for cloud sign-in, `bitrouter key sign` for local virtual keys, `bitrouter cloud whoami` for cloud identity).
 
 ## Config resolution
 
@@ -131,6 +132,6 @@ The daemon `chdir`s to the directory holding the resolved config on startup, so 
 
 | Signal | Behavior |
 |---|---|
-| SIGHUP | Hot-reload config + routing table (same as `bitrouter reload`). |
+| SIGHUP | Hot-reload daemon-side config + routing table. It does not forward provider keys from the invoking shell; use `bitrouter reload` for env-var rotation. |
 | SIGINT / SIGTERM | Graceful shutdown: flush OTel exporter, remove pid file, exit 0. |
 | SIGKILL | No cleanup — pid file will be stale and `bitrouter status` will report it. `bitrouter start` cleans up stale pid files automatically before launching. |

@@ -1,0 +1,143 @@
+name: Registry Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 22 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: registry-sync
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code
+
+jobs:
+  sync:
+    name: sync source registry feeds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Sync deterministic registry feeds
+        run: |
+          cargo run -p dist-helper -- registry sync --write
+
+      - name: Install agentic sync tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ripgrep
+          curl --version
+          rg --version
+
+      - uses: actions/setup-node@v4
+
+      - name: Sync agentic registry feeds
+        env:
+          BITROUTER_API_KEY: ${{ secrets.BITROUTER_API_KEY }}
+        run: |
+          cargo run -p dist-helper -- registry agentic-prompt > target/registry-agentic-sync.md
+          if ! grep -q '^- `' target/registry-agentic-sync.md; then
+            echo "no agentic registry providers configured"
+            exit 0
+          fi
+          if [ -z "${BITROUTER_API_KEY:-}" ]; then
+            echo "::warning::BITROUTER_API_KEY is not set; skipping agentic registry sync"
+            exit 0
+          fi
+
+          npm install -g @openai/codex
+          export CODEX_HOME="${RUNNER_TEMP}/codex-home"
+          mkdir -p "$CODEX_HOME"
+          mkdir -p target/agentic-sync
+          codex --search -a never exec \
+            --ignore-user-config \
+            --ignore-rules \
+            --ephemeral \
+            --output-last-message target/registry-agentic-result.md \
+            -C "$GITHUB_WORKSPACE" \
+            -m "$AGENTIC_SYNC_MODEL" \
+            -c 'model_provider="bitrouter"' \
+            -c 'model_providers.bitrouter.name="BitRouter"' \
+            -c 'model_providers.bitrouter.base_url="https://api.bitrouter.ai/v1"' \
+            -c 'model_providers.bitrouter.wire_api="responses"' \
+            -c 'model_providers.bitrouter.env_key="BITROUTER_API_KEY"' \
+            -s danger-full-access \
+            - < target/registry-agentic-sync.md
+          if ! grep -q 'registry valid:' target/registry-agentic-result.md; then
+            echo "::error::agentic registry sync did not report successful validation"
+            cat target/registry-agentic-result.md
+            exit 1
+          fi
+          cargo run -p dist-helper -- registry agentic-diff-check
+
+      - name: Build and check registry dist
+        run: |
+          cargo run -p dist-helper -- registry build
+          cargo run -p dist-helper -- check
+
+      - name: Open registry sync PR
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          BRANCH: automation/registry-sync
+        run: |
+          if git diff --quiet -- registry dist/registry; then
+            echo "registry source and dist are already up to date"
+            exit 0
+          fi
+
+          cat > /tmp/registry-sync-pr.md <<'EOF'
+          ## What changed
+
+          Automated source registry sync from provider `auto_sync` feeds.
+
+          ## Validation
+
+          - `cargo run -p dist-helper -- registry sync --write`
+          - `cargo run -p dist-helper -- registry agentic-prompt`
+          - `codex --search exec ... < target/registry-agentic-sync.md`
+          - `cargo run -p dist-helper -- registry build`
+          - `cargo run -p dist-helper -- check`
+          EOF
+
+          git config user.name "bitrouter-automation[bot]"
+          git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
+          git add registry dist/registry
+          git commit -m "chore: sync registry catalog"
+          remote_ref="$(git ls-remote --heads origin "${BRANCH}")"
+          remote_sha="$(printf '%s\n' "${remote_ref}" | awk '{print $1}')"
+          if [ -n "${remote_sha}" ]; then
+            git push --force-with-lease="refs/heads/${BRANCH}:${remote_sha}" origin "HEAD:${BRANCH}"
+          else
+            git push origin "HEAD:${BRANCH}"
+          fi
+
+          pr_number="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
+          if [ -n "${pr_number}" ]; then
+            gh pr edit "${pr_number}" \
+              --title "chore: sync registry catalog" \
+              --body-file /tmp/registry-sync-pr.md
+          else
+            gh pr create \
+              --base main \
+              --head "${BRANCH}" \
+              --title "chore: sync registry catalog" \
+              --body-file /tmp/registry-sync-pr.md
+          fi

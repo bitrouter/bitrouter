@@ -2,10 +2,10 @@
 //!
 //! Two-step authentication:
 //!
-//! 1. The user runs `bitrouter login github-copilot` once, which drives the
-//!    OAuth Device Authorization Grant against `github.com` and stores a
-//!    long-lived GitHub user-to-server access token (e.g. `ghu_…`) in the
-//!    [`crate::oauth::credential_store::CredentialStore`].
+//! 1. The user runs `bitrouter providers login github-copilot` once, which
+//!    drives the OAuth Device Authorization Grant against `github.com` and
+//!    stores a long-lived GitHub user-to-server access token (e.g. `ghu_…`) in
+//!    the [`crate::oauth::credential_store::CredentialStore`].
 //! 2. At request time, [`CopilotAuthApplier`] reads that GitHub token and
 //!    exchanges it for a short-lived Copilot "internal" token via
 //!    `GET https://api.github.com/copilot_internal/v2/token`. The Copilot
@@ -127,7 +127,8 @@ impl CopilotAuthApplier {
             .and_then(|c| c.as_oauth().cloned())
             .ok_or_else(|| BitrouterError::Upstream {
                 status: 401,
-                message: "no GitHub Copilot OAuth token — run `bitrouter login github-copilot`"
+                message: "no GitHub Copilot OAuth token — run \
+                          `bitrouter providers login github-copilot`"
                     .to_string(),
             })
     }
@@ -235,7 +236,7 @@ mod tests {
         let err = applier.apply(req, &copilot_target()).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter login github-copilot"),
+            msg.contains("bitrouter providers login github-copilot"),
             "expected helpful hint, got: {msg}"
         );
     }

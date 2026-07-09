@@ -1,0 +1,68 @@
+name: xai
+metadata:
+  headquarters: US
+  name: xAI
+  privacy_policy_url: https://x.ai/legal/privacy-policy
+  slug: xai
+  status_page_url: https://status.x.ai
+  terms_of_service_url: https://x.ai/legal/terms-of-service
+api_base: https://api.x.ai/v1
+api_protocol:
+  - "*": [responses, openai]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+# Catalog source: https://models.dev/api.json (provider key `xai`); >200k tier on Grok 4 family doubles the base price listed here.
+# Pricing is per 1M tokens.
+models:
+  - id: x-ai/grok-4.3
+    provider_model_id: grok-4.3
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.20
+    provider_model_id: grok-4.20-0309-non-reasoning
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+    # `reasoning` dropped: the provider_model_id is the non-reasoning grok-4.20
+    # variant. The model-level models.dev baseline over-claimed it (the canonical
+    # id `grok-4.20` matches the reasoning family); corrected by hand.
+    capabilities:
+      - tools
+  - id: x-ai/grok-build-0.1
+    provider_model_id: grok-build-0.1
+    # Pricing from the xAI console catalog ($1.00 in / $2.00 out per 1M).
+    # No cached-input rate published there, so cache_read is omitted.
+    pricing:
+      input_tokens:
+        no_cache: 1
+      output_tokens:
+        text: 2
+    capabilities:
+      - tools
+  - id: x-ai/grok-4.20-multi-agent
+    provider_model_id: grok-4.20-multi-agent-0309
+    # Pricing from the xAI console catalog ($1.25 in / $2.50 out per 1M).
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+      output_tokens:
+        text: 2.5
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-05-25
+auto_sync:
+  feed: models_dev

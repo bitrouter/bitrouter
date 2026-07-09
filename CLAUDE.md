@@ -25,6 +25,42 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
 2. Keep `skills/bitrouter/SKILL.md` under ~200 lines; deep detail goes in
    `skills/bitrouter/references/`.
 
+## Documentation
+
+Product docs live in `docs/` and are synced to the docs site (`bitrouter-docs`)
+at build time. `docs/CONTRIBUTING.md` is the authoring contract (plain Markdown,
+no `import`/`export`, only the whitelisted global components, extensionless
+internal links).
+
+1. **ALWAYS** keep English and Chinese in lockstep. Every `docs/<section>/<name>.md`
+   has a Simplified-Chinese sibling `docs/<section>/<name>.zh.md`. When you add,
+   edit, or remove a doc page, make the **identical** change to its `.zh.md` in the
+   same change — never ship an English-only or out-of-date translation.
+2. A translation mirrors the English page exactly except for prose: preserve every
+   code block, component tag (`<Callout>`, `<Tabs>`, …), heading, and link target
+   verbatim; translate only human-readable text. Keep `title:` as the English;
+   translate `description:`.
+3. **NEVER** hand-edit the `sourceHash` frontmatter field — the docs sync manages it
+   (it tracks whether a translation is current).
+4. **NEVER** author API-reference operation pages or the `ai-resources`/root nav
+   here — those are owned by `bitrouter-docs` (see `docs/CONTRIBUTING.md`).
+5. **ALWAYS** keep `docs/get-started/supported-models.md` and
+   `supported-providers.md` (and their `.zh.md` siblings) consistent with the
+   `registry/` catalog whenever you add, remove, or re-scope a vendor or provider
+   in `registry/models/` or `registry/providers/`. Two things must stay in sync:
+   - **The catalog/directory tables.** These are generated, not hand-edited. Rebuild
+     the registry (`cargo run -p dist-helper -- registry build`) and then
+     regenerate the tables (`python3 scripts/gen-supported-tables.py`), which
+     rewrites the block under the `Model catalog` / `Provider directory` anchor
+     heading in all four pages from `dist/registry/{models,providers}.json`. The
+     English and Chinese tables share identical data rows — only the header row
+     differs — so run the script rather than editing rows by hand.
+   - **The surrounding prose.** It hardcodes registry-derived facts the script does
+     not touch: the discounted-vs-closed-source vendor families (`gpt-*`,
+     `claude-*`, `gemini-*`, `grok-*`), example model ids, and the default discount
+     percentage. Update these in the same change so the docs never describe a
+     catalog that no longer matches.
+
 ## Contributing
 
 1. **ALWAYS** use the **conventional** git commit message format. Keep the title under 60 characters. The message body and footer can be any length.

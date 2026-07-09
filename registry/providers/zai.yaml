@@ -1,0 +1,62 @@
+name: zai
+metadata:
+  headquarters: CN
+  name: Z.ai
+  privacy_policy_url: https://docs.z.ai/legal-agreement/privacy-policy
+  slug: zai
+  terms_of_service_url: https://docs.z.ai/legal-agreement/terms-of-use
+api_protocol:
+  - "*": [openai, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 3.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-4.7
+    provider_model_id: glm-4.7
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.11
+        cache_write: 0
+      output_tokens:
+        text: 2.2
+status: active
+weight: 1
+submitted_at: 2026-05-25
+api_base: https://api.z.ai/api/paas/v4
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
