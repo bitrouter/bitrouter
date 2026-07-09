@@ -1375,9 +1375,39 @@ fn validate_protocol_list(
 }
 
 fn validate_https(url: &str, file: &str, field: &str, issues: &mut Vec<String>) {
-    if !url.starts_with("https://") || reqwest::Url::parse(url).is_err() {
+    // `api_base` may carry `${VAR}` / `${VAR:-default}` placeholders that the
+    // registry merge resolves from the environment (regional / per-account
+    // bases like Bedrock's `${AWS_REGION}` or Azure's `${AZURE_OPENAI_RESOURCE}`).
+    // Substitute a dummy DNS label first so the template's URL structure is
+    // still validated — otherwise the `:` in `:-` reads as a port and parsing
+    // fails.
+    let resolved = fill_url_placeholders(url);
+    if !resolved.starts_with("https://") || reqwest::Url::parse(&resolved).is_err() {
         issues.push(format!("{file}: {field} must be an HTTPS URL"));
     }
+}
+
+/// Replace every `${...}` span with a fixed dummy label, so an `api_base`
+/// template validates as a concrete URL would.
+fn fill_url_placeholders(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    let mut rest = url;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        match rest[start + 2..].find('}') {
+            Some(end) => {
+                out.push_str("placeholder");
+                rest = &rest[start + 2 + end + 1..];
+            }
+            None => {
+                // Unterminated `${` — copy verbatim and stop.
+                out.push_str(&rest[start..]);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn path_label(path: &Path) -> String {

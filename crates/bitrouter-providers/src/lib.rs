@@ -21,30 +21,35 @@
 //! - **`AuthApplier`-shaped** (this crate). The provider reuses the
 //!   `HttpExecutor` + `OutboundDispatch` pipeline and only overrides
 //!   credential placement (Bearer, custom header, OAuth + token-exchange,
-//!   AAD, …). Async + stateful behaviour is fine — see [`copilot`] for
-//!   the GitHub→Copilot token-exchange pattern. Implementations are small
-//!   and share the OAuth + token-store + registry infrastructure that
-//!   already lives in this crate, so an additional dep is rarely needed.
+//!   AAD, …). Async + stateful behaviour is fine — see [`copilot`] for the
+//!   GitHub→Copilot token-exchange pattern. This is the slot for **every**
+//!   provider whose wire is HTTP+JSON+SSE, which is effectively all of them:
+//!   the big clouds included. AWS Bedrock uses the `bedrock-mantle`
+//!   OpenAI/Responses/Messages endpoints and Azure OpenAI its `/openai/v1`
+//!   surface — both plain `bearer` registry entries, no vendor SDK and no
+//!   custom code.
 //! - **`Executor`-shaped** (its own crate). The provider replaces the
-//!   entire request path — typically because a vendor SDK owns the binary
-//!   event-stream framing, the auth + signing + retry only makes sense as
-//!   a unit, or the wire format isn't HTTP+JSON+SSE. `bitrouter-bedrock` is
-//!   the prototype: `aws-sdk-bedrockruntime` + `aws-config` are heavy
-//!   transitive deps and folding them in (even feature-gated) would resolve
-//!   them in every `Cargo.lock` that touches `bitrouter-providers`.
+//!   entire request path — reserved for the rare case where the wire is
+//!   *not* HTTP+JSON+SSE that an existing `OutboundAdapter` can decode
+//!   (e.g. a vendor SDK owning a binary event-stream framing). **There are
+//!   no built-in providers in this slot today** — it exists as an escape
+//!   hatch, not a template. (Bedrock's native Converse API is such a wire,
+//!   but its OpenAI-compatible `bedrock-mantle` endpoints let it live in the
+//!   `AuthApplier` slot instead, so the heavy AWS SDK is not vendored.)
 //!
-//! In short: **if you can implement it as an `AuthApplier`, put it here. If
-//! it needs its own `Executor`, give it its own crate.**
+//! In short: **implement it as an `AuthApplier` here unless the upstream
+//! wire genuinely isn't HTTP+JSON+SSE — which, for current providers, never
+//! happens.**
 //!
 //! ## Layout
 //!
 //! - [`ProviderEntry`] — the compiled-in auth + transport shape of one built-in
 //!   provider (derived from the registry snapshot, or the `bitrouter` TOML).
 //! - [`AuthScheme`] — Bearer / Header / OAuth / Native variants. Bearer +
-//!   Header cover every static-credential provider; OAuth references a
-//!   handler that runs the device-code flow + applies a token; Native
-//!   references a handler in a sibling crate (e.g. `aws_sigv4` in
-//!   `bitrouter-bedrock`).
+//!   Header cover every static-credential provider (including the big clouds
+//!   Bedrock + Azure); OAuth references a handler that runs the device-code
+//!   flow + applies a token; Native references a request-time `AuthApplier`
+//!   handler by name (no built-in provider uses it today).
 //! - [`builtin`] — the lone compiled-in built-in (the `bitrouter` cloud
 //!   gateway): [`builtin::all`] / [`builtin::find`]. [`builtin::entry_from_registry`]
 //!   maps a fetched registry provider to the same shape on demand.
@@ -63,15 +68,16 @@
 //!    Once released, it is fetched + merged automatically — nothing is vendored
 //!    into this binary.
 //! 2. For Bearer / Header schemes, no Rust code is needed. For OAuth or
-//!    anything stateful, add an `AuthApplier` impl in a sibling module
-//!    (see [`copilot`]) keyed by the registry `auth.handler` name, and
-//!    register it during binary startup.
+//!    anything stateful (device-code, token-exchange), add an `AuthApplier`
+//!    impl in a sibling module (see [`copilot`]) keyed by the registry
+//!    `auth.handler` name, and register it during binary
+//!    startup. Regional / per-account base URLs (Bedrock region, Azure
+//!    resource) are expressed as `${VAR}` in the registry `api_base` and
+//!    resolved from the environment at merge time.
 //!
-//! For an **SDK-driven provider** (the `Executor` slot): create a new
-//! `bitrouter-<name>` crate following the `bitrouter-bedrock` template —
-//! depend on `bitrouter-sdk`, implement [`Executor`](bitrouter_sdk::language_model::Executor),
-//! register it on the `DispatchExecutor` at binary startup. Do not add it
-//! to this crate.
+//! An **`Executor`-slot provider** (its own crate) is only needed for a wire
+//! that isn't HTTP+JSON+SSE; no built-in provider needs one. See
+//! [`Executor`](bitrouter_sdk::language_model::Executor) if you hit that case.
 
 #![deny(missing_docs)]
 

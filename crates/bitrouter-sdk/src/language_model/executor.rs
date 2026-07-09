@@ -706,8 +706,11 @@ impl Executor for HttpExecutor {
 /// Use this when some providers use the built-in [`HttpExecutor`] +
 /// [`OutboundDispatch`] (HTTP / JSON / per-protocol auth header) and others
 /// bypass that machinery entirely — typically because they use a vendor SDK
-/// that owns the transport itself (e.g. `aws-sdk-bedrockruntime` for AWS
-/// Bedrock).
+/// that owns the transport itself (illustrated below with a hypothetical
+/// `aws-sdk-bedrockruntime`-backed executor for AWS Bedrock's native Converse
+/// API). No built-in provider needs this today — BitRouter's `aws-bedrock`
+/// provider reaches Bedrock's OpenAI-compatible `bedrock-mantle` endpoints over
+/// the default `HttpExecutor` instead.
 ///
 /// The `default` executor handles every protocol that is **not** explicitly
 /// registered. The four built-in protocols (`openai` / `responses` /

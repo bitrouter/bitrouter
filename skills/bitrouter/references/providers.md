@@ -15,7 +15,10 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 |---|---|---|---|
 | `openai` | `OPENAI_API_KEY` | Bearer | Chat Completions default; Responses API also live |
 | `anthropic` | `ANTHROPIC_API_KEY` | Header `x-api-key` | Messages API |
-| `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API — **not** `GOOGLE_API_KEY` |
+| `google` | `GEMINI_API_KEY` | Header `x-goog-api-key` | Generative Language API (Gemini API key) — **not** `GOOGLE_API_KEY` |
+| `aws-bedrock` | `AWS_BEARER_TOKEN_BEDROCK` | Bearer | Bedrock `bedrock-mantle` OpenAI-compatible endpoints; region via `AWS_REGION` (default `us-east-1`). Native Converse features (cross-region profiles, Guardrails) not served |
+| `azure` | `AZURE_OPENAI_API_KEY` | Bearer | Azure OpenAI `/openai/v1` surface; set `AZURE_OPENAI_RESOURCE` to your resource name (unset ⇒ provider inactive). Entra ID tokens also work as the bearer |
+| `vertex` | `VERTEX_EXPRESS_API_KEY` | Header `x-goog-api-key` | Vertex AI, currently **Express Mode only** → **Gemini models only** (no Claude/Llama/Mistral), global endpoint (region ignored). Partner models are commented out in the registry entry pending service-account OAuth support |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
 | `claude-code` | — (local OAuth) | Claude Code session | `bitrouter providers login claude-code`; Claude Pro/Max subscription provider, distinct from `anthropic` API-key billing |
 | `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
@@ -125,13 +128,19 @@ providers:
     api_key: "${GROQ_API_KEY}"
     auto_discover: true               # pull /v1/models at startup + reload
 
-  azure:
-    api_base: "https://YOUR_RESOURCE.openai.azure.com"
-    api_key: "${AZURE_OPENAI_KEY}"
-    # Azure speaks Chat Completions on the same base; deployment names go in `models`
+  vllm:
+    api_base: "https://llm.internal.example.com/v1"
+    api_key: "${VLLM_API_KEY}"
     models:
-      - { id: "gpt-4o", upstream_id: "gpt4-deployment" }
+      - { id: "my-org/mixtral-8x22b" }
 ```
+
+> Azure OpenAI and Amazon Bedrock are **built-in** registry providers now (see
+> *Known providers*) — you do not hand-write them here. Set their env vars (and
+> `AZURE_OPENAI_RESOURCE` / `AWS_REGION`) and they self-enable. Google `vertex`
+> is built-in **in Express Mode only** (Gemini-only, static `VERTEX_EXPRESS_API_KEY`);
+> the full Vertex catalog (Claude/Llama on regional endpoints) is commented out in
+> the registry entry, pending service-account OAuth support.
 
 `api_protocol` accepts a glob-prefix pattern map: `{ "claude-*": anthropic, "gpt-5.5-codex": responses, "*": openai }` is valid and matches most-specific-first.
 

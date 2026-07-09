@@ -25,7 +25,7 @@
 
 use bitrouter_sdk::config::{
     Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
-    ProviderModel, RateLimit, RegistryConfig, env_lookup,
+    ProviderModel, RateLimit, RegistryConfig, env_lookup, substitute_with,
 };
 use bitrouter_sdk::language_model::types::ProtocolList;
 
@@ -106,6 +106,17 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
     }
 }
 
+/// Resolve `${VAR}` / `${VAR:-default}` references in a registry `api_base`
+/// against the environment (via [`env_lookup`], so daemon `reload --env`
+/// overrides apply). Returns `None` when a referenced variable is unset and
+/// carries no default — the provider then can't form a valid base URL. Used
+/// for the parameterised big-cloud bases (Bedrock `${AWS_REGION}`, Azure
+/// `${AZURE_OPENAI_RESOURCE}`); a fixed base has no `${...}` and passes through
+/// unchanged.
+fn resolve_api_base(raw: &str) -> Option<String> {
+    substitute_with(raw, env_lookup).ok()
+}
+
 /// Merge one public (non-private) registry provider into the config. Fully
 /// configures it from the registry data — these providers are no longer
 /// compiled-in built-ins (only the `bitrouter` cloud gateway is), so the merge
@@ -128,7 +139,14 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         if existing.api_base.is_empty()
             && let Some(api_base) = &provider.api_base
         {
-            existing.api_base = api_base.clone();
+            match resolve_api_base(api_base) {
+                Some(base) => existing.api_base = base,
+                // A parameterised `api_base` (e.g. `${AZURE_OPENAI_RESOURCE}`)
+                // whose variable is unset and has no default can't form a real
+                // URL — drop the provider from routing rather than dial a
+                // literal `${VAR}` host.
+                None => existing.active = false,
+            }
         }
         // Provider-level protocol globs (the gateways) — used by discovered
         // models, which carry no per-model protocol. Providers with explicit model entries have no
@@ -169,7 +187,9 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     let Some(api_key) = env_lookup(&var).filter(|v| !v.is_empty()) else {
         return;
     };
-    let Some(api_base) = provider.api_base.clone() else {
+    // Resolve `${VAR}` in the base URL; a parameterised base whose variable is
+    // unset (and undefaulted) means we can't route to this provider yet.
+    let Some(api_base) = provider.api_base.as_deref().and_then(resolve_api_base) else {
         return;
     };
     let models = build_models(provider);
