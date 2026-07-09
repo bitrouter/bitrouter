@@ -7,7 +7,7 @@
 //! connection's background actors run only while the `main_fn` closure is alive,
 //! so `main_fn` runs a **command loop** that stays resident for the connection's
 //! lifetime. Callers on other runtimes reach that loop through a `futures` mpsc
-//! of [`Command`]s — `prompt_typed`/`cancel` enqueue a command carrying a
+//! of `Command`s — `prompt_typed`/`cancel` enqueue a command carrying a
 //! oneshot reply channel; the loop drives the request and answers the oneshot.
 //!
 //! ## Callback plane
@@ -79,8 +79,8 @@ const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 /// There is exactly **one** resolver per request — the one carried here. A
 /// consumer that cannot answer should simply **drop** the `PendingPermission`:
 /// dropping the resolver makes the parked upstream handler respond with the
-/// reject option ([`PermissionOutcome::Deny`] mapped via
-/// [`select_option`](crate::translate::select_option)), so the upstream never
+/// reject option ([`PermissionOutcome::Deny`] mapped via [`select_option`]),
+/// so the upstream never
 /// hangs.
 ///
 /// Unresolved permissions are otherwise reaped only when the connection tears
@@ -104,7 +104,7 @@ impl PendingPermission {
     /// Answer this permission request with the **exact** outcome — the chosen
     /// `optionId` (or `Cancelled`) as selected by the consumer. The parked
     /// upstream handler validates the id against the offered options
-    /// ([`sanitize_selection`](crate::translate::sanitize_selection)) before
+    /// ([`sanitize_selection`]) before
     /// responding. Consumes the pending item; if the `PendingPermission` is
     /// instead **dropped** without calling this, the upstream handler defaults
     /// the response to the reject option.
@@ -414,7 +414,7 @@ impl UpstreamConnection {
     /// Each call yields an independent stream from the current point onward.
     ///
     /// **Lossy under lag.** Updates ride a bounded `tokio` broadcast: a
-    /// subscriber that falls more than [`UPDATE_CHANNEL_CAPACITY`] messages
+    /// subscriber that falls more than `UPDATE_CHANNEL_CAPACITY` messages
     /// behind silently skips the dropped chunks (the broadcast's `Lagged` marker
     /// is filtered out, not surfaced as an error). A consumer that needs a
     /// complete transcript must subscribe immediately after
@@ -435,7 +435,7 @@ impl UpstreamConnection {
     /// upstream update to its manager verbatim (no lossy reverse-mapping).
     ///
     /// **Lossy under lag**, exactly like [`subscribe_updates`](Self::subscribe_updates):
-    /// rides the same bounded [`UPDATE_CHANNEL_CAPACITY`] broadcast and silently
+    /// rides the same bounded `UPDATE_CHANNEL_CAPACITY` broadcast and silently
     /// skips ahead (filters the `Lagged` marker) for a subscriber that falls
     /// behind.
     pub fn subscribe_raw_updates(
@@ -501,7 +501,7 @@ impl UpstreamConnection {
     /// and this returns once the driver confirms teardown. Idempotent: if the
     /// loop is already gone the connection is already down and this returns
     /// `Ok`. Errs only when the driver fails to confirm within
-    /// [`SHUTDOWN_TIMEOUT`], in which case the child may still be alive.
+    /// `SHUTDOWN_TIMEOUT` (5s), in which case the child may still be alive.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         let (done_tx, done_rx) = oneshot::channel::<()>();
         if self
@@ -821,7 +821,7 @@ const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// the health-check.
 ///
 /// Tears the connection down (drops) immediately after `initialize` succeeds
-/// or after [`HEALTH_CHECK_TIMEOUT`] elapses.
+/// or after `HEALTH_CHECK_TIMEOUT` (10s) elapses.
 pub async fn health_check(
     command: &str,
     args: &[String],

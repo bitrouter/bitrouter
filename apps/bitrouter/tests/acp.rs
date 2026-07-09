@@ -232,7 +232,7 @@ agents:
 async fn serve_subprocess_e2e() {
     use std::time::Duration;
 
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::BufReader;
 
     /// Per-round-trip timeout — generous enough for a debug-build spawn + ACP
     /// handshake, tight enough to fail fast on a stalled child.
@@ -414,7 +414,7 @@ async fn serve_subprocess_e2e() {
 async fn warm_reattach_socket_e2e() {
     use std::time::Duration;
 
-    use tokio::io::{AsyncWriteExt, BufReader};
+    use tokio::io::BufReader;
 
     const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 

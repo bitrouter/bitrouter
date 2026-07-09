@@ -24,6 +24,7 @@
 //! startup. Typed health-checking (initialize-only) is provided by
 //! `bitrouter-substrate::up::health_check`.
 
+#[cfg(feature = "acp")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -32,7 +33,10 @@ use async_trait::async_trait;
 use agent_client_protocol_schema::v1::{PromptRequest, PromptResponse};
 
 use crate::caller::CallerContext;
-use crate::error::{BitrouterError, Result};
+#[cfg(feature = "acp")]
+use crate::error::BitrouterError;
+use crate::error::Result;
+#[cfg(feature = "acp")]
 use crate::language_model::HookDecision;
 
 pub mod transport;

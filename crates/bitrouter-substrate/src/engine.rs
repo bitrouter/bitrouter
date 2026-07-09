@@ -4,7 +4,7 @@
 //! makes them run as one unit:
 //!
 //! - the [`UpstreamConnection`] (the agent child process + ACP client),
-//! - the SDK [`Pipeline`] (`PreRequest → Route → Execute`) whose [`Executor`] is
+//! - the SDK [`Pipeline`] (`PreRequest → Route → Execute`) whose executor is
 //!   a [`SessionExecutor`] bound to this connection and whose `ExecutionHook` is
 //!   a [`TelemetryHook`],
 //! - the [`TurnController`] that serialises prompts into ordered turns, and
@@ -83,7 +83,7 @@ pub struct LaunchOptions {
     pub transcript: bool,
     /// Per-turn deadline. On elapse the upstream is asked to cancel
     /// cooperatively (`session/cancel`); if it does not comply within
-    /// [`TURN_CANCEL_GRACE`] the turn errors.
+    /// `TURN_CANCEL_GRACE` (3s) the turn errors.
     pub turn_timeout: Option<Duration>,
 }
 

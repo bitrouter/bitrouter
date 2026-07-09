@@ -44,10 +44,11 @@
 //!   we wrap it in a [`SessionNotification`] (with the manager-facing session id)
 //!   and send it as a `session/update` notification — verbatim, no reverse
 //!   mapping.
-//! - **Permissions:** [`Session::permissions`] yields each [`PendingPermission`];
+//! - **Permissions:** [`Session::permissions`] yields each
+//!   [`PendingPermission`](crate::up::PendingPermission);
 //!   we re-issue it to the manager as a `session/request_permission` request with
 //!   the same tool-call and options, await the manager's
-//!   [`RequestPermissionResponse`], and resolve the pending item with the
+//!   `RequestPermissionResponse`, and resolve the pending item with the
 //!   manager's outcome **verbatim** — the exact chosen `optionId` reaches the
 //!   upstream (validated there against the offered set), never a lossy
 //!   collapse to option kind. The await happens inside a spawned task (off the
@@ -68,7 +69,7 @@
 //! `ConnectionTo` clone — held by our handlers/forwarders — keeps the connection's
 //! internal channels open). A `pending()` `main_fn` therefore never returns,
 //! leaking the `bitrouter acp serve` process and orphaning the upstream agent
-//! child. Instead we wrap the transport in [`EofSignaling`], which fires a
+//! child. Instead we wrap the transport in `EofSignaling`, which fires a
 //! one-shot when the manager's write side hits EOF; `main_fn` awaits that and
 //! returns, so `run_until` drops `background` (cancelling the forwarders) and the
 //! `Arc<Session>` drops, killing the upstream child.
@@ -922,7 +923,7 @@ mod tests {
 
                         // Drain the live updates received so far so the replay
                         // is observed in isolation.
-                        while update_rx.try_next().is_ok_and(|opt| opt.is_some()) {}
+                        while update_rx.try_recv().is_ok() {}
 
                         // Wrong id is refused.
                         let bad = cx
@@ -945,7 +946,7 @@ mod tests {
                         .await?;
 
                         let mut kinds: Vec<String> = Vec::new();
-                        while let Ok(Some(n)) = update_rx.try_next() {
+                        while let Ok(n) = update_rx.try_recv() {
                             kinds.push(format!("{:?}", n.update));
                         }
                         assert!(

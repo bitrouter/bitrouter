@@ -34,7 +34,7 @@
 //! ```
 //!
 //! Both functions load their `Config` via the standard resolution chain (see
-//! [`bitrouter::paths`]) and build a [`ConfigAcpRoutingTable`] from
+//! `bitrouter::paths`) and build a [`ConfigAcpRoutingTable`] from
 //! `config.agents` — the same table the GUI renderer uses.
 
 use std::sync::Arc;
@@ -422,7 +422,7 @@ where
             .context("writing output")?;
         return Ok(());
     }
-    records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
 
     let now = now_unix();
     let mut buf = String::from("RECORD    AGENT             STATUS   AGE      WORKTREE\n");
