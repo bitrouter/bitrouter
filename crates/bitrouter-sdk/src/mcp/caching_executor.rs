@@ -204,7 +204,7 @@ impl<E: Executor + 'static> CachingExecutor<E> {
                     // safe (silent stale data is worse than a fresh re-fetch).
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         if let Ok(mut map) = caches.lock() {
-                            for (_, sc) in map.iter_mut() {
+                            for sc in map.values_mut() {
                                 sc.clear();
                             }
                         }

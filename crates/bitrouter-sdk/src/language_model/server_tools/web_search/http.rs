@@ -392,7 +392,7 @@ mod tests {
                             .as_deref()
                             .map(|a| format!(
                                 "  answer: {}…",
-                                &a.chars().take(60).collect::<String>()
+                                a.chars().take(60).collect::<String>()
                             ))
                             .unwrap_or_default(),
                     );
