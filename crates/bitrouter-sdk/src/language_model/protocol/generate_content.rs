@@ -296,7 +296,6 @@ fn render_generate_content_tools(tools: &[Tool]) -> serde_json::Value {
                 name,
                 description,
                 parameters,
-                strict: _,
                 ..
             } => function_declarations.push(serde_json::json!({
                 "name": name,
