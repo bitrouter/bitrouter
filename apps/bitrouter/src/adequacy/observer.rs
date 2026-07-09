@@ -43,10 +43,13 @@ impl ObserveHook for AdequacyObserveHook {
     async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
 
     async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let client_disconnected = matches!(outcome, RequestOutcome::ClientDisconnected);
         let cause = match outcome {
             RequestOutcome::Failed(error) => classify_failure(error),
-            // The client hanging up tells us nothing about the tier — skip.
-            RequestOutcome::ClientDisconnected => return,
+            // A disconnect is not proof that a cheap response was adequate, but
+            // for an exploration candidate left on the escalation tier it can
+            // still advance the deterministic trial cadence below.
+            RequestOutcome::ClientDisconnected => InadequacyCause::None,
             // A completed request got a response: the route held.
             RequestOutcome::Completed => InadequacyCause::None,
         };
@@ -65,6 +68,9 @@ impl ObserveHook for AdequacyObserveHook {
         // tier). This guards against a caller's explicit route / coincidental
         // model match being mistaken for one.
         if static_tier == Some(served_tier) && Some(served_tier) != escalation_tier {
+            if client_disconnected {
+                return;
+            }
             let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
             self.ledger
                 .observe(&fingerprint, Outcome::StaticDowngrade { cause })
@@ -86,6 +92,9 @@ impl ObserveHook for AdequacyObserveHook {
             // up to the tool-use tier — is intentionally not counted: a real trial
             // there would be clamped too, so exploration is correctly inert for it.
             if trialed || Some(served_tier) == escalation_tier {
+                if trialed && client_disconnected {
+                    return;
+                }
                 let fingerprint = self.table.request_key(ctx.prompt(), ctx.headers());
                 self.ledger
                     .observe(&fingerprint, Outcome::Exploration { trialed, cause })
@@ -454,6 +463,27 @@ mod tests {
         assert!(
             ledger.should_trial("opening"),
             "served service id must advance the explicit route tier's cadence"
+        );
+    }
+
+    #[tokio::test]
+    async fn client_disconnect_on_escalation_tier_advances_exploration_cadence() {
+        // Codex streaming clients may close the response after consuming the
+        // useful content. That is not proof that a cheap trial was adequate, but
+        // a capable-tier non-trial can still advance the deterministic trial
+        // cadence; otherwise streaming agents never explore.
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        let hook = AdequacyObserveHook::new(explicit_route_explore_table(), ledger.clone());
+
+        hook.on_request_end(
+            &ctx("gpt-5.5", vec![user("start")]),
+            &RequestOutcome::ClientDisconnected,
+        )
+        .await;
+
+        assert!(
+            ledger.should_trial("opening"),
+            "capable stream disconnect should still advance exploration cadence"
         );
     }
 }
