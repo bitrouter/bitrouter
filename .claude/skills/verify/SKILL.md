@@ -53,5 +53,7 @@ or the first `agents check` blows the 10s initialize budget on download.
   permission response needs the request's id echoed back).
 - `acp sessions`: crashed sessions show `dead` (pid liveness).
 
-**Cleanup gotcha:** killing the CLI with a signal leaks the npx/node agent
-children (no destructors run) — `pkill -f claude-code-acp` after crashes.
+**Cleanup:** normal exits group-kill the whole agent tree (wrapper chains
+included) — verify with `pgrep -f claude-code-acp` after runs. Only a
+SIGKILL of bitrouter itself (no destructors) can still leave orphans:
+`pkill -f claude-code-acp` after hard kills.

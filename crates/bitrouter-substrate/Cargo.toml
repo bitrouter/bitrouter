@@ -14,6 +14,7 @@ agent-client-protocol = { workspace = true }
 agent-client-protocol-schema = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "process", "io-util", "fs"] }
 tokio-stream = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true, features = ["compat"] }
 futures.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
@@ -22,6 +23,9 @@ tracing.workspace = true
 uuid.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util", "fs"] }

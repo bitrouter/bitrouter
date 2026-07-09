@@ -50,16 +50,17 @@ use std::collections::HashMap;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, EnvVariable, InitializeRequest, InitializeResponse,
-    McpServer, McpServerStdio, NewSessionRequest, PermissionOption, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionId,
-    SessionNotification, SessionUpdate, TextContent, ToolCallUpdate,
+    CancelNotification, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
+    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SessionId, SessionNotification,
+    SessionUpdate, TextContent, ToolCallUpdate,
 };
-use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
+use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
 use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::telemetry::{ContextUsage, SharedContextUsage};
 use crate::translate::{
@@ -187,25 +188,102 @@ pub struct UpstreamConnection {
     _thread: std::thread::JoinHandle<()>,
 }
 
-/// Build an [`AcpAgent`] that spawns `command args` with `env` applied to the
-/// child process. Shared by [`UpstreamConnection::spawn`] and [`health_check`]
-/// so both spawn paths pass the configured agent environment identically —
-/// `AcpAgent::spawn_process` forwards each [`EnvVariable`] to the child via
-/// `Command::env`.
-fn build_agent(command: &str, args: &[String], env: &HashMap<String, String>) -> AcpAgent {
-    let name = std::path::Path::new(command)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("agent")
-        .to_string();
-    let env_vars: Vec<EnvVariable> = env
-        .iter()
-        .map(|(k, v)| EnvVariable::new(k.clone(), v.clone()))
-        .collect();
-    let server = McpServerStdio::new(name, command)
-        .args(args.to_vec())
-        .env(env_vars);
-    AcpAgent::new(McpServer::Stdio(server))
+/// The ACP-over-stdio transport wired to a spawned agent child.
+type AgentTransport =
+    ByteStreams<Compat<tokio::process::ChildStdin>, Compat<tokio::process::ChildStdout>>;
+
+/// Spawn `command args` with `env` applied, wired for ACP over stdio.
+///
+/// The child is made **its own process-group leader** (unix) so teardown can
+/// kill the whole tree: agents are commonly wrapper chains (`npx → node`,
+/// `uvx → python`), and killing only the immediate child orphans the real
+/// agent — the process re-parents to pid 1 and does not reliably exit on
+/// stdin EOF. Must run inside a tokio runtime (both call sites do). Shared by
+/// [`UpstreamConnection::spawn`] and [`health_check`] so both paths spawn
+/// identically. Stderr is inherited: agent logs land on our stderr alongside
+/// the substrate's own.
+fn spawn_agent_process(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> anyhow::Result<(AgentTransport, tokio::process::Child)> {
+    let mut cmd = tokio::process::Command::new(command);
+    cmd.args(args)
+        .envs(env)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        // Belt-and-braces: the reaper below is the real teardown; this covers
+        // the child handle being dropped without it ever running.
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("spawning agent '{command}': {e}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("agent child has no stdin pipe"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("agent child has no stdout pipe"))?;
+    Ok((
+        ByteStreams::new(stdin.compat_write(), stdout.compat()),
+        child,
+    ))
+}
+
+/// SIGKILL the child's whole process group (it is its own group leader via
+/// `process_group(0)`). `ESRCH` just means everyone is already gone. On
+/// non-unix targets group semantics don't apply; `kill_on_drop` covers the
+/// direct child there.
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    // SAFETY: plain syscall on a pid we spawned; failure is ignored by design.
+    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
+
+/// Own the agent child for its whole life. Two exits:
+///
+/// - the child dies on its own (agent crash/EOF) → SIGKILL its process group
+///   anyway (a dead wrapper can leave the real agent running), then signal
+///   `dead_tx` so the command loop ends;
+/// - a kill order arrives — `kill_rx` firing **or its sender dropping**
+///   (teardown, caller panic, `health_check` timeout: all collapse to the
+///   same cleanup) → group-kill, then reap the direct child.
+///
+/// Either way `done_tx` confirms once the group is killed and the child
+/// reaped, so teardown can wait for it before dropping the runtime.
+fn spawn_child_reaper(
+    mut child: tokio::process::Child,
+    kill_rx: oneshot::Receiver<()>,
+    dead_tx: oneshot::Sender<()>,
+    done_tx: oneshot::Sender<()>,
+) {
+    tokio::spawn(async move {
+        let pid = child.id();
+        tokio::select! {
+            _ = child.wait() => {
+                if let Some(pid) = pid {
+                    kill_process_group(pid);
+                }
+            }
+            // Resolves on an explicit send AND on sender drop.
+            _ = kill_rx => {
+                if let Some(pid) = pid {
+                    kill_process_group(pid);
+                }
+                let _ = child.wait().await;
+            }
+        }
+        let _ = dead_tx.send(());
+        let _ = done_tx.send(());
+    });
 }
 
 impl UpstreamConnection {
@@ -213,14 +291,16 @@ impl UpstreamConnection {
     /// `initialize`. Returns once the handshake completes and the command
     /// loop is resident, or an error if spawn/handshake failed. The session
     /// itself is created afterwards via [`new_session`](Self::new_session)
-    /// (which carries the cwd — `AcpAgent::spawn_process` does not set the
-    /// child's working directory; ACP carries it at the protocol level).
+    /// (which carries the cwd — the child's working directory is not set;
+    /// ACP carries it at the protocol level).
     pub async fn spawn(
         command: &str,
         args: &[String],
         env: &HashMap<String, String>,
     ) -> anyhow::Result<Self> {
-        let agent = build_agent(command, args, env);
+        let command = command.to_string();
+        let args = args.to_vec();
+        let env = env.clone();
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
@@ -249,7 +329,9 @@ impl UpstreamConnection {
                     }
                 };
                 rt.block_on(drive(
-                    agent,
+                    command,
+                    args,
+                    env,
                     cmd_rx,
                     CallbackPlane {
                         updates_tx: updates_for_thread,
@@ -455,11 +537,27 @@ struct CallbackPlane {
 }
 
 async fn drive(
-    agent: AcpAgent,
+    command: String,
+    args: Vec<String>,
+    env: HashMap<String, String>,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     plane: CallbackPlane,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
 ) {
+    // Spawn the agent child ourselves (own process group) and hand its stdio
+    // to the SDK as a ByteStreams transport; the reaper owns the child.
+    let (transport, child) = match spawn_agent_process(&command, &args, &env) {
+        Ok(spawned) => spawned,
+        Err(e) => {
+            let _ = handshake_tx.send(Err(e));
+            return;
+        }
+    };
+    let (kill_tx, kill_rx) = oneshot::channel::<()>();
+    let (dead_tx, mut dead_rx) = oneshot::channel::<()>();
+    let (done_tx, done_rx) = oneshot::channel::<()>();
+    spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
+
     let notif_updates = plane.updates_tx.clone();
     let notif_raw_updates = plane.raw_updates_tx.clone();
     let notif_usage = plane.usage.clone();
@@ -481,7 +579,7 @@ async fn drive(
     let shutdown_done: Arc<Mutex<Option<oneshot::Sender<()>>>> = Arc::new(Mutex::new(None));
     let closure_shutdown_done = shutdown_done.clone();
 
-    let result = agent_client_protocol::Client
+    let connect = agent_client_protocol::Client
         .builder()
         .name("bitrouter-substrate")
         .on_receive_notification(
@@ -566,7 +664,7 @@ async fn drive(
             },
             agent_client_protocol::on_receive_request!(),
         )
-        .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+        .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
             // ── Handshake: initialize only ─────────────────────────────────
             // `session/new` is a command (below) so the caller can relay the
             // manager's cwd + mcpServers into it instead of fabricating them
@@ -593,8 +691,11 @@ async fn drive(
             // Never blocks on a prompt turn: each prompt runs in its own task so
             // the loop stays responsive while a turn (and its mid-turn permission
             // requests) is in flight. Ends when the command channel closes or an
-            // explicit `Shutdown` arrives; returning ends `main_fn`, which tears
-            // the connection down and kills the agent child.
+            // explicit `Shutdown` arrives; agent death is handled one level up
+            // (the whole connection future is raced against the reaper's death
+            // signal), because a ByteStreams transport EOF does NOT fail
+            // in-flight requests — a request racing a dying agent would park
+            // forever inside this loop's awaits otherwise.
             while let Some(cmd) = cmd_rx.next().await {
                 match cmd {
                     Command::NewSession {
@@ -657,11 +758,40 @@ async fn drive(
             }
 
             Ok(())
-        })
-        .await;
+        });
+
+    // Race the connection against agent death. The SDK's ByteStreams
+    // transport does not fail pending requests on EOF, so a dead child would
+    // otherwise leave the handshake / prompts parked forever; dropping the
+    // connection future cancels everything (dispatch, spawned request tasks,
+    // the command loop), which drops every pending reply oneshot — callers
+    // get errors instead of hangs. This mirrors the child-monitor race the
+    // SDK's own AcpAgent transport performs.
+    tokio::pin!(connect);
+    let result = tokio::select! {
+        result = &mut connect => result,
+        _ = &mut dead_rx => {
+            // The pinned connection future is simply never polled again; it
+            // (and every task it owns) drops at the end of this function,
+            // failing all pending reply oneshots.
+            tracing::warn!("agent process exited; tearing the connection down");
+            Ok(())
+        }
+    };
+
+    // Teardown: order the reaper to SIGKILL the child's process group (a
+    // no-op if the child already died — the reaper group-killed on that path
+    // too) and wait for the reap to complete before the runtime drops.
+    let _ = kill_tx.send(());
+    if tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
+        .await
+        .is_err()
+    {
+        tracing::warn!("agent child reaper did not confirm within 2s");
+    }
 
     // An explicit shutdown was requested and the connection is now fully torn
-    // down (transport dropped, child killed): confirm it.
+    // down (transport dropped, agent process group killed): confirm it.
     if let Some(tx) = shutdown_done.lock().ok().and_then(|mut guard| guard.take()) {
         let _ = tx.send(());
     }
@@ -711,7 +841,16 @@ async fn health_check_inner(
     args: &[String],
     env: &HashMap<String, String>,
 ) -> Result<std::time::Duration, String> {
-    let agent = build_agent(command, args, env);
+    let (transport, child) =
+        spawn_agent_process(command, args, env).map_err(|e| format!("spawn failed: {e}"))?;
+    // Reaper teardown: explicitly ordered (and awaited) below so the group is
+    // gone before `agents check` moves on; if the caller's 10s timeout cancels
+    // this future mid-await instead, `kill_tx` drops and the receiver resolves
+    // all the same — the reaper group-kills + reaps on both paths.
+    let (kill_tx, kill_rx) = oneshot::channel::<()>();
+    let (dead_tx, _dead_rx) = oneshot::channel::<()>();
+    let (done_tx, done_rx) = oneshot::channel::<()>();
+    spawn_child_reaper(child, kill_rx, dead_tx, done_tx);
 
     let (result_tx, result_rx) =
         futures::channel::oneshot::channel::<Result<std::time::Duration, String>>();
@@ -721,7 +860,7 @@ async fn health_check_inner(
     let connect_result = agent_client_protocol::Client
         .builder()
         .name("bitrouter-health-check")
-        .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+        .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
             let started = std::time::Instant::now();
             let init_result = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
@@ -742,6 +881,11 @@ async fn health_check_inner(
             Ok(())
         })
         .await;
+
+    // The check is done either way: kill the agent's process group and wait
+    // for the reap so no wrapper-chain grandchild outlives the CLI.
+    let _ = kill_tx.send(());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), done_rx).await;
 
     // If the result was already sent via the closure, use it. Otherwise surface
     // the connect-level error (spawn failed, process exited before initialize, etc.).
@@ -891,6 +1035,117 @@ mod tests {
 
         // Idempotent.
         conn.shutdown().await.expect("second shutdown is a no-op");
+    }
+
+    /// The whole process GROUP dies at shutdown, wrapper chains included.
+    /// The agent is spawned as `bash → bash <inner script>` (mimicking
+    /// `npx → node`): the INNER process writes its pid to a file, and after
+    /// `shutdown` that pid must be gone — killing only the outer wrapper
+    /// (the old ChildGuard behavior) left it orphaned on pid 1.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_kills_wrapper_chain_process_group() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pid_file = dir.path().join("inner.pid");
+        let inner = dir.path().join("inner.sh");
+        std::fs::write(
+            &inner,
+            format!(
+                r#"echo $$ > {pid}
+while read line; do
+  id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *initialize*) printf '{{"jsonrpc":"2.0","id":"%s","result":{{"protocolVersion":1}}}}\n' "$id";;
+  esac
+done
+"#,
+                pid = pid_file.display()
+            ),
+        )
+        .expect("write inner script");
+
+        // `; :` keeps the outer bash alive as a parent instead of exec-ing
+        // the inner command (which would collapse the chain to one process).
+        let outer = format!("bash {} ; :", inner.display());
+        let conn = UpstreamConnection::spawn("bash", &["-c".into(), outer], &HashMap::new())
+            .await
+            .expect("spawn wrapper chain");
+
+        // The inner (grand)child is alive and identified.
+        let mut inner_pid = String::new();
+        for _ in 0..100 {
+            if let Ok(raw) = std::fs::read_to_string(&pid_file) {
+                let raw = raw.trim().to_string();
+                if !raw.is_empty() {
+                    inner_pid = raw;
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!inner_pid.is_empty(), "inner script never reported its pid");
+        assert!(pid_alive(&inner_pid), "inner process should be alive");
+
+        conn.shutdown().await.expect("shutdown");
+
+        // The grandchild must die with the group, not linger orphaned.
+        let mut gone = false;
+        for _ in 0..100 {
+            if !pid_alive(&inner_pid) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            gone,
+            "wrapper-chain grandchild (pid {inner_pid}) survived shutdown"
+        );
+    }
+
+    /// `kill -0` liveness probe (same technique as `acp sessions`).
+    #[cfg(unix)]
+    fn pid_alive(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// An agent that dies mid-session must not wedge the connection: the whole
+    /// connection future is raced against the reaper's death signal (a
+    /// ByteStreams transport EOF does NOT fail in-flight requests on its own),
+    /// so a pending prompt fails fast instead of hanging forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_crash_fails_pending_commands_fast() {
+        // Answers the handshake, lingers briefly (so `spawn` completes), then
+        // dies with the prompt in flight.
+        let script = r#"
+            read line
+            id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+            printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id"
+            sleep 0.3
+            exit 0
+        "#;
+        let conn =
+            UpstreamConnection::spawn("bash", &["-c".into(), script.into()], &HashMap::new())
+                .await
+                .expect("spawn");
+
+        // The child dies with this prompt unanswered. It must resolve to an
+        // error promptly (bounded), never hang.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            conn.prompt("u1", "anyone home?"),
+        )
+        .await;
+        match outcome {
+            Ok(result) => assert!(result.is_err(), "prompt to a dead agent must fail"),
+            Err(_) => panic!("prompt to a dead agent hung instead of failing fast"),
+        }
     }
 
     /// health_check: a stub that answers `initialize` → returns Ok with an
