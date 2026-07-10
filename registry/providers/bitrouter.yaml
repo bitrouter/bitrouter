@@ -391,13 +391,6 @@ models:
         cache_read: 0.025
       output_tokens:
         text: 1
-  - id: nvidia/nemotron-3-super-120b-a12b
-    provider_model_id: nvidia/nemotron-3-super-120b-a12b
-    pricing:
-      input_tokens:
-        no_cache: 0.08
-      output_tokens:
-        text: 0.45
   - id: nvidia/nemotron-3-ultra-550b-a55b
     provider_model_id: nvidia/nemotron-3-ultra-550b-a55b
     pricing:

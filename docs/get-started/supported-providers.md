@@ -17,7 +17,7 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
 | `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 12 |
 | `azure` | Microsoft Azure | US | openai, responses | Per-token | 14 |
-| `bitrouter` | BitRouter | US | openai | Per-token | 49 |
+| `bitrouter` | BitRouter | US | openai | Per-token | 48 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
 | `cerebras` | Cerebras | US | openai | Per-token | 3 |
 | `chutes` | Chutes | US | openai | Per-token | 7 |
@@ -37,7 +37,7 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `openai-codex` | OpenAI | US | responses | Subscription | 6 |
 | `opencode-go` | OpenCode | US | openai | Subscription | 18 |
 | `opencode-zen` | OpenCode | US | openai | Per-token | 26 |
-| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 52 |
+| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 51 |
 | `phala` | Phala | US | openai | Per-token | 5 |
 | `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 8 |
 | `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 9 |
