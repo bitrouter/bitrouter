@@ -1177,6 +1177,7 @@ mod hop_tests {
             api_base: "https://api.example.test:8443/v1".to_string(),
             api_key: "k".to_string(),
             api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
             account_label: Some("primary".to_string()),
             api_key_override: None,
             api_base_override: None,

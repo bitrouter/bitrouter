@@ -75,7 +75,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::error::Result;
+use crate::error::{BitrouterError, Result};
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, FinishReason, GenerateResult, Prompt, ProviderMetadata, RoutingTarget, StreamPart,
@@ -279,6 +279,19 @@ pub trait OutboundAdapter: Send + Sync {
     /// Render a canonical [`Prompt`] into this protocol's upstream request body.
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value>;
 
+    /// Render a canonical request for one concrete routing target.
+    ///
+    /// The default preserves source compatibility for custom adapters. A
+    /// built-in adapter overrides this only when provider/model compatibility
+    /// changes wire spelling without changing canonical prompt semantics.
+    fn render_request_for_target(
+        &self,
+        prompt: &Prompt,
+        _target: &RoutingTarget,
+    ) -> Result<serde_json::Value> {
+        self.render_request(prompt)
+    }
+
     /// Parse a provider response body into a canonical [`GenerateResult`].
     fn parse_response(&self, body: serde_json::Value) -> Result<GenerateResult>;
 
@@ -349,6 +362,13 @@ pub trait StreamEncoder: Send {
     /// `response.failed`). After this the stream stops.
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
         vec![SseFrame::Comment(format!("error: {message}"))]
+    }
+
+    /// Encode a typed BitRouter error after the HTTP stream has started.
+    /// Custom encoders remain source-compatible and inherit their existing
+    /// string-based terminal frame until they opt into richer error codes.
+    fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        self.encode_error(&error.public_message())
     }
 
     /// Called once at clean stream end; emit any trailing frames (e.g. the

@@ -273,6 +273,7 @@ mod tests {
             api_base: "https://api.x.ai/v1".to_string(),
             api_key: String::new(),
             api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,

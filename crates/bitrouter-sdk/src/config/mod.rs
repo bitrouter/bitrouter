@@ -26,7 +26,7 @@ use serde::Deserialize;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::{ApiProtocol, ProtocolList};
+use crate::language_model::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
 pub mod pattern;
 pub mod presets;
@@ -662,6 +662,9 @@ pub struct ProviderModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
+    /// Provider/model request-shape quirks that do not change model semantics.
+    #[serde(default)]
+    pub compatibility: ModelCompatibility,
 }
 
 /// An explicit virtual-model definition (Strategy 2).
@@ -1100,6 +1103,7 @@ pub async fn discover_models(config: &mut Config) {
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
+                        compatibility: ModelCompatibility::default(),
                     })
                     .collect();
             }

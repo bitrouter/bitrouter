@@ -265,6 +265,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             api_protocol: Some(m.api_protocol.to_protocol_list()),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
+            compatibility: m.compatibility.clone(),
         })
         .collect()
 }
@@ -316,7 +317,7 @@ mod tests {
         CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet, RegistryAccess,
         RegistryAuth, RegistryAuthKind, RegistryModel, RegistryProtocol, RequiredConfig,
     };
-    use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
+    use bitrouter_sdk::language_model::types::{ApiProtocol, ChatTokenLimitField, ProtocolList};
 
     fn provider(name: &str) -> RegistryProvider {
         RegistryProvider {
@@ -337,6 +338,7 @@ mod tests {
                     context_tiers: Vec::new(),
                 }),
                 rate_limits: None,
+                compatibility: Default::default(),
             }],
             status: "active".to_string(),
             kind: None,
@@ -348,6 +350,21 @@ mod tests {
             byok: Some(true),
             billing: Billing::UsageToken,
         }
+    }
+
+    #[test]
+    fn model_compatibility_reaches_provider_model() {
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.models[0]
+            .compatibility
+            .chat_completions
+            .token_limit_field = Some(ChatTokenLimitField::MaxCompletionTokens);
+
+        let models = build_models(&registry_provider);
+        assert_eq!(
+            models[0].compatibility.chat_completions.token_limit_field,
+            Some(ChatTokenLimitField::MaxCompletionTokens)
+        );
     }
 
     fn data_with(providers: Vec<RegistryProvider>, canonical: Vec<&str>) -> RegistryData {
@@ -651,6 +668,7 @@ mod tests {
             api_protocol: None,
             rate_limits: None,
             pricing: None,
+            compatibility: Default::default(),
         }];
         config.providers.insert("regtestprov".to_string(), user);
 

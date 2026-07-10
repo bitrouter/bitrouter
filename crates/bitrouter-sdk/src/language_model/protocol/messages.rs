@@ -1015,6 +1015,7 @@ impl InboundAdapter for MessagesAdapter {
                 temperature: req.temperature,
                 top_p: req.top_p,
                 max_tokens: req.max_tokens,
+                chat_token_limit_field: None,
                 reasoning_effort,
                 response_modalities: Vec::new(),
                 top_k: req.top_k,
@@ -2905,6 +2906,20 @@ impl StreamEncoder for MessagesStreamEncoder {
             serde_json::json!({
                 "type": "error",
                 "error": { "type": "api_error", "message": message },
+            }),
+        )]
+    }
+
+    fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        vec![Self::ev(
+            "error",
+            serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": error.error_type(),
+                    "message": error.public_message(),
+                    "code": error.error_code(),
+                },
             }),
         )]
     }

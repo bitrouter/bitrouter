@@ -94,6 +94,7 @@ fn target() -> RoutingTarget {
         api_base: "https://example.invalid".to_string(),
         api_key: "k".to_string(),
         api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,

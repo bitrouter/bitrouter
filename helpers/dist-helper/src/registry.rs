@@ -416,6 +416,7 @@ async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bo
                     api_protocol: None,
                     pricing,
                     rate_limits: None,
+                    compatibility: None,
                     capabilities: Vec::new(),
                     deprecation_date: None,
                 });
@@ -581,6 +582,7 @@ fn v1_models_plan_for_provider(
             api_protocol: None,
             pricing,
             rate_limits: None,
+            compatibility: None,
             capabilities: Vec::new(),
             deprecation_date: None,
         });
@@ -1117,6 +1119,13 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
                 obj.insert(
                     "rate_limits".to_string(),
                     serde_json::to_value(rate_limits).context("serializing rate_limits")?,
+                );
+            }
+            if let Some(compatibility) = &model.compatibility {
+                obj.insert(
+                    "compatibility".to_string(),
+                    serde_json::to_value(compatibility)
+                        .context("serializing model compatibility")?,
                 );
             }
             if let Some(deprecation_date) = &model.deprecation_date {
@@ -2048,10 +2057,32 @@ struct ProviderModel {
     pricing: Option<ModelPricing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rate_limits: Option<RateLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compatibility: Option<ModelCompatibility>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     capabilities: Vec<Capability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     deprecation_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ModelCompatibility {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chat_completions: Option<ChatCompletionsCompatibility>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ChatCompletionsCompatibility {
+    token_limit_field: ChatTokenLimitField,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ChatTokenLimitField {
+    MaxTokens,
+    MaxCompletionTokens,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
@@ -2693,6 +2724,7 @@ auto_sync:
             api_protocol: None,
             pricing: None,
             rate_limits: None,
+            compatibility: None,
             capabilities: Vec::new(),
             deprecation_date: None,
         };

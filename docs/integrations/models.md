@@ -35,10 +35,15 @@ providers:
     api_protocol:
       - "*": chat_completions          # upstream wire format
     models:
-      - id: openai/gpt-4o
+      - id: openai/gpt-5.5
+        compatibility:
+          chat_completions:
+            token_limit_field: max_completion_tokens
 ```
 
 `providers` is a map keyed by an id you choose; `api_base` is the source's base URL; `api_protocol` is the upstream wire format (`chat_completions` for any OpenAI-compatible host — also the inferred default); each `models` entry is a model that source serves.
+
+Most providers need no `compatibility` block. Set `chat_completions.token_limit_field` only when an upstream requires a particular output-token field: current OpenAI models use `max_completion_tokens`, while some older compatible APIs still require `max_tokens`. BitRouter otherwise preserves the caller's Chat Completions spelling and translates the semantic limit across Messages, Responses, and Generate Content automatically.
 
 ## Scaffold a config
 
