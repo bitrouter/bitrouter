@@ -14,6 +14,21 @@ repository = "https://github.com/bitrouter/bitrouter"
 rust-version = "1.88"
 
 [workspace.dependencies]
+# Cross-platform OS keyring reader (macOS Keychain / Linux Secret Service /
+# Windows Credential Manager). Used to import the Antigravity `agy` CLI session,
+# which stores its Google OAuth token in the OS keyring. The Linux backend is
+# `async-secret-service` (pure-Rust zbus — avoids the C `libdbus-1-dev` system
+# dependency `sync-secret-service` would pull) driven by `async-io`'s block-on
+# (independent of tokio, so the sync `Entry` API is safe to call from bitrouter's
+# async CLI); `crypto-rust` keeps the session crypto dependency-light.
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "async-secret-service",
+    "async-io",
+    "crypto-rust",
+] }
+
 # internal crates
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.22", default-features = false }
 bitrouter-attestation = { path = "crates/bitrouter-attestation", version = "1.0.0-alpha.22" }

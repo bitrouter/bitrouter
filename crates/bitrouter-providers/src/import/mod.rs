@@ -19,6 +19,7 @@
 //! - Grok — `$GROK_HOME/auth.json` (default `~/.grok/auth.json`), the OIDC
 //!   (SuperGrok subscription) entry. See [`grok`].
 
+pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod grok;
@@ -32,7 +33,8 @@ use crate::oauth::credential_store::OAuthToken;
 /// tell the user which source was adopted.
 #[derive(Debug, Clone)]
 pub enum ImportSource {
-    /// The macOS login Keychain; the field is the generic-password service.
+    /// The OS keyring (macOS Keychain / Linux Secret Service / Windows
+    /// Credential Manager); the field is the generic-password service.
     Keychain(&'static str),
     /// A JSON file on disk at the given path.
     File(PathBuf),
@@ -41,7 +43,7 @@ pub enum ImportSource {
 impl std::fmt::Display for ImportSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ImportSource::Keychain(service) => write!(f, "macOS Keychain ({service})"),
+            ImportSource::Keychain(service) => write!(f, "OS keyring ({service})"),
             ImportSource::File(path) => write!(f, "{}", path.display()),
         }
     }
@@ -86,6 +88,9 @@ pub enum ImportError {
         /// The vendor CLI name, for the message.
         cli: &'static str,
     },
+    /// The OS keyring backend failed (locked keychain, no Secret Service, …).
+    #[error("reading the OS keyring: {0}")]
+    Keyring(String),
 }
 
 /// Resolve the user's home directory from `HOME` (Unix) or `USERPROFILE`
