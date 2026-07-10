@@ -3220,6 +3220,36 @@
       "models": [
         {
           "api_protocol": "openai",
+          "id": "kuaishou/kat-coder-pro-v2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.0,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "kwaipilot/kat-coder-pro-v2"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 0.0,
+              "no_cache": 0.8
+            },
+            "output_tokens": {
+              "text": 2.6
+            }
+          },
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
+        },
+        {
+          "api_protocol": "openai",
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
@@ -6995,6 +7025,19 @@
         },
         {
           "api_protocol": "openai",
+          "id": "meituan/longcat-2.0",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 2.95
+            }
+          },
+          "provider_model_id": "meituan-longcat/LongCat-2.0"
+        },
+        {
+          "api_protocol": "openai",
           "id": "nex-agi/nex-n2-pro",
           "pricing": {
             "input_tokens": {
@@ -7504,7 +7547,7 @@
       "models": [
         {
           "api_protocol": "openai",
-          "id": "kwaipilot/kat-coder-pro-v2",
+          "id": "kuaishou/kat-coder-pro-v2",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.06,

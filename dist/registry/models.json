@@ -2676,7 +2676,38 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.0,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "kwaipilot/kat-coder-pro-v2"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.0,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "streamlake",
+          "provider_model_id": "kat-coder-pro-v2"
+        }
+      ],
       "release_date": "2026-03-27"
     },
     {
@@ -2692,7 +2723,21 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 2.95
+            }
+          },
+          "provider": "siliconflow",
+          "provider_model_id": "meituan-longcat/LongCat-2.0"
+        }
+      ],
       "release_date": "2026-06-30"
     },
     {
@@ -4409,6 +4454,21 @@
             }
           },
           "provider": "bitrouter",
+          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 0.0,
+              "no_cache": 0.8
+            },
+            "output_tokens": {
+              "text": 2.6
+            }
+          },
+          "provider": "gmicloud",
           "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
         },
         {

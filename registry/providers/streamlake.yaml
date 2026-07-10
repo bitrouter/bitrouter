@@ -18,7 +18,7 @@ api_protocol:
 auth_scheme: bearer
 kind: cloud
 models:
-  - id: kwaipilot/kat-coder-pro-v2
+  - id: kuaishou/kat-coder-pro-v2
     provider_model_id: kat-coder-pro-v2
     pricing:
       input_tokens:

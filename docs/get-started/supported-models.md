@@ -35,8 +35,8 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `inclusionai/ling-2.6-1t` | Ling 2.6 1T | 256K | text | ✅ | $0.075 | $0.625 |
 | `inclusionai/ling-2.6-flash` | Ling 2.6 Flash | 256K | text | ✅ | $0.01 | $0.03 |
 | `inclusionai/ring-2.6-1t` | Ring 2.6 1T | 256K | text | ✅ | $0.075 | $0.625 |
-| `kuaishou/kat-coder-pro-v2` | KAT Coder Pro V2 | 256K | text | — | — | — |
-| `meituan/longcat-2.0` | LongCat 2.0 | 1M | text | ✅ | — | — |
+| `kuaishou/kat-coder-pro-v2` | KAT Coder Pro V2 | 256K | text | — | $0.3 | $1.2 |
+| `meituan/longcat-2.0` | LongCat 2.0 | 1M | text | ✅ | $0.75 | $2.95 |
 | `meta/muse-spark-1.1` | Meta: Muse Spark 1.1 | 1M | text, image | — | $1.25 | $4.25 |
 | `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $0.9 |
 | `minimax/minimax-m2.7` | MiniMax: M2.7 | 192K | text | ✅ | $0.225 | $0.9 |
