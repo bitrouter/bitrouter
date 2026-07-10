@@ -26,8 +26,8 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
    `skills/bitrouter/references/`.
 3. The same lockstep rule covers the **agent-plugin manifests** at
    `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/marketplace.json`:
-   their hook/monitor/MCP commands invoke `bitrouter` subcommands
-   (`status --agent`, `events`, `reload`, `mcp serve`) and must never reference
+   their hook/MCP commands invoke `bitrouter` subcommands
+   (`status --agent`, `reload`, `mcp serve`) and must never reference
    a CLI surface that doesn't exist.
 4. Only **shippable** skills live in `skills/` — that directory is served
    verbatim by the skills install rails and both plugin manifests. Dev-only

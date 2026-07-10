@@ -64,7 +64,7 @@ Marginal value over the status quo (standalone skill + docs), most→least:
 | 1 | **Marketplace distribution** | Discovery inside the agent; one install; versioned updates. The entire funnel improvement. | P0 |
 | 2 | **Composition** | skill + MCP + hooks arrive together and stay in version lockstep, vs. three manual installs that drift | P0 |
 | 3 | **Ambient hooks** (SessionStart status, auto-reload on config edit) | A bare skill is inert until invoked. Hooks give BitRouter a heartbeat inside the session: daemon health, "not routed" warnings, zero-friction `bitrouter reload`. Full utilization map in §5.2 | P0 |
-| 4 | **Cost feed** (one events core, N renderers) | The onboarding aha-moment: savings shown on the user's own workload. Session-boundary + per-tool-call renderers are **cross-harness** (CC + Codex); live in-context streaming is a CC-monitor enhancement. §5.4 | **P0** |
+| 4 | **Cost surface** (uniform plugin renderers) | The onboarding aha: spend shown on the user's own workload — via SessionStart recap + MCP footer + `spawn` exit, **identical on every harness**. Live/per-turn cost is deliberately *not* in the plugin (can't generalize); it's the manager surface's job. §5.4 | **P0** |
 | 5 | **In-session model arbitrage** (origin MCP: `complete`, `list_models`, `status`) | Offload bulk/mechanical subtasks to a cheap model *right now*, without restart — the only piece that dodges the bootstrapping paradox | P0 |
 | 6 | **Loop-optimizer subagent** (`bitrouter:loop-optimizer`) | Translates the user's observed agentic loop into BitRouter policy config — the "act" arm of observe→evaluate→act, running inside the harness. §5.6 | P1 |
 | 7 | **Enable-time config prompt** (`userConfig`, Claude Code) | Local-vs-Cloud choice + `brk_` key straight into the OS keychain at install time — beats hand-editing settings | P1 |
@@ -182,21 +182,13 @@ Codex, CI-built mirror repo) are P2 (§8).
   },
   "mcpServers": {
     "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
-  },
-  "experimental": {
-    "monitors": [
-      {
-        "name": "cost-feed",
-        "command": "bitrouter events --follow --format agent",
-        "description": "Session spend, savings vs. frontier, failovers"
-      }
-    ]
   }
 }
 ```
 
-(Hooks and monitors are declared inline rather than as `hooks/` /
-`monitors/` dirs precisely so the repo root stays clean — see §4.)
+(Hooks are declared inline rather than as a `hooks/` dir precisely so the
+repo root stays clean — see §4. No `experimental.monitors` — live cost is
+the manager surface's job, not the plugin's; see §5.4 revision.)
 
 `.codex-plugin/plugin.json`:
 
@@ -244,7 +236,7 @@ exploratory bets, and a pile of rejects. The map, so we never re-sweep:
 | `SessionEnd` | Opt-in: ship turn/outcome metadata (hook receives the transcript path) into the observe→evaluate→act eval loop — the "observe" arm of §5.6. Privacy-sensitive; needs explicit consent design, off by default | P2 |
 | `PreToolUse` (matcher: `Task`) | `updatedInput` is confirmed on both platforms (R-8): BitRouter policy could downgrade subagent `model` selection at spawn time — actual routing *inside* the harness. Feasible; gated on a consent story, not capability | P2 spike |
 | `Setup` | Headless daemon install for CI images (`claude --init-only`) | P2 |
-| `Stop` (per-turn cost summary) | On CC: rejected — the monitor (§5.4) delivers the same signal with aggregation. On **Codex**: adopted — no monitor exists there, and `Stop` fires at every turn end (R-7), making it the Codex per-turn cost renderer (`bitrouter events --turn`) | **P0 on Codex**; killed on CC |
+| `Stop` (per-turn cost summary) | **Rejected on both** (revised §5.4). CC's `Stop` can't surface a line without forcing an extra model turn (`additionalContext` continues the conversation; plain stdout is discarded); Codex's `Stop` *can* (clean `systemMessage`), but a Codex-only per-turn line reintroduces the cross-harness asymmetry we're removing. Per-turn/live is the manager surface's job | Killed |
 | `UserPromptSubmit`, `PostToolUse*`, `PreCompact`, `Notification`, `Permission*`, `InstructionsLoaded`, `CwdChanged`, `Worktree*`, `Elicitation*`, `TeammateIdle`, themes of that ilk | No routing/observability angle that survives the noise-budget test | Killed |
 
 Two design rules bind every hook we ship:
@@ -277,23 +269,23 @@ Two design rules bind every hook we ship:
 - `BitRouter: installed but daemon not running — 'bitrouter start' brings it
   up`
 
-…plus, when a savings ledger exists (§5.4), the routed line appends the
-session-boundary recap — `last session $0.42 (saved 86%) · lifetime saved
-$214` — which is the **universal in-band cost-feed anchor** (SessionStart
-fires on both CC and Codex). And when the P1 `StopFailure` marker is present,
-one extra line noting the prior session's API-error death and that failover
-would have survived it.
+…plus, when the metering DB has data (§5.4), the line appends the spend
+recap — `Spend today $X (N requests), $Y this month` — the **universal
+in-band cost anchor** (SessionStart fires on both CC and Codex). And when the
+P1 `StopFailure` marker is present, one extra line noting the prior session's
+API-error death and that failover would have survived it.
 
 **Codex parity (resolved, R-7):** Codex plugin hooks expose 10 events —
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`,
 `PostToolUse`, `PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`,
 `Stop` — with the same `hooks.json` shape as Claude Code, JSON on stdin, and
-even `CLAUDE_PLUGIN_ROOT`/`CLAUDE_PLUGIN_DATA` compat env aliases. So Codex
-MVP ships **SessionStart + Stop** (status line + per-turn cost); the
-`SubagentStart/Stop` span-attribution idea (P1) works on both platforms.
-What Codex lacks: `FileChanged` (auto-reload is CC-only), `StopFailure`, and
-`SessionEnd`. Codex hooks are untrusted until the user reviews them — our
-read-only `bitrouter` one-liners survive that review easily.
+even `CLAUDE_PLUGIN_ROOT`/`CLAUDE_PLUGIN_DATA` compat env aliases. Codex ships
+**SessionStart** (status line + recap) to match CC; per-turn `Stop` is *not*
+used (revised §5.4 — keeping the plugin surface uniform). The
+`SubagentStart/Stop` span-attribution idea (P1) belongs to the manager HUD,
+not the plugin. What Codex lacks vs CC: `FileChanged` (auto-reload is
+CC-only), `StopFailure`, `SessionEnd`. Codex hooks are untrusted until the
+user reviews them — our read-only `bitrouter` one-liners survive that review.
 
 ### 5.3 Origin MCP server (P0)
 
@@ -317,95 +309,72 @@ the model choosing the tool. The skill should nudge ("prefer `complete` for
 bulk mechanical subtasks"), but transparent routing via `spawn` remains the
 real product. Don't oversell this in marketing copy.
 
-### 5.4 Cost feed (P0) — one events core, N renderers
+### 5.4 Cost surface — uniform in the plugin, live in the manager
 
-Routing is invisible when it works. The cost feed makes the first routed
-session *show* its own wins — that's why it belongs in onboarding, not in a
-later "power user" tier: a user who installs, wires, restarts, and then sees
+> **Revision (2026-07-10, supersedes the earlier "one events core, N
+> renderers / CC live monitor" design).** The prior version made a live
+> in-context cost stream a P0 renderer, delivered on Claude Code via
+> `experimental.monitors`. Two facts killed that as a *plugin* feature:
+> (1) it can **never** generalize — Codex has no monitor mechanism and none
+> is planned (verified: manifest has no monitor field, hooks are strictly
+> one-shot, exhaustive issue/discussion sweep); (2) Claude Code's `Stop`
+> hook can't surface a per-turn line either — plain stdout is discarded and
+> the only injection path (`additionalContext`) *forces an extra model
+> turn*. A permanently one-harness live feed contradicts BitRouter's core
+> value prop — **one manager across harnesses**. So live/per-turn cost moves
+> out of the plugin entirely and into BitRouter's own manager surface (below,
+> §8 P1/P2); the plugin keeps only renderers that are **identical on every
+> harness**.
 
-```text
-cost-feed: session $0.42 · would be $3.10 at frontier list price · saved 86%
-cost-feed: openai rate-limited at request 141 → failed over to bedrock, 0 lost
-```
+Routing is invisible when it works, so the cost surface exists to *show* the
+win on the user's own workload. But it must show it the same way everywhere —
+a feature that's rich on one harness and absent on another teaches exactly the
+fragmentation BitRouter exists to erase. So the plugin surfaces cost at
+**boundaries and on-demand** (uniform), and the *manager* owns **live**
+(where "single manager across harnesses" is actually expressed).
 
-has the product's entire pitch demonstrated on their own workload within
-minutes. The **counterfactual-savings line** (actual spend vs. what the same
-calls would have cost at frontier list price) is the headline metric; the
-daemon already attributes per-request cost, so the counterfactual is a
-pricing-table lookup away.
+**Plugin renderers — all uniform, all P0, all shipped:**
 
-**Framing rule — two audiences, two products.** The onboarding aha targets
-the **user's eyes**; only reactive behaviors (arbitrage nudges, spend-cap
-warnings) need the **agent's context**. Defining the feature as
-"context-injected stream" would wrongly gate it on the one mechanism only
-Claude Code has (monitors). Instead: a single harness-agnostic **events
-core** in the CLI/daemon, consumed by thin per-surface **renderers**.
+| Renderer | Reaches | Works on | Notes |
+|---|---|---|---|
+| **SessionStart spend recap** — `status --agent` (§5.2) appends *"Spend today $X (N requests), $Y this month"* | agent + user, in-band | **CC + Codex** (SessionStart on both) | once per session, zero steady-state noise |
+| **`spawn` exit summary** — session spend printed after the wrapped harness exits | user | **any** harness `spawn` wraps (BitRouter-owned) | trivial, zero risk |
+| **MCP tool-result footer** — every origin-server `complete`/`status` result carries a one-line spend footer | agent + user, in-band | **CC + Codex** (any MCP client) | makes in-session arbitrage self-demonstrating |
 
-**Events core** — `bitrouter events` (name settled per R-4), the P0 CLI work:
+All three read the metering `requests` table directly (per R-9 — persisted
+unconditionally) via a read-only opener; no daemon protocol change, no
+streaming, no `events` command. Every one degrades to **silence** on a missing
+DB / unroutable session — a cost surface must never break a session.
 
-- **Aggregate, never stream.** In-band lines cost tokens; a cost feed that
-  streams per-request lines is self-satire. Emission rules: (a) failover /
-  rate-limit-reroute events, immediately; (b) spend-threshold crossings
-  (default every $1); (c) rolling session summary with the counterfactual
-  line, at most every 10 min and only when spend changed. Steady-state
-  budget: **≤ 6 lines/hour**.
-- **Graceful daemon absence.** Wait quietly, poll at low frequency
-  (`--wait-daemon`); never spin, never emit error lines into context.
-- **Strictly read-only.** Implementation anchor (per R-9): every settled
-  request is already persisted unconditionally in the `requests` table
-  (`bitrouter.db`) with model, provider, tokens, `estimated_charge_micro_usd`,
-  latency, and error — so `events` v1 is a **throttled DB tail** on a
-  `created_at` cursor, no daemon protocol change. (`bitrouter-observe` is
-  push-only OTLP — not usable here. Live push over the control socket is a
-  later upgrade.) A `--turn`/`--since` one-shot mode serves per-turn hook
-  queries.
-- **Savings ledger** — cumulative per-session/lifetime totals persisted in
-  the existing optional `bitrouter.db`, so session-boundary renderers can say
-  "lifetime saved $214".
-- **Honesty asterisk:** the counterfactual is approximate (same token volumes
-  × frontier reference price) — HUD-grade, never invoice-grade. Docs and
-  skill say so.
-
-> **v1 as-built (P0 implementation):** the shipped renderers report **spend,
-> not savings** — the counterfactual line needs pricing/routing plumbing that
-> belongs with the P1 `bitrouter usage` work, and a savings line computed
-> against a single-provider BYOK config would read "$0 saved", which is worse
-> than absent. Concretely: the SessionStart recap says *"Spend today $X (N
-> requests), $Y this month"* (per-session attribution doesn't exist in the
-> metering rows — R-9 — so "last session/lifetime saved" wording waits for
-> it); the MCP footer reports spend-today (per-call cost needs request-id
-> correlation); `--turn` and `--follow` report turn/session spend + failures.
-> The counterfactual-savings headline remains the design target for P1.
-
-**Renderers**, by reach:
+**Manager renderers — live, NOT in the plugin (deferred):**
 
 | Renderer | Reaches | Works on | Tier |
 |---|---|---|---|
-| **SessionStart savings recap** — `status --agent` (§5.2) appends a ledger line: *"last session $0.42 (saved 86%) · lifetime saved $214"* | agent + user, in-band | **CC + Codex** (SessionStart on both); likely Antigravity/Grok later | **P0** — the universal in-band anchor; once per session, zero noise |
-| **`spawn` exit summary** — savings printed after the child harness exits | user | any harness `spawn` wraps | **P0** — trivial, zero risk |
-| **MCP tool-result piggyback** — every origin-server result (`complete`, `status`) carries a one-line cost footer: *"this call $0.003 vs $0.09 frontier · session $1.87"* | agent + user, in-band | **CC + Codex** (any MCP client) | **P0** — cheap; makes arbitrage self-demonstrating |
-| **Codex `Stop`-hook turn summary** — Codex's `Stop` hook fires at every turn end (R-7); it runs `bitrouter events --turn` against the local DB and returns the spend line via `systemMessage`/`additionalContext` | agent + user, per turn | **Codex** (and available on CC, where the monitor supersedes it) | **P0** — upgrades Codex from session-boundary to per-turn |
-| **CC monitor stream** — live in-context feed, inline under `experimental.monitors` (§5.1) | agent + user, live | CC only (≥ 2.1.105, experimental, interactive sessions only; skipped for project-scope skills-dir plugins — marketplace installs fine) | **P0** — honestly labeled a *CC enhancement*, not the feature itself |
-| **`spawn --hud` live bar** — PTY scroll-region or terminal-title HUD | user, live | universal | **Stretch** — interposing a PTY under a full-TUI child is real multiplexer work; title writes can interleave with the child's escape stream. Spike first |
-| Desktop notifications (threshold/failover) | user | universal | P1, opt-in |
-| `bitrouter top` TUI / local dashboard page | user, live | universal, even non-spawn setups | P1/P2 — the "second pane" answer; can reuse #604 TUI components |
-| ~~Codex `notify` wiring~~ | — | — | Dropped (R-7): `notify` emits only `agent-turn-complete` with no usage fields — the `Stop` hook supersedes it |
-| ~~Injecting cost text into the LLM response stream~~ | — | — | **Rejected hard**: mutating model output breaks tool-call parsing and trust |
+| **`spawn --hud` live bar** — PTY scroll-region / terminal-title HUD, updated per request | user, live | **universal** (spawn wraps any harness) | P1 — needs a PTY-interposition spike |
+| **`bitrouter top` / TUI-GUI cost-HUD** — the #604 manager's live pane | user, live | **universal**, even non-spawn setups | P1/P2 — the real home for live cross-harness cost |
+| Desktop notifications (threshold/failover) | user | universal | P2, opt-in |
 
-**Why P0 stays defensible:** the P0 bundle (core + first four renderers) is
-four-fifths cross-harness; the CC monitor rides along at ~10 manifest lines.
-Codex users get a real aha too — routed session ends → exit summary; next
-session opens → ledger recap in context. Session boundaries are exactly when
-onboarding attention peaks. The renderer split is also what makes future
-surfaces (Antigravity, Grok, native Hermes/OpenClaw integrations) a renderer
-each, not a redesign.
+These consume a future **`bitrouter events` stream** (a throttled `requests`
+DB tail — the design from R-9 stands), (re)introduced *with* its first manager
+consumer rather than shipped consumer-less now (repo no-dead-code rule). The
+per-turn `Stop`-hook idea and the `experimental.monitors` entry are **removed**
+— the former can't be made uniform, the latter can't generalize.
 
-**What we do not promise:** *mid-turn* live streaming on Codex. The `Stop`
-hook (R-7) delivers per-turn granularity, but nothing fires while a turn is
-in flight — Codex has no monitor equivalent. Stakeholder answer: "per-turn +
-per-tool-call + session-boundary on Codex; fully live on Claude Code." If
-Codex grows a push channel, the same `bitrouter events --format agent` slots
-in unchanged.
+**Rejected (unchanged):** injecting cost text into the LLM response stream
+(mutating model output breaks tool-call parsing and trust); Codex `notify`
+(only `agent-turn-complete`, no usage fields).
+
+**v1 reports spend, not savings.** The counterfactual "vs frontier list price"
+line needs the P1 `bitrouter usage` pricing plumbing, and a savings line on a
+single-provider BYOK config would read "$0 saved" — worse than absent. Recap
+says *spend today / this month* (per-session attribution isn't in the metering
+rows — R-9); the counterfactual-savings headline is the P1 target. All figures
+are estimates (`estimated_charge_micro_usd`) — HUD-grade, not invoice-grade.
+
+**What we do not promise:** live in-context cost inside a *natively-launched*
+harness session (env-wired, not via `spawn`/TUI). That path bypassed the
+manager; live cost is the manager's surface. Boundary recap + MCP footer still
+apply there.
 
 ### 5.5 userConfig (P1, Claude Code)
 
@@ -498,32 +467,30 @@ current docs.
           backend — exit and relaunch with `bitrouter spawn -a claude`, or I
           can show you the durable env override (diff shown, you confirm)."
 
-  --- first routed session (the aha-moment §5.4 exists for) ---
-  [SessionStart]: "BitRouter: routing active — daemon :4356, 5 providers, session routed."
-  … normal work …
-  [cost-feed]: "session $0.42 · would be $3.10 at frontier list price · saved 86%"
+  --- routed session ends, next one opens ---
+  [spawn exit]: "spawn: session spend $0.42 (18 requests) · today $1.10"
+  [next SessionStart]: "BitRouter: routing active — daemon :4356, 5 models routable;
+           this session is routed. Spend today $1.10 (26 requests), $8.40 this month."
 ```
 
-On Codex the same aha lands **per turn** instead of live: the `Stop` hook
-appends the spend line as each turn completes (R-7), `spawn` prints the
-savings summary when the session exits, and the next session's SessionStart
-line opens with `last session $0.42 (saved 86%) · lifetime saved $214`.
+The same recap lands identically on Codex (SessionStart + `spawn` exit both
+fire there). Live mid-session cost is the manager surface's job (`spawn --hud`
+/ TUI), not the plugin — see §5.4.
 
 **Persona B — already wired, daily use:**
 
 ```text
-  [SessionStart]: "BitRouter: routing active — daemon :4356, 5 providers, session routed."
+  [SessionStart]: "BitRouter: routing active — daemon :4356, 5 models routable;
+           this session is routed. Spend today $1.10 (26 requests), $8.40 this month."
 › generate fixtures for all 30 endpoint schemas
   [Claude] calls mcp: bitrouter.complete (model: deepseek/deepseek-v4) for the
            bulk generation, reviews output on the main model
-  [cost-feed]: "openai rate-limited at request 141 → failed over to bedrock,
-           0 lost. Session spend: $1.87."
+  [mcp footer]: "bitrouter: spend today $1.34 (31 requests)"
 › this loop feels expensive — optimize it
   [Claude] launches bitrouter:loop-optimizer → proposes bitrouter.yaml diff
            ("alias summarization hops to deepseek, cap Task spend at $2")
 › looks right, apply it
   [Claude] writes bitrouter.yaml → [FileChanged hook] bitrouter reload
-  [cost-feed] (next summary): savings delta visible
 ```
 
 ## 7. Security & trust posture
@@ -531,7 +498,7 @@ line opens with `last session $0.42 (saved 86%) · lifetime saved $214`.
 - **No silent config mutation.** Durable rewiring is always
   show-diff-and-confirm; per-process wiring goes through `spawn`, which by
   design never touches the agent's config files.
-- **Hooks & monitors are read-only** (status/events). Both platforms prompt
+- **Hooks are read-only** (`status --agent`, `reload`). Both platforms prompt
   users to trust hooks — a read-only status line survives that review;
   anything that installs software inside a hook would not.
 - **Install actions run in the skill conversation**, where the user sees and
@@ -549,22 +516,20 @@ line opens with `last session $0.42 (saved 86%) · lifetime saved $214`.
    [skills/bitrouter/references/harness-claude-code.md](skills/bitrouter/references/harness-claude-code.md)
    — its TODOs are answerable today from `spawn -a claude`'s implementation
    (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`).
-2. `bitrouter status --agent` (hook-grade status line; name per R-4).
-3. **Cost-feed events core + P0 renderers** (§5.4): `bitrouter events`
-   (`--follow` DB tail per R-9, `--turn` one-shot, aggregation,
-   counterfactual line, savings ledger, `--wait-daemon`), the SessionStart
-   ledger recap in `status --agent`, the Codex `Stop`-hook turn summary, the
-   `spawn` exit summary, and the MCP tool-result cost footer. The largest P0
-   work item; everything else is manifests and wording. The CC monitor entry
-   rides along at ~10 manifest lines.
-4. `.claude-plugin/{plugin,marketplace}.json` (incl. SessionStart +
-   FileChanged hooks and the inline cost-feed monitor), `.codex-plugin/*`
-   (SessionStart + Stop hooks) as in §5.1.
+2. `bitrouter status --agent` (hook-grade status line + spend recap; name per R-4).
+3. **Uniform cost renderers** (§5.4), all reading the metering `requests`
+   table via a read-only opener (R-9): the SessionStart spend recap in
+   `status --agent`, the `spawn` exit summary, and the MCP tool-result cost
+   footer. No `events` command, no monitor — live/per-turn is deferred to the
+   manager surface (below).
+4. `.claude-plugin/{plugin,marketplace}.json` (SessionStart +
+   FileChanged hooks, inline MCP), `.codex-plugin/*`
+   (SessionStart hook) as in §5.1.
 5. Relocate `skills/verify` → `.claude/skills/verify` and update
    `skills/README.md` (R-2).
 6. Skill addendum: plugin-context behavior (MCP enable walk-through on Codex,
-   the restart handoff wording, arbitrage nudge, cost-feed interpretation —
-   including the "counterfactual is approximate" caveat).
+   the restart handoff wording, arbitrage nudge, cost-surface interpretation —
+   including the "spend, not savings" and "estimate, not invoice" caveats).
 7. CI: `claude plugin validate . --strict`, plus the Codex loader-exercise
    check per R-6 (`codex plugin marketplace add` + `add` + `list --json`
    with component presence-assertions, since Codex load errors are silent).
@@ -573,15 +538,14 @@ line opens with `last session $0.42 (saved 86%) · lifetime saved $214`.
    that doesn't exist).
 9. Docs: user-facing install page under `docs/` (with `.zh.md` sibling, per
    contract) — can trail the code by one release.
-10. *P0-stretch:* `bitrouter spawn --hud` spike — the universal *live* HUD
-    renderer (§5.4), pending the PTY/terminal-title UX validation.
-
-**P1:** loop-optimizer subagent (§5.6) + its gating `bitrouter usage` local
-stats surface (scoped by R-9); `userConfig` local/cloud; `StopFailure` marker →
-SessionStart pain-point nudge; `SubagentStart/Stop` span attribution feeding
-the cost feed; statusline offer; community-marketplace submission (Claude) +
-plugin-portal submission (Codex); granular sub-skills if
-`/bitrouter:bitrouter` proves awkward.
+**P1:** the **manager live cost surface** (§5.4) — `bitrouter events` stream
+(the deferred throttled DB tail) + its first consumer, `bitrouter spawn --hud`
+(needs the PTY/terminal-title spike); loop-optimizer subagent (§5.6) + its
+gating `bitrouter usage` local stats surface (scoped by R-9); the
+counterfactual-savings line (needs `usage` pricing); `userConfig` local/cloud;
+`StopFailure` marker → SessionStart pain-point nudge; statusline offer;
+community-marketplace submission (Claude) + plugin-portal submission (Codex);
+granular sub-skills if `/bitrouter:bitrouter` proves awkward.
 
 **P2:** slim distribution (npm `@bitrouter/plugin` for Codex's npm source;
 CI-built mirror repo if the 46 MiB clone hurts adoption — note: live testing
@@ -598,6 +562,15 @@ per R-8; gated on a consent story, not capability).
 All nine OQs resolved 2026-07-10 — Codex answers from the `openai/codex`
 source (`codex-rs/`), official docs, and a live `codex-cli 0.144.0` install;
 Claude Code answers from official docs; BitRouter answers from this repo.
+
+> **Superseded in part by the §5.4 revision (same day):** R-4, R-7, and R-9
+> below reference a `bitrouter events` command / Codex `Stop`-hook per-turn
+> feed / CC `experimental.monitors`. Those were the design at resolution time;
+> the §5.4 revision then pulled live/per-turn cost out of the plugin into the
+> manager surface. The `bitrouter events` DB-tail design (R-9) still stands —
+> it's just deferred to ship with its first manager consumer, not as a plugin
+> renderer. Treat the mechanism findings in R-7/R-9 as accurate; treat the
+> "we will ship X in the plugin" framing as revised.
 
 - **R-1 (Codex layout) — resolved: `.codex-plugin/` interior paths work.**
   The single path validator (`resolve_manifest_path`,

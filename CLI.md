@@ -24,7 +24,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `agent-proxy` is a stdio JSON-RPC bridge, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result. The agent-facing surfaces are exempt too: `status --agent` and `events` print plain lines (or hook-JSON) consumed by harness hooks and monitors.
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `agent-proxy` is a stdio JSON-RPC bridge, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result. `status --agent` is exempt too: it prints one plain line consumed by harness `SessionStart` hooks.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
@@ -98,18 +98,6 @@ bitrouter status [-c <path>] [--socket <path>] [--agent]
 Prints pid, listen address, number of routable models, and control socket path. Exits cleanly with "stopped" when no daemon is reachable.
 
 `--agent` switches to hook-grade output for harness `SessionStart` hooks: exactly one plain-text line on stdout, always exit 0, never a network call, and no self-update nudge. The line reports one of three states — daemon down, daemon up but the current session **not** routed through it (detected by comparing `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` in the environment against the daemon's listen address), or routing active — plus a spend recap (today / this month) when the metering database has data.
-
-### `bitrouter events`
-
-```
-bitrouter events --follow [-c <path>]
-bitrouter events --turn [--hook codex] [-c <path>]
-```
-
-The agent-facing cost/failover feed. Reads the local metering database directly (`requests` table) — never the network, never the daemon socket — and degrades to silence on any failure: a cost feed must never break a session. Exempt from the JSON output contract.
-
-- `--follow` streams **aggregated** plain lines until terminated, for harness monitors (the Claude Code plugin's cost-feed monitor): failure lines rate-limited to one per minute, whole-dollar session-spend crossings, and a rolling summary at most every 10 minutes when spend changed. Waits quietly when the database doesn't exist yet.
-- `--turn` prints a one-shot spend-since-last-call line for turn-end hooks, persisting its cursor under `<home>/events/`. `--hook codex` reads the hook event JSON on stdin (using its `session_id` to key the cursor, so concurrent sessions don't steal each other's turns) and emits `{"systemMessage": …}` — the Codex `Stop` hook response shape. First call per session baselines silently.
 
 ---
 

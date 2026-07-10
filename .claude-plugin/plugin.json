@@ -34,14 +34,5 @@
   },
   "mcpServers": {
     "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
-  },
-  "experimental": {
-    "monitors": [
-      {
-        "name": "cost-feed",
-        "command": "command -v bitrouter >/dev/null 2>&1 && exec bitrouter events --follow || sleep 2147483647",
-        "description": "Session spend, failovers, and spend-threshold crossings via BitRouter"
-      }
-    ]
   }
 }

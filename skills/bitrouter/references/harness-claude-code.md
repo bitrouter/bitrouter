@@ -60,7 +60,7 @@ tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages
 
 ## Agent plugin
 
-The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: a `SessionStart` hook that reports routing status each session, a `bitrouter.yaml` auto-reload hook, a live cost-feed monitor (`bitrouter events --follow`), and the origin MCP server for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`.
+The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: a `SessionStart` hook that reports routing status + a spend recap each session, a `bitrouter.yaml` auto-reload hook, the origin MCP server (with a cost footer on tool results) for in-session model arbitrage, and a session spend summary from `bitrouter spawn` on exit. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`.
 
 ## Notes & gotchas
 

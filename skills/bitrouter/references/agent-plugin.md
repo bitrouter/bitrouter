@@ -7,13 +7,20 @@ from one repo and stay in lockstep.
 
 ## What the plugin adds
 
+The plugin carries only renderers that behave **identically on every
+harness** — that's the point: BitRouter is one manager across harnesses, so
+its surfaces shouldn't fragment per-harness. Live / per-turn cost is
+deliberately **not** here; it belongs to BitRouter's own manager surface
+(`spawn` HUD, then the TUI/GUI cost-HUD), which is harness-agnostic by
+construction. See [[agent-plugins-design]] §5.4.
+
 | Component | Claude Code | Codex |
 |---|---|---|
 | This skill (`bitrouter`) | ✓ (as `bitrouter:bitrouter`) | ✓ |
-| `SessionStart` status line (`bitrouter status --agent`) | ✓ | ✓ |
+| `SessionStart` status + spend recap (`bitrouter status --agent`) | ✓ | ✓ |
+| MCP tool-result cost footer (`complete` / `status`) | ✓ | ✓ |
+| `spawn` exit spend summary | ✓ (BitRouter-owned) | ✓ (BitRouter-owned) |
 | Auto-reload on `bitrouter.yaml` edits (`FileChanged` hook) | ✓ | — (no FileChanged event) |
-| Live cost-feed monitor (`bitrouter events --follow`) | ✓ (experimental monitors, CC ≥ 2.1.105) | — (no monitor mechanism) |
-| Per-turn spend line (`Stop` hook → `bitrouter events --turn --hook codex`) | — (monitor supersedes) | ✓ |
 | Origin MCP server (`complete` / `list_models` / `status`) | ✓ auto-starts | ✓ but **must be enabled manually** |
 
 ## Install
@@ -43,15 +50,23 @@ harness with the env override, to route this session." The one thing that
 works immediately without a restart is the origin MCP server: `complete` can
 offload subtasks to cheap models right away.
 
-## Reading the cost feed
+## Reading the cost surface
 
-- Lines are **aggregated**, never per-request: failure lines (rate-limited to
-  one per minute), whole-dollar spend crossings, and a rolling summary at
-  most every 10 minutes. Steady-state ≤ 6 lines/hour by design — silence
-  means nothing changed.
-- `spawn` prints a session spend summary after the wrapped harness exits;
-  `status --agent` opens each session with spend-today / this-month when the
-  metering DB has data.
+The plugin shows cost at **boundaries and on-demand**, uniformly on both
+harnesses:
+
+- **Every session start:** `status --agent` opens with spend-today /
+  this-month when the metering DB has data.
+- **Every `spawn` exit:** a one-line session spend summary.
+- **Every origin-MCP `complete` / `status` call:** a cost footer appended to
+  the tool result.
+
+Notes:
+
+- **Live / per-turn cost is not in the plugin** — no in-context streaming
+  monitor. That's intentional (Codex has no monitor mechanism and CC's `Stop`
+  hook can't surface a line without forcing an extra model turn, so it can't
+  be uniform). Live cost is the manager surface's job (`spawn` HUD → TUI/GUI).
 - v1 reports **spend**, not savings — the counterfactual "vs frontier list
   price" line lands together with the `bitrouter usage` pricing plumbing.
   Don't promise savings percentages yet.
@@ -64,12 +79,12 @@ offload subtasks to cheap models right away.
   installed yet. Install it (see SKILL.md §2), then `/reload-plugins`.
 - **SessionStart says "NOT routed"** → daemon is up but the session env
   doesn't point at it. That's the restart handoff above, not a bug.
-- **Cost feed silent** → expected when the session isn't routed through the
+- **Spend recap empty** → expected when the session isn't routed through the
   local daemon (e.g. Cloud base URL) — the local metering DB only records
   local daemon traffic.
 - **Hooks prompt for trust on install** → expected on both platforms; every
-  hook is a read-only one-liner (`status --agent`, `events`, `reload`) and
-  survives review.
+  hook is a read-only one-liner (`status --agent`, `reload`) and survives
+  review.
 - **Codex install copies the whole plugin root** into
   `$CODEX_HOME/plugins/cache/…` — from a fresh clone that's the repo
   checkout; from a **dev checkout it includes `target/` and `.git`** (can be

@@ -344,9 +344,9 @@ async fn print_exit_summary(
     }
     eprintln!(
         "{cyan}{bold}spawn:{reset} session spend {bold}{}{reset} ({} requests) · today {}",
-        crate::events::fmt_usd(session.spend_micro_usd),
+        crate::metering::fmt_usd(session.spend_micro_usd),
         session.requests,
-        crate::events::fmt_usd(today.spend_micro_usd),
+        crate::metering::fmt_usd(today.spend_micro_usd),
         cyan = p.cyan,
         bold = p.bold,
         reset = p.reset,

@@ -13,8 +13,6 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 | `bitrouter reload [--config PATH] [--socket PATH]` | Hot-reload the running daemon's config + routing table. **Also re-pushes provider env vars** from the current shell into the daemon, so `export OPENAI_API_KEY=new...; bitrouter reload` rotates the key without a restart. SIGHUP reloads daemon-side config but cannot forward newly exported shell variables. |
 | `bitrouter status [--config PATH] [--socket PATH]` | `systemctl status`-style block: pid / listen / model count / socket. Reports `stopped` (exit 0) when no daemon is reachable. |
 | `bitrouter status --agent` | Hook-grade variant for harness `SessionStart` hooks: one plain line (daemon down / up-but-session-not-routed / routing active + spend recap), always exit 0, no network, no update nudge. Routed-detection compares `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` against the daemon listen address. |
-| `bitrouter events --follow [--config PATH]` | Agent-facing cost feed for harness monitors: streams **aggregated** plain lines from the local metering DB (failures ≤1/min, whole-dollar crossings, rolling summary ≤ every 10 min). Silent-on-failure by design. |
-| `bitrouter events --turn [--hook codex] [--config PATH]` | One-shot spend-since-last-call line for turn-end hooks; cursor under `<home>/events/`. `--hook codex` reads the hook JSON on stdin (session-scoped cursor) and emits `{"systemMessage": …}`. First call baselines silently. |
 
 ## Inspection
 

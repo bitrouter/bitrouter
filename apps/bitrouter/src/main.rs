@@ -130,26 +130,6 @@ enum Command {
         #[arg(long)]
         agent: bool,
     },
-    /// Agent-facing cost/failover feed, read from the local metering
-    /// database. `--follow` streams aggregated lines (for harness
-    /// monitors); `--turn` prints a one-shot spend-since-last-call
-    /// summary (for turn-end hooks). Both stay silent rather than fail.
-    Events {
-        /// Path to `bitrouter.yaml` (used to locate the home / database).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Stream aggregated lines until terminated.
-        #[arg(long, conflicts_with = "turn")]
-        follow: bool,
-        /// One-shot: spend since the previous `--turn` call.
-        #[arg(long)]
-        turn: bool,
-        /// Hook dialect for `--turn` — reads the hook event JSON on
-        /// stdin and emits the hook's response JSON. Supported: `codex`
-        /// (emits `{"systemMessage": …}`).
-        #[arg(long, value_name = "DIALECT", requires = "turn")]
-        hook: Option<String>,
-    },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config and resolves locally.
     Route {
@@ -777,32 +757,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&status(&socket).await?)?;
             Ok(())
         }
-        Command::Events {
-            config,
-            follow,
-            turn,
-            hook,
-        } => {
-            if !follow && !turn {
-                return Err(anyhow::anyhow!(
-                    "pass --follow (stream for monitors) or --turn (one-shot for hooks)"
-                ));
-            }
-            // Like `serve`, this surface is exempt from the one-JSON-object
-            // contract: stdout is a plain-line (or hook-JSON) protocol.
-            let source = match bitrouter::paths::resolve_config(config.as_deref()) {
-                Ok(source) => source,
-                // Hooks and monitors must never fail a session — degrade
-                // to silence, matching the events module's philosophy.
-                Err(_) => return Ok(()),
-            };
-            if follow {
-                bitrouter::events::follow(&source).await;
-            } else {
-                bitrouter::events::turn(&source, hook.as_deref()).await;
-            }
-            Ok(())
-        }
         Command::Route {
             model,
             config,
@@ -1001,7 +955,7 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
         (today.requests > 0).then(|| {
             format!(
                 "bitrouter: spend today {} ({} requests)",
-                bitrouter::events::fmt_usd(today.spend_micro_usd),
+                bitrouter::metering::fmt_usd(today.spend_micro_usd),
                 today.requests
             )
         })
@@ -1736,9 +1690,9 @@ async fn agent_spend_recap(source: &bitrouter::paths::ConfigSource) -> String {
     }
     format!(
         " Spend today {} ({} requests), {} this month.",
-        bitrouter::events::fmt_usd(today.spend_micro_usd),
+        bitrouter::metering::fmt_usd(today.spend_micro_usd),
         today.requests,
-        bitrouter::events::fmt_usd(month.spend_micro_usd)
+        bitrouter::metering::fmt_usd(month.spend_micro_usd)
     )
 }
 
@@ -2505,26 +2459,6 @@ mod tests {
             "http://localhost:4356",
             "not-an-authority"
         ));
-    }
-
-    #[test]
-    fn events_mode_flags_parse() {
-        use clap::Parser;
-        let cli = Cli::try_parse_from(["bitrouter", "events", "--turn", "--hook", "codex"])
-            .expect("parse");
-        match cli.command {
-            Command::Events {
-                follow, turn, hook, ..
-            } => {
-                assert!(!follow && turn);
-                assert_eq!(hook.as_deref(), Some("codex"));
-            }
-            _ => panic!("expected Events"),
-        }
-        // --follow and --turn are mutually exclusive.
-        assert!(Cli::try_parse_from(["bitrouter", "events", "--follow", "--turn"]).is_err());
-        // --hook requires --turn.
-        assert!(Cli::try_parse_from(["bitrouter", "events", "--hook", "codex"]).is_err());
     }
 
     #[test]

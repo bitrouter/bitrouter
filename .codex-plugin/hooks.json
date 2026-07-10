@@ -10,17 +10,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "command -v bitrouter >/dev/null 2>&1 && bitrouter events --turn --hook codex || true",
-            "statusMessage": "BitRouter turn spend"
-          }
-        ]
-      }
     ]
   }
 }
