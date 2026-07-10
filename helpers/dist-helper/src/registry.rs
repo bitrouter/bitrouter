@@ -3257,7 +3257,7 @@ api_base: https://api.acme.test/v1
             "kuaishou/kat-coder-pro-v2",
             "kwaipilot/kat-coder-pro-v2",
             0.3,
-            Some((0.06, 0.0)),
+            (Some(0.06), Some(0.0)),
             1.2,
         );
         assert_provider_mapping(
@@ -3266,7 +3266,7 @@ api_base: https://api.acme.test/v1
             "nvidia/nemotron-3-ultra-550b-a55b",
             "nvidia/nemotron-3-ultra-550b-a55b",
             0.8,
-            Some((0.1, 0.0)),
+            (Some(0.1), Some(0.0)),
             2.6,
         );
 
@@ -3280,7 +3280,7 @@ api_base: https://api.acme.test/v1
             "meituan/longcat-2.0",
             "meituan-longcat/LongCat-2.0",
             0.75,
-            None,
+            (None, None),
             2.95,
         );
 
@@ -3294,8 +3294,50 @@ api_base: https://api.acme.test/v1
             "kuaishou/kat-coder-pro-v2",
             "kat-coder-pro-v2",
             0.3,
-            Some((0.06, 0.0)),
+            (Some(0.06), Some(0.0)),
             1.2,
+        );
+    }
+
+    #[test]
+    fn built_registry_refreshes_qianfan_international_catalog() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root).expect("builds repository registry");
+        let providers: Value =
+            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+        let qianfan = providers["data"]
+            .as_array()
+            .expect("provider data array")
+            .iter()
+            .find(|provider| provider["name"] == "qianfan");
+
+        assert!(qianfan.is_some(), "Qianfan International provider");
+        assert_provider_mapping(
+            qianfan,
+            "Qianfan International",
+            "baidu/ernie-5.1",
+            "ernie-5.1",
+            1.4,
+            (None, None),
+            5.6,
+        );
+        assert_provider_mapping(
+            qianfan,
+            "Qianfan International",
+            "deepseek/deepseek-v4-pro",
+            "deepseek-v4-pro",
+            1.69,
+            (Some(0.14), None),
+            3.38,
+        );
+        assert_provider_mapping(
+            qianfan,
+            "Qianfan International",
+            "z-ai/glm-5.2",
+            "glm-5.2",
+            0.97,
+            (Some(0.181), None),
+            3.07,
         );
     }
 
@@ -3305,7 +3347,7 @@ api_base: https://api.acme.test/v1
         canonical_id: &str,
         provider_model_id: &str,
         input_price: f64,
-        cache_prices: Option<(f64, f64)>,
+        cache_prices: (Option<f64>, Option<f64>),
         output_price: f64,
     ) {
         let model = provider
@@ -3331,15 +3373,11 @@ api_base: https://api.acme.test/v1
         let input_tokens = model
             .and_then(|model| model["pricing"]["input_tokens"].as_object())
             .expect("input token pricing");
-        match cache_prices {
-            Some((cache_read_price, cache_write_price)) => {
+        match cache_prices.0 {
+            Some(cache_read_price) => {
                 assert_eq!(
                     input_tokens.get("cache_read").and_then(Value::as_f64),
                     Some(cache_read_price)
-                );
-                assert_eq!(
-                    input_tokens.get("cache_write").and_then(Value::as_f64),
-                    Some(cache_write_price)
                 );
             }
             None => {
@@ -3347,6 +3385,16 @@ api_base: https://api.acme.test/v1
                     !input_tokens.contains_key("cache_read"),
                     "{provider_name} {canonical_id} should not advertise cache-read pricing"
                 );
+            }
+        }
+        match cache_prices.1 {
+            Some(cache_write_price) => {
+                assert_eq!(
+                    input_tokens.get("cache_write").and_then(Value::as_f64),
+                    Some(cache_write_price)
+                );
+            }
+            None => {
                 assert!(
                     !input_tokens.contains_key("cache_write"),
                     "{provider_name} {canonical_id} should not advertise cache-write pricing"

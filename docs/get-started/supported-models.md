@@ -18,7 +18,7 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `anthropic/claude-opus-4.8` | Anthropic: Claude Opus 4.8 | 1M | text, image | — | $5 | $25 |
 | `anthropic/claude-sonnet-4.6` | Anthropic: Claude Sonnet 4.6 | 1M | text, image | — | $3 | $15 |
 | `anthropic/claude-sonnet-5` | Anthropic: Claude Sonnet 5 | 1M | text, image | — | $2 | $10 |
-| `baidu/ernie-5.1` | ERNIE 5.1 | 119K | text, image | — | — | — |
+| `baidu/ernie-5.1` | ERNIE 5.1 | 119K | text, image | — | $1.4 | $5.6 |
 | `bytedance/doubao-seed-2.0-code` | Doubao Seed 2.0 Code | 256K | text, image | — | — | — |
 | `bytedance/doubao-seed-2.0-lite` | Doubao Seed 2.0 Lite | 256K | text, image | — | — | — |
 | `bytedance/doubao-seed-2.0-mini` | Doubao Seed 2.0 Mini | 256K | text, image | — | — | — |
@@ -73,7 +73,7 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `z-ai/glm-4.7` | Zhipu: GLM-4.7 | 200K | text | ✅ | $0.4 | $1.75 |
 | `z-ai/glm-5` | Zhipu: GLM-5 | 198K | text | ✅ | $0.6 | $1.92 |
 | `z-ai/glm-5.1` | Zhipu: GLM-5.1 | 128K | text | ✅ | $0.83 | $3.33 |
-| `z-ai/glm-5.2` | Zhipu: GLM-5.2 | 1M | text | ✅ | $0.979 | $3.08 |
+| `z-ai/glm-5.2` | Zhipu: GLM-5.2 | 1M | text | ✅ | $0.97 | $3.07 |
 
 ## Using BitRouter Cloud
 
