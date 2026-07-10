@@ -202,6 +202,16 @@ type AgentTransport =
 /// [`UpstreamConnection::spawn`] and [`health_check`] so both paths spawn
 /// identically. Stderr is inherited: agent logs land on our stderr alongside
 /// the substrate's own.
+///
+/// Deliberately NOT the SDK's `AcpAgent`, even though its `ChildGuard` also
+/// group-kills since agentclientprotocol/rust-sdk#251: owning the child is
+/// what gives us (a) the reaper's **awaitable** teardown confirmation —
+/// `Session::shutdown` and `health_check` wait for the group-kill + reap, a
+/// fire-and-forget drop guard cannot promise that; (b) the explicit
+/// connection-vs-child-death race below, still required because a
+/// `ByteStreams` transport EOF does not fail in-flight requests
+/// (rust-sdk#250, open); and (c) the seam for spawn policy the roadmap needs
+/// (env scrubbing, sandboxing, resource limits).
 fn spawn_agent_process(
     command: &str,
     args: &[String],
