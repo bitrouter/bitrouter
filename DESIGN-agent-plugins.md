@@ -8,6 +8,29 @@
 > plugins under `plugins/` (guardrails, observe, attestation), which are
 > unrelated.
 
+> **As-built shape (2026-07-10, after three trimming passes — read this first).**
+> The doc below records the full exploration; the design converged well inside
+> it. The shipped plugin carries exactly **two components: skills + MCP** —
+> nothing else. Cut along the way, each for the same reason (a component that
+> can't behave identically on every harness fragments the "one manager across
+> harnesses" value prop):
+> 1. **`experimental.monitors` live cost feed** — CC-only, can't generalize.
+> 2. **`bitrouter events` command + per-turn `Stop` hook** — per-turn can't be
+>    made uniform (CC `Stop` can't surface a line without forcing a model turn).
+> 3. **All hooks** (`SessionStart` recap, `FileChanged` reload) + the
+>    `status --agent` CLI surface — hooks are the *least* portable component
+>    (Grok block-only; Antigravity different catalog + output schema; even
+>    `SessionStart` output-surfacing varies), so anchoring on a hook fragments
+>    the thing we're unifying.
+>
+> What remains: **skill + origin MCP server** (both port to all four harnesses),
+> plus two non-plugin `bitrouter` CLI cost signals — the **MCP tool-result
+> footer** and the **`spawn` exit summary**. Everything ambient/live/per-turn
+> is deferred to BitRouter's own **manager surface** (`spawn --hud` → TUI/GUI
+> cost-HUD), harness-agnostic by construction. Sections that still describe
+> hooks/monitors/events as shipping are the exploration record — trust this
+> banner, §5.4, and the manifests for the final shape.
+
 ## 1. Problem & goals
 
 Onboarding BitRouter from a coding agent today takes three separately-discovered
@@ -63,8 +86,8 @@ Marginal value over the status quo (standalone skill + docs), most→least:
 |---|---|---|---|
 | 1 | **Marketplace distribution** | Discovery inside the agent; one install; versioned updates. The entire funnel improvement. | P0 |
 | 2 | **Composition** | skill + MCP + hooks arrive together and stay in version lockstep, vs. three manual installs that drift | P0 |
-| 3 | **Ambient hooks** (SessionStart status, auto-reload on config edit) | A bare skill is inert until invoked. Hooks give BitRouter a heartbeat inside the session: daemon health, "not routed" warnings, zero-friction `bitrouter reload`. Full utilization map in §5.2 | P0 |
-| 4 | **Cost surface** (uniform plugin renderers) | The onboarding aha: spend shown on the user's own workload — via SessionStart recap + MCP footer + `spawn` exit, **identical on every harness**. Live/per-turn cost is deliberately *not* in the plugin (can't generalize); it's the manager surface's job. §5.4 | **P0** |
+| 3 | ~~Ambient hooks~~ | **Dropped** (as-built banner): hooks are the least portable component (Grok block-only, Antigravity different catalog, `SessionStart` surfacing varies), so a hook-anchored plugin fragments what BitRouter unifies. Research map kept in §5.2 for the future manager surface | Cut |
+| 4 | **Cost surface** (non-hook renderers) | Spend shown on the user's own workload via the MCP footer + `spawn` exit — no ambient hook. Live/per-turn/ambient cost is deliberately *not* in the plugin (can't generalize); it's the manager surface's job. §5.4 | **P0** |
 | 5 | **In-session model arbitrage** (origin MCP: `complete`, `list_models`, `status`) | Offload bulk/mechanical subtasks to a cheap model *right now*, without restart — the only piece that dodges the bootstrapping paradox | P0 |
 | 6 | **Loop-optimizer subagent** (`bitrouter:loop-optimizer`) | Translates the user's observed agentic loop into BitRouter policy config — the "act" arm of observe→evaluate→act, running inside the harness. §5.6 | P1 |
 | 7 | **Enable-time config prompt** (`userConfig`, Claude Code) | Local-vs-Cloud choice + `brk_` key straight into the OS keychain at install time — beats hand-editing settings | P1 |
@@ -105,12 +128,13 @@ vendoring, no second copy of the skill:
 ```text
 bitrouter/                        # repo root == plugin root == CC marketplace root
 ├── .claude-plugin/
-│   ├── plugin.json               # CC manifest (skills override, inline hooks + MCP)
+│   ├── plugin.json               # CC manifest (skills override + inline MCP; no hooks)
 │   └── marketplace.json          # repo doubles as a CC marketplace
 ├── .codex-plugin/
-│   ├── plugin.json               # Codex manifest
-│   ├── mcp.json                  # Codex MCP config (interior paths confirmed valid — R-1)
-│   └── hooks.json                # Codex lifecycle hooks (SessionStart + Stop — R-7)
+│   ├── plugin.json               # Codex manifest (skills + MCP)
+│   └── mcp.json                  # Codex MCP config (interior paths confirmed valid — R-1)
+├── .agents/plugins/
+│   └── marketplace.json          # Codex marketplace catalog (source: ".")
 ├── skills/
 │   └── bitrouter/                # existing skill — single source of truth, unchanged
 ├── plugins/                      # existing Rust router plugins — UNRELATED
@@ -160,35 +184,16 @@ Codex, CI-built mirror repo) are P2 (§8).
   "license": "Apache-2.0",
   "keywords": ["llm", "router", "gateway", "cost", "openai", "anthropic", "mcp"],
   "skills": ["./skills/bitrouter"],
-  "hooks": {
-    "hooks": {
-      "SessionStart": [
-        {
-          "hooks": [
-            {
-              "type": "command",
-              "command": "command -v bitrouter >/dev/null 2>&1 && bitrouter status --agent || echo 'BitRouter CLI not installed — the bitrouter skill can set it up.'"
-            }
-          ]
-        }
-      ],
-      "FileChanged": [
-        {
-          "matcher": "bitrouter.yaml",
-          "hooks": [{ "type": "command", "command": "bitrouter reload" }]
-        }
-      ]
-    }
-  },
   "mcpServers": {
     "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
   }
 }
 ```
 
-(Hooks are declared inline rather than as a `hooks/` dir precisely so the
-repo root stays clean — see §4. No `experimental.monitors` — live cost is
-the manager surface's job, not the plugin's; see §5.4 revision.)
+(As-built: **skills + mcpServers only** — no `hooks`, no `experimental.monitors`.
+The earlier drafts of this snippet carried a `SessionStart` status hook and a
+`FileChanged` reload hook; both were dropped because hooks don't port across
+harnesses — see the as-built banner at the top and §5.2.)
 
 `.codex-plugin/plugin.json`:
 
@@ -202,8 +207,7 @@ the manager surface's job, not the plugin's; see §5.4 revision.)
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",
   "skills": "./skills/bitrouter",
-  "mcpServers": "./.codex-plugin/mcp.json",
-  "hooks": "./.codex-plugin/hooks.json"
+  "mcpServers": "./.codex-plugin/mcp.json"
 }
 ```
 
@@ -221,7 +225,17 @@ Install paths: `/plugin marketplace add bitrouter/bitrouter` →
 `/plugin install bitrouter@bitrouter`; later, community-marketplace submission
 makes it `/plugin install bitrouter@claude-community` with SHA auto-bumping.
 
-### 5.2 Hooks — full utilization map
+### 5.2 Hooks — full utilization map (exploration record; the plugin ships NO hooks)
+
+> **As-built: the plugin ships zero hooks.** This section is the research
+> record — it's why we know what hooks *could* do, kept for the future manager
+> surface and P2 hook ideas. The decision to drop all hooks from the plugin is
+> in the top-of-doc banner: cross-harness hook research showed hooks are the
+> least portable component (Grok block-only; Antigravity 5-event catalog with a
+> different output schema; even `SessionStart` output-surfacing varies — CC
+> injects stdout, Grok discards it, Antigravity CLI lacks the event), so a
+> hook-anchored plugin fragments the thing BitRouter unifies. The `P0` verdicts
+> in the table below are historical.
 
 Claude Code exposes ~30 lifecycle events. Sweeping all of them against
 BitRouter's thesis (route/observe/govern the loop) yields four keepers, three
@@ -333,18 +347,25 @@ fragmentation BitRouter exists to erase. So the plugin surfaces cost at
 **boundaries and on-demand** (uniform), and the *manager* owns **live**
 (where "single manager across harnesses" is actually expressed).
 
-**Plugin renderers — all uniform, all P0, all shipped:**
+**Plugin/CLI cost renderers — as-built (two, both non-hook):**
+
+> **Superseded again (2026-07-10, hooks-drop pass):** the earlier version of
+> this table listed a **SessionStart spend recap** as a third renderer. Hooks
+> were then dropped entirely (top banner), so the recap is gone. What remains
+> are two renderers that need no hook — the MCP footer (part of the MCP
+> component) and the `spawn` exit summary (a `spawn` CLI feature, not a plugin
+> component). The `status --agent` CLI surface that backed the recap was
+> removed with the hooks (no consumer, no-dead-code).
 
 | Renderer | Reaches | Works on | Notes |
 |---|---|---|---|
-| **SessionStart spend recap** — `status --agent` (§5.2) appends *"Spend today $X (N requests), $Y this month"* | agent + user, in-band | **CC + Codex** (SessionStart on both) | once per session, zero steady-state noise |
-| **`spawn` exit summary** — session spend printed after the wrapped harness exits | user | **any** harness `spawn` wraps (BitRouter-owned) | trivial, zero risk |
 | **MCP tool-result footer** — every origin-server `complete`/`status` result carries a one-line spend footer | agent + user, in-band | **CC + Codex** (any MCP client) | makes in-session arbitrage self-demonstrating |
+| **`spawn` exit summary** — session spend printed after the wrapped harness exits | user | **any** harness `spawn` wraps (BitRouter-owned) | trivial, zero risk; not a plugin component |
 
-All three read the metering `requests` table directly (per R-9 — persisted
+Both read the metering `requests` table directly (per R-9 — persisted
 unconditionally) via a read-only opener; no daemon protocol change, no
-streaming, no `events` command. Every one degrades to **silence** on a missing
-DB / unroutable session — a cost surface must never break a session.
+streaming, no `events` command, no hook. Each degrades to **silence** on a
+missing DB / unroutable session — a cost surface must never break a session.
 
 **Manager renderers — live, NOT in the plugin (deferred):**
 
@@ -498,9 +519,8 @@ fire there). Live mid-session cost is the manager surface's job (`spawn --hud`
 - **No silent config mutation.** Durable rewiring is always
   show-diff-and-confirm; per-process wiring goes through `spawn`, which by
   design never touches the agent's config files.
-- **Hooks are read-only** (`status --agent`, `reload`). Both platforms prompt
-  users to trust hooks — a read-only status line survives that review;
-  anything that installs software inside a hook would not.
+- **No hooks ship** (as-built), so there's no lifecycle-hook trust surface to
+  review at all — one less thing for a security-conscious user to vet.
 - **Install actions run in the skill conversation**, where the user sees and
   approves each command (brew/npm/installer), not hidden in lifecycle hooks.
 - **MCP server is local-loopback** to the user's own daemon; cloud mode uses
@@ -516,36 +536,35 @@ fire there). Live mid-session cost is the manager surface's job (`spawn --hud`
    [skills/bitrouter/references/harness-claude-code.md](skills/bitrouter/references/harness-claude-code.md)
    — its TODOs are answerable today from `spawn -a claude`'s implementation
    (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`).
-2. `bitrouter status --agent` (hook-grade status line + spend recap; name per R-4).
-3. **Uniform cost renderers** (§5.4), all reading the metering `requests`
-   table via a read-only opener (R-9): the SessionStart spend recap in
-   `status --agent`, the `spawn` exit summary, and the MCP tool-result cost
-   footer. No `events` command, no monitor — live/per-turn is deferred to the
-   manager surface (below).
-4. `.claude-plugin/{plugin,marketplace}.json` (SessionStart +
-   FileChanged hooks, inline MCP), `.codex-plugin/*`
-   (SessionStart hook) as in §5.1.
-5. Relocate `skills/verify` → `.claude/skills/verify` and update
+2. **Non-hook cost renderers** (§5.4), reading the metering `requests` table
+   via a read-only opener (R-9): the MCP tool-result cost footer and the
+   `spawn` exit summary. No `events` command, no monitor, no hook.
+3. `.claude-plugin/{plugin,marketplace}.json` and `.codex-plugin/*` —
+   **skills + mcpServers only** (as in §5.1). No hooks.
+4. Relocate `skills/verify` → `.claude/skills/verify` and update
    `skills/README.md` (R-2).
-6. Skill addendum: plugin-context behavior (MCP enable walk-through on Codex,
+5. Skill addendum: plugin-context behavior (MCP enable walk-through on Codex,
    the restart handoff wording, arbitrage nudge, cost-surface interpretation —
    including the "spend, not savings" and "estimate, not invoice" caveats).
-7. CI: `claude plugin validate . --strict`, plus the Codex loader-exercise
+6. CI: `claude plugin validate . --strict`, plus the Codex loader-exercise
    check per R-6 (`codex plugin marketplace add` + `add` + `list --json`
    with component presence-assertions, since Codex load errors are silent).
-8. CLAUDE.md: extend the Agent Skill lockstep rule to cover
+7. CLAUDE.md: extend the Agent Skill lockstep rule to cover
    `.claude-plugin/` + `.codex-plugin/` (manifests must never describe a CLI
    that doesn't exist).
-9. Docs: user-facing install page under `docs/` (with `.zh.md` sibling, per
+8. Docs: user-facing install page under `docs/` (with `.zh.md` sibling, per
    contract) — can trail the code by one release.
+
 **P1:** the **manager live cost surface** (§5.4) — `bitrouter events` stream
 (the deferred throttled DB tail) + its first consumer, `bitrouter spawn --hud`
 (needs the PTY/terminal-title spike); loop-optimizer subagent (§5.6) + its
 gating `bitrouter usage` local stats surface (scoped by R-9); the
 counterfactual-savings line (needs `usage` pricing); `userConfig` local/cloud;
-`StopFailure` marker → SessionStart pain-point nudge; statusline offer;
-community-marketplace submission (Claude) + plugin-portal submission (Codex);
-granular sub-skills if `/bitrouter:bitrouter` proves awkward.
+statusline offer; community-marketplace submission (Claude) + plugin-portal
+submission (Codex); granular sub-skills if `/bitrouter:bitrouter` proves
+awkward. (Hook-based ideas — `StopFailure` nudge, `FileChanged` reload,
+`PreToolUse` model-downgrade — are viable only where each harness supports
+them; treat as harness-specific enhancements, not uniform plugin features.)
 
 **P2:** slim distribution (npm `@bitrouter/plugin` for Codex's npm source;
 CI-built mirror repo if the 46 MiB clone hurts adoption — note: live testing

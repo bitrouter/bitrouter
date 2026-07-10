@@ -54,16 +54,14 @@ models:
 ```bash
 bitrouter spawn -a claude -- --version     # binary + wiring sanity
 echo "say hi" | bitrouter spawn -a claude  # one-shot through the router
-bitrouter status --agent                   # from the same shell: reports whether the session env is routed
 tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages traffic
 ```
 
 ## Agent plugin
 
-The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: a `SessionStart` hook that reports routing status + a spend recap each session, a `bitrouter.yaml` auto-reload hook, the origin MCP server (with a cost footer on tool results) for in-session model arbitrage, and a session spend summary from `bitrouter spawn` on exit. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`.
+The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: the `/bitrouter` skill and the origin MCP server (with a cost footer on tool results) for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`. A session spend summary is printed by `bitrouter spawn` on exit (a spawn feature, independent of the plugin).
 
 ## Notes & gotchas
 
 - A plugin or env change cannot reroute a session that is already running — Claude Code reads `ANTHROPIC_BASE_URL` at startup. Wire first, then (re)launch.
-- `bitrouter status --agent` distinguishes "daemon up" from "this session is routed": it compares the session's `ANTHROPIC_BASE_URL` against the daemon's listen address.
 - Streaming, tool use, and subagents ride the same `/v1/messages` surface — no extra wiring beyond the two variables.

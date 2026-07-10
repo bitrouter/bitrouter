@@ -7,21 +7,24 @@ from one repo and stay in lockstep.
 
 ## What the plugin adds
 
-The plugin carries only renderers that behave **identically on every
-harness** — that's the point: BitRouter is one manager across harnesses, so
-its surfaces shouldn't fragment per-harness. Live / per-turn cost is
-deliberately **not** here; it belongs to BitRouter's own manager surface
-(`spawn` HUD, then the TUI/GUI cost-HUD), which is harness-agnostic by
-construction. See [[agent-plugins-design]] §5.4.
+The plugin carries only the **two components that work identically on every
+harness** — skills and MCP. Hooks are deliberately **not** here: they're the
+least portable plugin component (Grok hooks are block-only, Antigravity has a
+different event catalog + output schema, and even `SessionStart` output only
+surfaces on some harnesses), so anchoring the plugin on a hook would fragment
+the exact thing BitRouter exists to unify. Ambient/live/per-turn cost belongs
+to BitRouter's own manager surface (`spawn` HUD, then the TUI/GUI cost-HUD),
+which is harness-agnostic by construction. See [[agent-plugins-design]] §5.4.
 
 | Component | Claude Code | Codex |
 |---|---|---|
 | This skill (`bitrouter`) | ✓ (as `bitrouter:bitrouter`) | ✓ |
-| `SessionStart` status + spend recap (`bitrouter status --agent`) | ✓ | ✓ |
-| MCP tool-result cost footer (`complete` / `status`) | ✓ | ✓ |
-| `spawn` exit spend summary | ✓ (BitRouter-owned) | ✓ (BitRouter-owned) |
-| Auto-reload on `bitrouter.yaml` edits (`FileChanged` hook) | ✓ | — (no FileChanged event) |
-| Origin MCP server (`complete` / `list_models` / `status`) | ✓ auto-starts | ✓ but **must be enabled manually** |
+| Origin MCP server (`complete` / `list_models` / `status`) + cost footer on results | ✓ auto-starts | ✓ but **must be enabled manually** |
+
+Two cost signals ride alongside but are **not plugin components** — they're
+`bitrouter` CLI behaviors that exist independent of the plugin: the MCP
+tool-result **cost footer** (part of `mcp serve`), and the **`spawn` exit
+spend summary** (printed by `bitrouter spawn` on any harness it wraps).
 
 ## Install
 
@@ -52,21 +55,17 @@ offload subtasks to cheap models right away.
 
 ## Reading the cost surface
 
-The plugin shows cost at **boundaries and on-demand**, uniformly on both
-harnesses:
+Cost shows up **on-demand and at the spawn boundary** (no ambient hook):
 
-- **Every session start:** `status --agent` opens with spend-today /
-  this-month when the metering DB has data.
-- **Every `spawn` exit:** a one-line session spend summary.
 - **Every origin-MCP `complete` / `status` call:** a cost footer appended to
-  the tool result.
+  the tool result (spend today + request count).
+- **Every `spawn` exit:** a one-line session spend summary.
 
 Notes:
 
-- **Live / per-turn cost is not in the plugin** — no in-context streaming
-  monitor. That's intentional (Codex has no monitor mechanism and CC's `Stop`
-  hook can't surface a line without forcing an extra model turn, so it can't
-  be uniform). Live cost is the manager surface's job (`spawn` HUD → TUI/GUI).
+- **Live / per-turn / ambient cost is not in the plugin** — no monitor, no
+  session hook. That's intentional: hooks don't port across harnesses (§5.4),
+  so live cost is the manager surface's job (`spawn` HUD → TUI/GUI).
 - v1 reports **spend**, not savings — the counterfactual "vs frontier list
   price" line lands together with the `bitrouter usage` pricing plumbing.
   Don't promise savings percentages yet.
@@ -77,14 +76,11 @@ Notes:
 
 - **MCP server shows an error in `/plugin`** → the `bitrouter` binary isn't
   installed yet. Install it (see SKILL.md §2), then `/reload-plugins`.
-- **SessionStart says "NOT routed"** → daemon is up but the session env
-  doesn't point at it. That's the restart handoff above, not a bug.
-- **Spend recap empty** → expected when the session isn't routed through the
-  local daemon (e.g. Cloud base URL) — the local metering DB only records
+- **MCP cost footer empty** → expected when the session isn't routed through
+  the local daemon (e.g. Cloud base URL) — the local metering DB only records
   local daemon traffic.
-- **Hooks prompt for trust on install** → expected on both platforms; every
-  hook is a read-only one-liner (`status --agent`, `reload`) and survives
-  review.
+- **`complete`/`status` tools missing on Codex** → the bundled MCP server
+  wasn't enabled after install (Codex doesn't auto-enable them).
 - **Codex install copies the whole plugin root** into
   `$CODEX_HOME/plugins/cache/…` — from a fresh clone that's the repo
   checkout; from a **dev checkout it includes `target/` and `.git`** (can be

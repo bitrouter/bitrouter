@@ -125,10 +125,6 @@ enum Command {
         /// Explicit control socket path. Overrides the config-derived path.
         #[arg(long)]
         socket: Option<PathBuf>,
-        /// Emit one agent-context line instead of JSON — for harness
-        /// session hooks. Always exits 0; never hits the network.
-        #[arg(long)]
-        agent: bool,
     },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config and resolves locally.
@@ -738,21 +734,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&reload(&socket).await?)?;
             Ok(())
         }
-        Command::Status {
-            config,
-            socket,
-            agent,
-        } => {
-            if agent {
-                // Hook-grade output: exactly one plain line on stdout,
-                // exit 0 no matter what — a broken BitRouter install must
-                // never fail a harness session start.
-                println!(
-                    "{}",
-                    agent_status_line(config.as_deref(), socket.as_deref()).await
-                );
-                return Ok(());
-            }
+        Command::Status { config, socket } => {
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
             output.emit(&status(&socket).await?)?;
             Ok(())
@@ -1631,123 +1613,6 @@ async fn status(socket: &Path) -> Result<StatusReport> {
     Ok(report)
 }
 
-/// The `status --agent` line: one sentence of session context for a
-/// harness hook (Claude Code / Codex `SessionStart`). Three states —
-/// daemon down, up-but-session-not-routed, up-and-routed — plus a spend
-/// recap when the metering database has data. Infallible by design:
-/// every failure degrades to a useful line. Skips the self-update nudge
-/// (it may hit the network; hooks must not).
-async fn agent_status_line(config: Option<&Path>, socket: Option<&Path>) -> String {
-    let source = match bitrouter::paths::resolve_config(config) {
-        Ok(source) => source,
-        Err(_) => {
-            return "BitRouter: config could not be resolved — run 'bitrouter status' for details."
-                .to_string();
-        }
-    };
-    let socket = match resolve_client_socket_from(&source, socket).await {
-        Ok(socket) => socket,
-        Err(_) => {
-            return "BitRouter: daemon not running — 'bitrouter start' brings it up.".to_string();
-        }
-    };
-    match daemon::send_command(&socket, &DaemonCommand::Status).await {
-        Ok(DaemonResponse::Status { listen, models, .. }) => {
-            let recap = agent_spend_recap(&source).await;
-            if session_routed_through(&listen) {
-                format!(
-                    "BitRouter: routing active — daemon at {listen}, {models} models routable; \
-                     this session is routed through it.{recap}"
-                )
-            } else {
-                format!(
-                    "BitRouter: daemon up at {listen} ({models} models), but this session is \
-                     NOT routed through it — relaunch via 'bitrouter spawn -a claude' or ask \
-                     the bitrouter skill to wire it.{recap}"
-                )
-            }
-        }
-        _ => "BitRouter: daemon not running — 'bitrouter start' brings it up.".to_string(),
-    }
-}
-
-/// Spend recap clause for the agent line — `" Spend today $X (N
-/// requests), $Y this month."` — or empty when the metering database is
-/// absent or has recorded nothing yet.
-async fn agent_spend_recap(source: &bitrouter::paths::ConfigSource) -> String {
-    use bitrouter::metering::store::TimeWindow;
-    let Some(store) = bitrouter::metering::reader::open_readonly(source).await else {
-        return String::new();
-    };
-    let (Ok(today), Ok(month)) = (
-        store.spend_summary(TimeWindow::Today).await,
-        store.spend_summary(TimeWindow::ThisMonth).await,
-    ) else {
-        return String::new();
-    };
-    if month.requests == 0 {
-        return String::new();
-    }
-    format!(
-        " Spend today {} ({} requests), {} this month.",
-        bitrouter::metering::fmt_usd(today.spend_micro_usd),
-        today.requests,
-        bitrouter::metering::fmt_usd(month.spend_micro_usd)
-    )
-}
-
-/// Whether the *current process environment* points a harness at the
-/// daemon's listen address — i.e. the session this hook runs inside is
-/// routed through BitRouter. Checks the two documented override vars.
-fn session_routed_through(listen: &str) -> bool {
-    ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]
-        .iter()
-        .filter_map(|var| std::env::var(var).ok())
-        .any(|url| url_targets_listen(&url, listen))
-}
-
-/// Whether `url`'s authority resolves to `listen` (`host:port`). Ports
-/// must match exactly; hosts match when equal, or when a wildcard bind
-/// (`0.0.0.0` / `[::]`) meets any loopback name, or when both sides are
-/// loopback spellings (`localhost` / `127.0.0.1` / `[::1]`).
-fn url_targets_listen(url: &str, listen: &str) -> bool {
-    let (Some((url_host, url_port)), Some((listen_host, listen_port))) =
-        (authority_of(url), split_host_port(listen))
-    else {
-        return false;
-    };
-    if url_port != listen_port {
-        return false;
-    }
-    let is_loopback = |h: &str| matches!(h, "localhost" | "127.0.0.1" | "::1" | "[::1]");
-    let is_wildcard = |h: &str| matches!(h, "0.0.0.0" | "::" | "[::]");
-    url_host == listen_host
-        || (is_wildcard(&listen_host) && is_loopback(&url_host))
-        || (is_loopback(&listen_host) && is_loopback(&url_host))
-}
-
-/// Extract `(host, port)` from a URL, tolerating a scheme prefix, a
-/// path suffix, and bracketed IPv6. `None` when no explicit port is
-/// present — a local daemon listen address always carries one.
-fn authority_of(url: &str) -> Option<(String, u16)> {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let authority = rest.split(['/', '?', '#']).next()?;
-    split_host_port(authority)
-}
-
-/// Split `host:port`, keeping bracketed IPv6 hosts intact.
-fn split_host_port(authority: &str) -> Option<(String, u16)> {
-    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
-        let (host, after) = rest.split_once(']')?;
-        (format!("[{host}]"), after.strip_prefix(':')?)
-    } else {
-        let (host, port) = authority.rsplit_once(':')?;
-        (host.to_string(), port)
-    };
-    let port: u16 = port.parse().ok()?;
-    Some((host, port))
-}
-
 async fn route(
     model: &str,
     source: &bitrouter::paths::ConfigSource,
@@ -2406,59 +2271,6 @@ mod tests {
         use clap::CommandFactory;
         // Panics if clap detects a conflict (e.g. `--tag` vs global `--version`).
         Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn status_agent_flag_parses() {
-        use clap::Parser;
-        let cli = Cli::try_parse_from(["bitrouter", "status", "--agent"]).expect("parse");
-        match cli.command {
-            Command::Status { agent, .. } => assert!(agent),
-            _ => panic!("expected Status"),
-        }
-    }
-
-    #[test]
-    fn url_targets_listen_matches_loopback_spellings() {
-        for url in [
-            "http://localhost:4356",
-            "http://127.0.0.1:4356/v1",
-            "http://[::1]:4356",
-            "localhost:4356",
-        ] {
-            assert!(url_targets_listen(url, "127.0.0.1:4356"), "{url}");
-        }
-    }
-
-    #[test]
-    fn url_targets_listen_wildcard_bind_accepts_loopback() {
-        assert!(url_targets_listen("http://localhost:4356", "0.0.0.0:4356"));
-        assert!(url_targets_listen("http://127.0.0.1:4356", "[::]:4356"));
-    }
-
-    #[test]
-    fn url_targets_listen_rejects_mismatches() {
-        // Different port.
-        assert!(!url_targets_listen(
-            "http://localhost:8787",
-            "127.0.0.1:4356"
-        ));
-        // Remote host on the right port.
-        assert!(!url_targets_listen(
-            "https://api.bitrouter.ai:4356",
-            "127.0.0.1:4356"
-        ));
-        // No explicit port (e.g. the cloud endpoint) never matches.
-        assert!(!url_targets_listen(
-            "https://api.bitrouter.ai",
-            "127.0.0.1:4356"
-        ));
-        // Garbage.
-        assert!(!url_targets_listen("", "127.0.0.1:4356"));
-        assert!(!url_targets_listen(
-            "http://localhost:4356",
-            "not-an-authority"
-        ));
     }
 
     #[test]
