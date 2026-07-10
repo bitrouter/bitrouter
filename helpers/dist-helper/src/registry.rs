@@ -3257,7 +3257,7 @@ api_base: https://api.acme.test/v1
             "kuaishou/kat-coder-pro-v2",
             "kwaipilot/kat-coder-pro-v2",
             0.3,
-            Some(0.06),
+            Some((0.06, 0.0)),
             1.2,
         );
         assert_provider_mapping(
@@ -3266,7 +3266,7 @@ api_base: https://api.acme.test/v1
             "nvidia/nemotron-3-ultra-550b-a55b",
             "nvidia/nemotron-3-ultra-550b-a55b",
             0.8,
-            Some(0.1),
+            Some((0.1, 0.0)),
             2.6,
         );
 
@@ -3294,7 +3294,7 @@ api_base: https://api.acme.test/v1
             "kuaishou/kat-coder-pro-v2",
             "kat-coder-pro-v2",
             0.3,
-            Some(0.06),
+            Some((0.06, 0.0)),
             1.2,
         );
     }
@@ -3305,7 +3305,7 @@ api_base: https://api.acme.test/v1
         canonical_id: &str,
         provider_model_id: &str,
         input_price: f64,
-        cache_read_price: Option<f64>,
+        cache_prices: Option<(f64, f64)>,
         output_price: f64,
     ) {
         let model = provider
@@ -3328,11 +3328,30 @@ api_base: https://api.acme.test/v1
             model.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
             Some(input_price)
         );
-        if let Some(cache_read_price) = cache_read_price {
-            assert_eq!(
-                model.and_then(|model| model["pricing"]["input_tokens"]["cache_read"].as_f64()),
-                Some(cache_read_price)
-            );
+        let input_tokens = model
+            .and_then(|model| model["pricing"]["input_tokens"].as_object())
+            .expect("input token pricing");
+        match cache_prices {
+            Some((cache_read_price, cache_write_price)) => {
+                assert_eq!(
+                    input_tokens.get("cache_read").and_then(Value::as_f64),
+                    Some(cache_read_price)
+                );
+                assert_eq!(
+                    input_tokens.get("cache_write").and_then(Value::as_f64),
+                    Some(cache_write_price)
+                );
+            }
+            None => {
+                assert!(
+                    !input_tokens.contains_key("cache_read"),
+                    "{provider_name} {canonical_id} should not advertise cache-read pricing"
+                );
+                assert!(
+                    !input_tokens.contains_key("cache_write"),
+                    "{provider_name} {canonical_id} should not advertise cache-write pricing"
+                );
+            }
         }
         assert_eq!(
             model.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
