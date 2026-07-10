@@ -56,11 +56,9 @@ curl http://127.0.0.1:4356/v1/chat/completions \
 
 ## 查看是哪个模型应答的
 
-三条线索：
+对于每个结算完成的请求，BitRouter 都会输出一行 `request finished` 日志，记录实际作答的上游——`provider`、`model`，以及对于多账号供应商而言实际服务的 `account`（会体现任何故障转移跳转）——同时还有 token 计数和延迟。从网关的日志输出中查看即可（本地安装为 `~/.bitrouter/bitrouter.log`），以确认某个请求由哪个供应商和模型处理，包括回退到后续模型之后的情况。
 
-- **响应体的 `model` 字段** — 设置为实际生成响应的模型，而不是你最初请求的那个（OpenAI 约定）。
-- **响应头 `bitrouter-served-by`** — `<provider-id>/<model-id>`，例如 `anthropic-direct/anthropic/claude-sonnet-4-6`。
-- **响应头 `bitrouter-fallback-trace`** — 以逗号分隔的尝试与结果列表，例如 `openai/gpt-4o:rate_limit,anthropic/claude-sonnet-4-6:served`。仅在至少触发了一次回退时输出。
+响应体的 `model` 字段回显的是你最初请求的模型，因此它本身并不能说明是哪个回退作答的——要确认这一点请使用该日志行。
 
 ## 成本与延迟权衡
 

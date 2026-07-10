@@ -15,9 +15,9 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `ambient` | Ambient | US | openai | Per-token | 2 |
 | `anthropic` | Anthropic | US | anthropic | Per-token | 8 |
 | `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
-| `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 12 |
-| `azure` | Microsoft Azure | US | openai, responses | Per-token | 14 |
-| `bitrouter` | BitRouter | US | openai | Per-token | 49 |
+| `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 14 |
+| `azure` | Microsoft Azure | US | openai, responses | Per-token | 15 |
+| `bitrouter` | BitRouter | US | openai | Per-token | 54 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
 | `cerebras` | Cerebras | US | openai | Per-token | 3 |
 | `chutes` | Chutes | US | openai | Per-token | 7 |
@@ -36,13 +36,13 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `openai` | OpenAI | US | openai, responses | Per-token | 6 |
 | `openai-codex` | OpenAI | US | responses | Subscription | 6 |
 | `opencode-go` | OpenCode | US | openai | Subscription | 18 |
-| `opencode-zen` | OpenCode | US | openai | Per-token | 26 |
-| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 52 |
+| `opencode-zen` | OpenCode | US | openai | Per-token | 27 |
+| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 56 |
 | `phala` | Phala | US | openai | Per-token | 5 |
 | `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 8 |
 | `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 9 |
 | `redpill` | RedPill | SG | openai | Per-token | 5 |
-| `siliconflow` | SiliconFlow | CN | openai | Per-token | 17 |
+| `siliconflow` | SiliconFlow | CN | openai | Per-token | 18 |
 | `siliconflow_cn` | SiliconFlow | CN | openai | Per-token | 13 |
 | `stepfun` | StepFun | CN | anthropic, openai | Per-token | 2 |
 | `stepfun_cn` | StepFun | CN | anthropic, openai | Per-token | 2 |

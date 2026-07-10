@@ -23,13 +23,14 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `claude-code` | — (local OAuth) | Claude Code session | `bitrouter providers login claude-code`; Claude Pro/Max subscription provider, distinct from `anthropic` API-key billing |
 | `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
 | `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
+| `supergrok` | — (local OAuth) | SuperGrok subscription | `bitrouter providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
 Zero-config mode auto-enables every API-key provider whose env var is present;
 an API-key provider without its credential gets `active: false` and falls out of
 the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
-`openai-codex`) are enabled by `bitrouter providers login`, not an env var. **First run with no network
+`openai-codex`, `supergrok`) are enabled by `bitrouter providers login`, not an env var. **First run with no network
 and no cache**: the registry is empty, so only fully-specified local providers
 and the in-binary `bitrouter` cloud gateway are available — the known-provider
 shorthand needs one prior successful fetch. Startup still succeeds.
@@ -355,7 +356,19 @@ agents:
       type: stdio
       command: npx
       args: ["-y", "@zed-industries/codex-acp@latest"]
+
+  pi-acp:
+    name: pi-acp
+    transport:
+      type: stdio
+      command: npx
+      args: ["-y", "pi-acp@latest"]   # spawns `pi --mode rpc`; needs `pi` on PATH
 ```
+
+The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, and `pi-acp`.
+`pi-acp` wraps the [`pi`](https://github.com/earendil-works/pi) coding agent — install
+it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with the
+`@bitrouter/pi` provider so pi's own model calls route back through the daemon.
 
 `bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bitrouter agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bitrouter agents check` verifies each configured agent answers `initialize`.
 

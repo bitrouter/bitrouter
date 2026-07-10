@@ -120,6 +120,7 @@ Separately, a JSON Schema for the config is committed at `dist/schema/bitrouter.
 bitrouter providers login claude-code       # Claude Pro/Max via Claude Code session
 bitrouter providers login openai-codex      # ChatGPT/Codex subscription
 bitrouter providers login github-copilot    # browser device flow, token stored on disk
+bitrouter providers login supergrok         # SuperGrok via the Grok CLI session (~/.grok)
 ```
 
 ## 4. Connect your SDK
@@ -188,7 +189,7 @@ Read these on demand — don't load them all upfront.
 ## 7. Gotchas
 
 - **Always ask Local-or-Cloud first.** The default of "just install locally" is wrong for users who want managed billing — they should never install the daemon at all.
-- **Cloud sign-in is `bitrouter cloud login`.** Per-provider OAuth is `bitrouter providers login <provider>` (today: `claude-code`, `github-copilot`, and `openai-codex`), not a top-level `login` command.
+- **Cloud sign-in is `bitrouter cloud login`.** Per-provider OAuth is `bitrouter providers login <provider>` (today: `claude-code`, `github-copilot`, `openai-codex`, and `supergrok`), not a top-level `login` command.
 - **Cloud management is `bitrouter cloud …`.** After `bitrouter cloud login`, run `bitrouter cloud --help` for the subcommand index: `keys`, `usage`, `requests`, `billing`, `policy`, `budget`, `preset`, `byok`. Every leaf accepts `--json`.
 - **Local port: `127.0.0.1:4356`.** Old docs (and the upstream README) sometimes say 8787 — those are stale.
 - **Cloud endpoints:** `https://api.bitrouter.ai/v1` for the OpenAI shape; `https://api.bitrouter.ai` (no `/v1`) for the Anthropic SDK — same asymmetry as Local.

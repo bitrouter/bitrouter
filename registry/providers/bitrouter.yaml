@@ -391,13 +391,6 @@ models:
         cache_read: 0.025
       output_tokens:
         text: 1
-  - id: nvidia/nemotron-3-super-120b-a12b
-    provider_model_id: nvidia/nemotron-3-super-120b-a12b
-    pricing:
-      input_tokens:
-        no_cache: 0.08
-      output_tokens:
-        text: 0.45
   - id: nvidia/nemotron-3-ultra-550b-a55b
     provider_model_id: nvidia/nemotron-3-ultra-550b-a55b
     pricing:
@@ -406,6 +399,57 @@ models:
         cache_read: 0.1
       output_tokens:
         text: 2.2
+  - id: bytedance/doubao-seed-2.0-pro
+    provider_model_id: bytedance/doubao-seed-2.0-pro
+    pricing:
+      input_tokens:
+        no_cache: 0.83
+        cache_read: 0.167
+      output_tokens:
+        text: 4.17
+  - id: meta/muse-spark-1.1
+    provider_model_id: meta/muse-spark-1.1
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.15
+      output_tokens:
+        text: 4.25
+  - id: openai/gpt-5.6-luna
+    provider_model_id: openai/gpt-5.6-luna
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 6
+  - id: openai/gpt-5.6-sol
+    provider_model_id: openai/gpt-5.6-sol
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 30
+  - id: openai/gpt-5.6-terra
+    provider_model_id: openai/gpt-5.6-terra
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+        cache_write: 3.125
+      output_tokens:
+        text: 15
+  - id: x-ai/grok-4.5
+    provider_model_id: x-ai/grok-4.5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 community: false

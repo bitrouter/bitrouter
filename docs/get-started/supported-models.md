@@ -41,12 +41,11 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $0.9 |
 | `minimax/minimax-m2.7` | MiniMax: M2.7 | 192K | text | ✅ | $0.225 | $0.9 |
 | `minimax/minimax-m3` | MiniMax: M3 | 1M | text, image | ✅ | $0.3 | $1.2 |
-| `mistralai/mistral-medium-3-5` | Mistral Medium 3.5 | 256K | text, image | ✅ | — | — |
+| `mistralai/mistral-medium-3-5` | Mistral Medium 3.5 | 256K | text, image | ✅ | $1.5 | $7.5 |
 | `moonshotai/kimi-k2.5` | Kimi: K2.5 | 256K | text, image | ✅ | $0.375 | $2.025 |
 | `moonshotai/kimi-k2.6` | Kimi: K2.6 | 256K | text | ✅ | $0.66 | $3.41 |
 | `moonshotai/kimi-k2.7-code` | Kimi: K2.7 Code | 256K | text, image | ✅ | $0.612 | $3.069 |
 | `nex-agi/nex-n2-pro` | Nex AGI: Nex-N2-Pro | 256K | text, image | ✅ | $0.25 | $1 |
-| `nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super 120B-A12B | 256K | text | ✅ | $0.08 | $0.45 |
 | `nvidia/nemotron-3-ultra-550b-a55b` | Nemotron 3 Ultra 550B-A55B | 1M | text | ✅ | $0.5 | $2.2 |
 | `openai/gpt-5.4` | OpenAI: GPT-5.4 | 128K | text, image | — | $2.5 | $15 |
 | `openai/gpt-5.4-mini` | OpenAI: GPT-5.4 Mini | 128K | text, image | — | $0.75 | $4.5 |

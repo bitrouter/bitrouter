@@ -340,6 +340,7 @@ impl AuthMethod {
 fn import_cli_for(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         bitrouter_providers::codex::PROVIDER_ID => Some("Codex"),
+        bitrouter_providers::supergrok::PROVIDER_ID => Some("Grok"),
         _ => None,
     }
 }
@@ -793,6 +794,7 @@ fn run_cli_import(
 ) -> Result<bitrouter_providers::oauth::credential_store::Credential> {
     let imported = match provider_id {
         bitrouter_providers::codex::PROVIDER_ID => bitrouter_providers::import::codex::import(),
+        bitrouter_providers::supergrok::PROVIDER_ID => bitrouter_providers::import::grok::import(),
         other => anyhow::bail!("no vendor-CLI import is available for provider '{other}'"),
     }
     .with_context(|| format!("importing a CLI credential for {provider_id}"))?;
