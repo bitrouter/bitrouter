@@ -95,6 +95,8 @@ mod entry;
 pub mod import;
 pub mod oauth;
 pub mod registry;
+#[cfg(feature = "pkce")]
+pub mod supergrok;
 
 pub use apply::{
     activate_stored_credential_providers, apply_builtin_defaults, zero_config,

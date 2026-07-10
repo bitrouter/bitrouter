@@ -855,6 +855,14 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
             .context("building the openai-codex AuthApplier")?;
         appliers.register("openai-codex", Arc::new(applier));
     }
+    // The SuperGrok subscription applier (OAuth imported from the Grok CLI
+    // session). Registered under `supergrok`, distinct from the metered `xai`
+    // API-key provider.
+    if config.providers.contains_key("supergrok") {
+        let applier = bitrouter_providers::supergrok::SuperGrokAuthApplier::new(&store_path)
+            .context("building the supergrok AuthApplier")?;
+        appliers.register("supergrok", Arc::new(applier));
+    }
     Ok(appliers)
 }
 
