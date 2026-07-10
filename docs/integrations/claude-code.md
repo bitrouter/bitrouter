@@ -50,7 +50,7 @@ Prefer a file? Put the same values in `.claude/settings.json` so they apply per-
 
 ## Verify
 
-Launch `claude`, ask it anything, and confirm the response. BitRouter's `bitrouter-served-by` response header tells you which provider actually answered.
+Launch `claude`, ask it anything, and confirm the response. To see which provider actually answered, read BitRouter's `request finished` log line (`~/.bitrouter/bitrouter.log` for a local install) — it records the `provider` and `model` that served the request.
 
 ## Learn more
 

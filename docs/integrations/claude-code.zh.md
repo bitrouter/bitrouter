@@ -50,7 +50,7 @@ claude
 
 ## 验证
 
-启动 `claude`，问它任意问题，并确认收到响应。BitRouter 的 `bitrouter-served-by` 响应头会告诉你实际作答的是哪个供应商。
+启动 `claude`，问它任意问题，并确认收到响应。想知道实际作答的是哪个供应商，可查看 BitRouter 的 `request finished` 日志行（本地安装为 `~/.bitrouter/bitrouter.log`）——其中记录了服务该请求的 `provider` 和 `model`。
 
 ## 延伸阅读
 
