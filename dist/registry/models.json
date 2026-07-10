@@ -1032,7 +1032,21 @@
       "output_modalities": [
         "text"
       ],
-      "providers": [],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 5.6
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "ernie-5.1"
+        }
+      ],
       "release_date": "2026-05-10"
     },
     {
@@ -1922,11 +1936,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.063,
-              "no_cache": 0.7605
+              "cache_read": 0.14,
+              "no_cache": 1.69
             },
             "output_tokens": {
-              "text": 1.521
+              "text": 3.38
             }
           },
           "provider": "qianfan",
@@ -8118,11 +8132,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.208,
-              "no_cache": 1.12
+              "cache_read": 0.181,
+              "no_cache": 0.97
             },
             "output_tokens": {
-              "text": 3.96
+              "text": 3.07
             }
           },
           "provider": "qianfan",

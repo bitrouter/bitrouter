@@ -39,7 +39,7 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `opencode-zen` | OpenCode | US | openai | Per-token | 27 |
 | `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 56 |
 | `phala` | Phala | US | openai | Per-token | 5 |
-| `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 8 |
+| `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 9 |
 | `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 9 |
 | `redpill` | RedPill | SG | openai | Per-token | 5 |
 | `siliconflow` | SiliconFlow | CN | openai | Per-token | 19 |
