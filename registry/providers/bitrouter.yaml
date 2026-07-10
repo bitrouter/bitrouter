@@ -450,6 +450,29 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 6
+  - id: baidu/ernie-5.1
+    provider_model_id: baidu/ernie-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+      output_tokens:
+        text: 5.6
+  - id: kuaishou/kat-coder-pro-v2
+    provider_model_id: kuaishou/kat-coder-pro-v2
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+        cache_write: 0
+      output_tokens:
+        text: 1.2
+  - id: meituan/longcat-2.0
+    provider_model_id: meituan/longcat-2.0
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+      output_tokens:
+        text: 2.95
 status: active
 weight: 1
 community: false
