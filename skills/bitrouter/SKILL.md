@@ -178,6 +178,7 @@ Read these on demand — don't load them all upfront.
 | `references/migrate-from-anthropic-compatible.md` | Migrating from raw Anthropic keys or any Anthropic-Messages-shaped gateway |
 | `references/harness-claude-code.md` | Wiring Claude Code at `localhost:4356` |
 | `references/harness-codex.md` | Wiring Codex CLI |
+| `references/agent-plugin.md` | The installable Claude Code / Codex agent plugin — hooks, cost feed, MCP enable steps, restart handoff |
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |

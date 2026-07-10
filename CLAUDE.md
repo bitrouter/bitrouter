@@ -24,6 +24,16 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
    must not describe a CLI that no longer matches `apps/bitrouter`.
 2. Keep `skills/bitrouter/SKILL.md` under ~200 lines; deep detail goes in
    `skills/bitrouter/references/`.
+3. The same lockstep rule covers the **agent-plugin manifests** at
+   `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/marketplace.json`:
+   their hook/monitor/MCP commands invoke `bitrouter` subcommands
+   (`status --agent`, `events`, `reload`, `mcp serve`) and must never reference
+   a CLI surface that doesn't exist.
+4. Only **shippable** skills live in `skills/` — that directory is served
+   verbatim by the skills install rails and both plugin manifests. Dev-only
+   skills go in `.claude/skills/` (auto-loaded for contributors, never
+   shipped). Never name any file under `skills/bitrouter/references/`
+   `SKILL.md` — Codex's recursive skill scan would load it as a second skill.
 
 ## Documentation
 

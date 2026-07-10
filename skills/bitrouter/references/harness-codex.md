@@ -63,4 +63,8 @@ bitrouter spawn --agent codex -- --version
 tail -n 20 ~/.bitrouter/bitrouter.log
 ```
 
-For live requests, check the `bitrouter-served-by` response header or the BitRouter request logs to confirm which upstream provider answered.
+For live requests, check the BitRouter request logs (`~/.bitrouter/bitrouter.log`) to confirm which upstream provider answered.
+
+## Agent plugin
+
+The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: a `SessionStart` hook that reports routing status, a `Stop` hook that prints a per-turn spend line (`bitrouter events --turn --hook codex`), and the origin MCP server for in-session model arbitrage — note bundled MCP servers must be enabled manually on Codex after install. See `references/agent-plugin.md`.

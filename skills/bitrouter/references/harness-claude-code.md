@@ -2,51 +2,68 @@
 
 Wire Anthropic's Claude Code CLI to route its model calls through BitRouter at `http://localhost:4356`.
 
-> **Cloud users:** swap `http://localhost:4356` → `https://api.bitrouter.ai` (Anthropic SDK drops the `/v1`) and use a `brk_*` key instead of `"unused"`. No daemon to install. See `references/cloud-setup.md`.
+> **Cloud users:** swap `http://localhost:4356` → `https://api.bitrouter.ai` (Anthropic SDK drops the `/v1`) and use a `brk_*` key instead of the placeholder. No daemon to install. See `references/cloud-setup.md`.
 
 ## Prerequisites
 
-- BitRouter installed and running (`bitrouter status` shows green).
-- The `anthropic` provider active in BitRouter (`bitrouter providers list` should show `active: yes`).
+- BitRouter installed (`bitrouter --version`). The daemon does **not** need to be pre-started for the `spawn` path — it auto-starts.
 - Claude Code installed and authenticated normally at least once.
 
-## Configuration
-
-> **TODO:** fill in the exact env var or settings.json path that points Claude Code at a custom Anthropic-shaped base URL. Confirmed knobs to capture:
-> - The env var name(s) Claude Code reads for `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` override.
-> - Whether `~/.claude/settings.json` carries the override and the exact field path.
-> - The auth header expectation when `bitrouter`'s `skip_auth: true` is on (any token? a `brvk_…` virtual key?).
-> - Anything Claude Code does differently for stream vs. non-stream that BitRouter needs to know about.
+## Preferred launch path: `bitrouter spawn`
 
 ```bash
-# placeholder — replace with the verified one-liner
-export ANTHROPIC_BASE_URL="http://localhost:4356"
-export ANTHROPIC_API_KEY="unused"      # bitrouter handles upstream auth
+bitrouter spawn -a claude
+bitrouter spawn -a claude -- -p "summarize this repo"
 ```
+
+Reversible, per-process, and config-file-free: `spawn` launches Claude Code as a child process with two environment overrides and never touches `~/.claude/settings.json`. When the local daemon is down, `spawn` auto-starts it and waits for readiness first. Everything after `--` is forwarded to `claude` verbatim. After the session exits, `spawn` prints a one-line spend summary for the wrapped run.
+
+## What the wiring actually is
+
+Two environment variables — these are what `spawn` injects, and what a durable setup exports:
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:4356"
+export ANTHROPIC_AUTH_TOKEN="bitrouter-local"   # placeholder; fine under skip_auth: true
+```
+
+Facts that matter (verified against `apps/bitrouter/src/spawn.rs`):
+
+- **`ANTHROPIC_AUTH_TOKEN`, not `ANTHROPIC_API_KEY`.** Claude Code sends `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer …` — the credential BitRouter validates. `ANTHROPIC_API_KEY` would be sent as `x-api-key` instead, and in a BYOK setup that variable typically holds your *upstream* Anthropic provider key, which is not a valid BitRouter inbound credential. `spawn` always sets both variables explicitly (never inherit-only) for exactly this reason.
+- **Token precedence** (`spawn`): an `ANTHROPIC_AUTH_TOKEN` you already exported → `BITROUTER_API_KEY` → the `bitrouter-local` placeholder. The placeholder works with the `skip_auth: true` default from `bitrouter init`; flip `skip_auth: false` and mint a `brvk_*` key (`bitrouter key sign --user <id>`) for multi-tenant setups.
+- **Durable setup:** put the two exports in your shell profile, or in the `env` block of `~/.claude/settings.json`. Show the user the diff before writing settings files — never edit them silently.
 
 ## Model selection
 
-> **TODO:** confirm whether Claude Code accepts `anthropic/claude-sonnet-4-5` (BitRouter's `provider/model` form) or only bare `claude-sonnet-4-5`. If only bare names, document the `models:` alias pattern to add to `bitrouter.yaml`:
+Claude Code sends bare Anthropic model ids (`claude-sonnet-4-6`, `claude-haiku-4-5`). BitRouter's routing table resolves bare ids through its fallback chain — confirm with:
+
+```bash
+bitrouter route claude-sonnet-4-6
+```
+
+If a bare id doesn't resolve in your config, alias it in `bitrouter.yaml`:
 
 ```yaml
-# bitrouter.yaml — alias bare Claude Code model names to BitRouter's provider/model
 models:
-  claude-sonnet-4-5:
-    upstream_id: "anthropic/claude-sonnet-4-5"
-  claude-haiku-4-5:
-    upstream_id: "anthropic/claude-haiku-4-5"
+  claude-sonnet-4-6:
+    upstream_id: "anthropic/claude-sonnet-4-6"
 ```
 
 ## Verify
 
 ```bash
-# from the shell that exported the override:
-claude --version
-# run a one-shot query — the daemon log should show an /v1/messages hit
-echo "say hi" | claude
-tail -n 20 ~/.bitrouter/bitrouter.log
+bitrouter spawn -a claude -- --version     # binary + wiring sanity
+echo "say hi" | bitrouter spawn -a claude  # one-shot through the router
+bitrouter status --agent                   # from the same shell: reports whether the session env is routed
+tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages traffic
 ```
+
+## Agent plugin
+
+The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: a `SessionStart` hook that reports routing status each session, a `bitrouter.yaml` auto-reload hook, a live cost-feed monitor (`bitrouter events --follow`), and the origin MCP server for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`.
 
 ## Notes & gotchas
 
-> **TODO:** capture anything specific to Claude Code that surprised you in testing — e.g., whether tool use round-trips work end-to-end through BitRouter, whether streaming buffering behaves, any auth header strictness.
+- A plugin or env change cannot reroute a session that is already running — Claude Code reads `ANTHROPIC_BASE_URL` at startup. Wire first, then (re)launch.
+- `bitrouter status --agent` distinguishes "daemon up" from "this session is routed": it compares the session's `ANTHROPIC_BASE_URL` against the daemon's listen address.
+- Streaming, tool use, and subagents ride the same `/v1/messages` surface — no extra wiring beyond the two variables.
