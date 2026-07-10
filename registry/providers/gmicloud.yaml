@@ -97,6 +97,9 @@ models:
         text: 3.08
   - id: openai/gpt-5.5
     provider_model_id: openai/gpt-5.5
+    compatibility:
+      chat_completions:
+        token_limit_field: max_completion_tokens
     pricing:
       input_tokens:
         no_cache: 5

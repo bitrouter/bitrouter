@@ -4591,6 +4591,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.25,
@@ -4715,6 +4720,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.075,
@@ -4851,6 +4861,11 @@
         },
         {
           "api_protocol": "openai",
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
@@ -4873,6 +4888,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
@@ -4973,6 +4993,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "context_tiers": [
               {
@@ -5074,6 +5099,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "context_tiers": [
               {
@@ -5175,6 +5205,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "context_tiers": [
               {
