@@ -15,7 +15,7 @@ rust-version.workspace = true
 # `bitrouter-providers` (`bitrouter-cloud`, downstream crates) don't pull
 # `sha2` / `base64` / `rand` they don't use. `apps/bitrouter` enables it.
 default = []
-pkce = ["dep:sha2", "dep:base64", "dep:rand", "dep:url", "tokio/net", "tokio/io-util", "tokio/sync"]
+pkce = ["dep:sha2", "dep:base64", "dep:rand", "dep:url", "dep:keyring", "tokio/net", "tokio/io-util", "tokio/sync"]
 
 [dependencies]
 # `config_file` for `bitrouter_sdk::config::{Config, ProviderConfig, PatternMap}`
@@ -38,6 +38,9 @@ sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+# Cross-platform OS keyring — reads the Antigravity `agy` session. Gated with
+# the rest of the interactive-login deps behind `pkce`.
+keyring = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "sync"] }

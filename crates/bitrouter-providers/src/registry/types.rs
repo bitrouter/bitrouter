@@ -54,6 +54,10 @@ pub enum RegistryProtocol {
     Google,
     /// OpenAI Responses.
     Responses,
+    /// Google Antigravity Code Assist — Gemini `generateContent` retargeted at
+    /// `cloudcode-pa.googleapis.com/v1internal:*` (custom protocol, registered
+    /// by `bitrouter_providers::antigravity`).
+    Antigravity,
 }
 
 impl RegistryProtocol {
@@ -64,6 +68,9 @@ impl RegistryProtocol {
             RegistryProtocol::Anthropic => ApiProtocol::Messages,
             RegistryProtocol::Google => ApiProtocol::GenerateContent,
             RegistryProtocol::Responses => ApiProtocol::Responses,
+            // Matches the protocol the antigravity adapter registers under
+            // (`bitrouter_providers::antigravity::protocol::PROTOCOL`).
+            RegistryProtocol::Antigravity => ApiProtocol::Custom("antigravity".to_string()),
         }
     }
 }

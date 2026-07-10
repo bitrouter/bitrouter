@@ -2141,17 +2141,6 @@
         },
         {
           "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "tools"
-          ],
-          "provider": "google-ai",
-          "provider_model_id": "gemini-3.1-flash-lite-preview"
-        },
-        {
-          "api_protocol": [
             "openai",
             "responses",
             "anthropic"
@@ -2247,18 +2236,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "google-ai",
-          "provider_model_id": "gemini-3.1-pro-preview"
         },
         {
           "api_protocol": [
@@ -2358,18 +2335,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "google-ai",
-          "provider_model_id": "gemini-3.5-flash"
         },
         {
           "api_protocol": "openai",

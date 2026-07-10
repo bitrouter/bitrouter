@@ -346,6 +346,7 @@ fn import_cli_for(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         bitrouter_providers::codex::PROVIDER_ID => Some("Codex"),
         bitrouter_providers::supergrok::PROVIDER_ID => Some("Grok"),
+        bitrouter_providers::antigravity::PROVIDER_ID => Some("Antigravity (agy)"),
         _ => None,
     }
 }
@@ -800,6 +801,9 @@ fn run_cli_import(
     let imported = match provider_id {
         bitrouter_providers::codex::PROVIDER_ID => bitrouter_providers::import::codex::import(),
         bitrouter_providers::supergrok::PROVIDER_ID => bitrouter_providers::import::grok::import(),
+        bitrouter_providers::antigravity::PROVIDER_ID => {
+            bitrouter_providers::import::antigravity::import()
+        }
         other => anyhow::bail!("no vendor-CLI import is available for provider '{other}'"),
     }
     .with_context(|| format!("importing a CLI credential for {provider_id}"))?;
