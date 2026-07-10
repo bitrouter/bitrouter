@@ -355,7 +355,19 @@ agents:
       type: stdio
       command: npx
       args: ["-y", "@zed-industries/codex-acp@latest"]
+
+  pi-acp:
+    name: pi-acp
+    transport:
+      type: stdio
+      command: npx
+      args: ["-y", "pi-acp@latest"]   # spawns `pi --mode rpc`; needs `pi` on PATH
 ```
+
+The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, and `pi-acp`.
+`pi-acp` wraps the [`pi`](https://github.com/earendil-works/pi) coding agent — install
+it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with the
+`@bitrouter/pi` provider so pi's own model calls route back through the daemon.
 
 `bitrouter agents list` shows the bundled catalog; `--remote` also lists the official ACP agent registry (50+ agents). `bitrouter agents install <id>` prints a paste-ready stub — catalog first, then registry (`npx`/`uvx` entries, version-pinned; binary-only entries need manual install). `bitrouter agents check` verifies each configured agent answers `initialize`.
 

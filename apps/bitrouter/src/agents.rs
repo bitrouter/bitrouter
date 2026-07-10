@@ -66,6 +66,13 @@ pub const CATALOG: &[KnownAgent] = &[
             "--experimental-acp",
         ],
     },
+    KnownAgent {
+        id: "pi-acp",
+        description: "pi coding agent via `pi-acp` (needs `pi` on PATH)",
+        project_url: "https://github.com/svkozak/pi-acp",
+        command: "npx",
+        args: &["-y", "pi-acp@latest"],
+    },
 ];
 
 fn lookup_catalog(id: &str) -> Option<&'static KnownAgent> {
@@ -527,6 +534,17 @@ mod tests {
     fn install_emits_project_url_for_attribution() {
         let out = install("gemini-cli").unwrap();
         assert!(out.contains("github.com"));
+    }
+
+    #[test]
+    fn catalog_includes_pi_acp() {
+        let a = lookup_catalog("pi-acp").expect("pi-acp is in the bundled catalog");
+        assert_eq!(a.command, "npx");
+        assert_eq!(a.args, &["-y", "pi-acp@latest"]);
+        let out = install("pi-acp").unwrap();
+        assert!(out.contains("pi-acp:"));
+        assert!(out.contains("pi-acp@latest"));
+        assert!(out.contains("github.com/svkozak/pi-acp"));
     }
 
     #[test]
