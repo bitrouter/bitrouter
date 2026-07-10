@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v bitrouter >/dev/null 2>&1 && bitrouter status --agent || echo 'BitRouter CLI not installed — the bitrouter skill can set it up.'",
+            "statusMessage": "Checking BitRouter routing status"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v bitrouter >/dev/null 2>&1 && bitrouter events --turn --hook codex || true",
+            "statusMessage": "BitRouter turn spend"
+          }
+        ]
+      }
+    ]
+  }
+}

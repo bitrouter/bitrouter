@@ -1,0 +1,13 @@
+{
+  "name": "bitrouter",
+  "displayName": "BitRouter",
+  "version": "0.1.0",
+  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the bitrouter setup skill, ambient daemon status, per-turn cost lines, and in-session model arbitrage tools.",
+  "homepage": "https://bitrouter.ai",
+  "repository": "https://github.com/bitrouter/bitrouter",
+  "license": "Apache-2.0",
+  "keywords": ["llm", "router", "gateway", "cost", "openai", "anthropic", "mcp"],
+  "skills": "./skills/bitrouter",
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "hooks": "./.codex-plugin/hooks.json"
+}
