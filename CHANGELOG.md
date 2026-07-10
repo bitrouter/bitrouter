@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.23](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.22...v1.0.0-alpha.23)
+
+
+### ⛰️ Features
+
+- *(agents)* Add pi-acp to the ACP catalog ([#685](https://github.com/bitrouter/bitrouter/pull/685)) - ([c12f5d8](https://github.com/bitrouter/bitrouter/commit/c12f5d842932d1fb843dc218fbdf81662d6e3248))
+- *(providers)* Add SuperGrok BYO subscription ([#676](https://github.com/bitrouter/bitrouter/pull/676)) - ([ad266c7](https://github.com/bitrouter/bitrouter/commit/ad266c7bf13aa480e9f02ea46e7f9716f88fc4cf))
+- Ship Claude Code and Codex agent plugins ([#683](https://github.com/bitrouter/bitrouter/pull/683)) - ([6ea6458](https://github.com/bitrouter/bitrouter/commit/6ea6458926e0bde62ffd55415d4cd2460c7af34a))
+- Add AWS Bedrock, Azure, Vertex built-in providers ([#647](https://github.com/bitrouter/bitrouter/pull/647)) - ([6b92fcf](https://github.com/bitrouter/bitrouter/commit/6b92fcf612ee5eff54e426f7ba8b50a023002caa))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Preserve token limits and upstream errors ([#692](https://github.com/bitrouter/bitrouter/pull/692)) - ([495b1e9](https://github.com/bitrouter/bitrouter/commit/495b1e9aa4de4e79f877ca2d7fda0cf88bffad65))
+
+
 ## [1.0.0-alpha.22](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.21...v1.0.0-alpha.22)
 
 
