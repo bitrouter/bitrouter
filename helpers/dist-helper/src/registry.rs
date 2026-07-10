@@ -3236,6 +3236,110 @@ api_base: https://api.acme.test/v1
         assert_eq!(nex["pricing"]["output_tokens"]["text"], 2.5);
     }
 
+    #[test]
+    fn built_registry_maps_configured_provider_ids_for_recovered_models() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root).expect("builds repository registry");
+        let providers: Value =
+            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+        let empty = Vec::new();
+        let provider_data = providers["data"].as_array();
+        assert!(provider_data.is_some(), "provider data array");
+        let provider_data = provider_data.unwrap_or(&empty);
+
+        let gmicloud = provider_data
+            .iter()
+            .find(|provider| provider["name"] == "gmicloud");
+        assert!(gmicloud.is_some(), "GMI Cloud provider");
+        assert_provider_mapping(
+            gmicloud,
+            "GMI Cloud",
+            "kuaishou/kat-coder-pro-v2",
+            "kwaipilot/kat-coder-pro-v2",
+            0.3,
+            Some(0.06),
+            1.2,
+        );
+        assert_provider_mapping(
+            gmicloud,
+            "GMI Cloud",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            0.8,
+            Some(0.1),
+            2.6,
+        );
+
+        let siliconflow = provider_data
+            .iter()
+            .find(|provider| provider["name"] == "siliconflow");
+        assert!(siliconflow.is_some(), "SiliconFlow provider");
+        assert_provider_mapping(
+            siliconflow,
+            "SiliconFlow",
+            "meituan/longcat-2.0",
+            "meituan-longcat/LongCat-2.0",
+            0.75,
+            None,
+            2.95,
+        );
+
+        let streamlake = provider_data
+            .iter()
+            .find(|provider| provider["name"] == "streamlake");
+        assert!(streamlake.is_some(), "StreamLake provider");
+        assert_provider_mapping(
+            streamlake,
+            "StreamLake",
+            "kuaishou/kat-coder-pro-v2",
+            "kat-coder-pro-v2",
+            0.3,
+            Some(0.06),
+            1.2,
+        );
+    }
+
+    fn assert_provider_mapping(
+        provider: Option<&Value>,
+        provider_name: &str,
+        canonical_id: &str,
+        provider_model_id: &str,
+        input_price: f64,
+        cache_read_price: Option<f64>,
+        output_price: f64,
+    ) {
+        let model = provider
+            .and_then(|provider| provider["models"].as_array())
+            .and_then(|models| models.iter().find(|model| model["id"] == canonical_id));
+
+        assert!(
+            model.is_some(),
+            "{provider_name} mapping for {canonical_id}"
+        );
+        assert_eq!(
+            model.and_then(|model| model["id"].as_str()),
+            Some(canonical_id)
+        );
+        assert_eq!(
+            model.and_then(|model| model["provider_model_id"].as_str()),
+            Some(provider_model_id)
+        );
+        assert_eq!(
+            model.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
+            Some(input_price)
+        );
+        if let Some(cache_read_price) = cache_read_price {
+            assert_eq!(
+                model.and_then(|model| model["pricing"]["input_tokens"]["cache_read"].as_f64()),
+                Some(cache_read_price)
+            );
+        }
+        assert_eq!(
+            model.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
+            Some(output_price)
+        );
+    }
+
     fn test_root(name: &str) -> PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
