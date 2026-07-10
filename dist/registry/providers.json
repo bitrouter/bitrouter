@@ -6992,6 +6992,19 @@
             }
           },
           "provider_model_id": "google/gemma-4-31B-it"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "nex-agi/nex-n2-pro",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider_model_id": "nex-agi/Nex-N2-Pro"
         }
       ],
       "name": "siliconflow",
