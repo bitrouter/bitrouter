@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use bitrouter_sdk::language_model::types::ModelCompatibility;
 use bitrouter_sdk::language_model::types::{ApiProtocol, ProtocolList};
 
 /// The distribution envelope shared by both dist files: `{ "data": [ … ] }`.
@@ -334,6 +335,9 @@ pub struct RegistryModel {
     /// Resolved rate limits for this (provider, model) pair, if any.
     #[serde(default)]
     pub rate_limits: Option<RegistryRateLimits>,
+    /// Provider/model request-shape compatibility settings.
+    #[serde(default)]
+    pub compatibility: ModelCompatibility,
 }
 
 /// Per-token pricing for a registry model. bitrouter consumes the base

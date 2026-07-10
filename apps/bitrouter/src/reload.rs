@@ -279,6 +279,7 @@ providers:
             api_base,
             api_key: "k".into(),
             api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

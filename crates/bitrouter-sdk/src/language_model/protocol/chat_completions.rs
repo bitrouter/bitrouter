@@ -19,10 +19,10 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
-    Modality, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart,
-    Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, provider_namespace,
-    set_provider_metadata,
+    ApiProtocol, ChatTokenLimitField, Content, DataContent, FinishReason, GenerateResult,
+    GenerationParams, Message, Modality, Prompt, ProviderMetadata, ResponseFormat, Role,
+    RoutingTarget, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput,
+    Usage, provider_namespace, set_provider_metadata,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -576,6 +576,19 @@ impl InboundAdapter for ChatCompletionsAdapter {
         // reaching an OpenAI upstream). Unmapped shapes stay in `extra`.
         let tool_choice = parse_chat_tool_choice(&mut extra);
 
+        let (max_tokens, chat_token_limit_field) = match (req.max_tokens, req.max_completion_tokens)
+        {
+            (Some(legacy), Some(current)) if legacy != current => {
+                return Err(BitrouterError::bad_request(
+                    "max_tokens and max_completion_tokens must match when both are provided",
+                ));
+            }
+            (Some(value), Some(_)) => (Some(value), Some(ChatTokenLimitField::MaxCompletionTokens)),
+            (Some(value), None) => (Some(value), Some(ChatTokenLimitField::MaxTokens)),
+            (None, Some(value)) => (Some(value), Some(ChatTokenLimitField::MaxCompletionTokens)),
+            (None, None) => (None, None),
+        };
+
         Ok(Prompt {
             model: req.model,
             system,
@@ -586,7 +599,8 @@ impl InboundAdapter for ChatCompletionsAdapter {
             params: GenerationParams {
                 temperature: req.temperature,
                 top_p: req.top_p,
-                max_tokens: req.max_tokens.or(req.max_completion_tokens),
+                max_tokens,
+                chat_token_limit_field,
                 reasoning_effort: req.reasoning_effort,
                 response_modalities,
                 // Chat Completions carries no top-k.
@@ -761,7 +775,11 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             req.insert("top_p".into(), p.into());
         }
         if let Some(mt) = prompt.params.max_tokens {
-            req.insert("max_tokens".into(), mt.into());
+            let field = match prompt.params.chat_token_limit_field {
+                Some(ChatTokenLimitField::MaxCompletionTokens) => "max_completion_tokens",
+                Some(ChatTokenLimitField::MaxTokens) | None => "max_tokens",
+            };
+            req.insert(field.into(), mt.into());
         }
         if let Some(re) = &prompt.params.reasoning_effort {
             req.insert("reasoning_effort".into(), re.clone().into());
@@ -807,6 +825,9 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         // survive the round trip. Typed fields above win over any same-named
         // extra.
         for (k, v) in &prompt.params.extra {
+            if matches!(k.as_str(), "max_tokens" | "max_completion_tokens") {
+                continue;
+            }
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
         req.insert("stream".into(), prompt.stream.into());
@@ -826,6 +847,18 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             }
         }
         Ok(serde_json::Value::Object(req))
+    }
+
+    fn render_request_for_target(
+        &self,
+        prompt: &Prompt,
+        target: &RoutingTarget,
+    ) -> Result<serde_json::Value> {
+        let mut prompt = prompt.clone();
+        if let Some(field) = target.chat_token_limit_field {
+            prompt.params.chat_token_limit_field = Some(field);
+        }
+        self.render_request(&prompt)
     }
 
     fn parse_response(&self, body: serde_json::Value) -> Result<GenerateResult> {
@@ -1759,6 +1792,26 @@ impl StreamEncoder for ChatStreamEncoder {
                 event: None,
                 data: serde_json::json!({
                     "error": { "message": message, "type": "upstream_error" }
+                })
+                .to_string(),
+            },
+            SseFrame::Event {
+                event: None,
+                data: "[DONE]".to_string(),
+            },
+        ]
+    }
+
+    fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        vec![
+            SseFrame::Event {
+                event: None,
+                data: serde_json::json!({
+                    "error": {
+                        "message": error.public_message(),
+                        "type": error.error_type(),
+                        "code": error.error_code(),
+                    }
                 })
                 .to_string(),
             },

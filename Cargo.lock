@@ -770,6 +770,7 @@ dependencies = [
  "futures",
  "futures-core",
  "http",
+ "httpdate",
  "pin-project-lite",
  "regex",
  "reqwest 0.12.28",

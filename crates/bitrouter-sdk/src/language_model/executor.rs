@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::auth::AuthAppliers;
 use crate::language_model::context::PipelineContext;
-use crate::language_model::protocol::{OutboundDispatch, SseEvent};
+use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
 use crate::language_model::types::{
     ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
 };
@@ -215,17 +215,46 @@ fn truncate_upstream_message(text: &str) -> String {
 /// signal it cleanly with `402`, but others (e.g. opencode) return a
 /// `401`/`403` with a `CreditsError` / "insufficient balance" body —
 /// which would otherwise be misread as an auth failure. Recognise that
-/// family and map it to [`BitrouterError::PaymentRequired`] so the
+/// family and map it to [`BitrouterError::UpstreamPaymentRequired`] so the
 /// fallback policy drops to the next account / provider instead of
 /// failing the request outright.
-fn classify_upstream_error(status: u16, body: &str) -> BitrouterError {
+fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) -> BitrouterError {
+    if status == 429 {
+        return BitrouterError::UpstreamRateLimited { retry_after };
+    }
     if matches!(status, 401..=403) && looks_like_credit_exhaustion(body) {
-        return BitrouterError::PaymentRequired(truncate_upstream_message(body));
+        return BitrouterError::UpstreamPaymentRequired;
     }
     BitrouterError::Upstream {
         status,
         message: truncate_upstream_message(body),
     }
+}
+
+/// Parse the standard `Retry-After` response field into a delay in seconds.
+/// Both delay-seconds and HTTP-date are defined by RFC 9110 section 10.2.3:
+/// <https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3>.
+fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    let value = value?.to_str().ok()?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let deadline = httpdate::parse_http_date(value).ok()?;
+    match deadline.duration_since(std::time::SystemTime::now()) {
+        Ok(delay) => Some(delay.as_secs() + u64::from(delay.subsec_nanos() > 0)),
+        Err(_) => Some(0),
+    }
+}
+
+fn parse_upstream_success(
+    adapter: &dyn OutboundAdapter,
+    json: serde_json::Value,
+) -> Result<GenerateResult> {
+    adapter
+        .parse_response(json)
+        .map_err(|error| BitrouterError::UpstreamInvalidResponse {
+            message: error.to_string(),
+        })
 }
 
 /// Classify a transport error that surfaces from the SSE decode loop *after*
@@ -542,7 +571,7 @@ impl Executor for HttpExecutor {
         let mut upstream_prompt = prompt.clone();
         upstream_prompt.model = target.service_id.clone();
         upstream_prompt.stream = false;
-        let mut body = adapter.render_request(&upstream_prompt)?;
+        let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, false);
 
@@ -570,13 +599,17 @@ impl Executor for HttpExecutor {
         })?;
 
         let status = response.status();
+        let retry_after = parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+        if status.as_u16() == 429 {
+            return Err(BitrouterError::UpstreamRateLimited { retry_after });
+        }
         let text = response
             .text()
             .await
             .map_err(|e| upstream_body_error("reading upstream body", e))?;
 
         if !status.is_success() {
-            return Err(classify_upstream_error(status.as_u16(), &text));
+            return Err(classify_upstream_error(status.as_u16(), &text, retry_after));
         }
 
         let json: serde_json::Value =
@@ -584,7 +617,7 @@ impl Executor for HttpExecutor {
                 status: 502,
                 message: format!("upstream returned non-JSON body: {e}"),
             })?;
-        let result = adapter.parse_response(json)?;
+        let result = parse_upstream_success(adapter.as_ref(), json)?;
         let elapsed = started.elapsed().as_millis() as u64;
 
         Ok(ExecutionResult {
@@ -614,7 +647,7 @@ impl Executor for HttpExecutor {
         let mut upstream_prompt = prompt.clone();
         upstream_prompt.model = target.service_id.clone();
         upstream_prompt.stream = true;
-        let mut body = adapter.render_request(&upstream_prompt)?;
+        let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         self.shape_request_body(&mut body, target).await?;
         let url = transport.endpoint_url(target, true);
 
@@ -641,9 +674,13 @@ impl Executor for HttpExecutor {
         })?;
 
         let status = response.status();
+        let retry_after = parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+        if status.as_u16() == 429 {
+            return Err(BitrouterError::UpstreamRateLimited { retry_after });
+        }
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
-            return Err(classify_upstream_error(status.as_u16(), &text));
+            return Err(classify_upstream_error(status.as_u16(), &text, retry_after));
         }
 
         // Parse the upstream SSE byte stream into canonical stream parts via
@@ -668,7 +705,9 @@ impl Executor for HttpExecutor {
                                 }
                             }
                             Err(e) => {
-                                yield Err(e);
+                                yield Err(BitrouterError::UpstreamInvalidResponse {
+                                    message: e.to_string(),
+                                });
                                 return;
                             }
                         }
@@ -692,7 +731,9 @@ impl Executor for HttpExecutor {
                         yield Ok(p);
                     }
                 }
-                Err(e) => yield Err(e),
+                Err(e) => yield Err(BitrouterError::UpstreamInvalidResponse {
+                    message: e.to_string(),
+                }),
             }
         };
 
@@ -821,6 +862,10 @@ impl Executor for DispatchExecutor {
 #[cfg(test)]
 mod error_classification_tests {
     use super::*;
+    use crate::language_model::protocol::{
+        chat_completions::ChatCompletionsAdapter, generate_content::GenerateContentAdapter,
+        messages::MessagesAdapter, responses::ResponsesAdapter,
+    };
 
     #[test]
     fn credit_exhaustion_401_maps_to_payment_required() {
@@ -829,9 +874,9 @@ mod error_classification_tests {
         // next account rather than treating it as an auth failure.
         let body =
             r#"{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance."}}"#;
-        match classify_upstream_error(401, body) {
-            BitrouterError::PaymentRequired(_) => {}
-            other => panic!("expected PaymentRequired, got {other:?}"),
+        match classify_upstream_error(401, body, None) {
+            BitrouterError::UpstreamPaymentRequired => {}
+            other => panic!("expected UpstreamPaymentRequired, got {other:?}"),
         }
     }
 
@@ -840,7 +885,7 @@ mod error_classification_tests {
         // A genuine auth failure (no credit signal) must NOT become
         // PaymentRequired — it should fail the request, not silently
         // fall through to the next account.
-        match classify_upstream_error(401, r#"{"error":"invalid api key"}"#) {
+        match classify_upstream_error(401, r#"{"error":"invalid api key"}"#, None) {
             BitrouterError::Upstream { status, .. } => assert_eq!(status, 401),
             other => panic!("expected Upstream(401), got {other:?}"),
         }
@@ -848,10 +893,56 @@ mod error_classification_tests {
 
     #[test]
     fn server_error_stays_an_upstream_error() {
-        match classify_upstream_error(503, "service unavailable") {
+        match classify_upstream_error(503, "service unavailable", None) {
             BitrouterError::Upstream { status, .. } => assert_eq!(status, 503),
             other => panic!("expected Upstream(503), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn upstream_429_has_a_distinct_safe_error() {
+        match classify_upstream_error(429, r#"{"secret":"provider quota"}"#, Some(17)) {
+            BitrouterError::UpstreamRateLimited { retry_after } => {
+                assert_eq!(retry_after, Some(17));
+            }
+            other => panic!("expected UpstreamRateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_success_is_upstream_502_for_every_builtin_protocol() {
+        let adapters: [&dyn OutboundAdapter; 4] = [
+            &ChatCompletionsAdapter,
+            &MessagesAdapter,
+            &ResponsesAdapter,
+            &GenerateContentAdapter,
+        ];
+        for adapter in adapters {
+            let error = parse_upstream_success(adapter, serde_json::json!({}))
+                .expect_err("empty success body must not parse");
+            assert!(
+                matches!(error, BitrouterError::UpstreamInvalidResponse { .. }),
+                "{} returned {error:?}",
+                adapter.protocol()
+            );
+            assert_eq!(error.status(), 502);
+        }
+    }
+
+    #[test]
+    fn retry_after_accepts_seconds_http_date_and_rejects_invalid_values() {
+        let seconds = reqwest::header::HeaderValue::from_static("42");
+        assert_eq!(parse_retry_after(Some(&seconds)), Some(42));
+
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+        let date =
+            reqwest::header::HeaderValue::from_str(&httpdate::fmt_http_date(future)).unwrap();
+        let parsed = parse_retry_after(Some(&date)).unwrap();
+        assert!((119..=120).contains(&parsed), "parsed delay was {parsed}");
+
+        let invalid = reqwest::header::HeaderValue::from_static("soon-ish");
+        assert_eq!(parse_retry_after(Some(&invalid)), None);
+        assert_eq!(parse_retry_after(None), None);
     }
 
     #[test]
@@ -936,6 +1027,7 @@ mod beta_forward_tests {
             api_base: "https://api.anthropic.com/v1".into(),
             api_key: String::new(),
             api_protocol: proto,
+            chat_token_limit_field: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -1006,6 +1098,7 @@ mod client_selection_tests {
             api_base: "https://api.example.com".into(),
             api_key: String::new(),
             api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -1124,6 +1217,7 @@ mod client_selection_tests {
             api_base: format!("http://{addr}/v1"),
             api_key: "k".into(),
             api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

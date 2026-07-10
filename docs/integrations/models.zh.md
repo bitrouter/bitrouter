@@ -35,10 +35,15 @@ providers:
     api_protocol:
       - "*": chat_completions          # upstream wire format
     models:
-      - id: openai/gpt-4o
+      - id: openai/gpt-5.5
+        compatibility:
+          chat_completions:
+            token_limit_field: max_completion_tokens
 ```
 
 `providers` 是一个以你自选 id 为键的映射；`api_base` 是该来源的 base URL；`api_protocol` 是上游的传输协议格式（任何 OpenAI 兼容的服务用 `chat_completions`——也是推断出的默认值）；每条 `models` 记录代表该来源提供的一个模型。
+
+大多数 provider 都不需要 `compatibility` 块。只有当上游强制要求特定的输出 token 字段时，才设置 `chat_completions.token_limit_field`：当前 OpenAI 模型使用 `max_completion_tokens`，部分较旧的兼容 API 仍要求 `max_tokens`。在没有显式设置时，BitRouter 会保留调用方在 Chat Completions 中使用的字段拼写，并自动将同一语义上限转换到 Messages、Responses 和 Generate Content。
 
 ## 生成配置脚手架
 

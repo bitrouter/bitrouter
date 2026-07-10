@@ -1144,6 +1144,38 @@ pub enum Modality {
     Audio,
 }
 
+/// Chat Completions field used to carry the output-token budget.
+///
+/// OpenAI-compatible providers are split between the legacy `max_tokens`
+/// spelling and the current `max_completion_tokens` spelling. The canonical
+/// prompt keeps one semantic token budget; this enum only records which wire
+/// spelling should be used when the prompt is rendered back to Chat
+/// Completions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatTokenLimitField {
+    /// Legacy Chat Completions field.
+    MaxTokens,
+    /// Current Chat Completions field, including reasoning tokens.
+    MaxCompletionTokens,
+}
+
+/// Provider/model request-shape compatibility settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ModelCompatibility {
+    /// Chat Completions-specific request settings.
+    pub chat_completions: ChatCompletionsCompatibility,
+}
+
+/// Chat Completions request-shape compatibility settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ChatCompletionsCompatibility {
+    /// Token-limit field required by this upstream model.
+    pub token_limit_field: Option<ChatTokenLimitField>,
+}
+
 /// Sampling / generation parameters, carried verbatim where possible.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GenerationParams {
@@ -1156,6 +1188,13 @@ pub struct GenerationParams {
     /// Maximum tokens to generate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Inbound Chat Completions wire spelling for [`max_tokens`](Self::max_tokens).
+    ///
+    /// This is transient provenance, not a second generation parameter. Other
+    /// protocols leave it unset, and provider/model compatibility can override
+    /// it at outbound render time.
+    #[serde(skip)]
+    pub chat_token_limit_field: Option<ChatTokenLimitField>,
     /// Reasoning effort hint (`low` / `medium` / `high`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -1843,6 +1882,10 @@ pub struct RoutingTarget {
     pub api_key: String,
     /// The wire protocol this target speaks.
     pub api_protocol: ApiProtocol,
+    /// Provider/model override for the Chat Completions token-limit field.
+    /// `None` preserves the inbound spelling, then falls back to legacy
+    /// `max_tokens` when the request originated on another protocol.
+    pub chat_token_limit_field: Option<ChatTokenLimitField>,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a
@@ -1870,6 +1913,7 @@ impl std::fmt::Debug for RoutingTarget {
             .field("api_base", &self.api_base)
             .field("api_key", &redacted(&self.api_key))
             .field("api_protocol", &self.api_protocol)
+            .field("chat_token_limit_field", &self.chat_token_limit_field)
             .field("account_label", &self.account_label)
             .field(
                 "api_key_override",

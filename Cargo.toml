@@ -44,6 +44,7 @@ tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 http = "1"
+httpdate = "1"
 bytes = "1"
 pin-project-lite = "0.2"
 async-stream = "0.3"

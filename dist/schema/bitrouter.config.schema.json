@@ -407,6 +407,15 @@
               "type": "null"
             }
           ]
+        },
+        "compatibility": {
+          "description": "Provider/model request-shape quirks that do not change model semantics.",
+          "$ref": "#/$defs/ModelCompatibility",
+          "default": {
+            "chat_completions": {
+              "token_limit_field": null
+            }
+          }
         }
       },
       "required": [
@@ -463,6 +472,52 @@
       },
       "required": [
         "above_input_tokens"
+      ]
+    },
+    "ModelCompatibility": {
+      "description": "Provider/model request-shape compatibility settings.",
+      "type": "object",
+      "properties": {
+        "chat_completions": {
+          "description": "Chat Completions-specific request settings.",
+          "$ref": "#/$defs/ChatCompletionsCompatibility",
+          "default": {
+            "token_limit_field": null
+          }
+        }
+      }
+    },
+    "ChatCompletionsCompatibility": {
+      "description": "Chat Completions request-shape compatibility settings.",
+      "type": "object",
+      "properties": {
+        "token_limit_field": {
+          "description": "Token-limit field required by this upstream model.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatTokenLimitField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "ChatTokenLimitField": {
+      "description": "Chat Completions field used to carry the output-token budget.\n\nOpenAI-compatible providers are split between the legacy `max_tokens`\nspelling and the current `max_completion_tokens` spelling. The canonical\nprompt keeps one semantic token budget; this enum only records which wire\nspelling should be used when the prompt is rendered back to Chat\nCompletions.",
+      "oneOf": [
+        {
+          "description": "Legacy Chat Completions field.",
+          "type": "string",
+          "const": "max_tokens"
+        },
+        {
+          "description": "Current Chat Completions field, including reasoning tokens.",
+          "type": "string",
+          "const": "max_completion_tokens"
+        }
       ]
     },
     "ProviderAccount": {

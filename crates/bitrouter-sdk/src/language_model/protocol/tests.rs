@@ -296,6 +296,61 @@ fn conversion_matrix_4x4_streaming() {
     }
 }
 
+#[test]
+fn upstream_rate_limit_has_typed_terminal_frames_in_every_protocol() {
+    let error = crate::error::BitrouterError::UpstreamRateLimited {
+        retry_after: Some(9),
+    };
+    for protocol in all_protocols() {
+        let mut encoder = adapter_for(protocol.clone()).stream_encoder("resp_429", "m");
+        let frames = encoder.encode_bitrouter_error(&error);
+        let wire = frames
+            .iter()
+            .map(SseFrame::to_wire)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            wire.contains("upstream_rate_limited"),
+            "{protocol:?} frame lacked stable code: {wire}"
+        );
+        match protocol {
+            ApiProtocol::ChatCompletions | ApiProtocol::Messages => {
+                assert!(wire.contains("rate_limit_error"), "{protocol:?}: {wire}");
+            }
+            ApiProtocol::Responses => {
+                assert!(wire.contains("response.failed"), "{wire}");
+            }
+            ApiProtocol::GenerateContent => {
+                assert!(wire.contains("RESOURCE_EXHAUSTED"), "{wire}");
+                assert!(wire.contains("429"), "{wire}");
+            }
+            ApiProtocol::Custom(_) => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn upstream_diagnostics_are_not_exposed_in_terminal_frames() {
+    let error = crate::error::BitrouterError::Upstream {
+        status: 500,
+        message: "provider secret stack trace".to_string(),
+    };
+    for protocol in all_protocols() {
+        let mut encoder = adapter_for(protocol.clone()).stream_encoder("resp_502", "m");
+        let wire = encoder
+            .encode_bitrouter_error(&error)
+            .iter()
+            .map(SseFrame::to_wire)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(!wire.contains("secret"), "{protocol:?}: {wire}");
+        assert!(
+            wire.contains("upstream request failed"),
+            "{protocol:?}: {wire}"
+        );
+    }
+}
+
 // ===== per-adapter unit tests =====
 
 /// Each outbound adapter must extract the provider-native response id
@@ -395,6 +450,209 @@ fn chat_completions_request_roundtrip() {
     let parsed = adapter.parse_request(json).unwrap();
     assert_eq!(parsed.system.as_deref(), Some("be brief"));
     assert_eq!(parsed.tools.len(), 1);
+}
+
+#[test]
+fn chat_token_limit_fields_roundtrip_without_alias_drift() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    for (field, expected_hint) in [
+        ("max_tokens", ChatTokenLimitField::MaxTokens),
+        (
+            "max_completion_tokens",
+            ChatTokenLimitField::MaxCompletionTokens,
+        ),
+    ] {
+        let mut body = minimal_request(ApiProtocol::ChatCompletions);
+        body[field] = 321.into();
+        let prompt = adapter.parse_request(body).unwrap();
+        assert_eq!(prompt.params.max_tokens, Some(321));
+        assert_eq!(prompt.params.chat_token_limit_field, Some(expected_hint));
+        let rendered = adapter.render_request(&prompt).unwrap();
+        assert_eq!(rendered[field], 321);
+        let other = if field == "max_tokens" {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        assert!(rendered.get(other).is_none());
+    }
+}
+
+#[test]
+fn chat_token_limit_alias_conflicts_are_rejected() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let equal = serde_json::json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 64,
+        "max_completion_tokens": 64
+    });
+    let prompt = adapter.parse_request(equal).unwrap();
+    assert_eq!(
+        prompt.params.chat_token_limit_field,
+        Some(ChatTokenLimitField::MaxCompletionTokens)
+    );
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["max_completion_tokens"], 64);
+    assert!(rendered.get("max_tokens").is_none());
+
+    let conflicting = serde_json::json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 64,
+        "max_completion_tokens": 65
+    });
+    let error = adapter.parse_request(conflicting).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::error::BitrouterError::BadRequest { .. }
+    ));
+}
+
+#[test]
+fn token_limit_translates_across_every_protocol_pair() {
+    for inbound_protocol in all_protocols() {
+        let mut body = minimal_request(inbound_protocol.clone());
+        match inbound_protocol {
+            ApiProtocol::ChatCompletions => body["max_completion_tokens"] = 777.into(),
+            ApiProtocol::Messages => body["max_tokens"] = 777.into(),
+            ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
+            ApiProtocol::GenerateContent => {
+                body["generationConfig"] = serde_json::json!({"maxOutputTokens": 777});
+            }
+            ApiProtocol::Custom(_) => unreachable!(),
+        }
+        let prompt = adapter_for(inbound_protocol.clone())
+            .parse_request(body)
+            .unwrap();
+        assert_eq!(prompt.params.max_tokens, Some(777));
+
+        for outbound_protocol in all_protocols() {
+            let rendered = adapter_for(outbound_protocol.clone())
+                .render_request(&prompt)
+                .unwrap();
+            match outbound_protocol {
+                ApiProtocol::ChatCompletions => {
+                    let expected = if inbound_protocol == ApiProtocol::ChatCompletions {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    };
+                    assert_eq!(rendered[expected], 777, "{inbound_protocol:?} -> chat");
+                    let absent = if expected == "max_tokens" {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    };
+                    assert!(rendered.get(absent).is_none());
+                }
+                ApiProtocol::Messages => assert_eq!(rendered["max_tokens"], 777),
+                ApiProtocol::Responses => assert_eq!(rendered["max_output_tokens"], 777),
+                ApiProtocol::GenerateContent => {
+                    assert_eq!(rendered["generationConfig"]["maxOutputTokens"], 777)
+                }
+                ApiProtocol::Custom(_) => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
+fn target_token_limit_override_wins_over_inbound_spelling() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let cases = [
+        (
+            "max_tokens",
+            ChatTokenLimitField::MaxCompletionTokens,
+            "max_completion_tokens",
+        ),
+        (
+            "max_completion_tokens",
+            ChatTokenLimitField::MaxTokens,
+            "max_tokens",
+        ),
+    ];
+    for (inbound_field, override_field, outbound_field) in cases {
+        let mut body = minimal_request(ApiProtocol::ChatCompletions);
+        body[inbound_field] = 99.into();
+        let prompt = adapter.parse_request(body).unwrap();
+        let target = RoutingTarget {
+            provider_name: "provider".into(),
+            service_id: "m".into(),
+            api_base: "https://example.invalid/v1".into(),
+            api_key: "secret".into(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: Some(override_field),
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        };
+        let rendered = adapter.render_request_for_target(&prompt, &target).unwrap();
+        assert_eq!(rendered[outbound_field], 99);
+        assert!(rendered.get(inbound_field).is_none());
+    }
+}
+
+#[test]
+fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
+    for inbound_protocol in [
+        ApiProtocol::Messages,
+        ApiProtocol::Responses,
+        ApiProtocol::GenerateContent,
+    ] {
+        let mut body = minimal_request(inbound_protocol.clone());
+        match inbound_protocol {
+            ApiProtocol::Messages => body["max_tokens"] = 777.into(),
+            ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
+            ApiProtocol::GenerateContent => {
+                body["generationConfig"] = serde_json::json!({"maxOutputTokens": 777});
+            }
+            _ => unreachable!(),
+        }
+        let mut prompt = adapter_for(inbound_protocol.clone())
+            .parse_request(body)
+            .unwrap();
+        prompt
+            .params
+            .extra
+            .insert("max_tokens".to_string(), 111.into());
+        prompt
+            .params
+            .extra
+            .insert("max_completion_tokens".to_string(), 222.into());
+
+        for (override_field, expected, absent) in [
+            (
+                ChatTokenLimitField::MaxTokens,
+                "max_tokens",
+                "max_completion_tokens",
+            ),
+            (
+                ChatTokenLimitField::MaxCompletionTokens,
+                "max_completion_tokens",
+                "max_tokens",
+            ),
+        ] {
+            let target = RoutingTarget {
+                provider_name: "provider".into(),
+                service_id: "m".into(),
+                api_base: "https://example.invalid/v1".into(),
+                api_key: "secret".into(),
+                api_protocol: ApiProtocol::ChatCompletions,
+                chat_token_limit_field: Some(override_field),
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: Default::default(),
+            };
+            let rendered = adapter_for(ApiProtocol::ChatCompletions)
+                .render_request_for_target(&prompt, &target)
+                .unwrap();
+            assert_eq!(rendered[expected], 777, "{inbound_protocol:?}");
+            assert!(rendered.get(absent).is_none(), "{inbound_protocol:?}");
+        }
+    }
 }
 
 #[test]
@@ -1271,6 +1529,7 @@ fn messages_no_beta_header_is_emitted() {
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Messages,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1298,6 +1557,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
         api_base: "http://example.invalid".into(),
         api_key: "secret".into(),
         api_protocol: ApiProtocol::Messages,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
