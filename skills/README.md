@@ -26,14 +26,6 @@ skills/bitrouter/
 Covers the Local-or-Cloud decision, install, daemon lifecycle, cloud onboarding,
 provider config, migration off other gateways, diagnostics, and per-harness wiring.
 
-> **Dev-only skills live elsewhere.** Contributor-facing skills (e.g.
-> `/verify`, which drives ACP substrate verification) live in
-> `.claude/skills/`, where Claude Code auto-loads them in project scope.
-> This directory holds only **shippable** skills — everything here is served
-> verbatim by every install rail below and by the agent-plugin manifests
-> (`.claude-plugin/`, `.codex-plugin/`), so a dev skill placed here would
-> leak to end users.
-
 ## Install
 
 Every install rail resolves this directory by its repo path —
