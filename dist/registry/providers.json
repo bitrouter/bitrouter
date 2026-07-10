@@ -2453,19 +2453,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "nvidia/nemotron-3-super-120b-a12b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.08
-            },
-            "output_tokens": {
-              "text": 0.45
-            }
-          },
-          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
-        },
-        {
-          "api_protocol": "openai",
           "id": "nvidia/nemotron-3-ultra-550b-a55b",
           "pricing": {
             "input_tokens": {
@@ -5824,23 +5811,6 @@
             }
           },
           "provider_model_id": "nex-agi/nex-n2-pro"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "nvidia/nemotron-3-super-120b-a12b",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.08
-            },
-            "output_tokens": {
-              "text": 0.45
-            }
-          },
-          "provider_model_id": "nvidia/nemotron-3-super-120b-a12b"
         },
         {
           "api_protocol": [
