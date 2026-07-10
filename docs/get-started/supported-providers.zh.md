@@ -24,7 +24,7 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `claude-code` | Anthropic | US | anthropic | Subscription | 7 |
 | `deepseek` | DeepSeek | CN | anthropic, openai | Per-token | 2 |
 | `github-copilot` | GitHub | US | openai | Subscription | 14 |
-| `gmicloud` | GMI Cloud | US | openai | Per-token | 13 |
+| `gmicloud` | GMI Cloud | US | openai | Per-token | 15 |
 | `google` | Google | US | google, openai | Per-token | 4 |
 | `google-ai` | Google | US | google, openai | Subscription | 3 |
 | `meta-ai` | Meta | US | anthropic, openai, responses | Per-token | 1 |
@@ -42,7 +42,7 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 8 |
 | `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 9 |
 | `redpill` | RedPill | SG | openai | Per-token | 5 |
-| `siliconflow` | SiliconFlow | CN | openai | Per-token | 18 |
+| `siliconflow` | SiliconFlow | CN | openai | Per-token | 19 |
 | `siliconflow_cn` | SiliconFlow | CN | openai | Per-token | 13 |
 | `stepfun` | StepFun | CN | anthropic, openai | Per-token | 2 |
 | `stepfun_cn` | StepFun | CN | anthropic, openai | Per-token | 2 |
