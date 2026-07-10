@@ -136,6 +136,13 @@ models:
         no_cache: 0.13
       output_tokens:
         text: 0.4
+  - id: meituan/longcat-2.0
+    provider_model_id: meituan-longcat/LongCat-2.0
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+      output_tokens:
+        text: 2.95
   # SiliconFlow lists this case-sensitive upstream ID and USD prices at
   # https://www.siliconflow.com/.
   - id: nex-agi/nex-n2-pro
