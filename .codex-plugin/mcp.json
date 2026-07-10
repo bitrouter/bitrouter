@@ -1,0 +1,3 @@
+{
+  "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
+}

@@ -921,6 +921,29 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
 
 // ===== `bitrouter mcp …` (origin MCP server: serve / install) =====
 
+/// `CostFooter` over the local metering database: the origin MCP server
+/// appends this spend line to `complete` / `status` results so
+/// in-session model arbitrage stays cost-visible to the calling agent.
+struct LocalCostFooter {
+    source: bitrouter::paths::ConfigSource,
+}
+
+#[async_trait::async_trait]
+impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
+    async fn line(&self) -> Option<String> {
+        use bitrouter::metering::store::TimeWindow;
+        let store = bitrouter::metering::reader::open_readonly(&self.source).await?;
+        let today = store.spend_summary(TimeWindow::Today).await.ok()?;
+        (today.requests > 0).then(|| {
+            format!(
+                "bitrouter: spend today {} ({} requests)",
+                bitrouter::metering::fmt_usd(today.spend_micro_usd),
+                today.requests
+            )
+        })
+    }
+}
+
 async fn mcp_cmd(action: McpAction) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -942,6 +965,18 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                     "note: --token/BITROUTER_TOKEN is ignored for --transport http (multi-tenant; each client sends its own Authorization)"
                 );
             }
+            // The spend footer only makes sense where the local metering
+            // database *is* the caller's spend: stdio → local daemon.
+            let cost_footer: Option<std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>> =
+                match (transport, backend) {
+                    (bitrouter_mcp::Transport::Stdio, bitrouter_mcp::BackendKind::Local) => {
+                        bitrouter::paths::resolve_config(None).ok().map(|source| {
+                            std::sync::Arc::new(LocalCostFooter { source })
+                                as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
+                        })
+                    }
+                    _ => None,
+                };
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -949,6 +984,7 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 cloud_url,
                 cloud_token,
                 bind,
+                cost_footer,
             })
             .await
         }

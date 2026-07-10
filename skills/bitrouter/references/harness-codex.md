@@ -64,3 +64,7 @@ tail -n 20 ~/.bitrouter/bitrouter.log
 ```
 
 For live requests, check the BitRouter request logs — the `request finished` line records the `provider`, `model`, and `account` that answered — to confirm which upstream served the request.
+
+## Agent plugin
+
+The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: the `/bitrouter` skill and the origin MCP server for in-session model arbitrage (bundled MCP servers must be enabled manually on Codex after install). A session spend summary is printed by `bitrouter spawn` on exit (a spawn feature, independent of the plugin). See `references/agent-plugin.md`.

@@ -108,7 +108,7 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 
 | Command | Effect |
 |---|---|
-| `bitrouter spawn --agent <claude\|codex> [--config PATH] [--base-url URL] -- <agent args...>` | Launch a coding-agent CLI through BitRouter without editing agent config files. Claude uses child env overrides; Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. |
+| `bitrouter spawn --agent <claude\|codex> [--config PATH] [--base-url URL] -- <agent args...>` | Launch a coding-agent CLI through BitRouter without editing agent config files. Claude uses child env overrides; Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. After the agent exits, prints a one-line session spend summary to stderr (silent when nothing was recorded locally). |
 
 
 ## Unimplemented in v1.0

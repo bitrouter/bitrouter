@@ -205,6 +205,8 @@ The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwis
 
 When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `spawn` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 
+After the wrapped agent exits, `spawn` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
+
 ### `bitrouter key sign`
 
 ```

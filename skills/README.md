@@ -26,17 +26,13 @@ skills/bitrouter/
 Covers the Local-or-Cloud decision, install, daemon lifecycle, cloud onboarding,
 provider config, migration off other gateways, diagnostics, and per-harness wiring.
 
-### `/verify`, at [`verify/`](verify/)
-
-```
-skills/verify/
-└── SKILL.md          # entry point
-```
-
-Verifies `bitrouter acp`/`agents` CLI changes end-to-end against a real ACP
-agent (claude-code-acp) — build, real-agent workspace setup, and the flows worth
-driving under `crates/bitrouter-substrate` and `apps/bitrouter`'s
-`acp_cli`/`agents` surfaces.
+> **Dev-only skills live elsewhere.** Contributor-facing skills (e.g.
+> `/verify`, which drives ACP substrate verification) live in
+> `.claude/skills/`, where Claude Code auto-loads them in project scope.
+> This directory holds only **shippable** skills — everything here is served
+> verbatim by every install rail below and by the agent-plugin manifests
+> (`.claude-plugin/`, `.codex-plugin/`), so a dev skill placed here would
+> leak to end users.
 
 ## Install
 

@@ -25,6 +25,7 @@
 pub mod db;
 pub mod entities;
 pub mod pricing;
+pub mod reader;
 pub mod recorder;
 pub mod store;
 
@@ -35,3 +36,29 @@ pub use db::RequestMetric;
 pub use pricing::{ContextTier, ModelPricing, PricingTable, calculate_charge_micro_usd};
 pub use recorder::MeteringRecorder;
 pub use store::{MeteringStore, RateMetrics, TimeWindow, TokenUsage};
+
+/// Render micro-USD for the agent-facing cost surfaces (`status --agent`
+/// spend recap, the MCP tool-result footer, the `spawn` exit summary):
+/// two decimals normally, four when the amount would otherwise round to
+/// nothing.
+pub fn fmt_usd(micro_usd: u64) -> String {
+    let usd = micro_usd as f64 / 1_000_000.0;
+    if micro_usd == 0 || usd >= 0.01 {
+        format!("${usd:.2}")
+    } else {
+        format!("${usd:.4}")
+    }
+}
+
+#[cfg(test)]
+mod fmt_tests {
+    use super::fmt_usd;
+
+    #[test]
+    fn fmt_usd_picks_precision() {
+        assert_eq!(fmt_usd(0), "$0.00");
+        assert_eq!(fmt_usd(420_000), "$0.42");
+        assert_eq!(fmt_usd(3_100_000), "$3.10");
+        assert_eq!(fmt_usd(3_200), "$0.0032");
+    }
+}
