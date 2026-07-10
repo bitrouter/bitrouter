@@ -152,15 +152,13 @@ Why this works without restructuring:
 - `skills/bitrouter/SKILL.md` already matches the plugin skill layout
   (`skills/<name>/SKILL.md`) byte-for-byte. The plugin ships the same files
   the standalone `bitrouter skills add` / `npx skills add` paths serve.
-- **Skill-scan hygiene:** `skills/` also contains the dev-only `verify` skill
-  (ACP substrate verification). The CC `skills` manifest field normally *adds*
-  to the default `skills/` scan, but for a marketplace entry whose source
+- **Skill-scan hygiene:** the CC `skills` manifest field normally *adds* to
+  the default `skills/` scan, but for a marketplace entry whose source
   resolves to the marketplace root, declaring explicit subdirectories
-  **replaces** the scan — so `"skills": ["./skills/bitrouter"]` keeps `verify`
-  out of marketplace installs. It still leaks under `--plugin-dir .` dev
-  testing — resolved by relocating `verify` to `.claude/skills/` (R-2, a P0
-  action item), after which `skills/` is purely shippable payload on every
-  rail.
+  **replaces** the scan — so `"skills": ["./skills/bitrouter"]` scopes the
+  install to exactly the one shippable skill. (`skills/` used to also hold a
+  dev-only `verify` skill; it was removed outright in a separate PR — see the
+  R-2 update below — leaving `skills/` as purely shippable payload.)
 
 Trade-off accepted: a marketplace git install clones the full monorepo
 (~46 MiB pack today). Tolerable for v1; mitigations (slim npm package for
@@ -541,8 +539,8 @@ fire there). Live mid-session cost is the manager surface's job (`spawn --hud`
    `spawn` exit summary. No `events` command, no monitor, no hook.
 3. `.claude-plugin/{plugin,marketplace}.json` and `.codex-plugin/*` —
    **skills + mcpServers only** (as in §5.1). No hooks.
-4. Relocate `skills/verify` → `.claude/skills/verify` and update
-   `skills/README.md` (R-2).
+4. Remove the dev-only `skills/verify` skill outright (R-2) — done in a
+   separate PR off `main`, not bundled here.
 5. Skill addendum: plugin-context behavior (MCP enable walk-through on Codex,
    the restart handoff wording, arbitrage nudge, cost-surface interpretation —
    including the "spend, not savings" and "estimate, not invoice" caveats).
@@ -607,21 +605,23 @@ Claude Code answers from official docs; BitRouter answers from this repo.
   export `CLAUDE_PLUGIN_ROOT`/`CLAUDE_PLUGIN_DATA` compat aliases. One
   caveat: invalid manifest paths are **warn-and-ignore**, not load failures —
   a typo silently drops a component (see R-6).
-- **R-2 (skill hygiene) — resolved: relocate `skills/verify` →
-  `.claude/skills/verify`.** Referenced only by `skills/README.md`; `.claude/`
-  has no skills dir yet. Wins: (a) plugin payload dir becomes purely
-  shippable — no leakage under `--plugin-dir .` (Claude) or a `./skills/`
-  scan (Codex); (b) the `npx skills add bitrouter/bitrouter` rail stops
-  surfacing a dev-only skill; (c) contributors get `/verify` auto-loaded in
-  project scope, which bare `skills/verify` never did. Matches the
-  convention `bitrouter skills add` itself uses (`.claude/skills/` install
-  target). Action item in P0; update `skills/README.md` in the same change.
+- **R-2 (skill hygiene) — resolved: REMOVE the dev-only `verify` skill
+  outright** (superseded an earlier "relocate to `.claude/skills/`" plan).
+  `skills/` is the source-of-truth tree served verbatim by every install rail
+  (`bitrouter skills add`, `npx skills add`) and both plugin manifests, so a
+  dev-only skill there blurs the shipped-vs-internal boundary (and its name
+  collides with the `bitrouter verify` CLI command). Relocating to
+  `.claude/skills/` was considered but rejected — it just moved the clutter;
+  the substrate-verification steps belong in `DEVELOPMENT.md` / the code's own
+  tests. Done in a **separate PR** (off `main`, not bundled with the plugin
+  work); this PR drops its earlier relocation. Net: `skills/` holds exactly
+  the shippable `/bitrouter` skill.
 - **R-3 (Codex skill scan) — resolved: point at the skill dir, get exactly
   one skill.** Each `skills` entry is a root recursively scanned for files
   literally named `SKILL.md` (depth ≤ 6, hidden dirs pruned —
   `codex-rs/core-skills/src/loader/discovery.rs`). `"skills":
-  "./skills/bitrouter"` → exactly our skill; `"./skills/"` would include
-  `verify` too (moot after R-2). Standing rule for skill authors:
+  "./skills/bitrouter"` → exactly our skill (and after R-2 removes `verify`,
+  `skills/` holds only the one skill anyway). Standing rule for skill authors:
   **never name any file under `skills/bitrouter/references/` `SKILL.md`** —
   it would load as a second skill on Codex.
 - **R-4 (CLI naming) — resolved:** `bitrouter status --agent` (third output

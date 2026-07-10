@@ -29,10 +29,10 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
    their MCP command invokes a `bitrouter` subcommand (`mcp serve`) and
    must never reference a CLI surface that doesn't exist.
 4. Only **shippable** skills live in `skills/` — that directory is served
-   verbatim by the skills install rails and both plugin manifests. Dev-only
-   skills go in `.claude/skills/` (auto-loaded for contributors, never
-   shipped). Never name any file under `skills/bitrouter/references/`
-   `SKILL.md` — Codex's recursive skill scan would load it as a second skill.
+   verbatim by the skills install rails (`bitrouter skills add`, `npx skills
+   add`) and both plugin manifests, so never put contributor-only tooling
+   there. Never name any file under `skills/bitrouter/references/` `SKILL.md`
+   — Codex's recursive skill scan would load it as a second skill.
 
 ## Documentation
 
