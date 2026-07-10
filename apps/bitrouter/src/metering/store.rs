@@ -64,6 +64,34 @@ pub struct RateMetrics {
     pub tokens_per_minute: f64,
 }
 
+/// One settled request in tail order, as read by `bitrouter events`.
+#[derive(Debug, Clone)]
+pub struct SettledRequest {
+    /// RFC3339 settlement timestamp — the tail cursor.
+    pub created_at: String,
+    /// Resolved model id.
+    pub model_id: String,
+    /// Resolved provider id.
+    pub provider_id: String,
+    /// Estimated charge in micro-USD (0 when pricing was unavailable).
+    pub charge_micro_usd: u64,
+    /// Error string if the request failed, else `None`.
+    pub error: Option<String>,
+}
+
+/// Spend / request rollup over a window, across **every** caller.
+///
+/// Read by the agent-facing CLI surfaces (`status --agent`,
+/// `events`) — unlike the per-key getters above, nothing here is
+/// scoped to one `api_key_id`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpendSummary {
+    /// Total estimated spend in micro-USD.
+    pub spend_micro_usd: u64,
+    /// Requests observed (success and failure alike).
+    pub requests: u64,
+}
+
 /// sea-orm-backed metering store.
 #[derive(Clone)]
 pub struct MeteringStore {
@@ -151,6 +179,59 @@ impl MeteringStore {
         Ok(RateMetrics {
             requests_per_minute: rows.len() as f64,
             tokens_per_minute: tokens as f64,
+        })
+    }
+
+    /// Requests settled strictly after `cursor_rfc3339`, oldest first,
+    /// capped at `limit`. The tail read behind `bitrouter events`.
+    pub async fn settled_since(
+        &self,
+        cursor_rfc3339: &str,
+        limit: u64,
+    ) -> Result<Vec<SettledRequest>> {
+        use sea_orm::QueryOrder;
+        let rows: Vec<(String, String, String, i64, Option<String>)> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::CreatedAt)
+            .column(requests::Column::ModelId)
+            .column(requests::Column::ProviderId)
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .column(requests::Column::Error)
+            .filter(requests::Column::CreatedAt.gt(cursor_rfc3339))
+            .order_by_asc(requests::Column::CreatedAt)
+            .limit(limit)
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("settled_since: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(created_at, model_id, provider_id, charge, error)| SettledRequest {
+                    created_at,
+                    model_id,
+                    provider_id,
+                    charge_micro_usd: charge.max(0) as u64,
+                    error,
+                },
+            )
+            .collect())
+    }
+
+    /// Total spend + request count within `window`, across every caller.
+    pub async fn spend_summary(&self, window: TimeWindow) -> Result<SpendSummary> {
+        let start = window_start(window).to_rfc3339();
+        let charges: Vec<i64> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("spend_summary: {e}")))?;
+        Ok(SpendSummary {
+            requests: charges.len() as u64,
+            spend_micro_usd: charges.into_iter().map(|c| c.max(0) as u64).sum(),
         })
     }
 

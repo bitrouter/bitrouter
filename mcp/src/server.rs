@@ -31,9 +31,20 @@ fn parse_bearer(value: &str) -> Option<&str> {
     scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
 }
 
+/// One-line cost annotator appended to tool results — the origin
+/// server's slice of the agent-facing cost feed. Injected by the
+/// embedding binary, which owns metering-database access; this crate
+/// stays storage-agnostic. `None` means stay silent.
+#[async_trait::async_trait]
+pub trait CostFooter: Send + Sync {
+    /// The line to append to a successful tool result, or `None`.
+    async fn line(&self) -> Option<String>;
+}
+
 #[derive(Clone)]
 pub struct BitrouterMcp {
     backend: Arc<dyn Backend>,
+    cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
 }
 
@@ -53,8 +64,23 @@ impl BitrouterMcp {
     pub fn new(backend: Arc<dyn Backend>) -> Self {
         Self {
             backend,
+            cost_footer: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Attach a cost annotator; its line is appended to successful
+    /// `complete` / `status` results as a second content item.
+    pub fn with_cost_footer(mut self, footer: Arc<dyn CostFooter>) -> Self {
+        self.cost_footer = Some(footer);
+        self
+    }
+
+    /// The extra content item for a successful result, when a footer is
+    /// attached and has something to say.
+    async fn footer_content(&self) -> Option<Content> {
+        let footer = self.cost_footer.as_ref()?;
+        footer.line().await.map(Content::text)
     }
 
     #[tool(description = "Route a completion through BitRouter and return the full result.")]
@@ -73,7 +99,13 @@ impl BitrouterMcp {
         };
         match self.backend.complete(&caller, req).await {
             Ok(r) => match serde_json::to_string(&r) {
-                Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
+                Ok(json) => {
+                    let mut contents = vec![Content::text(json)];
+                    if let Some(footer) = self.footer_content().await {
+                        contents.push(footer);
+                    }
+                    Ok(CallToolResult::success(contents))
+                }
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
                     "serialization error: {e}"
                 ))])),
@@ -106,7 +138,13 @@ impl BitrouterMcp {
         let caller = caller_from_extensions(&ctx.extensions);
         match self.backend.status(&caller).await {
             Ok(s) => match serde_json::to_string(&s) {
-                Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
+                Ok(json) => {
+                    let mut contents = vec![Content::text(json)];
+                    if let Some(footer) = self.footer_content().await {
+                        contents.push(footer);
+                    }
+                    Ok(CallToolResult::success(contents))
+                }
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
                     "serialization error: {e}"
                 ))])),
@@ -218,10 +256,19 @@ pub async fn serve_http_on(
     Ok(())
 }
 
-/// Serve over stdio until the client disconnects.
-pub async fn serve_stdio(backend: Arc<dyn Backend>) -> anyhow::Result<()> {
+/// Serve over stdio until the client disconnects. `cost_footer`, when
+/// given, annotates successful `complete` / `status` results with one
+/// spend line (the HTTP transport is multi-tenant and gets no footer).
+pub async fn serve_stdio(
+    backend: Arc<dyn Backend>,
+    cost_footer: Option<Arc<dyn CostFooter>>,
+) -> anyhow::Result<()> {
     use rmcp::{ServiceExt, transport::stdio};
-    let service = BitrouterMcp::new(backend).serve(stdio()).await?;
+    let mut server = BitrouterMcp::new(backend);
+    if let Some(footer) = cost_footer {
+        server = server.with_cost_footer(footer);
+    }
+    let service = server.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }

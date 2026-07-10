@@ -71,6 +71,10 @@ pub struct ServeOptions {
     pub cloud_token: Option<String>,
     /// HTTP bind address (only for `Transport::Http`). Default `127.0.0.1:4357`.
     pub bind: String,
+    /// Optional spend annotator for tool results (stdio transport only —
+    /// the HTTP transport is multi-tenant and per-caller spend isn't
+    /// what the local metering database holds).
+    pub cost_footer: Option<std::sync::Arc<dyn server::CostFooter>>,
 }
 
 /// Run the MCP server to completion.
@@ -83,7 +87,7 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
         opts.cloud_token.as_deref(),
     )?;
     match opts.transport {
-        Transport::Stdio => server::serve_stdio(backend).await,
+        Transport::Stdio => server::serve_stdio(backend, opts.cost_footer).await,
         Transport::Http => {
             let require_auth = matches!(opts.backend, BackendKind::Cloud);
             // Without the auth middleware (local backend), a non-loopback bind

@@ -25,6 +25,7 @@
 pub mod db;
 pub mod entities;
 pub mod pricing;
+pub mod reader;
 pub mod recorder;
 pub mod store;
 
