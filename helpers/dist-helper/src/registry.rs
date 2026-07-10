@@ -3212,6 +3212,30 @@ api_base: https://api.acme.test/v1
         );
     }
 
+    #[test]
+    fn built_registry_maps_nex_n2_pro_to_siliconflow_upstream_id() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root).expect("builds repository registry");
+        let providers: Value =
+            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+        let siliconflow = providers["data"]
+            .as_array()
+            .expect("provider data array")
+            .iter()
+            .find(|provider| provider["name"] == "siliconflow")
+            .expect("SiliconFlow provider");
+        let nex = siliconflow["models"]
+            .as_array()
+            .expect("SiliconFlow models array")
+            .iter()
+            .find(|model| model["id"] == "nex-agi/nex-n2-pro")
+            .expect("Nex N2 Pro model");
+
+        assert_eq!(nex["provider_model_id"], "nex-agi/Nex-N2-Pro");
+        assert_eq!(nex["pricing"]["input_tokens"]["no_cache"], 0.5);
+        assert_eq!(nex["pricing"]["output_tokens"]["text"], 2.5);
+    }
+
     fn test_root(name: &str) -> PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

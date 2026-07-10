@@ -41,7 +41,7 @@ Prices are USD per **million tokens**, taken from the current [registry](https:/
 | `minimax/minimax-m2.5` | MiniMax: M2.5 | 192K | text | ✅ | $0.15 | $0.9 |
 | `minimax/minimax-m2.7` | MiniMax: M2.7 | 192K | text | ✅ | $0.225 | $0.9 |
 | `minimax/minimax-m3` | MiniMax: M3 | 1M | text, image | ✅ | $0.3 | $1.2 |
-| `mistralai/mistral-medium-3-5` | Mistral Medium 3.5 | 256K | text, image | ✅ | — | — |
+| `mistralai/mistral-medium-3-5` | Mistral Medium 3.5 | 256K | text, image | ✅ | $1.5 | $7.5 |
 | `moonshotai/kimi-k2.5` | Kimi: K2.5 | 256K | text, image | ✅ | $0.375 | $2.025 |
 | `moonshotai/kimi-k2.6` | Kimi: K2.6 | 256K | text | ✅ | $0.66 | $3.41 |
 | `moonshotai/kimi-k2.7-code` | Kimi: K2.7 Code | 256K | text, image | ✅ | $0.612 | $3.069 |

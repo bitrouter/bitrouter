@@ -4366,6 +4366,19 @@
           },
           "provider": "openrouter",
           "provider_model_id": "nex-agi/nex-n2-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "provider": "siliconflow",
+          "provider_model_id": "nex-agi/Nex-N2-Pro"
         }
       ],
       "release_date": "2026-06-08"
