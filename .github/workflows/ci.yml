@@ -130,3 +130,31 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo test --doc --workspace --all-features
+
+  agent-plugin:
+    name: agent-plugin
+    runs-on: ubuntu-latest
+    # Validate the agent-plugin manifests (.claude-plugin/, .codex-plugin/)
+    # against the real loaders. Two gates:
+    #   1. Claude Code has a purpose-built validator — run it strict.
+    #   2. Codex has NO validator and its loader warn-and-ignores broken
+    #      manifests (a typo silently drops a component), so we exercise
+    #      the real install path in an isolated CODEX_HOME and
+    #      presence-assert the plugin actually loaded.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: claude plugin validate (strict)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate . --strict
+      - name: codex loader exercise (presence-asserted)
+        run: |
+          npm install -g @openai/codex
+          export CODEX_HOME="$(mktemp -d)"
+          codex plugin marketplace add "$PWD"
+          codex plugin add bitrouter@bitrouter
+          codex plugin list --json | tee /tmp/codex-plugins.json
+          jq -e '.installed[] | select(.name == "bitrouter")' /tmp/codex-plugins.json
