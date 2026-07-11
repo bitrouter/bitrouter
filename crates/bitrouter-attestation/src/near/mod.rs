@@ -745,7 +745,7 @@ mod tests {
         h.update(text.len().to_string().as_bytes());
         h.update(text.as_bytes());
         let digest: [u8; 32] = h.finalize().into();
-        let (sig, rec) = key.sign_prehash_recoverable(&digest).unwrap();
+        let (sig, rec) = key.sign_prehash_recoverable(&digest);
         let mut out = sig.to_bytes().to_vec();
         out.push(27 + rec.to_byte());
         hex::encode(out)

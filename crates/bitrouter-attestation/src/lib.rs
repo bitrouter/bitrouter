@@ -93,7 +93,7 @@ pub trait ConfidentialVerifier: Send + Sync {
 
 /// A fresh 32-byte hex nonce for an attestation challenge.
 pub(crate) fn fresh_nonce_hex() -> String {
-    use rand::RngCore;
+    use rand::Rng;
     let mut nonce = [0u8; 32];
     rand::rng().fill_bytes(&mut nonce);
     hex::encode(nonce)

@@ -8,11 +8,10 @@ edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
 repository = "https://github.com/bitrouter/bitrouter"
-# MSRV — the oldest toolchain the dependency tree actually compiles on.
-# Floor set by `process-wrap` (needs 1.87). The `msrv` CI job pins this exact
-# version. (Was 1.88 while `bitrouter-bedrock` pulled `aws-sdk-sts`; dropped
-# when Bedrock moved to the registry-based bearer provider.)
-rust-version = "1.87"
+# MSRV — a recent compiler floor verified against the full workspace.
+# The `msrv` CI job pins this exact version; current stable is tested by the
+# rest of CI. The resolved dependency graph itself requires Rust 1.89.
+rust-version = "1.93"
 
 [workspace.dependencies]
 # internal crates
@@ -26,8 +25,8 @@ bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.24", default-features = false }
 
 # ACP SDK crates
-agent-client-protocol = "1.0"
-agent-client-protocol-schema = "1.1"
+agent-client-protocol = "1.2"
+agent-client-protocol-schema = "1.4"
 
 # shared third-party
 anyhow = "1"
@@ -50,20 +49,22 @@ async-stream = "0.3"
 # http server (sdk `server` feature)
 axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 
 # http client
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
+    "form",
+    "query",
     "stream",
-    "rustls-tls",
+    "rustls",
 ] }
 eventsource-stream = "0.2"
 url = "2"
 
 # config (sdk `config_file` feature)
-serde-saphyr = "0.0.26"
-toml = "0.8"
+serde-saphyr = "0.0.29"
+toml = "1.1"
 
 # JsonSchema derives for the wire-shape types in `bitrouter-sdk`. Used by
 # downstream crates (notably `bitrouter-cloud`) to publish an OpenAPI spec via
@@ -72,7 +73,7 @@ schemars = "1"
 
 # MCP (sdk `mcp` feature) — official Rust MCP SDK.
 # Source: <https://github.com/modelcontextprotocol/rust-sdk>
-rmcp = { version = "1.7", default-features = false, features = [
+rmcp = { version = "2.2", default-features = false, features = [
     "client",
     "reqwest",
     "transport-streamable-http-client-reqwest",
@@ -107,9 +108,9 @@ sea-orm-migration = { version = "1", default-features = false, features = [
 ] }
 
 # crypto / encoding
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = [
     "std",

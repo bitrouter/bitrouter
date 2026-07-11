@@ -45,12 +45,12 @@ use opentelemetry::{
     propagation::{Extractor, Injector},
     trace::{Span, SpanKind, Status, TraceContextExt, Tracer},
 };
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{
-    BatchConfigBuilder, BatchSpanProcessor, RandomIdGenerator, Sampler, Tracer as SdkTracer,
-    TracerProvider,
+    BatchConfigBuilder, BatchSpanProcessor, RandomIdGenerator, Sampler, SdkTracerProvider,
+    Tracer as SdkTracer,
 };
-use opentelemetry_sdk::{Resource, runtime};
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
@@ -123,7 +123,7 @@ struct HopState {
 /// OpenTelemetry exporter with multi-tenant attribution.
 pub struct OtelExporter {
     tracer: SdkTracer,
-    provider: TracerProvider,
+    provider: SdkTracerProvider,
     metrics: Option<crate::otel::metrics::OtelMetrics>,
 
     /// Snapshot of the config the exporter was built from. Kept so
@@ -183,11 +183,11 @@ impl OtelExporter {
             .with_max_queue_size(config.traces.batch.max_queue_size)
             .with_scheduled_delay(Duration::from_millis(config.traces.batch.flush_ms))
             .build();
-        let processor = BatchSpanProcessor::builder(span_exporter, runtime::Tokio)
+        let processor = BatchSpanProcessor::builder(span_exporter)
             .with_batch_config(batch_config)
             .build();
 
-        let provider = TracerProvider::builder()
+        let provider = SdkTracerProvider::builder()
             .with_span_processor(processor)
             .with_sampler(build_sampler(&config))
             .with_id_generator(RandomIdGenerator::default())
@@ -1040,7 +1040,9 @@ fn build_resource(config: &OtelConfig) -> Resource {
         }
         attrs.push(KeyValue::new(k.clone(), v.clone()));
     }
-    Resource::from_schema_url(attrs, SCHEMA_URL)
+    Resource::builder_empty()
+        .with_schema_url(attrs, SCHEMA_URL)
+        .build()
 }
 
 fn build_sampler(config: &OtelConfig) -> Sampler {
@@ -1193,9 +1195,8 @@ mod hop_tests {
 
     use futures::StreamExt;
     use opentelemetry::Value;
-    use opentelemetry::trace::TraceResult;
-    use opentelemetry_sdk::export::trace::SpanData;
-    use opentelemetry_sdk::trace::{Span as SdkSpan, SpanProcessor};
+    use opentelemetry_sdk::error::OTelSdkResult;
+    use opentelemetry_sdk::trace::{Span as SdkSpan, SpanData, SpanProcessor};
 
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::error::BitrouterError;
@@ -1254,11 +1255,11 @@ mod hop_tests {
             guard.push(span);
         }
 
-        fn force_flush(&self) -> TraceResult<()> {
+        fn force_flush(&self) -> OTelSdkResult {
             Ok(())
         }
 
-        fn shutdown(&self) -> TraceResult<()> {
+        fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
             Ok(())
         }
     }
@@ -1278,7 +1279,7 @@ mod hop_tests {
         };
         global::set_text_map_propagator(TraceContextPropagator::new());
 
-        let provider = TracerProvider::builder()
+        let provider = SdkTracerProvider::builder()
             .with_span_processor(processor)
             .with_sampler(Sampler::AlwaysOn)
             .with_id_generator(RandomIdGenerator::default())
@@ -1451,7 +1452,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1477,7 +1478,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1505,7 +1506,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1628,7 +1629,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1697,7 +1698,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1763,7 +1764,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1807,7 +1808,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1840,7 +1841,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
         let spans = captured.lock().unwrap().clone();
         let root = spans
             .iter()
@@ -1861,7 +1862,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
         let spans = captured.lock().unwrap().clone();
         let root = spans
             .iter()
@@ -1898,7 +1899,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -1971,7 +1972,7 @@ mod hop_tests {
         exporter
             .on_hop_end(&ctx, &target, HopOutcome::StreamStarted)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         assert!(
             captured
@@ -1986,7 +1987,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2021,7 +2022,7 @@ mod hop_tests {
             .on_hop_end(&ctx, &first, HopOutcome::StreamStarted)
             .await;
         exporter.on_hop_start(&ctx, &second).await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let clients: Vec<_> = spans
@@ -2043,7 +2044,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         assert_eq!(
             captured
@@ -2092,7 +2093,7 @@ mod hop_tests {
             .expect("stream starts");
         let parts: Vec<_> = stream.collect().await;
         assert!(parts.iter().all(Result::is_ok));
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2141,7 +2142,7 @@ mod hop_tests {
                 &RequestOutcome::Failed(BitrouterError::UpstreamUnavailable),
             )
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2173,7 +2174,7 @@ mod hop_tests {
             .await
             .expect_err("pre-request rejects");
         assert!(matches!(error, BitrouterError::Unauthorized(_)));
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2221,7 +2222,7 @@ mod hop_tests {
             .expect("stream starts");
         let drain = tokio::spawn(async move { stream.collect::<Vec<_>>().await });
         entered.notified().await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         assert!(
@@ -2272,7 +2273,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2346,7 +2347,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2386,7 +2387,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let root_chat = spans
@@ -2422,7 +2423,7 @@ mod hop_tests {
         exporter
             .on_request_end(&ctx, &RequestOutcome::Failed(err.clone()))
             .await;
-        exporter.provider.force_flush();
+        assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
         let hop_chat = spans

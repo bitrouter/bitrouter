@@ -3,7 +3,9 @@
 //! against a live collector. End-to-end overhead is better measured against
 //! a real Jaeger / OTel-collector via `scripts/test_observability.sh`.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use bitrouter_observe::otel::CardinalityLimiter;
 

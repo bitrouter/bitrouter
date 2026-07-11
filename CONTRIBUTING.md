@@ -50,7 +50,7 @@ For larger changes, opening an issue before writing code is the fastest way to a
    - `cargo test --workspace --all-features`
 6. Open a pull request with a clear summary and note any follow-up work.
 
-The workspace MSRV is **Rust 1.88**; the `msrv` CI job pins that exact toolchain. Don't rely on a feature stabilised after it.
+The workspace MSRV is **Rust 1.93**; the `msrv` CI job pins that exact toolchain. Don't rely on a feature stabilised after it.
 
 ## Review Guidelines
 

@@ -133,4 +133,4 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (plugins must not pull axum), and `msrv` (pinned to Rust 1.88). AI agents should also read [`CLAUDE.md`](CLAUDE.md).
+CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (plugins must not pull axum), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](CLAUDE.md).

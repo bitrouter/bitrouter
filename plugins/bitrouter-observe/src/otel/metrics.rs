@@ -48,7 +48,7 @@ impl OtelMetrics {
         // crate's feature flags — see `crate::otel::transport`.
         let exporter = crate::otel::transport::metric_exporter(config)?;
 
-        let reader = PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::Tokio)
+        let reader = PeriodicReader::builder(exporter)
             .with_interval(Duration::from_millis(config.metrics.export_interval_ms))
             .build();
 

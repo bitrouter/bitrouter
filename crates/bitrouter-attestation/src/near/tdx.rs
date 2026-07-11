@@ -108,7 +108,13 @@ pub async fn verify_tdx_quote(
     pccs_url: &str,
     now_unix: u64,
 ) -> Result<TdxMeasurements, VerifyError> {
-    let collateral = dcap_qvl::collateral::get_collateral(pccs_url, raw)
+    let collateral_client = dcap_qvl::collateral::CollateralClient::with_default_http(pccs_url)
+        .map_err(|e| VerifyError::Transport {
+            what: "dcap collateral",
+            source: e.to_string().into(),
+        })?;
+    let collateral = collateral_client
+        .fetch(raw)
         .await
         .map_err(|e| VerifyError::Transport {
             what: "dcap collateral",
