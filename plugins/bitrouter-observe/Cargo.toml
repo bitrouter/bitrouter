@@ -18,7 +18,13 @@ tracing.workspace = true
 # OpenTelemetry stack for OTLP export (traces + metrics).
 # Pinned to 0.32.x — the API churns minor-to-minor in this stack.
 opentelemetry = { version = "0.32", optional = true }
-opentelemetry_sdk = { version = "0.32", optional = true, features = ["rt-tokio", "trace", "metrics"] }
+opentelemetry_sdk = { version = "0.32", optional = true, features = [
+    "rt-tokio-current-thread",
+    "trace",
+    "metrics",
+    "experimental_trace_batch_span_processor_with_async_runtime",
+    "experimental_metrics_periodicreader_with_async_runtime",
+] }
 # Transport features (`http-proto`, `grpc-tonic`, the reqwest/tonic TLS
 # variants) are NOT enabled here — they are layered on by the `otel-http` /
 # `otel-grpc` sub-features below. `default-features = false` drops the upstream
