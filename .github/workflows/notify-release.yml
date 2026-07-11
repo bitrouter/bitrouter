@@ -1,0 +1,27 @@
+# Notify the bitrouter-docs site the moment a release is published.
+# Fires a repository_dispatch (event_type: bitrouter-release) that the docs
+# repo's sync-changelog.yml + on-bitrouter-release.yml already listen for —
+# turning "changelog synced by the daily cron" into "synced within seconds of
+# the release". The docs side fetches the release body itself from this public
+# repo, so the payload only carries the tag (+ product, for forward-compat with
+# bitrouter-cloud).
+#
+# Reuses the existing DOCS_DISPATCH_TOKEN secret (the same fine-grained PAT that
+# notify-docs.yml uses to dispatch on bitrouter/bitrouter-docs).
+name: Notify docs of release
+on:
+  release:
+    types: [published]   # fires for stable AND prereleases
+permissions: {}
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch bitrouter-release to bitrouter-docs
+        run: |
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${{ secrets.DOCS_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/bitrouter/bitrouter-docs/dispatches \
+            -d "$(jq -n --arg tag '${{ github.event.release.tag_name }}' \
+                  '{event_type:"bitrouter-release", client_payload:{tag:$tag, product:"oss"}}')"
