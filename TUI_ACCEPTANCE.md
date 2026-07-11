@@ -248,10 +248,20 @@ this doc, or if two iterations make no checkbox progress.
 
 ## Phase 4 — Command palette + which-key
 
-- [ ] `:` opens a fuzzy palette over a command table (spawn, close, split,
+- [x] `:` opens a fuzzy palette over a command table (spawn, close, split,
       broadcast, diff, autonomy, kill-done, quit); `Enter` runs, `Esc` cancels
-- [ ] A leader key shows a which-key menu of actions for the current mode
-- [ ] Palette/which-key don't panic on empty or single-item states
+      — `:` on an *empty* prompt (mid-sentence stays literal) or in AGENT
+      mode; subsequence fuzzy match; every command maps onto an existing
+      reducer path; `diff` awaits Phase 5 substrate; tests `colon_on_empty…`,
+      `palette_fuzzy…`, `palette_enter_runs…`, `palette_spawn…`,
+      `palette_kill_done…`
+- [x] A leader key shows a which-key menu of actions for the current mode
+      — `Ctrl-A` (leader) then `?` → keys popup per mode; any key dismisses
+      (swallowed, not acted on); also reachable as the `keys help` command;
+      tests `agent_question_mark_opens_keys_help…`, `keys_help_popup_lists…`
+- [x] Palette/which-key don't panic on empty or single-item states
+      — no-match Enter closes cleanly; selection clamps; tests
+      `palette_enter_with_no_match_just_closes`, `palette_popup_handles_no_matches`
 
 ## Phase 5 — Review queue (v2 — substrate work)
 

@@ -45,11 +45,102 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
         render_picker(picker, frame, area);
     }
 
+    if state.mode == Mode::Command
+        && let Some(palette) = &state.palette
+    {
+        render_palette(palette, frame, area);
+    }
+
+    if state.keys_help {
+        render_keys_help(state.mode, frame, area);
+    }
+
     if let Some(pane) = state.focused()
         && let Some(pending) = &pane.pending
     {
         render_permission(pending, frame, area);
     }
+}
+
+/// Command palette: a filter line over the fuzzy-matched command list.
+fn render_palette(palette: &crate::tui::state::PaletteState, frame: &mut Frame, area: Rect) {
+    let popup = centered(area, 50, 50);
+    frame.render_widget(Clear, popup);
+    let mut lines: Vec<TuiLine> = vec![TuiLine::from(vec![
+        Span::styled(": ", Style::default().fg(Color::Cyan)),
+        Span::raw(palette.input.clone()),
+        Span::styled("▏", Style::default().fg(Color::Cyan)),
+    ])];
+    let matches = palette.matches();
+    if matches.is_empty() {
+        lines.push(TuiLine::styled(
+            "(no matching command)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    for (i, (name, _)) in matches.iter().enumerate() {
+        if i == palette.selected.min(matches.len() - 1) {
+            lines.push(TuiLine::styled(
+                format!("> {name}"),
+                Style::default().fg(Color::Cyan),
+            ));
+        } else {
+            lines.push(TuiLine::raw(format!("  {name}")));
+        }
+    }
+    let para =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" command "));
+    frame.render_widget(para, popup);
+}
+
+/// Which-key overlay: every binding for the current mode. Any key dismisses.
+fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
+    let bindings: &[(&str, &str)] = match mode {
+        Mode::Normal | Mode::Command => &[
+            ("type + Enter", "prompt the focused agent"),
+            ("y / a / n", "resolve its pending permission"),
+            ("PgUp / PgDn", "scroll its scrollback"),
+            (": (empty line)", "command palette"),
+            ("Ctrl-A", "manager mode"),
+            ("Ctrl-B", "broadcast mode"),
+            ("Ctrl-C", "quit"),
+        ],
+        Mode::Agent => &[
+            ("j / k / ↑ / ↓", "move the rail cursor"),
+            ("Enter", "open cursor agent solo"),
+            ("s / v", "split cursor agent in (h/v)"),
+            ("u", "drop the focused slot"),
+            ("Tab / ← / → / 1-4", "switch detail slot"),
+            ("q", "queue focus (needs-you only)"),
+            ("y / a / d", "resolve cursor pending"),
+            ("A", "cycle autonomy tier"),
+            ("n", "new agent"),
+            ("x", "close cursor agent"),
+            (":", "command palette"),
+            ("Esc", "back to normal"),
+        ],
+        Mode::Picker => &[("↑ / ↓", "select"), ("Enter", "spawn"), ("Esc", "cancel")],
+        Mode::Broadcast => &[
+            ("Space", "toggle cursor row"),
+            ("1-9", "toggle roster row"),
+            ("a", "select all"),
+            ("type + Enter", "send to selection"),
+            ("Esc", "cancel"),
+        ],
+    };
+    let popup = centered(area, 60, 60);
+    frame.render_widget(Clear, popup);
+    let lines: Vec<TuiLine> = bindings
+        .iter()
+        .map(|(key, what)| {
+            TuiLine::from(vec![
+                Span::styled(format!("{key:>18}  "), Style::default().fg(Color::Cyan)),
+                Span::raw(*what),
+            ])
+        })
+        .collect();
+    let para = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" keys "));
+    frame.render_widget(para, popup);
 }
 
 /// State glyph + color for one agent, shared by the roster and the radar.
@@ -308,12 +399,13 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
 
 fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
-        Mode::Normal => "NORMAL  ^a manage · ^b broadcast · PgUp/PgDn scroll · ^c quit",
+        Mode::Normal => "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c quit",
         Mode::Agent => {
-            "AGENT  j/k rail · Enter open · s/v split · u unsplit · q queue · y/a/d resolve · Tab slot · n new · x close · Esc"
+            "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · A tier · n new · x close · ? keys · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
+        Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
     };
     let text = match &state.notice {
         Some(n) => format!("{hints}   ! {n}"),
@@ -630,6 +722,44 @@ mod tests {
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("all clear"), "empty queue reads calm");
         assert!(text.contains("needs you · 0"), "queue header with count");
+    }
+
+    #[test]
+    fn palette_popup_renders_filter_and_matches() {
+        let mut st = agents3();
+        st.mode = Mode::Command;
+        st.palette = Some(crate::tui::state::PaletteState {
+            input: "sp".into(),
+            selected: 0,
+        });
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("spawn agent"), "match listed");
+        assert!(text.contains("> spawn agent"), "selection marked");
+    }
+
+    #[test]
+    fn palette_popup_handles_no_matches() {
+        let mut st = agents3();
+        st.mode = Mode::Command;
+        st.palette = Some(crate::tui::state::PaletteState {
+            input: "zzz".into(),
+            selected: 3,
+        });
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("no matching command"), "empty state shown");
+    }
+
+    #[test]
+    fn keys_help_popup_lists_mode_bindings() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.keys_help = true;
+        let text = draw(&mut st, 90, 30);
+        assert!(
+            text.contains("cycle autonomy tier"),
+            "agent bindings listed"
+        );
+        assert!(text.contains("command palette"));
     }
 
     #[test]

@@ -27,6 +27,70 @@ pub enum Mode {
     Picker,
     /// Selecting multiple agents to send one message to all of them.
     Broadcast,
+    /// Fuzzy command palette (`:` on an empty prompt, or `:` in AGENT mode).
+    Command,
+}
+
+/// One palette command. The table is static; actions map onto existing
+/// reducer paths so the palette adds discoverability, not new behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    SpawnAgent,
+    CloseAgent,
+    SplitH,
+    SplitV,
+    Unsplit,
+    Broadcast,
+    Queue,
+    Autonomy,
+    KillDone,
+    KeysHelp,
+    Quit,
+}
+
+/// Palette entries: display name → command. Order = display order when the
+/// filter is empty.
+pub const COMMANDS: &[(&str, Command)] = &[
+    ("spawn agent", Command::SpawnAgent),
+    ("close agent", Command::CloseAgent),
+    ("split horizontal", Command::SplitH),
+    ("split vertical", Command::SplitV),
+    ("unsplit", Command::Unsplit),
+    ("broadcast", Command::Broadcast),
+    ("queue", Command::Queue),
+    ("autonomy cycle", Command::Autonomy),
+    ("kill done", Command::KillDone),
+    ("keys help", Command::KeysHelp),
+    ("quit", Command::Quit),
+];
+
+/// State of the command palette overlay.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PaletteState {
+    pub input: String,
+    pub selected: usize,
+}
+
+impl PaletteState {
+    /// Commands whose name fuzzy-matches (case-insensitive subsequence) the
+    /// current input, in table order.
+    pub fn matches(&self) -> Vec<(&'static str, Command)> {
+        COMMANDS
+            .iter()
+            .copied()
+            .filter(|(name, _)| fuzzy_match(name, &self.input))
+            .collect()
+    }
+}
+
+/// Case-insensitive subsequence match: every `needle` char appears in
+/// `haystack` in order. An empty needle matches everything.
+fn fuzzy_match(haystack: &str, needle: &str) -> bool {
+    let mut hay = haystack.chars().flat_map(char::to_lowercase);
+    needle
+        .chars()
+        .flat_map(char::to_lowercase)
+        .all(|n| hay.any(|h| h == n))
 }
 
 /// State of the agent picker overlay.
@@ -281,6 +345,10 @@ pub struct AppState {
     pub should_quit: bool,
     pub mode: Mode,
     pub picker: Option<PickerState>,
+    /// Command palette overlay state (present while `mode == Command`).
+    pub palette: Option<PaletteState>,
+    /// Which-key overlay: lists the current mode's bindings; any key dismisses.
+    pub keys_help: bool,
     pub available_agents: Vec<String>,
     pub notice: Option<String>,
     pub broadcast_input: String,
@@ -300,6 +368,8 @@ impl AppState {
             should_quit: false,
             mode: Mode::Normal,
             picker: None,
+            palette: None,
+            keys_help: false,
             available_agents: Vec::new(),
             notice: None,
             broadcast_input: String::new(),
@@ -496,11 +566,17 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 state.should_quit = true;
                 return vec![Effect::Quit];
             }
+            // The which-key overlay swallows exactly one key to dismiss.
+            if state.keys_help {
+                state.keys_help = false;
+                return Vec::new();
+            }
             match state.mode {
                 Mode::Normal => reduce_key_normal(state, key),
                 Mode::Agent => reduce_key_agent(state, key),
                 Mode::Picker => reduce_key_picker(state, key),
                 Mode::Broadcast => reduce_key_broadcast(state, key),
+                Mode::Command => reduce_key_command(state, key),
             }
         }
     }
@@ -574,6 +650,13 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 
     match key.code {
+        // `:` on an empty prompt opens the command palette; mid-sentence it
+        // is a literal colon.
+        KeyCode::Char(':') if state.input.is_empty() => {
+            state.palette = Some(PaletteState::default());
+            state.mode = Mode::Command;
+            Vec::new()
+        }
         KeyCode::Char(c) => {
             state.input.push(c);
             Vec::new()
@@ -701,6 +784,16 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.mode = Mode::Picker;
             Vec::new()
         }
+        // Command palette + which-key.
+        KeyCode::Char(':') => {
+            state.palette = Some(PaletteState::default());
+            state.mode = Mode::Command;
+            Vec::new()
+        }
+        KeyCode::Char('?') => {
+            state.keys_help = true;
+            Vec::new()
+        }
         // Cycle the cursor agent's autonomy tier (capital A — lowercase `a`
         // grants allow-always on a pending row).
         KeyCode::Char('A') => {
@@ -716,6 +809,147 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         // Close the cursor agent.
         KeyCode::Char('x') => close_rail_selected(state),
         _ => Vec::new(),
+    }
+}
+
+/// COMMAND-mode keys: filter, select, and run a palette command.
+fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    let palette = match state.palette.as_mut() {
+        Some(p) => p,
+        // Defensive: no palette → back to Normal.
+        None => {
+            state.mode = Mode::Normal;
+            return Vec::new();
+        }
+    };
+    match key.code {
+        KeyCode::Esc => {
+            state.palette = None;
+            state.mode = Mode::Normal;
+            Vec::new()
+        }
+        KeyCode::Up => {
+            palette.selected = palette.selected.saturating_sub(1);
+            Vec::new()
+        }
+        KeyCode::Down => {
+            let max = palette.matches().len().saturating_sub(1);
+            palette.selected = (palette.selected + 1).min(max);
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            palette.input.pop();
+            palette.selected = 0;
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let cmd = palette
+                .matches()
+                .get(
+                    palette
+                        .selected
+                        .min(palette.matches().len().saturating_sub(1)),
+                )
+                .map(|(_, c)| *c);
+            state.palette = None;
+            state.mode = Mode::Normal;
+            match cmd {
+                Some(cmd) => run_command(state, cmd),
+                None => Vec::new(), // no match → just close, no panic
+            }
+        }
+        KeyCode::Char(c) => {
+            palette.input.push(c);
+            palette.selected = 0;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Execute one palette command. Every action maps onto an existing reducer
+/// path — the palette is a discoverable front door, not a second behavior set.
+fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
+    match cmd {
+        Command::SpawnAgent => {
+            state.picker = Some(PickerState {
+                agents: state.available_agents.clone(),
+                selected: 0,
+            });
+            state.mode = Mode::Picker;
+            Vec::new()
+        }
+        Command::CloseAgent => {
+            let id = state.detail.focused_id().map(str::to_string);
+            match id {
+                Some(id) => close_agent_by_id(state, &id),
+                None => Vec::new(),
+            }
+        }
+        Command::SplitH | Command::SplitV => {
+            let split = if cmd == Command::SplitH {
+                Split::H
+            } else {
+                Split::V
+            };
+            // Add the most actionable agent not already shown.
+            let next = state
+                .roster()
+                .into_iter()
+                .map(|i| state.agents[i].record_id.clone())
+                .find(|id| !state.detail.shown.contains(id));
+            if let Some(id) = next {
+                state.detail.add(id, split);
+                clear_shown_attention(state);
+            }
+            Vec::new()
+        }
+        Command::Unsplit => {
+            state.detail.remove_focused();
+            Vec::new()
+        }
+        Command::Broadcast => {
+            for p in state.agents.iter_mut() {
+                p.selected = false;
+            }
+            state.mode = Mode::Broadcast;
+            Vec::new()
+        }
+        Command::Queue => {
+            state.queue_only = !state.queue_only;
+            state.clamp_rail_cursor();
+            state.mode = Mode::Agent;
+            Vec::new()
+        }
+        Command::Autonomy => {
+            if let Some(pane) = state.focused_mut() {
+                pane.autonomy = pane.autonomy.next();
+                let label = pane.autonomy.label();
+                pane.push(Line::AutoResolved(format!("autonomy set to {label}")));
+            }
+            Vec::new()
+        }
+        Command::KillDone => {
+            let dead: Vec<String> = state
+                .agents
+                .iter()
+                .filter(|p| p.exited)
+                .map(|p| p.record_id.clone())
+                .collect();
+            let mut effects = Vec::new();
+            for id in dead {
+                effects.extend(close_agent_by_id(state, &id));
+            }
+            effects
+        }
+        Command::KeysHelp => {
+            state.keys_help = true;
+            Vec::new()
+        }
+        Command::Quit => {
+            state.should_quit = true;
+            vec![Effect::Quit]
+        }
     }
 }
 
@@ -748,16 +982,23 @@ fn resolve_rail_pending(state: &mut AppState, outcome: PermissionOutcome) -> Vec
     vec![Effect::ResolvePermission { record_id, outcome }]
 }
 
-/// Close the agent under the rail cursor: remove it, prune the detail layout
-/// (refilling it with the most actionable agent if it empties), emit
-/// `CloseAgent`. Closing the last agent quits.
+/// Close the agent under the rail cursor.
 fn close_rail_selected(state: &mut AppState) -> Vec<Effect> {
-    let record_id = match state.rail_selected().map(|p| p.record_id.clone()) {
-        Some(id) => id,
-        None => return Vec::new(),
-    };
+    match state.rail_selected().map(|p| p.record_id.clone()) {
+        Some(id) => close_agent_by_id(state, &id),
+        None => Vec::new(),
+    }
+}
+
+/// Close one agent by id: remove it, prune the detail layout (refilling it
+/// with the most actionable agent if it empties), emit `CloseAgent`. Closing
+/// the last agent quits.
+fn close_agent_by_id(state: &mut AppState, record_id: &str) -> Vec<Effect> {
+    if !state.agents.iter().any(|p| p.record_id == record_id) {
+        return Vec::new();
+    }
     state.agents.retain(|p| p.record_id != record_id);
-    state.detail.prune(&record_id);
+    state.detail.prune(record_id);
     state.clamp_rail_cursor();
     if state.agents.is_empty() {
         state.should_quit = true;
@@ -767,7 +1008,9 @@ fn close_rail_selected(state: &mut AppState) -> Vec<Effect> {
             state.detail = DetailLayout::solo(state.agents[head].record_id.clone());
         }
     }
-    vec![Effect::CloseAgent { record_id }]
+    vec![Effect::CloseAgent {
+        record_id: record_id.to_string(),
+    }]
 }
 
 /// PICKER-mode keys: navigate + choose an agent to spawn.
@@ -1072,7 +1315,13 @@ mod tests {
 
     #[test]
     fn ctrl_c_quits_from_every_mode() {
-        for mode in [Mode::Normal, Mode::Agent, Mode::Picker, Mode::Broadcast] {
+        for mode in [
+            Mode::Normal,
+            Mode::Agent,
+            Mode::Picker,
+            Mode::Broadcast,
+            Mode::Command,
+        ] {
             let mut st = AppState::new(pane());
             st.mode = mode;
             if mode == Mode::Picker {
@@ -2080,6 +2329,118 @@ mod tests {
         let order = st.roster();
         assert_eq!(order[0], 1, "high risk outranks age");
         assert_eq!(order[1], 0);
+    }
+
+    // ── Command palette + which-key. ──
+
+    #[test]
+    fn colon_on_empty_prompt_opens_palette_mid_sentence_stays_literal() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        assert_eq!(st.mode, Mode::Command);
+        assert!(st.palette.is_some());
+
+        let mut st = AppState::new(pane());
+        st.input = "add field x".into();
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        assert_eq!(st.mode, Mode::Normal, "mid-sentence colon types");
+        assert_eq!(st.input, "add field x:");
+    }
+
+    #[test]
+    fn palette_fuzzy_filters_by_subsequence() {
+        let p = PaletteState {
+            input: "spw".into(),
+            selected: 0,
+        };
+        let names: Vec<&str> = p.matches().iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, vec!["spawn agent"], "s-p-w subsequence");
+
+        let none = PaletteState {
+            input: "zzz".into(),
+            selected: 0,
+        };
+        assert!(none.matches().is_empty());
+
+        let all = PaletteState::default();
+        assert_eq!(all.matches().len(), COMMANDS.len(), "empty filter = all");
+    }
+
+    #[test]
+    fn palette_enter_runs_the_selected_command() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        for c in "quit".chars() {
+            reduce(&mut st, &press(KeyCode::Char(c)));
+        }
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(fx, vec![Effect::Quit]);
+        assert!(st.should_quit);
+    }
+
+    #[test]
+    fn palette_enter_with_no_match_just_closes() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        for c in "zzz".chars() {
+            reduce(&mut st, &press(KeyCode::Char(c)));
+        }
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert!(fx.is_empty(), "no match → no action, no panic");
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.palette.is_none());
+    }
+
+    #[test]
+    fn palette_spawn_opens_picker() {
+        let mut st = AppState::new(pane());
+        st.available_agents = vec!["fake".into()];
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        for c in "spawn".chars() {
+            reduce(&mut st, &press(KeyCode::Char(c)));
+        }
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.mode, Mode::Picker);
+        assert!(st.picker.is_some());
+    }
+
+    #[test]
+    fn palette_kill_done_closes_only_exited_agents() {
+        let mut st = agents3();
+        st.agents[1].exited = true;
+        st.agents[2].exited = true;
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        for c in "kill".chars() {
+            reduce(&mut st, &press(KeyCode::Char(c)));
+        }
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(fx.len(), 2, "two dead agents closed");
+        assert_eq!(st.agents.len(), 1);
+        assert_eq!(st.agents[0].record_id, "r0");
+        assert!(!st.should_quit);
+    }
+
+    #[test]
+    fn palette_esc_cancels() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        let fx = reduce(&mut st, &press(KeyCode::Esc));
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.palette.is_none());
+    }
+
+    #[test]
+    fn agent_question_mark_opens_keys_help_and_any_key_dismisses() {
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        reduce(&mut st, &press(KeyCode::Char('?')));
+        assert!(st.keys_help);
+        // The dismissing key is swallowed, not acted on.
+        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
+        assert!(fx.is_empty(), "dismiss key must not close an agent");
+        assert!(!st.keys_help);
+        assert_eq!(st.agents.len(), 1);
     }
 
     #[test]
