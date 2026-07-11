@@ -3362,6 +3362,11 @@
         },
         {
           "api_protocol": "openai",
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.5",
           "pricing": {
             "input_tokens": {
@@ -4354,6 +4359,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.6-sol",
           "pricing": {
             "context_tiers": [
@@ -4393,6 +4403,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.6-terra",
           "pricing": {
             "context_tiers": [
@@ -4432,6 +4447,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "context_tiers": [
@@ -4471,6 +4491,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.5",
           "pricing": {
             "input_tokens": {
@@ -4496,6 +4521,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.4",
           "pricing": {
             "input_tokens": {
@@ -4521,6 +4551,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "id": "openai/gpt-5.4-mini",
           "pricing": {
             "input_tokens": {
