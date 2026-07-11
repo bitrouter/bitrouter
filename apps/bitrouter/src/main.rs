@@ -300,11 +300,12 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Launch the in-process multi-agent TUI. Starts with one ACP agent
-    /// (`--agent`) and grows from there: `Ctrl-A` opens agent mode to spawn more
-    /// (tiled grid, tabs, focus, zoom), `Ctrl-B` broadcasts a prompt to several
-    /// agents at once. Streams each agent's output, sends prompts, and answers
-    /// permissions inline.
+    /// Launch the in-process multi-agent TUI: a left rail listing every agent
+    /// (sorted by who needs you, with a radar strip) beside a splittable detail
+    /// view. Starts with one ACP agent (`--agent`); `Ctrl-A` opens manager mode
+    /// (navigate the rail, open/split agents, spawn, close), `Ctrl-B` broadcasts
+    /// a prompt to several agents at once. Streams each agent's output, sends
+    /// prompts, and answers permissions inline.
     #[cfg(feature = "tui")]
     Tui {
         /// Agent id for the first pane (must exist under `agents:` in the config).

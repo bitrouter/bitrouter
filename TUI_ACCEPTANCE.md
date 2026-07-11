@@ -178,16 +178,29 @@ this doc, or if two iterations make no checkbox progress.
 
 ## Phase 1 — One screen: rail + splittable detail
 
-- [ ] State model flattened to `agents: Vec<PaneState>` + `DetailLayout`; `tabs`
+- [x] State model flattened to `agents: Vec<PaneState>` + `DetailLayout`; `tabs`
       and the grid render deleted
-- [ ] Left rail shows roster (sorted by actionability) + radar; is the default
+      — `Tab`/`tabs`/`zoom`/grid gone; tab keys (`t`/`[`/`]`/`f`) removed;
+      77 TUI tests migrated + extended
+- [x] Left rail shows roster (sorted by actionability) + radar; is the default
       landing surface
-- [ ] Detail viewport shows 1 agent by default; `Ctrl-A` split H/V shows 2–4;
+      — `roster()` buckets needs-you>attention>running>dead (tests
+      `roster_sorts_by_actionability_stable_within_bucket`,
+      `rail_sorts_actionable_agent_to_the_top`); radar strip under the roster
+- [x] Detail viewport shows 1 agent by default; `Ctrl-A` split H/V shows 2–4;
       un-split returns to 1
-- [ ] `↵` on a roster row opens that agent in the detail; rail focus + detail
+      — `s`/`v` add splits (cap 4, no duplicates), `u` drops the focused slot;
+      tests `s_adds…`, `v_adds…`, `split_caps_at_four_shown`, `u_unsplits…`
+- [x] `↵` on a roster row opens that agent in the detail; rail focus + detail
       focus are both unmistakable
-- [ ] Radar reflects a background agent's state change within one frame
-- [ ] Terse `agent · harness` header on each detail pane; uniform styling
+      — rail `▸` cursor (AGENT/BROADCAST modes) + bold shown rows; focused
+      pane border cyan; test `enter_opens_cursor_agent_solo_and_returns_to_normal`
+- [x] Radar reflects a background agent's state change within one frame
+      — radar renders from live state and every event redraws; ui test
+      `rail_shows_attention_glyph_for_background_agent`
+- [x] Terse `agent · harness` header on each detail pane; uniform styling
+      — harness = agent command basename via `set_harness_map`; test
+      `pane_header_includes_harness_tag`
 
 ## Phase 2 — Actionable head / decision queue (permissions)
 

@@ -53,6 +53,12 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     // ── Initial state. ──
     let mut state = AppState::new(PaneState::new(record_id, agent_id.to_string()));
     state.set_available_agents(agent_ids);
+    state.set_harness_map(
+        cfg.agents
+            .iter()
+            .map(|(k, v)| (k.clone(), harness_tag(&v.transport)))
+            .collect(),
+    );
     // Agents route LLM traffic through `bitrouter serve`; probe it once so a
     // missing proxy is an up-front notice instead of silent agent failures.
     if let Some(warning) = probe_serve(&cfg.server.listen).await {
@@ -66,6 +72,17 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     let result = event_loop(&mut terminal, state, rx, sessions, &catalog, base_repo, tx).await;
     restore_terminal();
     result
+}
+
+/// Terse harness tag for a pane header: the basename of the agent command
+/// (e.g. `/usr/local/bin/claude` → `claude`).
+fn harness_tag(transport: &bitrouter_sdk::acp::AcpTransport) -> String {
+    match transport {
+        bitrouter_sdk::acp::AcpTransport::Stdio { command, .. } => std::path::Path::new(command)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| command.clone()),
+    }
 }
 
 /// Probe the configured `bitrouter serve` listen address; `Some(warning)` when

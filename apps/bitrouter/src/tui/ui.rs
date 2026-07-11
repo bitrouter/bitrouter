@@ -1,49 +1,42 @@
-//! ratatui rendering of `AppState`. M2a: a tiled grid of agent panes with a
-//! focus highlight, an agent-picker overlay, and a mode bar — plus the M1 input
-//! box and permission popup.
+//! ratatui rendering of `AppState`: a fixed left rail (roster sorted by
+//! actionability + radar strip) beside a splittable detail viewport, with the
+//! input box, mode bar, and the picker/permission popups.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::tui::state::{AppState, Line, Mode, PaneState, PendingView, PickerState};
+use crate::tui::state::{AppState, Line, Mode, PaneState, PendingView, PickerState, Split};
+
+/// Preferred rail width; shrinks on narrow terminals.
+const RAIL_WIDTH: u16 = 24;
 
 /// Render the whole app for one frame. Takes `&mut` so panes can record the
 /// viewport height they were drawn at (ratatui stateful-render idiom) — the
 /// reducer uses it to page the scrollback by exactly one screen.
 pub fn render(state: &mut AppState, frame: &mut Frame) {
     let area = frame.area();
-    let chunks = Layout::default()
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // tab bar
-            Constraint::Min(1),    // grid
+            Constraint::Min(1),    // rail + detail
             Constraint::Length(3), // input
             Constraint::Length(1), // mode bar
         ])
         .split(area);
-    let tabbar_area = chunks[0];
-    let grid_area = chunks[1];
+    // Narrow terminals get a proportional rail instead of a fixed one.
+    let rail_w = RAIL_WIDTH.min(rows[0].width / 3);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(rail_w), Constraint::Min(1)])
+        .split(rows[0]);
 
-    render_tabbar(state, frame, tabbar_area);
-
-    if state.zoom {
-        let focus = state.active().map(|t| t.focus).unwrap_or(0);
-        if let Some(pane) = state.focused_mut() {
-            render_grid_pane(pane, true, focus, frame, grid_area);
-        }
-    } else if let Some(tab) = state.active_mut() {
-        let focus = tab.focus;
-        let rects = grid_rects(grid_area, tab.panes.len());
-        for (i, (pane, rect)) in tab.panes.iter_mut().zip(rects.iter()).enumerate() {
-            render_grid_pane(pane, i == focus, i, frame, *rect);
-        }
-    }
-
-    render_input(state, frame, chunks[2]);
-    render_modebar(state, frame, chunks[3]);
+    render_rail(state, frame, cols[0]);
+    render_detail(state, frame, cols[1]);
+    render_input(state, frame, rows[1]);
+    render_modebar(state, frame, rows[2]);
 
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
@@ -58,83 +51,126 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
     }
 }
 
-/// Top bar: one entry per tab (`title (pane_count)`), active tab highlighted. A
-/// tab with any pane needing attention (background notification or a pending
-/// permission) gets a `●` so it's visible from another tab.
-fn render_tabbar(state: &AppState, frame: &mut Frame, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-    for (i, tab) in state.tabs.iter().enumerate() {
-        let alert = tab.panes.iter().any(|p| p.attention || p.pending.is_some());
-        let label = format!(
-            "{} ({}){}",
-            tab.title,
-            tab.panes.len(),
-            if alert { " ●" } else { "" }
-        );
-        if i == state.active_tab {
-            spans.push(Span::styled(
-                format!(" ‹{label}› "),
-                Style::default().fg(Color::Cyan),
-            ));
-        } else {
-            spans.push(Span::raw(format!("  {label}  ")));
-        }
+/// State glyph + color for one agent, shared by the roster and the radar.
+/// Never color-alone: each state has a distinct glyph.
+fn state_glyph(pane: &PaneState) -> (&'static str, Color) {
+    if pane.pending.is_some() {
+        ("⚠", Color::Red) // needs you
+    } else if pane.attention {
+        ("●", Color::Yellow) // happened in the background
+    } else if !pane.exited {
+        ("⣷", Color::Cyan) // running
+    } else {
+        ("✗", Color::DarkGray) // dead
     }
-    frame.render_widget(Paragraph::new(TuiLine::from(spans)), area);
 }
 
-/// Row-major tiled layout of `n` rects within `area`. `cols = ceil(sqrt(n))`,
-/// `rows = ceil(n/cols)`; the final row's cells widen to fill. `n == 0` → empty.
-fn grid_rects(area: Rect, n: usize) -> Vec<Rect> {
+/// Left rail: the roster (every agent, sorted by actionability) over a radar
+/// strip. The rail cursor (`▸`) is shown in AGENT and BROADCAST modes.
+fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let order = state.roster();
+    let cursor_active = matches!(state.mode, Mode::Agent | Mode::Broadcast);
+    let mut lines: Vec<TuiLine> = Vec::with_capacity(order.len());
+    for (row, &idx) in order.iter().enumerate() {
+        let pane = &state.agents[idx];
+        let (glyph, color) = state_glyph(pane);
+        let cursor = if cursor_active && row == state.rail_cursor {
+            "▸"
+        } else {
+            " "
+        };
+        let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
+        let mut name_style = Style::default();
+        if shown {
+            name_style = name_style.add_modifier(Modifier::BOLD);
+        }
+        let mut spans = vec![
+            Span::raw(cursor.to_string()),
+            Span::styled(glyph.to_string(), Style::default().fg(color)),
+            Span::raw(" "),
+            Span::styled(pane.agent_id.clone(), name_style),
+        ];
+        if pane.selected {
+            spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
+        }
+        lines.push(TuiLine::from(spans));
+    }
+    if lines.is_empty() {
+        lines.push(TuiLine::styled(
+            "(no agents)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    let roster = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::RIGHT)
+            .title(format!(" agents · {} ", state.agents.len())),
+    );
+    frame.render_widget(roster, chunks[0]);
+
+    // Radar: one glyph per agent in roster order — peripheral vision of every
+    // agent's state even while the detail is zoomed into one.
+    let radar: Vec<Span> = order
+        .iter()
+        .map(|&idx| {
+            let (glyph, color) = state_glyph(&state.agents[idx]);
+            Span::styled(glyph.to_string(), Style::default().fg(color))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(TuiLine::from(radar)), chunks[1]);
+}
+
+/// Detail viewport: the shown agents in a horizontal or vertical split.
+fn render_detail(state: &mut AppState, frame: &mut Frame, area: Rect) {
+    let shown = state.detail.shown.clone();
+    let focus = state.detail.focus;
+    let split = state.detail.split;
+    if shown.is_empty() {
+        let placeholder = Paragraph::new("no agent shown — Ctrl-A then n to spawn")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(placeholder, area);
+        return;
+    }
+    let rects = split_rects(area, shown.len(), split);
+    for (slot, (rid, rect)) in shown.iter().zip(rects.iter()).enumerate() {
+        if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
+            render_pane(pane, slot, slot == focus, frame, *rect);
+        }
+    }
+}
+
+/// Equal division of `area` into `n` slots: columns for [`Split::H`], rows for
+/// [`Split::V`]. `n == 0` → empty.
+fn split_rects(area: Rect, n: usize, split: Split) -> Vec<Rect> {
     if n == 0 {
         return Vec::new();
     }
     if n == 1 {
         return vec![area];
     }
-    let cols = (n as f64).sqrt().ceil() as usize;
-    let rows = n.div_ceil(cols);
-    let row_constraints: Vec<Constraint> = (0..rows)
-        .map(|_| Constraint::Ratio(1, rows as u32))
-        .collect();
-    let row_rects = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(row_constraints)
-        .split(area);
-
-    let mut rects = Vec::with_capacity(n);
-    for (r, row_rect) in row_rects.iter().enumerate() {
-        let cells_in_row = (n - r * cols).min(cols);
-        if cells_in_row == 0 {
-            break;
-        }
-        let col_constraints: Vec<Constraint> = (0..cells_in_row)
-            .map(|_| Constraint::Ratio(1, cells_in_row as u32))
-            .collect();
-        let col_rects = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(col_constraints)
-            .split(*row_rect);
-        for cr in col_rects.iter() {
-            rects.push(*cr);
-            if rects.len() == n {
-                return rects;
-            }
-        }
-    }
-    rects
+    let constraints: Vec<Constraint> = (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect();
+    let direction = match split {
+        Split::H => Direction::Horizontal,
+        Split::V => Direction::Vertical,
+    };
+    Layout::default()
+        .direction(direction)
+        .constraints(constraints)
+        .split(area)
+        .to_vec()
 }
 
-/// Render one agent pane: bordered block titled `[i] agent · shortid [⚠]`, with
-/// the focused pane's border highlighted. Shows the scrollback tail unless the
-/// pane is pinned (`scroll`), and records the drawn viewport height for paging.
-fn render_grid_pane(
-    pane: &mut PaneState,
-    focused: bool,
-    index: usize,
-    frame: &mut Frame,
-    area: Rect,
-) {
+/// Render one detail pane: bordered block titled
+/// `[slot] agent · harness · shortid [markers]`, focused slot highlighted.
+/// Shows the scrollback tail unless the pane is pinned (`scroll`), and records
+/// the drawn viewport height for paging.
+fn render_pane(pane: &mut PaneState, slot: usize, focused: bool, frame: &mut Frame, area: Rect) {
     let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
     let inner_height = area.height.saturating_sub(2) as usize;
     pane.viewport = inner_height;
@@ -153,12 +189,26 @@ fn render_grid_pane(
     if pane.selected {
         markers.push_str(" ✓");
     }
+    if pane.exited {
+        markers.push_str(" ✗");
+    }
     if hidden_below > 0 {
         // Off-tail indicator: how many newer lines are below the pinned view.
         markers.push_str(&format!(" ⇣{hidden_below}"));
     }
-    let title = format!(" [{}] {} · {}{} ", index + 1, pane.agent_id, short, markers);
-    // Focused = cyan; else selected (broadcast) = green; else default.
+    let harness = if pane.harness.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", pane.harness)
+    };
+    let title = format!(
+        " [{}] {}{} · {}{} ",
+        slot + 1,
+        pane.agent_id,
+        harness,
+        short,
+        markers
+    );
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else if pane.selected {
@@ -210,10 +260,12 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
 
 fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
-        Mode::Normal => "NORMAL  ^a agent · PgUp/PgDn scroll · ^c quit",
-        Mode::Agent => "AGENT  n new · x close · Tab focus · 1-9 · f zoom · Esc",
+        Mode::Normal => "NORMAL  ^a manage · ^b broadcast · PgUp/PgDn scroll · ^c quit",
+        Mode::Agent => {
+            "AGENT  j/k rail · Enter open · s/v split · u unsplit · Tab slot · n new · x close · Esc"
+        }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
-        Mode::Broadcast => "BROADCAST  space/1-9 select · a all · Enter send · Esc",
+        Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
     };
     let text = match &state.notice {
         Some(n) => format!("{hints}   ! {n}"),
@@ -267,7 +319,8 @@ fn render_permission(pending: &PendingView, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, popup);
 }
 
-/// Single-key hint per option label (y/a/n), matching `reduce_key_normal`.
+/// Single-key hint per option label (y/a/n), matching `reduce_key_normal`'s
+/// y/a/n handling (allow-once / allow-always / deny).
 fn key_for(label: &str) -> char {
     match label {
         "allow" => 'y',
@@ -298,7 +351,7 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::state::{AppState, Line, Mode, PaneState, PickerState};
+    use crate::tui::state::{AppState, DetailLayout, Line, Mode, PaneState, PickerState};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -316,38 +369,136 @@ mod tests {
             .collect()
     }
 
-    fn three_panes() -> AppState {
+    fn agents3() -> AppState {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
-        st.tabs[0]
-            .panes
-            .push(PaneState::new("r1".into(), "a1".into()));
-        st.tabs[0]
-            .panes
-            .push(PaneState::new("r2".into(), "a2".into()));
+        st.agents.push(PaneState::new("r1".into(), "a1".into()));
+        st.agents.push(PaneState::new("r2".into(), "a2".into()));
         st
     }
 
     #[test]
-    fn renders_all_panes_with_indices() {
-        let text = draw(&mut three_panes(), 80, 24);
+    fn rail_lists_every_agent_even_when_detail_is_solo() {
+        let text = draw(&mut agents3(), 80, 24);
         assert!(text.contains("a0") && text.contains("a1") && text.contains("a2"));
-        assert!(text.contains("[1]") && text.contains("[2]") && text.contains("[3]"));
+        assert!(text.contains("agents · 3"), "rail header with count");
     }
 
     #[test]
-    fn zoom_shows_only_focused_pane() {
-        let mut st = three_panes();
-        st.tabs[0].panes[1]
+    fn rail_sorts_actionable_agent_to_the_top() {
+        let mut st = agents3();
+        st.agents[2].pending = Some(crate::tui::state::PendingView {
+            title: "WRITE".into(),
+            diff: None,
+            options: vec![],
+        });
+        // Show r2's pane so the permission popup doesn't cover the rail.
+        st.detail = DetailLayout {
+            shown: vec!["r2".into()],
+            split: crate::tui::state::Split::H,
+            focus: 0,
+        };
+        let text = draw(&mut st, 80, 24);
+        let (a2, a0) = (text.find("a2"), text.find("a0"));
+        assert!(
+            a2 < a0,
+            "needs-you row renders above running rows: a2={a2:?} a0={a0:?}"
+        );
+        assert!(text.contains('⚠'), "needs-you glyph shown");
+    }
+
+    #[test]
+    fn detail_shows_only_shown_agents() {
+        let mut st = agents3();
+        st.agents[1]
             .lines
             .push(Line::Message("SECOND_PANE_UNIQUE".into()));
-        st.tabs[0].focus = 0;
-        st.zoom = true;
         let text = draw(&mut st, 80, 24);
-        assert!(text.contains("a0"), "focused agent present");
         assert!(
             !text.contains("SECOND_PANE_UNIQUE"),
-            "non-focused content hidden when zoomed"
+            "non-shown agent content hidden"
         );
+        assert!(text.contains("[1]"), "solo pane has slot header");
+    }
+
+    #[test]
+    fn split_shows_two_panes_with_slots() {
+        let mut st = agents3();
+        st.detail = DetailLayout {
+            shown: vec!["r0".into(), "r1".into()],
+            split: crate::tui::state::Split::H,
+            focus: 1,
+        };
+        st.agents[0]
+            .lines
+            .push(Line::Message("LEFT_CONTENT".into()));
+        st.agents[1]
+            .lines
+            .push(Line::Message("RIGHT_CONTENT".into()));
+        let text = draw(&mut st, 100, 24);
+        assert!(text.contains("LEFT_CONTENT") && text.contains("RIGHT_CONTENT"));
+        assert!(text.contains("[1]") && text.contains("[2]"));
+    }
+
+    #[test]
+    fn pane_header_includes_harness_tag() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "api-1".into()));
+        st.agents[0].harness = "codex".into();
+        let text = draw(&mut st, 80, 24);
+        assert!(
+            text.contains("api-1 · codex"),
+            "agent · harness header: {text:?}"
+        );
+    }
+
+    #[test]
+    fn split_rects_h_columns_v_rows_no_overlap() {
+        let area = Rect::new(0, 0, 80, 24);
+        for n in 1..=4usize {
+            for split in [crate::tui::state::Split::H, crate::tui::state::Split::V] {
+                let rects = split_rects(area, n, split);
+                assert_eq!(rects.len(), n, "n={n} rect count");
+                for i in 0..rects.len() {
+                    for j in (i + 1)..rects.len() {
+                        assert!(!overlaps(rects[i], rects[j]), "n={n} rects {i},{j} overlap");
+                    }
+                }
+            }
+        }
+        // Direction: H splits along x, V along y.
+        let h = split_rects(area, 2, crate::tui::state::Split::H);
+        assert_eq!(h[0].y, h[1].y, "H = side-by-side");
+        let v = split_rects(area, 2, crate::tui::state::Split::V);
+        assert_eq!(v[0].x, v[1].x, "V = stacked");
+    }
+
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    #[test]
+    fn rail_shows_attention_glyph_for_background_agent() {
+        let mut st = agents3();
+        st.agents[1].attention = true;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains('●'), "attention glyph rendered in rail/radar");
+    }
+
+    #[test]
+    fn rail_shows_selection_marks_in_broadcast() {
+        let mut st = agents3();
+        st.mode = Mode::Broadcast;
+        st.agents[0].selected = true;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains('✓'), "selection marker rendered");
+    }
+
+    #[test]
+    fn broadcast_input_renders_in_broadcast_mode() {
+        let mut st = agents3();
+        st.mode = Mode::Broadcast;
+        st.broadcast_input = "BROADCAST_TEXT".into();
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("BROADCAST_TEXT"), "broadcast input shown");
     }
 
     #[test]
@@ -372,90 +523,37 @@ mod tests {
     }
 
     #[test]
-    fn grid_rects_counts_and_non_overlap() {
-        let area = Rect::new(0, 0, 80, 24);
-        for n in 1..=6usize {
-            let rects = grid_rects(area, n);
-            assert_eq!(rects.len(), n, "n={n} rect count");
-            for i in 0..rects.len() {
-                for j in (i + 1)..rects.len() {
-                    assert!(!overlaps(rects[i], rects[j]), "n={n} rects {i},{j} overlap");
-                }
-            }
-        }
-    }
-
-    fn overlaps(a: Rect, b: Rect) -> bool {
-        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-    }
-
-    #[test]
-    fn tab_bar_shows_all_tabs_with_active_marked() {
-        use crate::tui::state::Tab;
-        let mut st = three_panes();
-        st.tabs.push(Tab {
-            title: "2".into(),
-            panes: vec![],
-            focus: 0,
-        });
-        // active tab is 0 ("1")
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains("‹1"), "active tab 1 marked: {text:?}");
-        assert!(text.contains("2 (0)"), "second tab shown");
-    }
-
-    #[test]
-    fn attention_pane_shows_marker() {
-        let mut st = three_panes();
-        st.tabs[0].panes[1].attention = true;
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains('●'), "attention marker rendered");
-    }
-
-    #[test]
-    fn tab_bar_flags_a_background_tab_needing_attention() {
-        use crate::tui::state::Tab;
-        let mut st = three_panes(); // stays on active tab 0 (no attention there)
-        let mut bg = PaneState::new("bg".into(), "b".into());
-        bg.attention = true;
-        st.tabs.push(Tab {
-            title: "2".into(),
-            panes: vec![bg],
-            focus: 0,
-        });
-        let text = draw(&mut st, 80, 24);
-        // The ● surfaces on the *tab* label so it's visible from another tab.
-        assert!(text.contains("2 (1) ●"), "background tab flagged: {text:?}");
-    }
-
-    #[test]
-    fn selected_pane_shows_marker_in_broadcast() {
-        use crate::tui::state::Mode;
-        let mut st = three_panes();
-        st.mode = Mode::Broadcast;
-        st.tabs[0].panes[0].selected = true;
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains('✓'), "selection marker rendered");
-    }
-
-    #[test]
     fn pinned_pane_shows_off_tail_indicator_and_history() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
         for i in 0..40 {
-            st.tabs[0].panes[0]
+            st.agents[0]
                 .lines
                 .push(Line::Message(format!("hist{i}end")));
         }
-        st.tabs[0].panes[0].scroll = Some(0);
-        let text = draw(&mut st, 40, 12);
+        st.agents[0].scroll = Some(0);
+        let text = draw(&mut st, 60, 12);
         assert!(text.contains('⇣'), "off-tail indicator visible: {text:?}");
         assert!(text.contains("hist0end"), "pinned view shows history top");
         assert!(!text.contains("hist39end"), "tail hidden while pinned");
 
-        st.tabs[0].panes[0].scroll = None;
-        let text = draw(&mut st, 40, 12);
+        st.agents[0].scroll = None;
+        let text = draw(&mut st, 60, 12);
         assert!(!text.contains('⇣'), "no indicator when following the tail");
         assert!(text.contains("hist39end"), "tail visible when following");
+    }
+
+    #[test]
+    fn empty_agent_list_renders_placeholders() {
+        let mut st = agents3();
+        st.agents.clear();
+        st.detail = DetailLayout {
+            shown: vec![],
+            split: crate::tui::state::Split::H,
+            focus: 0,
+        };
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("(no agents)"), "rail placeholder");
+        assert!(text.contains("no agent shown"), "detail placeholder");
     }
 
     #[test]
@@ -464,10 +562,15 @@ mod tests {
         use crate::tui::state::PendingView;
         use bitrouter_substrate::translate::PermissionOutcome;
 
-        // Every render surface active at once: tab bar, multi-pane grid,
-        // input, mode bar, picker overlay, permission popup, notice.
-        let mut st = three_panes();
-        st.tabs[0].panes[0].pending = Some(PendingView {
+        // Every render surface active at once: rail, split detail, input,
+        // mode bar, picker overlay, permission popup, notice.
+        let mut st = agents3();
+        st.detail = DetailLayout {
+            shown: vec!["r0".into(), "r1".into()],
+            split: crate::tui::state::Split::V,
+            focus: 0,
+        };
+        st.agents[0].pending = Some(PendingView {
             title: "write file".into(),
             diff: Some("+added\n-removed".into()),
             options: vec![PermOption {
@@ -475,7 +578,7 @@ mod tests {
                 label: "allow".into(),
             }],
         });
-        st.tabs[0].panes[1].attention = true;
+        st.agents[1].attention = true;
         st.mode = Mode::Picker;
         st.picker = Some(PickerState {
             agents: vec!["alpha".into()],
@@ -488,21 +591,5 @@ mod tests {
         for (w, h) in [(1, 1), (2, 2), (5, 3), (10, 2), (20, 5), (80, 1), (1, 24)] {
             let _ = draw(&mut st, w, h);
         }
-
-        // Zoomed path at the same extremes.
-        st.zoom = true;
-        for (w, h) in [(1, 1), (20, 5)] {
-            let _ = draw(&mut st, w, h);
-        }
-    }
-
-    #[test]
-    fn broadcast_input_renders_in_broadcast_mode() {
-        use crate::tui::state::Mode;
-        let mut st = three_panes();
-        st.mode = Mode::Broadcast;
-        st.broadcast_input = "BROADCAST_TEXT".into();
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains("BROADCAST_TEXT"), "broadcast input shown");
     }
 }

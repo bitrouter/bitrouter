@@ -1,4 +1,10 @@
 //! Pure render state + reducer for the TUI. No `ratatui`/`tokio` deps.
+//!
+//! One screen: a fixed left rail (roster sorted by actionability + radar) and
+//! a splittable detail viewport showing 1–4 agents. The rail is the canonical
+//! list of every agent; the detail split is ephemeral layout, not structure.
+
+use std::collections::HashMap;
 
 use crate::tui::event::{AppEvent, Effect, PermOption};
 use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
@@ -7,16 +13,19 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Max scrollback lines retained per pane (ring buffer).
 const SCROLLBACK_CAP: usize = 2000;
 
+/// Max agents shown at once in the detail viewport.
+const MAX_SHOWN: usize = 4;
+
 /// Which key-handling mode the TUI is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Keys go to the focused pane's prompt (default).
+    /// Keys go to the focused detail pane's prompt (default).
     Normal,
-    /// Pane-management keys (new/close/focus/zoom).
+    /// Manager keys: rail navigation, split, spawn, close.
     Agent,
     /// Selecting an agent to spawn.
     Picker,
-    /// Selecting multiple panes to send one message to all of them.
+    /// Selecting multiple agents to send one message to all of them.
     Broadcast,
 }
 
@@ -60,6 +69,9 @@ pub struct PendingView {
 pub struct PaneState {
     pub record_id: String,
     pub agent_id: String,
+    /// Terse harness tag shown in the pane header (e.g. `claude`, `codex`).
+    /// Empty when unknown.
+    pub harness: String,
     pub lines: Vec<Line>,
     pub pending: Option<PendingView>,
     pub exited: bool,
@@ -78,6 +90,7 @@ impl PaneState {
         Self {
             record_id,
             agent_id,
+            harness: String::new(),
             lines: Vec::new(),
             pending: None,
             exited: false,
@@ -120,27 +133,105 @@ impl PaneState {
             }
         }
     }
+
+    /// Actionability bucket for the roster sort. Lower = closer to the top.
+    fn bucket(&self) -> u8 {
+        if self.pending.is_some() {
+            0 // needs you
+        } else if self.attention {
+            1 // something happened in the background
+        } else if !self.exited {
+            2 // running
+        } else {
+            3 // dead
+        }
+    }
 }
 
-/// A cohort of agent panes shown together. `focus` indexes `panes`.
-#[derive(Debug, Clone)]
-pub struct Tab {
-    pub title: String,
-    pub panes: Vec<PaneState>,
+/// How the detail viewport is divided when showing more than one agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Split {
+    /// Side-by-side columns.
+    H,
+    /// Stacked rows.
+    V,
+}
+
+/// Which agents the detail viewport shows and how. Ephemeral layout state —
+/// closing an agent prunes it; the split direction applies to all slots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailLayout {
+    /// `record_id`s of the shown agents, in slot order (1..=MAX_SHOWN).
+    pub shown: Vec<String>,
+    pub split: Split,
+    /// Index into `shown` of the slot that receives NORMAL-mode input.
     pub focus: usize,
 }
 
-/// Whole-app render state. Holds N tabs, each with N agent panes; `active_tab`
-/// indexes `tabs`. Accessors return `Option` because a tab or pane may be absent
-/// transiently (e.g. right after the last pane closes, before `should_quit`).
+impl DetailLayout {
+    /// Show exactly one agent.
+    fn solo(record_id: String) -> Self {
+        Self {
+            shown: vec![record_id],
+            split: Split::H,
+            focus: 0,
+        }
+    }
+
+    /// Add `record_id` as a new slot in `split` direction (or refocus it if
+    /// already shown). Full viewport (MAX_SHOWN) refocuses instead of adding.
+    fn add(&mut self, record_id: String, split: Split) {
+        self.split = split;
+        if let Some(i) = self.shown.iter().position(|r| r == &record_id) {
+            self.focus = i;
+            return;
+        }
+        if self.shown.len() >= MAX_SHOWN {
+            return;
+        }
+        self.shown.push(record_id);
+        self.focus = self.shown.len() - 1;
+    }
+
+    /// Remove the focused slot (keeps at least one).
+    fn remove_focused(&mut self) {
+        if self.shown.len() > 1 {
+            self.shown.remove(self.focus);
+            if self.focus >= self.shown.len() {
+                self.focus = self.shown.len() - 1;
+            }
+        }
+    }
+
+    /// Drop `record_id` from the layout if shown; clamps focus.
+    fn prune(&mut self, record_id: &str) {
+        self.shown.retain(|r| r != record_id);
+        if self.focus >= self.shown.len() {
+            self.focus = self.shown.len().saturating_sub(1);
+        }
+    }
+
+    /// The focused slot's record id.
+    fn focused_id(&self) -> Option<&str> {
+        self.shown.get(self.focus).map(String::as_str)
+    }
+}
+
+/// Whole-app render state: a flat agent list + the detail layout + rail cursor.
+/// Accessors return `Option` because the agent list may be empty transiently
+/// (right after the last agent closes, before `should_quit`).
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub tabs: Vec<Tab>,
-    pub active_tab: usize,
+    /// Every live agent, in spawn order (stable; the roster sorts a projection).
+    pub agents: Vec<PaneState>,
+    pub detail: DetailLayout,
+    /// Rail cursor: an index into `roster()` order.
+    pub rail_cursor: usize,
+    /// agent_id → harness tag, from the config catalog.
+    pub harness_by_agent: HashMap<String, String>,
     pub input: String,
     pub should_quit: bool,
     pub mode: Mode,
-    pub zoom: bool,
     pub picker: Option<PickerState>,
     pub available_agents: Vec<String>,
     pub notice: Option<String>,
@@ -149,17 +240,15 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(pane: PaneState) -> Self {
+        let detail = DetailLayout::solo(pane.record_id.clone());
         Self {
-            tabs: vec![Tab {
-                title: "1".to_string(),
-                panes: vec![pane],
-                focus: 0,
-            }],
-            active_tab: 0,
+            agents: vec![pane],
+            detail,
+            rail_cursor: 0,
+            harness_by_agent: HashMap::new(),
             input: String::new(),
             should_quit: false,
             mode: Mode::Normal,
-            zoom: false,
             picker: None,
             available_agents: Vec::new(),
             notice: None,
@@ -172,35 +261,61 @@ impl AppState {
         self.available_agents = agents;
     }
 
-    /// The active tab.
-    pub fn active(&self) -> Option<&Tab> {
-        self.tabs.get(self.active_tab)
+    /// Set the agent_id → harness-tag map (from the config catalog).
+    pub fn set_harness_map(&mut self, map: HashMap<String, String>) {
+        for pane in self.agents.iter_mut() {
+            if let Some(h) = map.get(&pane.agent_id) {
+                pane.harness = h.clone();
+            }
+        }
+        self.harness_by_agent = map;
     }
 
-    /// The active tab, mutably.
-    pub fn active_mut(&mut self) -> Option<&mut Tab> {
-        self.tabs.get_mut(self.active_tab)
+    /// Roster order: indices into `agents`, sorted by actionability bucket
+    /// (needs-you > attention > running > dead), stable within a bucket.
+    pub fn roster(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.agents.len()).collect();
+        order.sort_by_key(|&i| self.agents[i].bucket());
+        order
     }
 
-    /// The active tab's focused pane.
+    /// The agent under the rail cursor.
+    pub fn rail_selected(&self) -> Option<&PaneState> {
+        let order = self.roster();
+        order
+            .get(self.rail_cursor.min(order.len().saturating_sub(1)))
+            .and_then(|&i| self.agents.get(i))
+    }
+
+    /// The detail-focused pane (receives NORMAL-mode input).
     pub fn focused(&self) -> Option<&PaneState> {
-        let t = self.tabs.get(self.active_tab)?;
-        t.panes.get(t.focus)
+        let id = self.detail.focused_id()?;
+        self.agents.iter().find(|p| p.record_id == id)
     }
 
-    /// The active tab's focused pane, mutably.
+    /// The detail-focused pane, mutably.
     pub fn focused_mut(&mut self) -> Option<&mut PaneState> {
-        let t = self.tabs.get_mut(self.active_tab)?;
-        t.panes.get_mut(t.focus)
+        let id = self.detail.focused_id()?.to_string();
+        self.agents.iter_mut().find(|p| p.record_id == id)
     }
 
-    /// Find a pane by `record_id` across ALL tabs (updates/permissions may target
-    /// a pane in a non-active tab).
+    /// Whether `record_id` is visible in the detail viewport.
+    fn is_shown(&self, record_id: &str) -> bool {
+        self.detail.shown.iter().any(|r| r == record_id)
+    }
+
     fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
-        self.tabs
-            .iter_mut()
-            .flat_map(|t| t.panes.iter_mut())
-            .find(|p| p.record_id == record_id)
+        self.agents.iter_mut().find(|p| p.record_id == record_id)
+    }
+
+    /// Clamp the rail cursor into the current roster.
+    fn clamp_rail_cursor(&mut self) {
+        let len = self.agents.len();
+        if len == 0 {
+            self.rail_cursor = 0;
+        } else if self.rail_cursor >= len {
+            self.rail_cursor = len - 1;
+        }
     }
 }
 
@@ -215,12 +330,11 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             Vec::new()
         }
         AppEvent::Exited { record_id } => {
-            let is_focused =
-                state.focused().map(|p| p.record_id.as_str()) == Some(record_id.as_str());
+            let shown = state.is_shown(record_id);
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.exited = true;
-                if !is_focused {
+                if !shown {
                     pane.attention = true;
                     effects.push(Effect::Bell);
                 }
@@ -233,8 +347,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             diff,
             options,
         } => {
-            let is_focused =
-                state.focused().map(|p| p.record_id.as_str()) == Some(record_id.as_str());
+            let shown = state.is_shown(record_id);
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.pending = Some(PendingView {
@@ -242,7 +355,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     diff: diff.clone(),
                     options: options.clone(),
                 });
-                if !is_focused {
+                if !shown {
                     pane.attention = true;
                     effects.push(Effect::Bell);
                 }
@@ -253,13 +366,14 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             record_id,
             agent_id,
         } => {
-            if let Some(tab) = state.active_mut() {
-                tab.panes
-                    .push(PaneState::new(record_id.clone(), agent_id.clone()));
-                tab.focus = tab.panes.len() - 1;
+            let mut pane = PaneState::new(record_id.clone(), agent_id.clone());
+            if let Some(h) = state.harness_by_agent.get(agent_id) {
+                pane.harness = h.clone();
             }
+            state.agents.push(pane);
+            // A just-spawned agent is what you want to look at: open it solo.
+            state.detail = DetailLayout::solo(record_id.clone());
             state.notice = None;
-            clear_focused_attention(state);
             Vec::new()
         }
         AppEvent::AgentSpawnFailed { agent_id, error } => {
@@ -267,12 +381,11 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             Vec::new()
         }
         AppEvent::PromptFailed { record_id, error } => {
-            let is_focused =
-                state.focused().map(|p| p.record_id.as_str()) == Some(record_id.as_str());
+            let shown = state.is_shown(record_id);
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.push(Line::Error(format!("prompt failed: {error}")));
-                if !is_focused {
+                if !shown {
                     pane.attention = true;
                     effects.push(Effect::Bell);
                 }
@@ -301,17 +414,22 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
 
 /// NORMAL-mode keys. Permission keys take priority when a prompt is pending.
 fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
-    // Ctrl-A enters AGENT (pane-management) mode.
+    // Ctrl-A enters AGENT (manager) mode with the cursor on the focused agent.
     if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.mode = Mode::Agent;
+        // Park the rail cursor on the detail-focused agent's roster row.
+        if let Some(id) = state.detail.focused_id().map(str::to_string) {
+            let order = state.roster();
+            if let Some(pos) = order.iter().position(|&i| state.agents[i].record_id == id) {
+                state.rail_cursor = pos;
+            }
+        }
         return Vec::new();
     }
     // Ctrl-B enters BROADCAST mode (with a cleared selection).
     if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let Some(tab) = state.active_mut() {
-            for p in tab.panes.iter_mut() {
-                p.selected = false;
-            }
+        for p in state.agents.iter_mut() {
+            p.selected = false;
         }
         state.mode = Mode::Broadcast;
         return Vec::new();
@@ -387,11 +505,74 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// AGENT-mode keys: pane management.
+/// AGENT-mode keys: rail navigation + detail layout + spawn/close.
 fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
             state.mode = Mode::Normal;
+            Vec::new()
+        }
+        // ── Rail navigation. ──
+        KeyCode::Down | KeyCode::Char('j') => {
+            let max = state.agents.len().saturating_sub(1);
+            state.rail_cursor = (state.rail_cursor + 1).min(max);
+            Vec::new()
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.rail_cursor = state.rail_cursor.saturating_sub(1);
+            Vec::new()
+        }
+        // Open the cursor agent solo in the detail (and return to typing).
+        KeyCode::Enter => {
+            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
+                state.detail = DetailLayout::solo(id);
+                clear_shown_attention(state);
+                state.mode = Mode::Normal;
+            }
+            Vec::new()
+        }
+        // Split the detail: add the cursor agent side-by-side / stacked.
+        KeyCode::Char('s') => {
+            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
+                state.detail.add(id, Split::H);
+                clear_shown_attention(state);
+            }
+            Vec::new()
+        }
+        KeyCode::Char('v') => {
+            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
+                state.detail.add(id, Split::V);
+                clear_shown_attention(state);
+            }
+            Vec::new()
+        }
+        // Drop the focused detail slot (never below one).
+        KeyCode::Char('u') => {
+            state.detail.remove_focused();
+            Vec::new()
+        }
+        // Cycle / jump detail-slot focus.
+        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+            if !state.detail.shown.is_empty() {
+                state.detail.focus = (state.detail.focus + 1) % state.detail.shown.len();
+            }
+            clear_shown_attention(state);
+            Vec::new()
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            let n = state.detail.shown.len();
+            if n > 0 {
+                state.detail.focus = (state.detail.focus + n - 1) % n;
+            }
+            clear_shown_attention(state);
+            Vec::new()
+        }
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as usize) - ('1' as usize);
+            if idx < state.detail.shown.len() {
+                state.detail.focus = idx;
+            }
+            clear_shown_attention(state);
             Vec::new()
         }
         KeyCode::Char('n') => {
@@ -402,103 +583,40 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.mode = Mode::Picker;
             Vec::new()
         }
-        KeyCode::Char('f') => {
-            state.zoom = !state.zoom;
-            Vec::new()
-        }
-        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-            if let Some(tab) = state.active_mut()
-                && !tab.panes.is_empty()
-            {
-                tab.focus = (tab.focus + 1) % tab.panes.len();
-            }
-            clear_focused_attention(state);
-            Vec::new()
-        }
-        KeyCode::Left | KeyCode::Char('h') => {
-            if let Some(tab) = state.active_mut()
-                && !tab.panes.is_empty()
-            {
-                tab.focus = (tab.focus + tab.panes.len() - 1) % tab.panes.len();
-            }
-            clear_focused_attention(state);
-            Vec::new()
-        }
-        KeyCode::Char(c @ '1'..='9') => {
-            let idx = (c as usize) - ('1' as usize);
-            if let Some(tab) = state.active_mut()
-                && idx < tab.panes.len()
-            {
-                tab.focus = idx;
-            }
-            clear_focused_attention(state);
-            Vec::new()
-        }
-        KeyCode::Char('x') => close_focused(state),
-        KeyCode::Char('t') => {
-            let title = (state.tabs.len() + 1).to_string();
-            state.tabs.push(Tab {
-                title,
-                panes: Vec::new(),
-                focus: 0,
-            });
-            state.active_tab = state.tabs.len() - 1;
-            Vec::new()
-        }
-        KeyCode::Char(']') => {
-            if !state.tabs.is_empty() {
-                state.active_tab = (state.active_tab + 1) % state.tabs.len();
-            }
-            clear_focused_attention(state);
-            Vec::new()
-        }
-        KeyCode::Char('[') => {
-            if !state.tabs.is_empty() {
-                state.active_tab = (state.active_tab + state.tabs.len() - 1) % state.tabs.len();
-            }
-            clear_focused_attention(state);
-            Vec::new()
-        }
+        // Close the cursor agent.
+        KeyCode::Char('x') => close_rail_selected(state),
         _ => Vec::new(),
     }
 }
 
-/// Clear the `attention` flag on the active tab's focused pane (called after a
-/// focus or tab change — the user is now looking at it).
-fn clear_focused_attention(state: &mut AppState) {
-    if let Some(pane) = state.focused_mut() {
-        pane.attention = false;
+/// Clear the `attention` flag on every agent visible in the detail viewport
+/// (the user is now looking at them).
+fn clear_shown_attention(state: &mut AppState) {
+    let shown: Vec<String> = state.detail.shown.clone();
+    for pane in state.agents.iter_mut() {
+        if shown.iter().any(|r| r == &pane.record_id) {
+            pane.attention = false;
+        }
     }
 }
 
-/// Remove the active tab's focused pane, emit `CloseAgent`, and (if the tab is
-/// now empty) remove the tab. Quitting the last pane of the last tab exits.
-fn close_focused(state: &mut AppState) -> Vec<Effect> {
-    let (record_id, tab_now_empty) = {
-        let tab = match state.active_mut() {
-            Some(t) => t,
-            None => return Vec::new(),
-        };
-        let record_id = match tab.panes.get(tab.focus) {
-            Some(pane) => pane.record_id.clone(),
-            None => return Vec::new(),
-        };
-        tab.panes.remove(tab.focus);
-        if tab.panes.is_empty() {
-            (record_id, true)
-        } else {
-            if tab.focus >= tab.panes.len() {
-                tab.focus = tab.panes.len() - 1;
-            }
-            (record_id, false)
-        }
+/// Close the agent under the rail cursor: remove it, prune the detail layout
+/// (refilling it with the most actionable agent if it empties), emit
+/// `CloseAgent`. Closing the last agent quits.
+fn close_rail_selected(state: &mut AppState) -> Vec<Effect> {
+    let record_id = match state.rail_selected().map(|p| p.record_id.clone()) {
+        Some(id) => id,
+        None => return Vec::new(),
     };
-    if tab_now_empty {
-        state.tabs.remove(state.active_tab);
-        if state.tabs.is_empty() {
-            state.should_quit = true;
-        } else if state.active_tab >= state.tabs.len() {
-            state.active_tab = state.tabs.len() - 1;
+    state.agents.retain(|p| p.record_id != record_id);
+    state.detail.prune(&record_id);
+    state.clamp_rail_cursor();
+    if state.agents.is_empty() {
+        state.should_quit = true;
+    } else if state.detail.shown.is_empty() {
+        // Refill with the roster head (most actionable agent).
+        if let Some(&head) = state.roster().first() {
+            state.detail = DetailLayout::solo(state.agents[head].record_id.clone());
         }
     }
     vec![Effect::CloseAgent { record_id }]
@@ -543,10 +661,7 @@ fn reduce_key_picker(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// BROADCAST-mode keys: select panes, type once, send to all selected.
-///
-/// v1 limitation: `Space`, digits `1`-`9`, and `a` are consumed as commands, so
-/// broadcast text cannot contain them.
+/// BROADCAST-mode keys: select agents on the rail, type once, send to all.
 fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
@@ -554,28 +669,29 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.mode = Mode::Normal;
             Vec::new()
         }
+        // Space toggles the rail-cursor row.
         KeyCode::Char(' ') => {
-            if let Some(tab) = state.active_mut()
-                && let Some(p) = tab.panes.get_mut(tab.focus)
+            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
+                && let Some(p) = state.pane_by_id_mut(&id)
             {
                 p.selected = !p.selected;
             }
             Vec::new()
         }
+        // Digits toggle the Nth roster row.
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as usize) - ('1' as usize);
-            if let Some(tab) = state.active_mut()
-                && let Some(p) = tab.panes.get_mut(idx)
+            let order = state.roster();
+            if let Some(&agent_idx) = order.get(idx)
+                && let Some(p) = state.agents.get_mut(agent_idx)
             {
                 p.selected = !p.selected;
             }
             Vec::new()
         }
         KeyCode::Char('a') => {
-            if let Some(tab) = state.active_mut() {
-                for p in tab.panes.iter_mut() {
-                    p.selected = true;
-                }
+            for p in state.agents.iter_mut() {
+                p.selected = true;
             }
             Vec::new()
         }
@@ -589,15 +705,13 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 return Vec::new();
             }
             let mut effects = Vec::new();
-            if let Some(tab) = state.active_mut() {
-                for p in tab.panes.iter_mut() {
-                    if p.selected {
-                        p.lines.push(Line::UserPrompt(text.clone()));
-                        effects.push(Effect::Prompt {
-                            record_id: p.record_id.clone(),
-                            text: text.clone(),
-                        });
-                    }
+            for p in state.agents.iter_mut() {
+                if p.selected {
+                    p.lines.push(Line::UserPrompt(text.clone()));
+                    effects.push(Effect::Prompt {
+                        record_id: p.record_id.clone(),
+                        text: text.clone(),
+                    });
                 }
             }
             clear_broadcast(state);
@@ -612,13 +726,11 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// Clear the broadcast input and all pane selections in the active tab.
+/// Clear the broadcast input and all agent selections.
 fn clear_broadcast(state: &mut AppState) {
     state.broadcast_input.clear();
-    if let Some(tab) = state.active_mut() {
-        for p in tab.panes.iter_mut() {
-            p.selected = false;
-        }
+    for p in state.agents.iter_mut() {
+        p.selected = false;
     }
 }
 
@@ -670,6 +782,7 @@ mod tests {
     use super::*;
     use crate::tui::event::{AppEvent, Effect, PermOption};
     use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn pane() -> PaneState {
         PaneState::new("rec-1".into(), "claude".into())
@@ -699,24 +812,34 @@ mod tests {
     }
 
     fn press(code: KeyCode) -> AppEvent {
-        AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+        AppEvent::Key(KeyEvent::from(code))
     }
+
+    /// Three agents r0/r1/r2 in spawn order; detail shows r0 solo.
+    fn agents3() -> AppState {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.agents.push(PaneState::new("r1".into(), "a1".into()));
+        st.agents.push(PaneState::new("r2".into(), "a2".into()));
+        st
+    }
+
+    // ── Scrollback paging. ──
 
     #[test]
     fn pageup_pins_view_and_new_output_does_not_move_it() {
         let mut st = AppState::new(pane());
-        st.tabs[0].panes[0].viewport = 10;
+        st.agents[0].viewport = 10;
         for i in 0..50 {
             reduce(&mut st, &msg(i));
         }
         reduce(&mut st, &press(KeyCode::PageUp));
         // Follow start was 40 (50 - viewport); one page up pins at 30.
-        assert_eq!(st.tabs[0].panes[0].scroll, Some(30));
+        assert_eq!(st.agents[0].scroll, Some(30));
         for i in 50..60 {
             reduce(&mut st, &msg(i));
         }
         assert_eq!(
-            st.tabs[0].panes[0].scroll,
+            st.agents[0].scroll,
             Some(30),
             "pinned view must not move when new output arrives"
         );
@@ -725,18 +848,18 @@ mod tests {
     #[test]
     fn pagedown_returns_to_follow_at_tail() {
         let mut st = AppState::new(pane());
-        st.tabs[0].panes[0].viewport = 10;
+        st.agents[0].viewport = 10;
         for i in 0..50 {
             reduce(&mut st, &msg(i));
         }
         reduce(&mut st, &press(KeyCode::PageUp)); // pin at 30
         reduce(&mut st, &press(KeyCode::PageUp)); // pin at 20
-        assert_eq!(st.tabs[0].panes[0].scroll, Some(20));
+        assert_eq!(st.agents[0].scroll, Some(20));
         reduce(&mut st, &press(KeyCode::PageDown)); // 30 — still off-tail
-        assert_eq!(st.tabs[0].panes[0].scroll, Some(30));
+        assert_eq!(st.agents[0].scroll, Some(30));
         reduce(&mut st, &press(KeyCode::PageDown)); // window reaches tail
         assert_eq!(
-            st.tabs[0].panes[0].scroll, None,
+            st.agents[0].scroll, None,
             "reaching the tail resumes following"
         );
     }
@@ -744,28 +867,28 @@ mod tests {
     #[test]
     fn pageup_clamps_at_top() {
         let mut st = AppState::new(pane());
-        st.tabs[0].panes[0].viewport = 10;
+        st.agents[0].viewport = 10;
         for i in 0..15 {
             reduce(&mut st, &msg(i));
         }
         reduce(&mut st, &press(KeyCode::PageUp));
-        assert_eq!(st.tabs[0].panes[0].scroll, Some(0));
+        assert_eq!(st.agents[0].scroll, Some(0));
         reduce(&mut st, &press(KeyCode::PageUp)); // already at top — stays
-        assert_eq!(st.tabs[0].panes[0].scroll, Some(0));
+        assert_eq!(st.agents[0].scroll, Some(0));
     }
 
     #[test]
     fn scroll_pin_tracks_ring_buffer_drain() {
         let mut st = AppState::new(pane());
-        st.tabs[0].panes[0].viewport = 10;
+        st.agents[0].viewport = 10;
         for i in 0..SCROLLBACK_CAP {
             reduce(&mut st, &msg(i));
         }
         reduce(&mut st, &press(KeyCode::PageUp));
-        let pinned = st.tabs[0].panes[0].scroll.unwrap_or(0);
+        let pinned = st.agents[0].scroll.unwrap_or(0);
         reduce(&mut st, &msg(SCROLLBACK_CAP)); // overflows the cap by one
         assert_eq!(
-            st.tabs[0].panes[0].scroll,
+            st.agents[0].scroll,
             Some(pinned.saturating_sub(1)),
             "pin slides with the ring buffer so it stays on the same content"
         );
@@ -774,7 +897,7 @@ mod tests {
     #[test]
     fn pageup_works_while_permission_pending() {
         let mut st = AppState::new(pane());
-        st.tabs[0].panes[0].viewport = 10;
+        st.agents[0].viewport = 10;
         for i in 0..50 {
             reduce(&mut st, &msg(i));
         }
@@ -789,12 +912,14 @@ mod tests {
         );
         let effects = reduce(&mut st, &press(KeyCode::PageUp));
         assert!(effects.is_empty(), "scrolling resolves nothing");
-        assert_eq!(st.tabs[0].panes[0].scroll, Some(30));
+        assert_eq!(st.agents[0].scroll, Some(30));
         assert!(
-            st.tabs[0].panes[0].pending.is_some(),
+            st.agents[0].pending.is_some(),
             "pending permission untouched by scrolling"
         );
     }
+
+    // ── Quit. ──
 
     #[test]
     fn ctrl_c_quits_from_every_mode() {
@@ -815,6 +940,26 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_during_pending_permission_quits() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "rec-1".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: allow_deny(),
+            },
+        );
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let effects = reduce(&mut st, &AppEvent::Key(key));
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert!(st.should_quit);
+    }
+
+    // ── Prompt failures. ──
+
+    #[test]
     fn prompt_failed_surfaces_error_line_in_pane() {
         let mut st = AppState::new(pane());
         let effects = reduce(
@@ -824,44 +969,38 @@ mod tests {
                 error: "acp transport closed".into(),
             },
         );
-        // Focused pane: visible error line, no attention/bell needed.
+        // Shown pane: visible error line, no attention/bell needed.
         assert!(effects.is_empty());
         assert!(matches!(
-            st.tabs[0].panes[0].lines.last(),
+            st.agents[0].lines.last(),
             Some(Line::Error(e)) if e.contains("acp transport closed")
         ));
-        assert!(!st.tabs[0].panes[0].attention);
+        assert!(!st.agents[0].attention);
     }
 
     #[test]
     fn prompt_failed_on_background_pane_flags_attention_and_bells() {
-        let mut st = AppState::new(pane());
-        st.tabs[0]
-            .panes
-            .push(PaneState::new("rec-2".into(), "codex".into()));
-        // Focus stays on pane 0; the failure hits background pane rec-2.
+        let mut st = agents3(); // detail shows only r0
         let effects = reduce(
             &mut st,
             &AppEvent::PromptFailed {
-                record_id: "rec-2".into(),
+                record_id: "r2".into(),
                 error: "boom".into(),
             },
         );
         assert_eq!(effects, vec![Effect::Bell]);
-        assert!(st.tabs[0].panes[1].attention);
-        assert!(matches!(
-            st.tabs[0].panes[1].lines.last(),
-            Some(Line::Error(_))
-        ));
+        assert!(st.agents[2].attention);
+        assert!(matches!(st.agents[2].lines.last(), Some(Line::Error(_))));
     }
 
+    // ── App shape + updates. ──
+
     #[test]
-    fn new_app_has_one_tab_with_one_pane() {
+    fn new_app_shows_the_initial_agent_solo() {
         let st = AppState::new(pane());
-        assert_eq!(st.tabs.len(), 1);
-        assert_eq!(st.active_tab, 0);
-        assert_eq!(st.tabs[0].panes.len(), 1);
-        assert_eq!(st.tabs[0].focus, 0);
+        assert_eq!(st.agents.len(), 1);
+        assert_eq!(st.detail.shown, vec!["rec-1".to_string()]);
+        assert_eq!(st.detail.focus, 0);
     }
 
     #[test]
@@ -876,14 +1015,14 @@ mod tests {
                 options: allow_deny(),
             },
         );
-        let pending = st.tabs[0].panes[0].pending.as_ref().expect("pending set");
+        let pending = st.agents[0].pending.as_ref().expect("pending set");
         assert_eq!(pending.title, "WRITE src/x.rs");
+        assert_eq!(pending.diff.as_deref(), Some("- a\n+ b"));
         assert_eq!(pending.options.len(), 2);
     }
 
     #[test]
     fn y_key_resolves_pending_allow_once_and_clears_it() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = AppState::new(pane());
         reduce(
             &mut st,
@@ -894,7 +1033,7 @@ mod tests {
                 options: allow_deny(),
             },
         );
-        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('y'))));
+        let effects = reduce(&mut st, &press(KeyCode::Char('y')));
         assert_eq!(
             effects,
             vec![Effect::ResolvePermission {
@@ -903,14 +1042,13 @@ mod tests {
             }]
         );
         assert!(
-            st.tabs[0].panes[0].pending.is_none(),
+            st.agents[0].pending.is_none(),
             "pending cleared after resolve"
         );
     }
 
     #[test]
     fn n_key_resolves_pending_deny() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = AppState::new(pane());
         reduce(
             &mut st,
@@ -921,7 +1059,7 @@ mod tests {
                 options: allow_deny(),
             },
         );
-        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('n'))));
+        let effects = reduce(&mut st, &press(KeyCode::Char('n')));
         assert_eq!(
             effects,
             vec![Effect::ResolvePermission {
@@ -943,7 +1081,7 @@ mod tests {
         };
         let effects = reduce(&mut st, &ev);
         assert!(effects.is_empty());
-        assert_eq!(st.tabs[0].panes[0].lines, vec![Line::Message("hi".into())]);
+        assert_eq!(st.agents[0].lines, vec![Line::Message("hi".into())]);
     }
 
     #[test]
@@ -974,7 +1112,7 @@ mod tests {
             },
         );
         assert_eq!(
-            st.tabs[0].panes[0].lines,
+            st.agents[0].lines,
             vec![Line::Tool {
                 id: "t1".into(),
                 title: "run tests".into(),
@@ -996,12 +1134,14 @@ mod tests {
                 },
             },
         );
-        assert!(st.tabs[0].panes[0].lines.is_empty());
+        assert!(st.agents[0].lines.is_empty());
     }
 
+    // ── Spawn. ──
+
     #[test]
-    fn agent_spawned_appends_and_focuses_new_pane() {
-        let mut st = AppState::new(pane()); // 1 pane, focus 0
+    fn agent_spawned_appends_and_opens_solo() {
+        let mut st = AppState::new(pane());
         reduce(
             &mut st,
             &AppEvent::AgentSpawned {
@@ -1009,31 +1149,24 @@ mod tests {
                 agent_id: "fake".into(),
             },
         );
-        assert_eq!(st.tabs[0].panes.len(), 2);
-        assert_eq!(st.tabs[0].focus, 1);
-        assert_eq!(st.tabs[0].panes[1].record_id, "r9");
-        assert_eq!(st.tabs[0].panes[1].agent_id, "fake");
+        assert_eq!(st.agents.len(), 2);
+        assert_eq!(st.agents[1].record_id, "r9");
+        assert_eq!(st.agents[1].agent_id, "fake");
+        assert_eq!(st.detail.shown, vec!["r9".to_string()]);
     }
 
     #[test]
-    fn second_agent_spawned_focuses_newest() {
+    fn spawned_agent_gets_harness_from_map() {
         let mut st = AppState::new(pane());
+        st.set_harness_map(HashMap::from([("fake".to_string(), "codex".to_string())]));
         reduce(
             &mut st,
             &AppEvent::AgentSpawned {
-                record_id: "r1".into(),
-                agent_id: "a".into(),
+                record_id: "r9".into(),
+                agent_id: "fake".into(),
             },
         );
-        reduce(
-            &mut st,
-            &AppEvent::AgentSpawned {
-                record_id: "r2".into(),
-                agent_id: "b".into(),
-            },
-        );
-        assert_eq!(st.tabs[0].panes.len(), 3);
-        assert_eq!(st.tabs[0].focus, 2);
+        assert_eq!(st.agents[1].harness, "codex");
     }
 
     #[test]
@@ -1046,17 +1179,17 @@ mod tests {
                 error: "boom".into(),
             },
         );
-        assert_eq!(st.tabs[0].panes.len(), 1);
+        assert_eq!(st.agents.len(), 1);
         assert_eq!(st.notice.as_deref(), Some("failed to spawn fake: boom"));
     }
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    // ── NORMAL-mode input. ──
 
     #[test]
     fn typing_appends_to_input() {
         let mut st = AppState::new(pane());
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('h'))));
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('i'))));
+        reduce(&mut st, &press(KeyCode::Char('h')));
+        reduce(&mut st, &press(KeyCode::Char('i')));
         assert_eq!(st.input, "hi");
     }
 
@@ -1064,7 +1197,7 @@ mod tests {
     fn backspace_removes_last_char() {
         let mut st = AppState::new(pane());
         st.input = "hi".into();
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Backspace)));
+        reduce(&mut st, &press(KeyCode::Backspace));
         assert_eq!(st.input, "h");
     }
 
@@ -1072,7 +1205,7 @@ mod tests {
     fn enter_emits_prompt_effect_records_line_and_clears_input() {
         let mut st = AppState::new(pane());
         st.input = "fix the bug".into();
-        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        let effects = reduce(&mut st, &press(KeyCode::Enter));
         assert_eq!(
             effects,
             vec![Effect::Prompt {
@@ -1082,7 +1215,7 @@ mod tests {
         );
         assert_eq!(st.input, "");
         assert_eq!(
-            st.tabs[0].panes[0].lines,
+            st.agents[0].lines,
             vec![Line::UserPrompt("fix the bug".into())]
         );
     }
@@ -1090,9 +1223,9 @@ mod tests {
     #[test]
     fn enter_on_empty_input_is_a_noop() {
         let mut st = AppState::new(pane());
-        let effects = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        let effects = reduce(&mut st, &press(KeyCode::Enter));
         assert!(effects.is_empty());
-        assert!(st.tabs[0].panes[0].lines.is_empty());
+        assert!(st.agents[0].lines.is_empty());
     }
 
     #[test]
@@ -1105,26 +1238,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_during_pending_permission_quits() {
-        let mut st = AppState::new(pane());
-        reduce(
-            &mut st,
-            &AppEvent::Permission {
-                record_id: "rec-1".into(),
-                title: "WRITE".into(),
-                diff: None,
-                options: allow_deny(),
-            },
-        );
-        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let effects = reduce(&mut st, &AppEvent::Key(key));
-        assert_eq!(effects, vec![Effect::Quit]);
-        assert!(st.should_quit);
-    }
-
-    #[test]
     fn ctrl_a_enters_agent_mode() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut st = AppState::new(pane());
         let fx = reduce(
             &mut st,
@@ -1135,17 +1249,27 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_a_parks_rail_cursor_on_focused_agent() {
+        let mut st = agents3();
+        st.detail = DetailLayout::solo("r2".into());
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        // All three are running (same bucket) → roster order = spawn order.
+        assert_eq!(st.rail_cursor, 2);
+    }
+
+    #[test]
     fn esc_returns_to_normal_from_agent() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = AppState::new(pane());
         st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Esc)));
+        reduce(&mut st, &press(KeyCode::Esc));
         assert_eq!(st.mode, Mode::Normal);
     }
 
     #[test]
     fn ctrl_a_does_not_type_into_input() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut st = AppState::new(pane());
         reduce(
             &mut st,
@@ -1154,85 +1278,171 @@ mod tests {
         assert_eq!(st.input, "");
     }
 
-    fn panes3() -> AppState {
-        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
-        st.tabs[0]
-            .panes
-            .push(PaneState::new("r1".into(), "a1".into()));
-        st.tabs[0]
-            .panes
-            .push(PaneState::new("r2".into(), "a2".into()));
-        st
+    // ── Roster sort. ──
+
+    #[test]
+    fn roster_sorts_by_actionability_stable_within_bucket() {
+        let mut st = agents3(); // r0 r1 r2 all running
+        st.agents[2].pending = Some(PendingView {
+            title: "WRITE".into(),
+            diff: None,
+            options: vec![],
+        }); // r2 needs you → top
+        st.agents[0].exited = true; // r0 dead → bottom
+        let order = st.roster();
+        assert_eq!(order, vec![2, 1, 0], "needs-you > running > dead");
     }
 
     #[test]
-    fn tab_cycles_focus_forward_wrapping() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = panes3();
+    fn roster_puts_attention_above_running() {
+        let mut st = agents3();
+        st.agents[1].attention = true;
+        let order = st.roster();
+        assert_eq!(order, vec![1, 0, 2]);
+    }
+
+    // ── AGENT mode: rail navigation + detail layout. ──
+
+    #[test]
+    fn jk_move_rail_cursor_with_clamping() {
+        let mut st = agents3();
         st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
-        assert_eq!(st.tabs[0].focus, 1);
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
-        assert_eq!(st.tabs[0].focus, 2);
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Tab)));
-        assert_eq!(st.tabs[0].focus, 0);
+        reduce(&mut st, &press(KeyCode::Char('j')));
+        assert_eq!(st.rail_cursor, 1);
+        reduce(&mut st, &press(KeyCode::Char('j')));
+        assert_eq!(st.rail_cursor, 2);
+        reduce(&mut st, &press(KeyCode::Char('j'))); // clamp at bottom
+        assert_eq!(st.rail_cursor, 2);
+        reduce(&mut st, &press(KeyCode::Char('k')));
+        assert_eq!(st.rail_cursor, 1);
+        reduce(&mut st, &press(KeyCode::Up));
+        assert_eq!(st.rail_cursor, 0);
+        reduce(&mut st, &press(KeyCode::Up)); // clamp at top
+        assert_eq!(st.rail_cursor, 0);
     }
 
     #[test]
-    fn left_cycles_focus_backward_wrapping() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = panes3();
+    fn enter_opens_cursor_agent_solo_and_returns_to_normal() {
+        let mut st = agents3();
         st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Left)));
-        assert_eq!(st.tabs[0].focus, 2);
+        st.rail_cursor = 1; // r1 (all same bucket → roster = spawn order)
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.detail.shown, vec!["r1".to_string()]);
+        assert_eq!(st.detail.focus, 0);
+        assert_eq!(st.mode, Mode::Normal);
     }
 
     #[test]
-    fn digit_focuses_pane_in_range_only() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = panes3();
+    fn s_adds_cursor_agent_as_horizontal_split() {
+        let mut st = agents3(); // detail = [r0]
         st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('3'))));
-        assert_eq!(st.tabs[0].focus, 2);
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('9'))));
-        assert_eq!(st.tabs[0].focus, 2); // out of range → unchanged
+        st.rail_cursor = 1;
+        reduce(&mut st, &press(KeyCode::Char('s')));
+        assert_eq!(st.detail.shown, vec!["r0".to_string(), "r1".to_string()]);
+        assert_eq!(st.detail.split, Split::H);
+        assert_eq!(st.detail.focus, 1, "new slot takes focus");
     }
 
     #[test]
-    fn f_toggles_zoom() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = panes3();
+    fn v_adds_cursor_agent_as_vertical_split() {
+        let mut st = agents3();
         st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('f'))));
-        assert!(st.zoom);
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('f'))));
-        assert!(!st.zoom);
+        st.rail_cursor = 2;
+        reduce(&mut st, &press(KeyCode::Char('v')));
+        assert_eq!(st.detail.shown, vec!["r0".to_string(), "r2".to_string()]);
+        assert_eq!(st.detail.split, Split::V);
     }
 
     #[test]
-    fn x_closes_focused_and_emits_close_agent() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = panes3();
+    fn split_on_already_shown_agent_refocuses_instead_of_duplicating() {
+        let mut st = agents3();
         st.mode = Mode::Agent;
-        st.tabs[0].focus = 1;
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
+        st.rail_cursor = 0; // r0 already shown
+        reduce(&mut st, &press(KeyCode::Char('s')));
+        assert_eq!(st.detail.shown, vec!["r0".to_string()], "no duplicate");
+        assert_eq!(st.detail.focus, 0);
+    }
+
+    #[test]
+    fn split_caps_at_four_shown() {
+        let mut st = agents3();
+        st.agents.push(PaneState::new("r3".into(), "a3".into()));
+        st.agents.push(PaneState::new("r4".into(), "a4".into()));
+        st.mode = Mode::Agent;
+        for cursor in [1usize, 2, 3, 4] {
+            st.rail_cursor = cursor;
+            reduce(&mut st, &press(KeyCode::Char('s')));
+        }
+        assert_eq!(st.detail.shown.len(), 4, "fifth split is refused");
+        assert!(!st.detail.shown.contains(&"r4".to_string()));
+    }
+
+    #[test]
+    fn u_unsplits_focused_slot_but_never_below_one() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.rail_cursor = 1;
+        reduce(&mut st, &press(KeyCode::Char('s'))); // [r0, r1], focus 1
+        reduce(&mut st, &press(KeyCode::Char('u')));
+        assert_eq!(st.detail.shown, vec!["r0".to_string()]);
+        assert_eq!(st.detail.focus, 0);
+        reduce(&mut st, &press(KeyCode::Char('u'))); // already solo — no-op
+        assert_eq!(st.detail.shown, vec!["r0".to_string()]);
+    }
+
+    #[test]
+    fn tab_cycles_detail_focus_and_digits_jump() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.rail_cursor = 1;
+        reduce(&mut st, &press(KeyCode::Char('s'))); // [r0, r1], focus 1
+        reduce(&mut st, &press(KeyCode::Tab));
+        assert_eq!(st.detail.focus, 0, "Tab wraps focus");
+        reduce(&mut st, &press(KeyCode::Char('2')));
+        assert_eq!(st.detail.focus, 1, "digit jumps to slot");
+        reduce(&mut st, &press(KeyCode::Char('9')));
+        assert_eq!(st.detail.focus, 1, "out-of-range digit ignored");
+        reduce(&mut st, &press(KeyCode::Left));
+        assert_eq!(st.detail.focus, 0, "Left cycles backward");
+    }
+
+    #[test]
+    fn n_opens_picker_with_available_agents() {
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Agent;
+        st.available_agents = vec!["fake".into(), "claude-acp".into()];
+        reduce(&mut st, &press(KeyCode::Char('n')));
+        assert_eq!(st.mode, Mode::Picker);
+        let p = st.picker.as_ref().expect("picker set");
+        assert_eq!(p.agents, vec!["fake".to_string(), "claude-acp".to_string()]);
+        assert_eq!(p.selected, 0);
+    }
+
+    // ── Close. ──
+
+    #[test]
+    fn x_closes_cursor_agent_and_emits_close_agent() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.rail_cursor = 1; // r1
+        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
                 record_id: "r1".into()
             }]
         );
-        assert_eq!(st.tabs[0].panes.len(), 2);
-        assert_eq!(st.tabs[0].panes[0].record_id, "r0");
-        assert_eq!(st.tabs[0].panes[1].record_id, "r2");
+        assert_eq!(st.agents.len(), 2);
+        assert_eq!(st.agents[0].record_id, "r0");
+        assert_eq!(st.agents[1].record_id, "r2");
+        assert!(!st.should_quit);
     }
 
     #[test]
-    fn x_on_last_pane_sets_should_quit() {
-        use crossterm::event::{KeyCode, KeyEvent};
+    fn x_on_last_agent_sets_should_quit() {
         let mut st = AppState::new(pane());
         st.mode = Mode::Agent;
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
+        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
@@ -1240,143 +1450,91 @@ mod tests {
             }]
         );
         assert!(st.should_quit);
-        assert!(st.tabs.is_empty());
+        assert!(st.agents.is_empty());
     }
 
     #[test]
-    fn n_opens_picker_with_available_agents() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = AppState::new(pane());
+    fn closing_the_shown_agent_refills_detail_with_roster_head() {
+        let mut st = agents3(); // detail = [r0]
+        st.agents[2].attention = true; // r2 = roster head after r0 closes
         st.mode = Mode::Agent;
-        st.available_agents = vec!["fake".into(), "claude-acp".into()];
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('n'))));
-        assert_eq!(st.mode, Mode::Picker);
-        let p = st.picker.as_ref().expect("picker set");
-        assert_eq!(p.agents, vec!["fake".to_string(), "claude-acp".to_string()]);
-        assert_eq!(p.selected, 0);
-    }
-
-    #[test]
-    fn t_creates_and_switches_to_new_empty_tab() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t'))));
-        assert_eq!(st.tabs.len(), 2);
-        assert_eq!(st.active_tab, 1);
-        assert!(st.tabs[1].panes.is_empty());
-    }
-
-    #[test]
-    fn bracket_keys_cycle_tabs_with_wrap() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t')))); // 2 tabs, active 1
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t')))); // 3 tabs, active 2
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(']'))));
-        assert_eq!(st.active_tab, 0); // wrapped forward
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('['))));
-        assert_eq!(st.active_tab, 2); // wrapped backward
-    }
-
-    #[test]
-    fn spawned_agent_goes_to_active_tab() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('t')))); // active tab 1, empty
-        reduce(
-            &mut st,
-            &AppEvent::AgentSpawned {
-                record_id: "r9".into(),
-                agent_id: "fake".into(),
-            },
-        );
-        assert_eq!(st.tabs[1].panes.len(), 1);
-        assert_eq!(st.tabs[1].panes[0].record_id, "r9");
-        assert_eq!(st.tabs[0].panes.len(), 1); // original tab untouched
-    }
-
-    #[test]
-    fn closing_last_pane_of_a_tab_removes_that_tab() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = AppState::new(pane());
-        st.tabs.push(Tab {
-            title: "2".into(),
-            panes: vec![PaneState::new("r1".into(), "a1".into())],
-            focus: 0,
-        });
-        st.active_tab = 1;
-        st.mode = Mode::Agent;
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('x'))));
+        st.rail_cursor = 1; // roster: [r2(attn), r0, r1] → cursor 1 = r0
+        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
-                record_id: "r1".into()
+                record_id: "r0".into()
             }]
         );
-        assert_eq!(st.tabs.len(), 1); // emptied tab removed
-        assert_eq!(st.active_tab, 0); // clamped
-        assert!(!st.should_quit);
+        assert_eq!(
+            st.detail.shown,
+            vec!["r2".to_string()],
+            "detail refilled with the most actionable agent"
+        );
     }
 
+    // ── Broadcast. ──
+
     fn bc_state() -> AppState {
-        let mut st = panes3();
+        let mut st = agents3();
         st.mode = Mode::Broadcast;
         st
     }
 
     #[test]
     fn ctrl_b_enters_broadcast_and_clears_selection() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let mut st = panes3();
-        st.tabs[0].panes[0].selected = true;
+        let mut st = agents3();
+        st.agents[0].selected = true;
         reduce(
             &mut st,
             &AppEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)),
         );
         assert_eq!(st.mode, Mode::Broadcast);
-        assert!(!st.tabs[0].panes[0].selected);
+        assert!(!st.agents[0].selected);
     }
 
     #[test]
-    fn space_toggles_focused_pane_selection() {
-        use crossterm::event::{KeyCode, KeyEvent};
+    fn space_toggles_rail_cursor_selection() {
         let mut st = bc_state();
-        st.tabs[0].focus = 1;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(' '))));
-        assert!(st.tabs[0].panes[1].selected);
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(' '))));
-        assert!(!st.tabs[0].panes[1].selected);
+        st.rail_cursor = 1; // r1 (same bucket → roster = spawn order)
+        reduce(&mut st, &press(KeyCode::Char(' ')));
+        assert!(st.agents[1].selected);
+        reduce(&mut st, &press(KeyCode::Char(' ')));
+        assert!(!st.agents[1].selected);
     }
 
     #[test]
-    fn a_selects_all_panes() {
-        use crossterm::event::{KeyCode, KeyEvent};
+    fn digit_toggles_nth_roster_row() {
         let mut st = bc_state();
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('a'))));
-        assert!(st.tabs[0].panes.iter().all(|p| p.selected));
+        reduce(&mut st, &press(KeyCode::Char('3'))); // roster row 3 = r2
+        assert!(st.agents[2].selected);
+        reduce(&mut st, &press(KeyCode::Char('9'))); // out of range → no-op
+        assert!(st.agents.iter().filter(|p| p.selected).count() == 1);
+    }
+
+    #[test]
+    fn a_selects_all_agents() {
+        let mut st = bc_state();
+        reduce(&mut st, &press(KeyCode::Char('a')));
+        assert!(st.agents.iter().all(|p| p.selected));
     }
 
     #[test]
     fn typing_builds_broadcast_input() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = bc_state();
         for c in ['h', 'i'] {
-            reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char(c))));
+            reduce(&mut st, &press(KeyCode::Char(c)));
         }
         assert_eq!(st.broadcast_input, "hi");
     }
 
     #[test]
     fn enter_sends_to_selected_and_returns_to_normal() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = bc_state();
-        st.tabs[0].panes[0].selected = true;
-        st.tabs[0].panes[2].selected = true;
+        st.agents[0].selected = true;
+        st.agents[2].selected = true;
         st.broadcast_input = "go".into();
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
         assert_eq!(
             fx,
             vec![
@@ -1392,24 +1550,17 @@ mod tests {
         );
         assert_eq!(st.mode, Mode::Normal);
         assert_eq!(st.broadcast_input, "");
-        assert!(st.tabs[0].panes.iter().all(|p| !p.selected));
-        assert_eq!(
-            st.tabs[0].panes[0].lines,
-            vec![Line::UserPrompt("go".into())]
-        );
-        assert!(st.tabs[0].panes[1].lines.is_empty());
-        assert_eq!(
-            st.tabs[0].panes[2].lines,
-            vec![Line::UserPrompt("go".into())]
-        );
+        assert!(st.agents.iter().all(|p| !p.selected));
+        assert_eq!(st.agents[0].lines, vec![Line::UserPrompt("go".into())]);
+        assert!(st.agents[1].lines.is_empty());
+        assert_eq!(st.agents[2].lines, vec![Line::UserPrompt("go".into())]);
     }
 
     #[test]
     fn enter_with_no_selection_is_a_noop_but_exits() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = bc_state();
         st.broadcast_input = "go".into();
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Normal);
         assert_eq!(st.broadcast_input, "");
@@ -1417,16 +1568,17 @@ mod tests {
 
     #[test]
     fn esc_cancels_broadcast() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = bc_state();
-        st.tabs[0].panes[0].selected = true;
+        st.agents[0].selected = true;
         st.broadcast_input = "x".into();
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Esc)));
+        let fx = reduce(&mut st, &press(KeyCode::Esc));
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Normal);
         assert_eq!(st.broadcast_input, "");
-        assert!(!st.tabs[0].panes[0].selected);
+        assert!(!st.agents[0].selected);
     }
+
+    // ── Picker. ──
 
     fn picker_state(agents: &[&str]) -> AppState {
         let mut st = AppState::new(pane());
@@ -1442,13 +1594,12 @@ mod tests {
 
     #[test]
     fn picker_down_then_up_clamps_at_bounds() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = picker_state(&["a", "b", "c"]);
         let down = |st: &mut AppState| {
-            reduce(st, &AppEvent::Key(KeyEvent::from(KeyCode::Down)));
+            reduce(st, &press(KeyCode::Down));
         };
         let up = |st: &mut AppState| {
-            reduce(st, &AppEvent::Key(KeyEvent::from(KeyCode::Up)));
+            reduce(st, &press(KeyCode::Up));
         };
         down(&mut st);
         assert_eq!(st.picker.as_ref().expect("p").selected, 1);
@@ -1466,10 +1617,9 @@ mod tests {
 
     #[test]
     fn picker_enter_spawns_selected_and_returns_to_normal() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = picker_state(&["fake", "claude"]);
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Down))); // select "claude"
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        reduce(&mut st, &press(KeyCode::Down)); // select "claude"
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
         assert_eq!(
             fx,
             vec![Effect::SpawnAgent {
@@ -1482,9 +1632,8 @@ mod tests {
 
     #[test]
     fn picker_esc_cancels_with_no_effect() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = picker_state(&["fake"]);
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Esc)));
+        let fx = reduce(&mut st, &press(KeyCode::Esc));
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Normal);
         assert!(st.picker.is_none());
@@ -1492,17 +1641,18 @@ mod tests {
 
     #[test]
     fn picker_enter_on_empty_list_just_closes() {
-        use crossterm::event::{KeyCode, KeyEvent};
         let mut st = picker_state(&[]);
-        let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Enter)));
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Normal);
         assert!(st.picker.is_none());
     }
 
+    // ── Attention. ──
+
     #[test]
     fn permission_on_background_pane_sets_attention_and_bell() {
-        let mut st = panes3(); // focus 0 = r0
+        let mut st = agents3(); // detail shows only r0
         let fx = reduce(
             &mut st,
             &AppEvent::Permission {
@@ -1512,13 +1662,13 @@ mod tests {
                 options: vec![],
             },
         );
-        assert!(st.tabs[0].panes[1].attention);
+        assert!(st.agents[1].attention);
         assert!(fx.contains(&Effect::Bell));
     }
 
     #[test]
-    fn permission_on_focused_pane_no_attention_no_bell() {
-        let mut st = panes3(); // focus 0 = r0
+    fn permission_on_shown_pane_no_attention_no_bell() {
+        let mut st = agents3();
         let fx = reduce(
             &mut st,
             &AppEvent::Permission {
@@ -1528,33 +1678,54 @@ mod tests {
                 options: vec![],
             },
         );
-        assert!(!st.tabs[0].panes[0].attention);
+        assert!(!st.agents[0].attention);
         assert!(!fx.contains(&Effect::Bell));
-        assert!(st.tabs[0].panes[0].pending.is_some());
     }
 
     #[test]
     fn exit_on_background_pane_sets_attention_and_bell() {
-        let mut st = panes3();
+        let mut st = agents3();
         let fx = reduce(
             &mut st,
             &AppEvent::Exited {
                 record_id: "r2".into(),
             },
         );
-        assert!(st.tabs[0].panes[2].attention);
-        assert!(st.tabs[0].panes[2].exited);
+        assert!(st.agents[2].exited);
+        assert!(st.agents[2].attention);
         assert!(fx.contains(&Effect::Bell));
     }
 
     #[test]
-    fn focusing_a_pane_clears_its_attention() {
-        use crossterm::event::{KeyCode, KeyEvent};
-        let mut st = panes3();
+    fn permission_on_split_shown_pane_is_not_background() {
+        let mut st = agents3();
         st.mode = Mode::Agent;
-        st.tabs[0].panes[1].attention = true;
-        reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::Char('2')))); // focus pane index 1
-        assert_eq!(st.tabs[0].focus, 1);
-        assert!(!st.tabs[0].panes[1].attention);
+        st.rail_cursor = 1;
+        reduce(&mut st, &press(KeyCode::Char('s'))); // show r0 + r1
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "r1".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: vec![],
+            },
+        );
+        assert!(
+            !st.agents[1].attention,
+            "visible in a split — no attention needed"
+        );
+        assert!(!fx.contains(&Effect::Bell));
+    }
+
+    #[test]
+    fn opening_an_agent_clears_its_attention() {
+        let mut st = agents3();
+        st.agents[1].attention = true;
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0; // roster: [r1(attn), r0, r2] → cursor 0 = r1
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.detail.shown, vec!["r1".to_string()]);
+        assert!(!st.agents[1].attention, "looking at it clears attention");
     }
 }
