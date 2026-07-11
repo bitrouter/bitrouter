@@ -47,11 +47,19 @@ impl ServerToolLoop {
         upstream: Arc<dyn UpstreamStream>,
     ) -> Result<StreamPartStream> {
         let (working, owned) = self.inject(base, ctx).await?;
+        // `Result<StreamPartStream>` is the boundary between fallible request
+        // setup and an HTTP response whose status may already be committed.
+        // Open the first upstream turn eagerly so an HTTP 429/auth/availability
+        // failure can still retain its real downstream status. Later turns are
+        // driven inside the stream because earlier narration/tool activity may
+        // already have reached the caller.
+        let first_upstream_stream = upstream.run(&working).await?;
         let ctx = ctx.clone();
         let loop_ = self;
 
         let stream = async_stream::stream! {
             let mut working = working;
+            let mut first_upstream_stream = Some(first_upstream_stream);
             let mut total = Usage::default();
             let mut had_usage = false;
             let start = Instant::now();
@@ -59,12 +67,15 @@ impl ServerToolLoop {
             let mut consecutive_errors = 0u32;
 
             loop {
-                let mut upstream_stream = match upstream.run(&working).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
+                let mut upstream_stream = match first_upstream_stream.take() {
+                    Some(stream) => stream,
+                    None => match upstream.run(&working).await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            yield Err(error);
+                            return;
+                        }
+                    },
                 };
 
                 let mut buffered: Vec<BufferedCall> = Vec::new();
@@ -259,6 +270,7 @@ mod tests {
     use crate::language_model::types::{Tool, ToolResultOutput};
     use std::collections::VecDeque;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct OneTool;
 
@@ -303,6 +315,41 @@ mod tests {
         }
     }
 
+    struct FailingStartStream;
+
+    #[async_trait]
+    impl UpstreamStream for FailingStartStream {
+        async fn run(&self, _prompt: &Prompt) -> Result<StreamPartStream> {
+            Err(crate::error::BitrouterError::UpstreamRateLimited {
+                retry_after: Some(9),
+            })
+        }
+    }
+
+    struct FailingSecondTurnStream {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl UpstreamStream for FailingSecondTurnStream {
+        async fn run(&self, _prompt: &Prompt) -> Result<StreamPartStream> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let parts = vec![
+                    StreamPart::ToolCallDelta {
+                        id: "c1".into(),
+                        name: Some("search".into()),
+                        arguments: "{}".into(),
+                    },
+                    StreamPart::Finish {
+                        reason: FinishReason::ToolCalls,
+                    },
+                ];
+                return Ok(Box::pin(futures::stream::iter(parts.into_iter().map(Ok))));
+            }
+            Err(crate::error::BitrouterError::UpstreamTimeout)
+        }
+    }
+
     fn loop_() -> Arc<ServerToolLoop> {
         Arc::new(ServerToolLoop::new(
             ToolsetRegistry::new(vec![Arc::new(OneTool)]),
@@ -336,6 +383,53 @@ mod tests {
             out.push(item.unwrap());
         }
         out
+    }
+
+    #[tokio::test]
+    async fn first_upstream_failure_is_returned_before_stream_start() {
+        let result = loop_()
+            .run_stream(&base_prompt(), &tool_ctx(), Arc::new(FailingStartStream))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::error::BitrouterError::UpstreamRateLimited {
+                retry_after: Some(9)
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn later_turn_failure_remains_an_in_stream_error() {
+        let result = loop_()
+            .run_stream(
+                &base_prompt(),
+                &tool_ctx(),
+                Arc::new(FailingSecondTurnStream {
+                    calls: AtomicUsize::new(0),
+                }),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "first turn unexpectedly failed: {:?}",
+            result.as_ref().err()
+        );
+        let Ok(mut stream) = result else {
+            return;
+        };
+        let mut terminal_error = None;
+        while let Some(item) = stream.next().await {
+            if let Err(error) = item {
+                terminal_error = Some(error);
+                break;
+            }
+        }
+
+        assert!(matches!(
+            terminal_error,
+            Some(crate::error::BitrouterError::UpstreamTimeout)
+        ));
     }
 
     #[tokio::test]
