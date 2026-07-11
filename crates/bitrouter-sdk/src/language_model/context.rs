@@ -6,14 +6,16 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
+use crate::language_model::timing::{FirstTokenKind, FirstTokenTiming, elapsed_millis};
 use crate::language_model::types::{
     ApiProtocol, Content, ExecutionResult, PipelineRequest, PipelineResponse, Prompt,
-    RoutingTarget, Usage,
+    RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -67,6 +69,7 @@ pub struct PipelineContext {
     /// a native, same-protocol upstream. `None` when the request was built
     /// without a known inbound protocol.
     inbound_protocol: Option<ApiProtocol>,
+    request_started_at: Instant,
 
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
@@ -74,6 +77,9 @@ pub struct PipelineContext {
     /// The execution result (Stage 3). Stored here rather than moved out so
     /// Settlement can borrow it without an ownership fight.
     pub execution_result: Option<ExecutionResult>,
+    stream_provider_started_at: Option<Instant>,
+    first_token_timing: Option<FirstTokenTiming>,
+    finalized_request_latency_ms: Option<u64>,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -108,8 +114,12 @@ impl PipelineContext {
             headers: req.headers,
             prompt: req.prompt,
             inbound_protocol: req.inbound_protocol,
+            request_started_at: Instant::now(),
             route_chain: None,
             execution_result: None,
+            stream_provider_started_at: None,
+            first_token_timing: None,
+            finalized_request_latency_ms: None,
             metadata: HashMap::new(),
             extensions: Extensions::default(),
             events: EventBus::new(),
@@ -129,8 +139,12 @@ impl PipelineContext {
             headers: self.headers.clone(),
             prompt,
             inbound_protocol: self.inbound_protocol.clone(),
+            request_started_at: self.request_started_at,
             route_chain: self.route_chain.clone(),
             execution_result: None,
+            stream_provider_started_at: None,
+            first_token_timing: None,
+            finalized_request_latency_ms: None,
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
             events: self.events.clone(),
@@ -151,6 +165,45 @@ impl PipelineContext {
             })
             .or_else(|| chain.first())
             .cloned()
+    }
+
+    pub(crate) fn set_stream_provider_started_at(&mut self, started_at: Instant) {
+        self.stream_provider_started_at = Some(started_at);
+    }
+
+    pub(crate) fn finalize_request_latency(&mut self) {
+        let latency_ms = elapsed_millis(self.request_started_at);
+        self.finalized_request_latency_ms = Some(latency_ms);
+        if let Some(result) = self.execution_result.as_mut() {
+            result.latency_ms = latency_ms;
+        }
+    }
+
+    /// End-to-end request time in milliseconds. Once settlement begins this is
+    /// the finalized value; before then it is the current elapsed duration.
+    pub fn request_latency_ms(&self) -> u64 {
+        self.finalized_request_latency_ms
+            .or_else(|| {
+                self.execution_result
+                    .as_ref()
+                    .map(|result| result.latency_ms)
+                    .filter(|latency| *latency > 0)
+            })
+            .unwrap_or_else(|| elapsed_millis(self.request_started_at))
+    }
+
+    pub(crate) fn finalize_stream_generation_time(&mut self) {
+        let Some(provider_started_at) = self.stream_provider_started_at else {
+            return;
+        };
+        if let Some(result) = self.execution_result.as_mut() {
+            result.generation_time_ms = elapsed_millis(provider_started_at);
+        }
+    }
+
+    /// The first semantic output timing captured for a streamed request.
+    pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
+        self.first_token_timing
     }
 
     /// Store outbound HTTP headers for the next upstream request. The
@@ -342,6 +395,8 @@ impl PipelineContext {
             accumulated_usage: UsageAccumulator::with_prompt_chars(self.prompt_text_chars()),
             parts_emitted: 0,
             final_usage: None,
+            provider_started_at: self.stream_provider_started_at,
+            first_token_timing: self.first_token_timing,
             events: EventBus::new(),
             metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
@@ -356,6 +411,7 @@ impl PipelineContext {
         if let (Some(exec), Some(usage)) = (self.execution_result.as_mut(), stream.final_usage) {
             exec.result.usage = Some(usage);
         }
+        self.first_token_timing = stream.first_token_timing;
         self.events.merge_from(stream.events);
     }
 
@@ -393,8 +449,10 @@ impl PipelineContext {
                 .map(|e| e.server_tool_calls.clone())
                 .unwrap_or_default(),
             streamed: false,
-            latency_ms: exec.map(|e| e.latency_ms).unwrap_or(0),
+            latency_ms: self.request_latency_ms(),
             generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
+            first_token_latency_ms: self.first_token_timing.map(|timing| timing.latency_ms),
+            first_token_kind: self.first_token_timing.map(|timing| timing.kind),
             error: None,
             events: std::mem::take(&mut self.events),
         }
@@ -440,12 +498,35 @@ pub struct StreamContext {
     pub parts_emitted: u64,
     /// Usage finalised at `on_stream_end`, folded back into `PipelineContext`.
     pub final_usage: Option<Usage>,
+    provider_started_at: Option<Instant>,
+    first_token_timing: Option<FirstTokenTiming>,
     events: EventBus,
     metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
 }
 
 impl StreamContext {
+    pub(crate) fn observe_first_token(&mut self, part: &StreamPart) {
+        if self.first_token_timing.is_some() {
+            return;
+        }
+        let Some(provider_started_at) = self.provider_started_at else {
+            return;
+        };
+        let Some(kind) = FirstTokenKind::from_part(part) else {
+            return;
+        };
+        self.first_token_timing = Some(FirstTokenTiming {
+            latency_ms: elapsed_millis(provider_started_at),
+            kind,
+        });
+    }
+
+    /// The first semantic output timing captured so far.
+    pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
+        self.first_token_timing
+    }
+
     /// Emit a typed event from within the StreamHook stage.
     pub fn emit<E: PipelineEvent>(&mut self, event: E) {
         self.events.emit(event);

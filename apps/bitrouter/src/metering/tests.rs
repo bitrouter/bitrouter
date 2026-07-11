@@ -37,6 +37,8 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         streamed: false,
         latency_ms: 100,
         generation_time_ms: 80,
+        first_token_latency_ms: None,
+        first_token_kind: None,
         error: None,
         events: bitrouter_sdk::EventBus::new(),
     }

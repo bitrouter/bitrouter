@@ -718,6 +718,7 @@ dependencies = [
  "bytes",
  "criterion",
  "dashmap",
+ "futures",
  "http",
  "opentelemetry",
  "opentelemetry-http",

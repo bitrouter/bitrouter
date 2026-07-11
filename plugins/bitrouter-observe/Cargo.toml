@@ -106,6 +106,7 @@ otel-grpc = [
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+futures.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 
 [[bench]]

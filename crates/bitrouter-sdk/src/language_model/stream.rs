@@ -350,6 +350,7 @@ impl StreamProcessor {
     /// upstream part so usage is never lost to a rewrite.
     pub async fn process_part(&mut self, part: StreamPart) -> Result<Vec<StreamPart>> {
         self.ctx.accumulated_usage.observe(&part);
+        self.ctx.observe_first_token(&part);
         self.ctx.parts_emitted += 1;
 
         let mut current = vec![part];
@@ -447,8 +448,81 @@ impl StreamProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller::CallerContext;
+    use crate::language_model::context::PipelineContext;
+    use crate::language_model::timing::FirstTokenKind;
     use crate::language_model::types::FinishReason;
+    use crate::language_model::types::{GenerationParams, Message, PipelineRequest, Prompt, Role};
     use futures::StreamExt;
+
+    fn timed_stream_context() -> StreamContext {
+        let prompt = Prompt {
+            model: "test-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "hello")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let mut ctx = PipelineContext::new(PipelineRequest::new(
+            "test-model",
+            CallerContext::local(),
+            prompt,
+        ));
+        ctx.set_stream_provider_started_at(std::time::Instant::now());
+        ctx.stream_context()
+    }
+
+    #[tokio::test]
+    async fn first_original_semantic_delta_sets_timing_once() {
+        let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
+
+        processor
+            .process_part(StreamPart::ResponseStarted { id: "r".into() })
+            .await
+            .unwrap();
+        processor
+            .process_part(StreamPart::ReasoningDelta {
+                text: "think".into(),
+            })
+            .await
+            .unwrap();
+        processor
+            .process_part(StreamPart::TextDelta {
+                text: "answer".into(),
+            })
+            .await
+            .unwrap();
+
+        let timing = processor
+            .context()
+            .first_token_timing()
+            .expect("first token timing");
+        assert_eq!(timing.kind, FirstTokenKind::Reasoning);
+        assert!(timing.latency_ms >= 1);
+    }
+
+    #[tokio::test]
+    async fn metadata_usage_and_terminal_parts_do_not_set_first_token_timing() {
+        let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
+
+        for part in [
+            StreamPart::ResponseStarted { id: "r".into() },
+            StreamPart::Usage {
+                usage: Usage::default(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ] {
+            processor.process_part(part).await.unwrap();
+        }
+
+        assert!(processor.context().first_token_timing().is_none());
+    }
 
     #[test]
     fn interest_matches_only_declared_kinds() {

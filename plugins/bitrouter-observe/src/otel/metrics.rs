@@ -129,10 +129,6 @@ impl OtelMetrics {
                 attributes.push(KeyValue::new("bitrouter.account_label", label.clone()));
             }
 
-            // GenAI semconv: operation.duration is a histogram in seconds.
-            self.latency_histogram
-                .record(result.latency_ms as f64 / 1000.0, &attributes);
-
             if let Some(usage) = &result.result.usage {
                 let mut input_attrs = attributes.clone();
                 input_attrs.push(KeyValue::new("gen_ai.token.type", "input"));
@@ -144,6 +140,12 @@ impl OtelMetrics {
                     .record(usage.completion_tokens, &output_attrs);
             }
         }
+
+        // GenAI semconv: operation.duration is a histogram in seconds. The SDK
+        // exposes elapsed time even when an early failure produced no
+        // `ExecutionResult`, so failed preflight requests are included too.
+        self.latency_histogram
+            .record(request_latency_seconds(ctx), &attributes);
 
         self.request_counter.add(1, &attributes);
 
@@ -176,6 +178,10 @@ impl OtelMetrics {
     }
 }
 
+fn request_latency_seconds(ctx: &PipelineContext) -> f64 {
+    ctx.request_latency_ms() as f64 / 1000.0
+}
+
 fn stream_part_type(part: &StreamPart) -> &'static str {
     match part {
         StreamPart::TextStart { .. } => "text_start",
@@ -193,5 +199,72 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
         StreamPart::ResponseStarted { .. } => "response_started",
         StreamPart::Finish { .. } => "finish",
         StreamPart::ResponseCompleted { .. } => "response_completed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::language_model::{
+        ExecutionResult, GenerateResult, GenerationParams, PipelineRequest, Prompt,
+    };
+
+    use super::*;
+
+    #[test]
+    fn request_latency_histogram_uses_finalized_milliseconds_as_seconds() {
+        let prompt = Prompt {
+            model: "test-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let request =
+            PipelineRequest::new("test-model", CallerContext::new("api-key", "user"), prompt);
+        let mut ctx = PipelineContext::new(request);
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: "openai".into(),
+            model_id: "test-model".into(),
+            account_label: None,
+            result: GenerateResult {
+                content: Vec::new(),
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: 42,
+            generation_time_ms: 40,
+            server_tool_calls: Vec::new(),
+        });
+
+        assert_eq!(request_latency_seconds(&ctx), 0.042);
+    }
+
+    #[test]
+    fn request_latency_histogram_includes_early_failures() {
+        let prompt = Prompt {
+            model: "test-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let request =
+            PipelineRequest::new("test-model", CallerContext::new("api-key", "user"), prompt);
+        let ctx = PipelineContext::new(request);
+        std::thread::sleep(Duration::from_millis(2));
+
+        assert!(request_latency_seconds(&ctx) > 0.0);
     }
 }
