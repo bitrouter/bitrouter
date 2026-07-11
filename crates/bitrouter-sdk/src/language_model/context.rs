@@ -117,6 +117,42 @@ impl PipelineContext {
         }
     }
 
+    /// Fork the immutable request and accumulated hook state for a later
+    /// server-tool model turn. The fork keeps the original request identity,
+    /// headers, protocol, metadata, extensions, events, and resolved route;
+    /// only the evolving prompt and per-turn execution/trace state are fresh.
+    pub(crate) fn fork_for_prompt(&self, prompt: Prompt) -> Self {
+        Self {
+            request_id: self.request_id.clone(),
+            model: self.model.clone(),
+            caller: self.caller.clone(),
+            headers: self.headers.clone(),
+            prompt,
+            inbound_protocol: self.inbound_protocol.clone(),
+            route_chain: self.route_chain.clone(),
+            execution_result: None,
+            metadata: self.metadata.clone(),
+            extensions: self.extensions.clone(),
+            events: self.events.clone(),
+            outbound_trace_headers: Mutex::new(None),
+        }
+    }
+
+    fn serving_target(&self) -> Option<RoutingTarget> {
+        let chain = self.route_chain.as_ref()?;
+        self.execution_result
+            .as_ref()
+            .and_then(|execution| {
+                chain.iter().find(|target| {
+                    target.provider_name == execution.provider_id
+                        && target.service_id == execution.model_id
+                        && target.account_label == execution.account_label
+                })
+            })
+            .or_else(|| chain.first())
+            .cloned()
+    }
+
     /// Store outbound HTTP headers for the next upstream request. The
     /// executor merges them into the request just before issuing it.
     /// Typically called by an `ObserveHook` from `on_hop_start` to inject
@@ -298,7 +334,7 @@ impl PipelineContext {
 
     /// Borrow a `StreamContext` for the StreamHook stage.
     pub fn stream_context(&self) -> StreamContext {
-        let target = self.route_chain.as_ref().and_then(|c| c.first()).cloned();
+        let target = self.serving_target();
         StreamContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
@@ -327,7 +363,7 @@ impl PipelineContext {
     /// bus out (so recorders can inspect events emitted by earlier stages);
     /// `absorb_settlement` moves it back.
     pub fn settlement_context(&mut self) -> SettlementContext {
-        let target = self.route_chain.as_ref().and_then(|c| c.first()).cloned();
+        let target = self.serving_target();
         let exec = self.execution_result.as_ref();
         let usage = exec.and_then(|e| e.result.usage).unwrap_or_default();
         SettlementContext {

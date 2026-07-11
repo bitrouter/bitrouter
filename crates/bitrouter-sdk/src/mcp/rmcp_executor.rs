@@ -29,7 +29,6 @@ use rmcp::model::{
 };
 use rmcp::service::{
     NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient, RunningService,
-    ServiceError,
 };
 use tokio::sync::{Mutex, broadcast};
 
@@ -443,8 +442,16 @@ impl Executor for RmcpExecutor {
             return Ok(stream::once(async move { Ok(McpStreamPart::Final(response)) }).boxed());
         }
         let (server_name, transport) = direct_target(target)?;
+        let call_params: CallToolRequestParams = serde_json::from_value(request.params.clone())
+            .map_err(|error| bad_params(server_name, "tools/call", error))?;
         let conn = self.connection_for(server_name, transport).await?;
-        Ok(stream_tools_call(conn, server_name.to_string(), request.clone()).boxed())
+        Ok(stream_tools_call(
+            conn,
+            server_name.to_string(),
+            request.request_id.clone(),
+            call_params,
+        )
+        .boxed())
     }
 }
 
@@ -470,41 +477,35 @@ fn direct_target(target: &McpTarget) -> Result<(&str, &McpTransport)> {
 /// request hits the wire. We use `send_cancellable_request` instead so the
 /// returned `RequestHandle` tells us the token rmcp actually chose, then
 /// subscribe to it on the [`ProgressDispatcher`] before awaiting the response.
+/// Parameter validation and connection setup happen before this stream is
+/// returned; the JSON-RPC call itself starts on first poll so dropping an
+/// unconsumed downstream response never leaves a detached upstream call.
 fn stream_tools_call(
     conn: PooledConnection,
     server_name: String,
-    request: McpRequest,
+    request_id: String,
+    call_params: CallToolRequestParams,
 ) -> impl futures::Stream<Item = Result<McpStreamPart>> + Send + 'static {
     async_stream::stream! {
-        let call_params: CallToolRequestParams =
-            match serde_json::from_value(request.params.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    yield Err(bad_params(&server_name, "tools/call", e));
-                    return;
-                }
-            };
         let call_request = ClientRequest::CallToolRequest(CallToolRequest::new(call_params));
-
         let peer = conn.service.peer().clone();
         let handle = match peer
             .send_cancellable_request(call_request, PeerRequestOptions::no_options())
             .await
         {
-            Ok(h) => h,
-            Err(e) => {
-                yield Err(upstream(&server_name, format!("tools/call: {e}")));
+            Ok(handle) => handle,
+            Err(error) => {
+                yield Err(map_service_error(&server_name, "tools/call", error));
                 return;
             }
         };
         let mut subscriber = Some(conn.progress.subscribe(handle.progress_token.clone()).await);
-        let request_id = request.request_id.clone();
         let server = server_name.clone();
         let call_fut = async move {
-            handle.await_response().await.map_err(|e| match e {
-                ServiceError::McpError(err) => upstream(&server, format!("tools/call: {err}")),
-                other => upstream(&server, format!("tools/call: {other}")),
-            })
+            handle
+                .await_response()
+                .await
+                .map_err(|error| map_service_error(&server, "tools/call", error))
         };
         tokio::pin!(call_fut);
 
@@ -657,6 +658,28 @@ mod tests {
     #[test]
     fn executor_constructs_with_empty_pool() {
         let _ = RmcpExecutor::new();
+    }
+
+    #[tokio::test]
+    async fn streaming_tools_call_validates_params_before_connecting() {
+        let exec = RmcpExecutor::new();
+        let target = McpTarget::Direct {
+            server_name: "ghost".into(),
+            transport: McpTransport::Stdio {
+                command: "/bin/false".into(),
+                args: vec![],
+                env: HashMap::new(),
+            },
+        };
+        let request = McpRequest::direct(
+            "ghost",
+            "tools/call",
+            serde_json::json!({"arguments": {}}),
+            CallerContext::new("k", "u"),
+        );
+
+        let result = exec.execute_streaming(&target, &request).await;
+        assert!(matches!(result, Err(BitrouterError::BadRequest { .. })));
     }
 
     /// `/bin/false` exits immediately with status 1 — rmcp's `serve()` sees

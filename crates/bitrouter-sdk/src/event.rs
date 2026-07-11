@@ -11,6 +11,7 @@
 
 use serde::Serialize;
 use std::any::{Any, TypeId};
+use std::sync::Arc;
 
 /// A typed pipeline event. Each event is an independent struct declared by the
 /// crate that emits it.
@@ -23,17 +24,18 @@ pub trait PipelineEvent: Serialize + Any + Send + Sync + 'static {
 ///
 /// `typed` backs the compile-time-safe `has::<E>()` / `get::<E>()` queries;
 /// `json` backs `dump_json()` and is always available without re-deriving.
+#[derive(Clone)]
 struct EventEntry {
     type_id: TypeId,
     name: &'static str,
-    typed: Box<dyn Any + Send + Sync>,
+    typed: Arc<dyn Any + Send + Sync>,
     json: serde_json::Value,
 }
 
 /// Per-request, pull-based event bus. Stores every event emitted during the
 /// pipeline lifecycle. Used only for in-request hook coordination — it never
 /// leaves the process and there is no app-level subscription.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct EventBus {
     events: Vec<EventEntry>,
 }
@@ -52,7 +54,7 @@ impl EventBus {
         self.events.push(EventEntry {
             type_id: TypeId::of::<E>(),
             name,
-            typed: Box::new(event),
+            typed: Arc::new(event),
             json,
         });
     }

@@ -10,7 +10,6 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
-use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
@@ -83,31 +82,56 @@ impl UpstreamTurn for PipelineUpstream<'_> {
 }
 
 /// Drives one upstream **streaming** turn for the server-side tool loop. Each
-/// iteration tries the routing `chain` in order until one stream starts
-/// (commit-on-start failover, mirroring the single-shot path), and uses a fresh
-/// throwaway [`PipelineContext`] (the executor reads it only for outbound trace
-/// headers), so the real request context stays owned by the settlement guard.
+/// iteration uses the pipeline's standard fallback policy over the routing
+/// `chain` until one stream starts. A fresh throwaway [`PipelineContext`] keeps
+/// per-turn fallback/observation state separate while the real request context
+/// stays owned by the settlement guard.
 struct PipelineStreamUpstream {
-    executor: Arc<dyn Executor>,
+    pipeline: Arc<Pipeline>,
     chain: Vec<RoutingTarget>,
-    caller: CallerContext,
+    context: PipelineContext,
+    serving_target: SharedServingTarget,
 }
 
 #[async_trait]
 impl UpstreamStream for PipelineStreamUpstream {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
-        let req = PipelineRequest::new(prompt.model.clone(), self.caller.clone(), prompt.clone());
-        let ctx = PipelineContext::new(req);
-        let mut last_error: Option<BitrouterError> = None;
-        for target in &self.chain {
-            match self.executor.execute_stream(target, prompt, &ctx).await {
-                Ok(stream) => return Ok(stream),
-                Err(e) => last_error = Some(e),
-            }
-        }
-        Err(last_error
-            .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string())))
+        let ctx = self.context.fork_for_prompt(prompt.clone());
+        let (target, stream) = self
+            .pipeline
+            .execute_stream_with_fallback(&self.chain, &ctx)
+            .await?;
+        store_serving_target(&self.serving_target, target);
+        Ok(stream)
     }
+}
+
+type SharedServingTarget = Arc<std::sync::Mutex<Option<RoutingTarget>>>;
+
+fn store_serving_target(slot: &SharedServingTarget, target: RoutingTarget) {
+    match slot.lock() {
+        Ok(mut current) => *current = Some(target),
+        Err(poisoned) => *poisoned.into_inner() = Some(target),
+    }
+}
+
+fn load_serving_target(slot: &SharedServingTarget) -> Option<RoutingTarget> {
+    match slot.lock() {
+        Ok(current) => current.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+fn sync_execution_target(ctx: &mut PipelineContext, slot: &SharedServingTarget) {
+    let Some(target) = load_serving_target(slot) else {
+        return;
+    };
+    let Some(execution) = ctx.execution_result.as_mut() else {
+        return;
+    };
+    execution.provider_id = target.provider_name;
+    execution.model_id = target.service_id;
+    execution.account_label = target.account_label;
 }
 
 impl Pipeline {
@@ -289,6 +313,7 @@ impl Pipeline {
         };
         self.observe_after(Phase::Route, &ctx).await;
         log_request_received(&ctx, chain.first(), true);
+        let serving_target: SharedServingTarget = Arc::new(std::sync::Mutex::new(None));
 
         // Route Stage 3 through the server-side tool loop when configured: the
         // merged stream becomes the "upstream" the settlement guard drains, so
@@ -297,16 +322,23 @@ impl Pipeline {
             Some(server_loop) => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
-                    executor: self.executor.clone(),
+                    pipeline: self.clone(),
                     chain: chain.clone(),
-                    caller: ctx.caller().clone(),
+                    context: ctx.fork_for_prompt(ctx.prompt().clone()),
+                    serving_target: serving_target.clone(),
                 });
                 server_loop
                     .clone()
                     .run_stream(ctx.prompt(), &tool_ctx, upstream_impl)
                     .await
             }
-            None => self.execute_stream_with_fallback(&chain, &ctx).await,
+            None => match self.execute_stream_with_fallback(&chain, &ctx).await {
+                Ok((target, stream)) => {
+                    store_serving_target(&serving_target, target);
+                    Ok(stream)
+                }
+                Err(error) => Err(error),
+            },
         };
         let upstream = match upstream_result {
             Ok(upstream) => upstream,
@@ -321,7 +353,7 @@ impl Pipeline {
         };
         // A placeholder execution result so Settlement has provider/model ids;
         // usage is folded in from the StreamContext at stream end.
-        let head = chain.first().cloned();
+        let head = load_serving_target(&serving_target).or_else(|| chain.first().cloned());
         if let Some(target) = &head {
             ctx.execution_result = Some(ExecutionResult {
                 provider_id: target.provider_name.clone(),
@@ -354,6 +386,7 @@ impl Pipeline {
         // so streaming settlement is never lost.
         let guard = StreamSettlementGuard {
             pipeline: self.clone(),
+            serving_target,
             state: Some((processor, ctx)),
         };
 
@@ -502,7 +535,7 @@ impl Pipeline {
         &self,
         chain: &[RoutingTarget],
         ctx: &PipelineContext,
-    ) -> Result<StreamPartStream> {
+    ) -> Result<(RoutingTarget, StreamPartStream)> {
         let mut errors = Vec::new();
         for target in chain {
             self.observe_hop_start(ctx, target).await;
@@ -523,7 +556,7 @@ impl Pipeline {
             match outcome {
                 // Once the stream starts, the SSE response is committed — no
                 // more fallback.
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => return Ok((target.clone(), stream)),
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
                     FallbackDecision::TryNext => {
                         errors.push(e);
@@ -704,6 +737,7 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
 /// normally or the client drops it early.
 struct StreamSettlementGuard {
     pipeline: Arc<Pipeline>,
+    serving_target: SharedServingTarget,
     /// `Some` until finalised; `take`n by `finalize` or `drop`, whichever fires
     /// first, so finalisation is exactly-once.
     state: Option<(StreamProcessor, PipelineContext)>,
@@ -726,6 +760,7 @@ impl StreamSettlementGuard {
         if let Some((mut processor, mut ctx)) = self.state.take() {
             let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
             processor.finish(outcome).await;
+            sync_execution_target(&mut ctx, &self.serving_target);
             ctx.absorb_stream(processor.into_context());
             self.pipeline
                 .run_settlement(&mut ctx, true, settlement_error)
@@ -758,8 +793,10 @@ impl Drop for StreamSettlementGuard {
         // could cut a settlement task mid-await and the receipt would be lost.
         if let Some((mut processor, mut ctx)) = self.state.take() {
             let pipeline = self.pipeline.clone();
+            let serving_target = self.serving_target.clone();
             let fut = async move {
                 processor.finish(StreamOutcome::ClientDisconnected).await;
+                sync_execution_target(&mut ctx, &serving_target);
                 ctx.absorb_stream(processor.into_context());
                 pipeline.run_settlement(&mut ctx, true, None).await;
                 pipeline
