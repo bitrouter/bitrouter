@@ -349,6 +349,10 @@ pub struct AppState {
     pub palette: Option<PaletteState>,
     /// Which-key overlay: lists the current mode's bindings; any key dismisses.
     pub keys_help: bool,
+    /// UI tick counter (drives the running spinner frame).
+    pub tick: u64,
+    /// `NO_COLOR` requested: draw glyphs/styles without foreground colors.
+    pub no_color: bool,
     pub available_agents: Vec<String>,
     pub notice: Option<String>,
     pub broadcast_input: String,
@@ -370,6 +374,8 @@ impl AppState {
             picker: None,
             palette: None,
             keys_help: false,
+            tick: 0,
+            no_color: false,
             available_agents: Vec::new(),
             notice: None,
             broadcast_input: String::new(),
@@ -555,6 +561,10 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 }
             }
             effects
+        }
+        AppEvent::Tick => {
+            state.tick = state.tick.wrapping_add(1);
+            Vec::new()
         }
         AppEvent::Key(key) => {
             // Ctrl-C is a global quit — every mode, even with a permission

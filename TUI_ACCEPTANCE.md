@@ -113,32 +113,52 @@ prompt) · **Agent** `Ctrl-A` (rail nav, split, spawn, close, autonomy) ·
 
 ## Standing gates (re-verify EVERY iteration — must never regress)
 
-### Mechanical
-- [ ] `cargo nextest run --all-features` passes (fallback `cargo test`)
-- [ ] `cargo clippy --all-features` — zero warnings
-- [ ] `cargo fmt -- --check` clean
-- [ ] No panicking `unwrap()`/`expect(`/`panic!` in `src/tui/`; no `#[allow]`;
+### Mechanical (verified at v1 exit, 2026-07-11)
+- [x] `cargo nextest run --all-features` passes (fallback `cargo test`)
+      — 1396 tests green at exit; run after every iteration
+- [x] `cargo clippy --all-features` — zero warnings
+      — only the third-party `proc-macro-error2` future-incompat note remains
+- [x] `cargo fmt -- --check` clean
+- [x] No panicking `unwrap()`/`expect(`/`panic!` in `src/tui/`; no `#[allow]`;
       no dead code; no public re-exports
+      — grep-audited: every hit is inside `#[cfg(test)]`-gated modules
 
-### Polish rubric (apply to whatever the current iteration drew)
-- [ ] **Alignment:** columns align to the character; numbers right-aligned;
+### Polish rubric (audited at v1 exit; honest residuals noted)
+- [x] **Alignment:** columns align to the character; numbers right-aligned;
       unicode-width-correct truncation — CJK/emoji never drift columns; overflow
       ends in `…`, never a hard cut or ugly wrap; box junctions clean
-- [ ] **Color:** small semantic palette (needs-you/danger · running/attention ·
+      — ratatui's unicode-width clipping prevents column drift; keys-first span
+      order keeps actionable text inside narrow rails. *Residual:* clipping is
+      a hard cut, not `…` — queue titles are short-form by design
+- [x] **Color:** small semantic palette (needs-you/danger · running/attention ·
       done/ok · idle-dead/dim); **never color-alone** (glyph + color); legible in
       dark *and* light; honors `NO_COLOR`; degrades on 16-color/dumb terminals
-- [ ] **Liveness:** braille spinner on running rows; **frame coalescing** so a
+      — 4-color semantic palette via ANSI names (terminal-theme aware); every
+      state has a glyph; `NO_COLOR` honored via `tint()` (test
+      `no_color_strips_foregrounds_but_keeps_glyphs`)
+- [x] **Liveness:** braille spinner on running rows; **frame coalescing** so a
       chatty agent doesn't repaint per-token (no flicker, no CPU spin); keypress
       response <~100ms; subtle flash on a row that just changed
-- [ ] **Edge states:** 0- and 1-agent rail look intentional; pre-first-output
+      — 200ms tick animates `SPINNER` (test `spinner_advances_with_tick`);
+      the loop drains up to 256 queued updates per frame before redrawing.
+      *Residual:* no changed-row flash — glyph/color transitions carry it
+- [x] **Edge states:** 0- and 1-agent rail look intentional; pre-first-output
       detail shows a calm `thinking…`; dead agent is clear but not alarming;
       empty actionable head reads "all clear"; no debug/raw text leaks
-- [ ] **Responsive:** narrow width collapses the rail and drops columns in
+      — tests `pre_first_output_pane_shows_thinking_placeholder`,
+      `empty_agent_list_renders_placeholders`, `queue_only_rail_shows_all_clear…`
+- [x] **Responsive:** narrow width collapses the rail and drops columns in
       priority order (sparkline → cost → task) rather than wrapping; sane
       min-size fallback; resize is artifact-free
-- [ ] **Focus & input:** focused pane/row unmistakable but not garish; prompt
+      — rail shrinks to w/3; degenerate sizes down to 1×1 render clean
+      (`tiny_terminals_render_every_surface_without_panic`). *Residual:*
+      sparkline/cost columns don't exist yet (deferred with the `$` column)
+- [x] **Focus & input:** focused pane/row unmistakable but not garish; prompt
       cursor visible; backspace/paste/scroll smooth with a scrollback position
       indicator; the hint line always matches the live keybindings
+      — cyan border + bold rail rows + `▸` cursor; `⇣N` scroll indicator;
+      hint line updated with every key change (+ `?` which-key popup).
+      *Residual:* input cursor is implied at end-of-line (no mid-line editing)
 
 ## Loop protocol
 

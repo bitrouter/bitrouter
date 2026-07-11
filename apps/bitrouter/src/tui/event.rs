@@ -58,6 +58,8 @@ pub enum AppEvent {
     /// A submitted prompt failed to reach the agent; surface it in the pane
     /// (otherwise a dead proxy/agent looks like a silent hang).
     PromptFailed { record_id: String, error: String },
+    /// Periodic UI tick (drives the running-agent spinner animation).
+    Tick,
 }
 
 /// Side effect the loop performs after a reduce. Keeps `reduce` pure.

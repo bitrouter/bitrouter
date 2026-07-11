@@ -42,17 +42,17 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
     {
-        render_picker(picker, frame, area);
+        render_picker(picker, state.no_color, frame, area);
     }
 
     if state.mode == Mode::Command
         && let Some(palette) = &state.palette
     {
-        render_palette(palette, frame, area);
+        render_palette(palette, state.no_color, frame, area);
     }
 
     if state.keys_help {
-        render_keys_help(state.mode, frame, area);
+        render_keys_help(state.mode, state.no_color, frame, area);
     }
 
     if let Some(pane) = state.focused()
@@ -63,27 +63,29 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
 }
 
 /// Command palette: a filter line over the fuzzy-matched command list.
-fn render_palette(palette: &crate::tui::state::PaletteState, frame: &mut Frame, area: Rect) {
+fn render_palette(
+    palette: &crate::tui::state::PaletteState,
+    nc: bool,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let popup = centered(area, 50, 50);
     frame.render_widget(Clear, popup);
     let mut lines: Vec<TuiLine> = vec![TuiLine::from(vec![
-        Span::styled(": ", Style::default().fg(Color::Cyan)),
+        Span::styled(": ", tint(nc, Color::Cyan)),
         Span::raw(palette.input.clone()),
-        Span::styled("▏", Style::default().fg(Color::Cyan)),
+        Span::styled("▏", tint(nc, Color::Cyan)),
     ])];
     let matches = palette.matches();
     if matches.is_empty() {
         lines.push(TuiLine::styled(
             "(no matching command)",
-            Style::default().fg(Color::DarkGray),
+            tint(nc, Color::DarkGray),
         ));
     }
     for (i, (name, _)) in matches.iter().enumerate() {
         if i == palette.selected.min(matches.len() - 1) {
-            lines.push(TuiLine::styled(
-                format!("> {name}"),
-                Style::default().fg(Color::Cyan),
-            ));
+            lines.push(TuiLine::styled(format!("> {name}"), tint(nc, Color::Cyan)));
         } else {
             lines.push(TuiLine::raw(format!("  {name}")));
         }
@@ -94,7 +96,7 @@ fn render_palette(palette: &crate::tui::state::PaletteState, frame: &mut Frame, 
 }
 
 /// Which-key overlay: every binding for the current mode. Any key dismisses.
-fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
+fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
             ("type + Enter", "prompt the focused agent"),
@@ -134,7 +136,7 @@ fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|(key, what)| {
             TuiLine::from(vec![
-                Span::styled(format!("{key:>18}  "), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("{key:>18}  "), tint(nc, Color::Cyan)),
                 Span::raw(*what),
             ])
         })
@@ -143,15 +145,27 @@ fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, popup);
 }
 
+/// Braille spinner frames for running agents, advanced by the UI tick.
+const SPINNER: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+
+/// Foreground style honoring NO_COLOR (glyphs carry the meaning either way).
+fn tint(no_color: bool, color: Color) -> Style {
+    if no_color {
+        Style::default()
+    } else {
+        Style::default().fg(color)
+    }
+}
+
 /// State glyph + color for one agent, shared by the roster and the radar.
 /// Never color-alone: each state has a distinct glyph.
-fn state_glyph(pane: &PaneState) -> (&'static str, Color) {
+fn state_glyph(pane: &PaneState, tick: u64) -> (&'static str, Color) {
     if pane.pending.is_some() {
         ("⚠", Color::Red) // needs you
     } else if pane.attention {
         ("●", Color::Yellow) // happened in the background
     } else if !pane.exited {
-        ("⣷", Color::Cyan) // running
+        (SPINNER[(tick % 8) as usize], Color::Cyan) // running
     } else {
         ("✗", Color::DarkGray) // dead
     }
@@ -160,6 +174,7 @@ fn state_glyph(pane: &PaneState) -> (&'static str, Color) {
 /// Left rail: the roster (every agent, sorted by actionability) over a radar
 /// strip. The rail cursor (`▸`) is shown in AGENT and BROADCAST modes.
 fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
+    let nc = state.no_color;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -170,7 +185,7 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
     let mut lines: Vec<TuiLine> = Vec::with_capacity(order.len());
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
-        let (glyph, color) = state_glyph(pane);
+        let (glyph, color) = state_glyph(pane, state.tick);
         let at_cursor = cursor_active && row == state.rail_cursor;
         let cursor = if at_cursor { "▸" } else { " " };
         let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
@@ -180,21 +195,21 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         }
         let mut spans = vec![
             Span::raw(cursor.to_string()),
-            Span::styled(glyph.to_string(), Style::default().fg(color)),
+            Span::styled(glyph.to_string(), tint(nc, color)),
             Span::raw(" "),
             Span::styled(pane.agent_id.clone(), name_style),
         ];
         if pane.selected {
-            spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
+            spans.push(Span::styled(" ✓", tint(nc, Color::Green)));
         }
         // Non-default autonomy is worth knowing at a glance.
         match pane.autonomy {
             crate::tui::state::Autonomy::Manual => {}
             crate::tui::state::Autonomy::Assisted => {
-                spans.push(Span::styled(" [a]", Style::default().fg(Color::DarkGray)))
+                spans.push(Span::styled(" [a]", tint(nc, Color::DarkGray)))
             }
             crate::tui::state::Autonomy::Auto => {
-                spans.push(Span::styled(" [A]", Style::default().fg(Color::DarkGray)))
+                spans.push(Span::styled(" [A]", tint(nc, Color::DarkGray)))
             }
         }
         lines.push(TuiLine::from(spans));
@@ -202,13 +217,10 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         // the cursor row in AGENT mode) the resolve keys.
         if let Some(pending) = &pane.pending {
             let risk_span = match pending.risk {
-                crate::tui::event::Risk::High => Span::styled(
-                    "high · ",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                crate::tui::event::Risk::Low => {
-                    Span::styled("low · ", Style::default().fg(Color::DarkGray))
+                crate::tui::event::Risk::High => {
+                    Span::styled("high · ", tint(nc, Color::Red).add_modifier(Modifier::BOLD))
                 }
+                crate::tui::event::Risk::Low => Span::styled("low · ", tint(nc, Color::DarkGray)),
             };
             // Keys first, then risk, then the (clippable) title — on a narrow
             // rail the actionable part must survive truncation.
@@ -220,24 +232,15 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
                 ));
             }
             detail.push(risk_span);
-            detail.push(Span::styled(
-                pending.title.clone(),
-                Style::default().fg(Color::Red),
-            ));
+            detail.push(Span::styled(pending.title.clone(), tint(nc, Color::Red)));
             lines.push(TuiLine::from(detail));
         }
     }
     if lines.is_empty() {
         if state.queue_only {
-            lines.push(TuiLine::styled(
-                "✓ all clear",
-                Style::default().fg(Color::Green),
-            ));
+            lines.push(TuiLine::styled("✓ all clear", tint(nc, Color::Green)));
         } else {
-            lines.push(TuiLine::styled(
-                "(no agents)",
-                Style::default().fg(Color::DarkGray),
-            ));
+            lines.push(TuiLine::styled("(no agents)", tint(nc, Color::DarkGray)));
         }
     }
     let title = if state.queue_only {
@@ -253,8 +256,8 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
     let radar: Vec<Span> = order
         .iter()
         .map(|&idx| {
-            let (glyph, color) = state_glyph(&state.agents[idx]);
-            Span::styled(glyph.to_string(), Style::default().fg(color))
+            let (glyph, color) = state_glyph(&state.agents[idx], state.tick);
+            Span::styled(glyph.to_string(), tint(nc, color))
         })
         .collect();
     frame.render_widget(Paragraph::new(TuiLine::from(radar)), chunks[1]);
@@ -262,12 +265,13 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
 
 /// Detail viewport: the shown agents in a horizontal or vertical split.
 fn render_detail(state: &mut AppState, frame: &mut Frame, area: Rect) {
+    let nc = state.no_color;
     let shown = state.detail.shown.clone();
     let focus = state.detail.focus;
     let split = state.detail.split;
     if shown.is_empty() {
         let placeholder = Paragraph::new("no agent shown — Ctrl-A then n to spawn")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(tint(nc, Color::DarkGray))
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(placeholder, area);
         return;
@@ -275,7 +279,7 @@ fn render_detail(state: &mut AppState, frame: &mut Frame, area: Rect) {
     let rects = split_rects(area, shown.len(), split);
     for (slot, (rid, rect)) in shown.iter().zip(rects.iter()).enumerate() {
         if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
-            render_pane(pane, slot, slot == focus, frame, *rect);
+            render_pane(pane, slot, slot == focus, nc, frame, *rect);
         }
     }
 }
@@ -305,7 +309,14 @@ fn split_rects(area: Rect, n: usize, split: Split) -> Vec<Rect> {
 /// `[slot] agent · harness · shortid [markers]`, focused slot highlighted.
 /// Shows the scrollback tail unless the pane is pinned (`scroll`), and records
 /// the drawn viewport height for paging.
-fn render_pane(pane: &mut PaneState, slot: usize, focused: bool, frame: &mut Frame, area: Rect) {
+fn render_pane(
+    pane: &mut PaneState,
+    slot: usize,
+    focused: bool,
+    nc: bool,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
     let inner_height = area.height.saturating_sub(2) as usize;
     pane.viewport = inner_height;
@@ -345,9 +356,9 @@ fn render_pane(pane: &mut PaneState, slot: usize, focused: bool, frame: &mut Fra
         markers
     );
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        tint(nc, Color::Cyan)
     } else if pane.selected {
-        Style::default().fg(Color::Green)
+        tint(nc, Color::Green)
     } else {
         Style::default()
     };
@@ -355,33 +366,43 @@ fn render_pane(pane: &mut PaneState, slot: usize, focused: bool, frame: &mut Fra
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title);
-    let lines: Vec<TuiLine> = pane.lines[start..].iter().map(render_line).collect();
+    let mut lines: Vec<TuiLine> = pane.lines[start..]
+        .iter()
+        .map(|l| render_line(l, nc))
+        .collect();
+    if lines.is_empty() && !pane.exited {
+        // Calm pre-first-output placeholder, not a blank pane.
+        lines.push(TuiLine::styled(
+            "thinking…",
+            tint(nc, Color::DarkGray).add_modifier(Modifier::ITALIC),
+        ));
+    }
     let para = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
 
-fn render_line(line: &Line) -> TuiLine<'static> {
+fn render_line(line: &Line, nc: bool) -> TuiLine<'static> {
     match line {
         Line::UserPrompt(t) => TuiLine::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Cyan)),
+            Span::styled("› ", tint(nc, Color::Cyan)),
             Span::raw(t.clone()),
         ]),
         Line::Message(t) => TuiLine::raw(t.clone()),
-        Line::Thought(t) => TuiLine::styled(t.clone(), Style::default().fg(Color::DarkGray)),
+        Line::Thought(t) => TuiLine::styled(t.clone(), tint(nc, Color::DarkGray)),
         Line::Tool { title, status, .. } => TuiLine::from(vec![
-            Span::styled("⚒ ", Style::default().fg(Color::Yellow)),
+            Span::styled("⚒ ", tint(nc, Color::Yellow)),
             Span::raw(title.clone()),
             Span::raw(format!(" [{status:?}]")),
         ]),
         Line::Error(t) => TuiLine::from(vec![
-            Span::styled("✗ ", Style::default().fg(Color::Red)),
-            Span::styled(t.clone(), Style::default().fg(Color::Red)),
+            Span::styled("✗ ", tint(nc, Color::Red)),
+            Span::styled(t.clone(), tint(nc, Color::Red)),
         ]),
         Line::AutoResolved(t) => TuiLine::from(vec![
-            Span::styled("· ", Style::default().fg(Color::DarkGray)),
-            Span::styled(t.clone(), Style::default().fg(Color::DarkGray)),
+            Span::styled("· ", tint(nc, Color::DarkGray)),
+            Span::styled(t.clone(), tint(nc, Color::DarkGray)),
         ]),
     }
 }
@@ -414,7 +435,7 @@ fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(text), area);
 }
 
-fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
+fn render_picker(picker: &PickerState, nc: bool, frame: &mut Frame, area: Rect) {
     let popup = centered(area, 50, 50);
     frame.render_widget(Clear, popup);
     let items: Vec<TuiLine> = if picker.agents.is_empty() {
@@ -426,7 +447,7 @@ fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
             .enumerate()
             .map(|(i, a)| {
                 if i == picker.selected {
-                    TuiLine::styled(format!("> {a}"), Style::default().fg(Color::Cyan))
+                    TuiLine::styled(format!("> {a}"), tint(nc, Color::Cyan))
                 } else {
                     TuiLine::raw(format!("  {a}"))
                 }
@@ -760,6 +781,48 @@ mod tests {
             "agent bindings listed"
         );
         assert!(text.contains("command palette"));
+    }
+
+    #[test]
+    fn pre_first_output_pane_shows_thinking_placeholder() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        let text = draw(&mut st, 60, 12);
+        assert!(text.contains("thinking…"), "calm placeholder, not blank");
+
+        st.agents[0].exited = true;
+        let text = draw(&mut st, 60, 12);
+        assert!(!text.contains("thinking…"), "dead pane doesn't pretend");
+    }
+
+    #[test]
+    fn spinner_advances_with_tick() {
+        let mut st = agents3();
+        st.tick = 0;
+        let t0 = draw(&mut st, 80, 24);
+        st.tick = 1;
+        let t1 = draw(&mut st, 80, 24);
+        assert!(t0.contains('⣾') && !t0.contains('⣽'), "frame 0");
+        assert!(t1.contains('⣽') && !t1.contains('⣾'), "frame 1");
+    }
+
+    #[test]
+    fn no_color_strips_foregrounds_but_keeps_glyphs() {
+        use ratatui::style::Color;
+        let mut st = agents3();
+        st.agents[1].attention = true;
+        st.no_color = true;
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|f| render(&mut st, f)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let colored = buffer
+            .content()
+            .iter()
+            .filter(|c| c.fg != Color::Reset)
+            .count();
+        assert_eq!(colored, 0, "NO_COLOR leaves no foreground colors");
+        let text: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains('●'), "state glyphs still carry the meaning");
     }
 
     #[test]

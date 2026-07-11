@@ -64,6 +64,8 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     if let Some(warning) = probe_serve(&cfg.server.listen).await {
         state.notice = Some(warning);
     }
+    // https://no-color.org: any non-empty value disables foreground colors.
+    state.no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
 
     // ── Run; the loop owns full session teardown. The panic hook guarantees
     // the terminal is restored even if the loop panics mid-draw. ──
@@ -167,6 +169,10 @@ async fn event_loop(
         },
     };
     let mut keys = EventStream::new();
+    // Drives the running-agent spinner and gives coalesced batches a steady
+    // redraw cadence.
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(200));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         if let Err(e) = terminal.draw(|f| ui::render(&mut state, f)) {
@@ -188,50 +194,80 @@ async fn event_loop(
                 Some(Ok(_)) => None,
                 Some(Err(_)) | None => Some(AppEvent::Key(quit_key())),
             },
+            _ = ticker.tick() => Some(AppEvent::Tick),
             maybe_in = rx.recv() => match maybe_in {
-                Some(Incoming::Update { record_id, update }) => {
-                    Some(AppEvent::Update { record_id, update })
-                }
-                Some(Incoming::Permission { record_id, pending: p }) => {
-                    if rt.sessions.contains_key(&record_id) {
-                        // Stash the handle; hand the reducer display-only data.
-                        let ev = AppEvent::Permission {
-                            record_id: record_id.clone(),
-                            title: p.tool_call.fields.title.clone().unwrap_or_default(),
-                            diff: p
-                                .tool_call
-                                .fields
-                                .content
-                                .as_deref()
-                                .and_then(bitrouter_substrate::translate::render_diff),
-                            options: perm_options(&p),
-                            risk: classify_risk(&p.tool_call.fields, &rt.spawner.base_repo),
-                        };
-                        rt.pending.insert(record_id, *p);
-                        Some(ev)
-                    } else {
-                        // Pane already closed; dropping `p` denies the request.
-                        None
-                    }
-                }
-                Some(Incoming::Exited { record_id }) => Some(AppEvent::Exited { record_id }),
-                Some(Incoming::PromptFailed { record_id, error }) => {
-                    Some(AppEvent::PromptFailed { record_id, error })
-                }
+                Some(incoming) => convert_incoming(incoming, &mut rt),
                 None => Some(AppEvent::Key(quit_key())),
             },
         };
 
-        let Some(app_event) = app_event else { continue };
-        let effects = reduce(&mut state, &app_event);
-        for effect in effects {
-            apply_effect(effect, &mut state, &mut rt).await;
+        if let Some(app_event) = app_event {
+            let effects = reduce(&mut state, &app_event);
+            for effect in effects {
+                apply_effect(effect, &mut state, &mut rt).await;
+            }
+        }
+        // Frame coalescing: a chatty agent can emit hundreds of updates in a
+        // burst; fold everything already queued before the next draw so the
+        // terminal repaints once per batch, not once per chunk. The cap keeps
+        // one agent from starving input indefinitely.
+        let mut drained = 0;
+        while drained < 256 {
+            let incoming = match rx.try_recv() {
+                Ok(i) => i,
+                Err(_) => break,
+            };
+            drained += 1;
+            if let Some(ev) = convert_incoming(incoming, &mut rt) {
+                let effects = reduce(&mut state, &ev);
+                for effect in effects {
+                    apply_effect(effect, &mut state, &mut rt).await;
+                }
+            }
         }
         // Reap finished prompt tasks so the map stays bounded over a long session.
         rt.prompt_tasks.retain(|_, handles| {
             handles.retain(|h| !h.is_finished());
             !handles.is_empty()
         });
+    }
+}
+
+/// Convert one pumped `Incoming` into a pure `AppEvent`, stashing resolvable
+/// permission handles in the runtime. Shared by the select arm and the
+/// coalescing drain.
+fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent> {
+    match incoming {
+        Incoming::Update { record_id, update } => Some(AppEvent::Update { record_id, update }),
+        Incoming::Permission {
+            record_id,
+            pending: p,
+        } => {
+            if rt.sessions.contains_key(&record_id) {
+                // Stash the handle; hand the reducer display-only data.
+                let ev = AppEvent::Permission {
+                    record_id: record_id.clone(),
+                    title: p.tool_call.fields.title.clone().unwrap_or_default(),
+                    diff: p
+                        .tool_call
+                        .fields
+                        .content
+                        .as_deref()
+                        .and_then(bitrouter_substrate::translate::render_diff),
+                    options: perm_options(&p),
+                    risk: classify_risk(&p.tool_call.fields, &rt.spawner.base_repo),
+                };
+                rt.pending.insert(record_id, *p);
+                Some(ev)
+            } else {
+                // Pane already closed; dropping `p` denies the request.
+                None
+            }
+        }
+        Incoming::Exited { record_id } => Some(AppEvent::Exited { record_id }),
+        Incoming::PromptFailed { record_id, error } => {
+            Some(AppEvent::PromptFailed { record_id, error })
+        }
     }
 }
 
