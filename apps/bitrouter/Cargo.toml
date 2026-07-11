@@ -50,7 +50,6 @@ agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 axoupdater = { version = "0.9", default-features = false, features = ["github_releases"] }
 semver = "1"
-thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

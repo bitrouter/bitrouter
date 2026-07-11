@@ -611,7 +611,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tower 0.5.3",
@@ -649,7 +648,6 @@ dependencies = [
  "bitrouter-sdk",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -684,7 +682,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -704,7 +701,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tracing",
  "wiremock",
 ]
 
@@ -764,16 +760,12 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum 0.8.9",
- "base64 0.22.1",
- "bytes",
- "chrono",
  "eventsource-stream",
  "futures",
  "futures-core",
  "http",
  "httpdate",
  "pin-project-lite",
- "regex",
  "reqwest 0.12.28",
  "reqwest 0.13.3",
  "rmcp",
@@ -781,13 +773,10 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
- "sha2",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tower 0.5.3",
- "tower-http",
  "tracing",
  "url",
  "uuid",
@@ -819,7 +808,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-util",

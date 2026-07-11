@@ -23,7 +23,6 @@ bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-al
 bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.24" }
 bitrouter-substrate = { path = "crates/bitrouter-substrate", version = "1.0.0-alpha.24" }
 bitrouter-guardrails = { path = "plugins/bitrouter-guardrails", version = "1.0.0-alpha.24" }
-bitrouter-attestation-plugin = { path = "plugins/bitrouter-attestation", version = "1.0.0-alpha.24" }
 bitrouter-observe = { path = "plugins/bitrouter-observe", version = "1.0.0-alpha.24", default-features = false }
 
 # ACP SDK crates
@@ -45,7 +44,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 http = "1"
 httpdate = "1"
-bytes = "1"
 pin-project-lite = "0.2"
 async-stream = "0.3"
 
@@ -124,8 +122,6 @@ tempfile = "3"
 
 # cli / tui
 clap = { version = "4", features = ["derive"] }
-ratatui = "0.29"
-crossterm = "0.28"
 
 [profile.release]
 lto = "thin"
