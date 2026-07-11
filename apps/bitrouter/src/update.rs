@@ -16,13 +16,39 @@ use std::path::Path;
 enum InstallMethod {
     Homebrew,
     Cargo,
+    Npm,
     Unknown,
 }
 
+/// True when `exe` is the binary the cargo-dist npm wrapper unpacks and execs.
+/// The wrapper extracts the platform binary to `<pkg>/node_modules/.bin_real/`
+/// and spawns it directly, so a process launched via `npm`/`npx` reports that
+/// path from `current_exe()`. Matched on path components so it holds on both
+/// `/`- and `\`-separated platforms.
+fn is_npm_install(exe: &Path) -> bool {
+    fn normal(c: Option<std::path::Component<'_>>) -> Option<&str> {
+        match c {
+            Some(std::path::Component::Normal(s)) => s.to_str(),
+            _ => None,
+        }
+    }
+    // .../ node_modules / .bin_real / <binary>
+    let mut rev = exe.components().rev();
+    rev.next(); // the binary file itself
+    normal(rev.next()) == Some(".bin_real") && normal(rev.next()) == Some("node_modules")
+}
+
 /// Best-effort classification from the executable path and the resolved Cargo
-/// home. Homebrew installs live under a `Cellar/bitrouter/...` path; `cargo
-/// install` places the binary in `<CARGO_HOME>/bin`.
+/// home. npm installs run from `.../node_modules/.bin_real/...`; Homebrew
+/// installs live under a `Cellar/bitrouter/...` path; `cargo install` places the
+/// binary in `<CARGO_HOME>/bin`.
 fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMethod {
+    // npm is checked first, and deliberately before Homebrew: a global npm
+    // install under a Homebrew-managed Node lives beneath `/opt/homebrew/...`,
+    // so the `/homebrew/` substring below would otherwise misclassify it.
+    if is_npm_install(exe) {
+        return InstallMethod::Npm;
+    }
     let exe_str = exe.to_string_lossy();
     if exe_str.contains("/Cellar/bitrouter/") || exe_str.contains("/homebrew/") {
         return InstallMethod::Homebrew;
@@ -38,6 +64,7 @@ fn method_label(method: InstallMethod) -> &'static str {
     match method {
         InstallMethod::Homebrew => "homebrew",
         InstallMethod::Cargo => "cargo",
+        InstallMethod::Npm => "npm",
         InstallMethod::Unknown => "unknown",
     }
 }
@@ -48,6 +75,9 @@ fn delegation_command(method: InstallMethod) -> String {
     match method {
         InstallMethod::Homebrew => "brew upgrade bitrouter".to_string(),
         InstallMethod::Cargo => "cargo install bitrouter --force".to_string(),
+        // CI publishes prereleases to npm under the default `latest` tag; switch
+        // to `@next` here if a dedicated prerelease dist-tag is ever introduced.
+        InstallMethod::Npm => "npm i -g bitrouter@latest".to_string(),
         InstallMethod::Unknown => {
             "curl --proto '=https' --tlsv1.2 -LsSf \
              https://github.com/bitrouter/bitrouter/releases/latest/download/bitrouter-installer.sh | sh"
@@ -374,6 +404,22 @@ mod tests {
     }
 
     #[test]
+    fn detects_npm_from_bin_real_path() {
+        let exe =
+            Path::new("/usr/local/lib/node_modules/bitrouter/node_modules/.bin_real/bitrouter");
+        assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
+    }
+
+    #[test]
+    fn npm_under_homebrew_node_is_npm_not_homebrew() {
+        // A global npm install under a Homebrew-managed Node contains
+        // `/homebrew/`; npm detection must win over the Homebrew heuristic.
+        let exe =
+            Path::new("/opt/homebrew/lib/node_modules/bitrouter/node_modules/.bin_real/bitrouter");
+        assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
+    }
+
+    #[test]
     fn unknown_when_no_signal_matches() {
         let exe = Path::new("/usr/local/bin/bitrouter");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Unknown);
@@ -388,6 +434,10 @@ mod tests {
         assert_eq!(
             delegation_command(InstallMethod::Cargo),
             "cargo install bitrouter --force"
+        );
+        assert_eq!(
+            delegation_command(InstallMethod::Npm),
+            "npm i -g bitrouter@latest"
         );
         assert!(delegation_command(InstallMethod::Unknown).contains("bitrouter-installer.sh"));
     }
