@@ -15,7 +15,7 @@ use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
-    RequestOutcome, RouteHook, StreamHook,
+    RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
@@ -34,6 +34,61 @@ struct StreamingExecution {
     stream: StreamPartStream,
     target: RoutingTarget,
     provider_started_at: Instant,
+}
+
+struct ObservedUpstreamStream {
+    inner: StreamPartStream,
+    hooks: Vec<Arc<dyn ObserveHook>>,
+    request_id: String,
+    target: RoutingTarget,
+    provider_started_at: Instant,
+    terminal: bool,
+}
+
+impl ObservedUpstreamStream {
+    fn notify(&mut self, outcome: StreamHopOutcome<'_>) {
+        if self.terminal {
+            return;
+        }
+        self.terminal = true;
+        let duration_ms = crate::language_model::timing::elapsed_millis(self.provider_started_at);
+        for hook in &self.hooks {
+            let callback = std::panic::AssertUnwindSafe(|| {
+                hook.on_stream_hop_end(&self.request_id, &self.target, outcome, duration_ms)
+            });
+            if std::panic::catch_unwind(callback).is_err() {
+                tracing::warn!("ObserveHook::on_stream_hop_end panicked; swallowed");
+            }
+        }
+    }
+}
+
+impl Stream for ObservedUpstreamStream {
+    type Item = Result<StreamPart>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let item = self.inner.as_mut().poll_next(cx);
+        match &item {
+            std::task::Poll::Ready(None) => self.notify(StreamHopOutcome::Completed),
+            std::task::Poll::Ready(Some(Err(error))) => {
+                self.notify(StreamHopOutcome::Failed(error));
+            }
+            std::task::Poll::Ready(Some(Ok(part))) if part.is_terminal() => {
+                self.notify(StreamHopOutcome::Completed);
+            }
+            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
+        }
+        item
+    }
+}
+
+impl Drop for ObservedUpstreamStream {
+    fn drop(&mut self) {
+        self.notify(StreamHopOutcome::Dropped);
+    }
 }
 
 #[derive(Clone)]
@@ -244,6 +299,7 @@ impl Pipeline {
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
         let mut ctx = PipelineContext::new(req);
+        self.observe_start(&ctx).await;
 
         // ---- Stage 1: pre-request checks ----
         if let Err(e) = self.run_pre_request(&mut ctx).await {
@@ -316,6 +372,7 @@ impl Pipeline {
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
         let mut ctx = PipelineContext::new(req);
+        self.observe_start(&ctx).await;
 
         if let Err(e) = self.run_pre_request(&mut ctx).await {
             log_request_resolve_failed(&ctx, &e);
@@ -599,6 +656,14 @@ impl Pipeline {
                 // Once the stream starts, the SSE response is committed — no
                 // more fallback.
                 Ok(stream) => {
+                    let stream = Box::pin(ObservedUpstreamStream {
+                        inner: stream,
+                        hooks: self.observe_hooks.clone(),
+                        request_id: ctx.request_id().to_string(),
+                        target: target.clone(),
+                        provider_started_at,
+                        terminal: false,
+                    });
                     return Ok(StreamingExecution {
                         stream,
                         target: target.clone(),
@@ -668,6 +733,15 @@ impl Pipeline {
     }
 
     // ===== observe helpers (read-only, swallow errors AND panics) =====
+
+    async fn observe_start(&self, ctx: &PipelineContext) {
+        for hook in &self.observe_hooks {
+            let fut = std::panic::AssertUnwindSafe(hook.on_request_start(ctx));
+            if fut.catch_unwind().await.is_err() {
+                tracing::warn!("ObserveHook::on_request_start panicked; swallowed");
+            }
+        }
+    }
 
     async fn observe_after(&self, phase: Phase, ctx: &PipelineContext) {
         for hook in &self.observe_hooks {

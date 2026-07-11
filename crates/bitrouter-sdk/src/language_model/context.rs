@@ -179,6 +179,19 @@ impl PipelineContext {
         }
     }
 
+    /// End-to-end request time in milliseconds. Once settlement begins this is
+    /// the finalized value; before then it is the current elapsed duration.
+    pub fn request_latency_ms(&self) -> u64 {
+        self.finalized_request_latency_ms
+            .or_else(|| {
+                self.execution_result
+                    .as_ref()
+                    .map(|result| result.latency_ms)
+                    .filter(|latency| *latency > 0)
+            })
+            .unwrap_or_else(|| elapsed_millis(self.request_started_at))
+    }
+
     pub(crate) fn finalize_stream_generation_time(&mut self) {
         let Some(provider_started_at) = self.stream_provider_started_at else {
             return;
@@ -436,10 +449,7 @@ impl PipelineContext {
                 .map(|e| e.server_tool_calls.clone())
                 .unwrap_or_default(),
             streamed: false,
-            latency_ms: self
-                .finalized_request_latency_ms
-                .or_else(|| exec.map(|e| e.latency_ms))
-                .unwrap_or(0),
+            latency_ms: self.request_latency_ms(),
             generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
             first_token_latency_ms: self.first_token_timing.map(|timing| timing.latency_ms),
             first_token_kind: self.first_token_timing.map(|timing| timing.kind),

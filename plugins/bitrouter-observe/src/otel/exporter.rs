@@ -57,7 +57,7 @@ use serde::{Deserialize, Serialize};
 
 use bitrouter_sdk::language_model::{
     Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
-    RequestOutcome, RoutingTarget, StreamContext, StreamInterest, StreamPart,
+    RequestOutcome, RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest, StreamPart,
 };
 
 use crate::otel::cardinality::CardinalityLimiter;
@@ -363,6 +363,10 @@ impl OtelObserveHook {
 
 #[async_trait]
 impl ObserveHook for OtelObserveHook {
+    async fn on_request_start(&self, ctx: &PipelineContext) {
+        self.0.on_request_start(ctx).await
+    }
+
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext) {
         self.0.after_phase(phase, ctx).await
     }
@@ -380,6 +384,17 @@ impl ObserveHook for OtelObserveHook {
         self.0.on_hop_end(ctx, target, outcome).await
     }
 
+    fn on_stream_hop_end(
+        &self,
+        request_id: &str,
+        target: &RoutingTarget,
+        outcome: StreamHopOutcome<'_>,
+        duration_ms: u64,
+    ) {
+        self.0
+            .on_stream_hop_end(request_id, target, outcome, duration_ms)
+    }
+
     fn stream_interest(&self) -> StreamInterest {
         self.0.stream_interest()
     }
@@ -393,80 +408,107 @@ impl ObserveHook for OtelObserveHook {
     }
 }
 
+impl OtelExporter {
+    fn start_request_span(&self, ctx: &PipelineContext) {
+        if self.active_spans.contains_key(ctx.request_id()) {
+            return;
+        }
+
+        // Prefer the host ingress SERVER span, then inbound W3C trace context.
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        let bridge_cx = tracing::Span::current().context();
+        let parent_context = if bridge_cx.span().span_context().is_valid() {
+            bridge_cx
+        } else {
+            global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())))
+        };
+
+        let model = ctx.model().to_string();
+        let span_name = format!("chat {model}");
+        let mut attributes = vec![
+            KeyValue::new("bitrouter.request_id", ctx.request_id().to_string()),
+            KeyValue::new(
+                "bitrouter.api_key_id",
+                ctx.caller().api_key_id().to_string(),
+            ),
+            KeyValue::new("bitrouter.user_id", ctx.caller().user_id().to_string()),
+            KeyValue::new("gen_ai.operation.name", "chat"),
+            KeyValue::new("gen_ai.request.model", model),
+        ];
+        attributes.extend(request_param_attrs(ctx.prompt()));
+
+        let builder = self
+            .tracer
+            .span_builder(span_name)
+            .with_kind(SpanKind::Internal)
+            .with_attributes(attributes);
+        let span = if parent_context.span().span_context().is_valid() {
+            builder.start_with_context(&self.tracer, &parent_context)
+        } else {
+            builder.start(&self.tracer)
+        };
+
+        self.active_spans.insert(
+            ctx.request_id().to_string(),
+            SpanEntry {
+                context: Context::current_with_span(span),
+                created_at: Instant::now(),
+                hop: None,
+                stream_text: Mutex::new(String::new()),
+                stream_reasoning: Mutex::new(String::new()),
+            },
+        );
+        self.gc_expired_spans();
+    }
+
+    fn finish_stream_hop(&self, request_id: &str, outcome: StreamHopOutcome<'_>, duration_ms: u64) {
+        let hop = {
+            let Some(mut entry) = self.active_spans.get_mut(request_id) else {
+                return;
+            };
+            let Some(hop) = entry.hop.take() else {
+                return;
+            };
+            hop
+        };
+
+        let span = hop.context.span();
+        span.set_attribute(KeyValue::new(
+            "bitrouter.latency_ms",
+            i64::try_from(duration_ms).unwrap_or(i64::MAX),
+        ));
+        match outcome {
+            StreamHopOutcome::Completed => span.set_status(Status::Ok),
+            StreamHopOutcome::Failed(error) => {
+                let error_class = error_type(error);
+                span.set_attribute(KeyValue::new("error.type", error_class.clone()));
+                span.add_event(
+                    "exception",
+                    vec![
+                        KeyValue::new("exception.type", error_class),
+                        KeyValue::new("exception.message", error.to_string()),
+                    ],
+                );
+                span.set_status(Status::error(error.to_string()));
+            }
+            StreamHopOutcome::Dropped => {
+                span.set_attribute(KeyValue::new("error.type", "stream_dropped"));
+                span.set_status(Status::error("stream_dropped"));
+            }
+        }
+        span.end();
+    }
+}
+
 #[async_trait]
 impl ObserveHook for OtelExporter {
+    async fn on_request_start(&self, ctx: &PipelineContext) {
+        self.start_request_span(ctx);
+    }
+
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext) {
         match phase {
-            Phase::PreRequest => {
-                // Pick a parent for the root `chat` INTERNAL span:
-                //   1. If the host's `tower-http` `TraceLayer` +
-                //      `tracing-opentelemetry` bridge wrapped this request in
-                //      a SERVER span, parent on it. The bridge does NOT
-                //      synchronise `opentelemetry::Context::current()` with
-                //      tracing's current span across async awaits — it stores
-                //      the OTel data in the tracing-span extensions instead.
-                //      `tracing::Span::current().context()` does the lookup.
-                //   2. Otherwise (no ingress layer — typical in unit tests),
-                //      fall back to extracting an inbound `traceparent` from
-                //      the request headers via the W3C propagator. Spec:
-                //      <https://www.w3.org/TR/trace-context/>
-                use tracing_opentelemetry::OpenTelemetrySpanExt as _;
-                let bridge_cx = tracing::Span::current().context();
-                let parent_context = if bridge_cx.span().span_context().is_valid() {
-                    bridge_cx
-                } else {
-                    global::get_text_map_propagator(|p| p.extract(&HeaderExtractor(ctx.headers())))
-                };
-
-                let model = ctx.model().to_string();
-                // GenAI semconv span name: "{operation} {model}".
-                let span_name = format!("chat {model}");
-
-                let mut attributes = vec![
-                    KeyValue::new("bitrouter.request_id", ctx.request_id().to_string()),
-                    // Raw values on spans — capping is a metrics concern.
-                    KeyValue::new(
-                        "bitrouter.api_key_id",
-                        ctx.caller().api_key_id().to_string(),
-                    ),
-                    KeyValue::new("bitrouter.user_id", ctx.caller().user_id().to_string()),
-                    // GenAI semconv from the start so the operation is
-                    // identifiable even when execution never completes.
-                    KeyValue::new("gen_ai.operation.name", "chat"),
-                    KeyValue::new("gen_ai.request.model", model),
-                ];
-                // The root `chat` span is the single gen_ai *generation* for the
-                // request, so the request parameters (temperature, max_tokens, …)
-                // live here — not on the per-hop CLIENT span, which is no longer a
-                // gen_ai generation (see `build_hop_client_attrs`).
-                attributes.extend(request_param_attrs(ctx.prompt()));
-
-                let builder = self
-                    .tracer
-                    .span_builder(span_name)
-                    .with_kind(SpanKind::Internal)
-                    .with_attributes(attributes);
-
-                let span = if parent_context.span().span_context().is_valid() {
-                    builder.start_with_context(&self.tracer, &parent_context)
-                } else {
-                    builder.start(&self.tracer)
-                };
-
-                let cx = Context::current_with_span(span);
-                self.active_spans.insert(
-                    ctx.request_id().to_string(),
-                    SpanEntry {
-                        context: cx,
-                        created_at: Instant::now(),
-                        hop: None,
-                        stream_text: Mutex::new(String::new()),
-                        stream_reasoning: Mutex::new(String::new()),
-                    },
-                );
-                // Best-effort GC — only walks the map, not held across awaits.
-                self.gc_expired_spans();
-            }
+            Phase::PreRequest => self.start_request_span(ctx),
             Phase::Route => {
                 // Brief INTERNAL span recording the routing decision. Parented
                 // to the root `chat` span.
@@ -632,6 +674,16 @@ impl ObserveHook for OtelExporter {
         hop_span.end();
     }
 
+    fn on_stream_hop_end(
+        &self,
+        request_id: &str,
+        _target: &RoutingTarget,
+        outcome: StreamHopOutcome<'_>,
+        duration_ms: u64,
+    ) {
+        self.finish_stream_hop(request_id, outcome, duration_ms);
+    }
+
     fn stream_interest(&self) -> StreamInterest {
         StreamInterest::all()
     }
@@ -725,9 +777,9 @@ impl ObserveHook for OtelExporter {
             .map(|buf| buf.clone())
             .unwrap_or_default();
 
-        // Streaming hops deliberately survive `HopOutcome::StreamStarted` so
-        // the CLIENT span covers the complete upstream response body. Close
-        // that span now, after the SDK has finalized request/generation time.
+        // Normally the provider body wrapper closes streaming CLIENT spans at
+        // EOF/error/drop. Keep this fallback for observers attached to a
+        // non-standard executor that did not emit the body-terminal callback.
         if let Some(hop) = &entry.hop {
             let hop_span = hop.context.span();
             if let Some(result) = &ctx.execution_result {
@@ -766,16 +818,16 @@ impl ObserveHook for OtelExporter {
                 None => ctx.model().to_string(),
             };
             span.set_attribute(KeyValue::new("$screen_name", screen_name));
+            span.set_attribute(KeyValue::new(
+                "bitrouter.latency_ms",
+                i64::try_from(ctx.request_latency_ms()).unwrap_or(i64::MAX),
+            ));
             if let Some(result) = &ctx.execution_result {
                 span.set_attribute(KeyValue::new(
                     "bitrouter.provider_id",
                     result.provider_id.clone(),
                 ));
                 span.set_attribute(KeyValue::new("bitrouter.model_id", result.model_id.clone()));
-                span.set_attribute(KeyValue::new(
-                    "bitrouter.latency_ms",
-                    result.latency_ms as i64,
-                ));
                 span.set_attribute(KeyValue::new(
                     "bitrouter.generation_time_ms",
                     result.generation_time_ms as i64,
@@ -1148,10 +1200,39 @@ mod hop_tests {
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::error::BitrouterError;
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message,
-        MockExecutor, MockResponse, PipelineBuilder, PipelineRequest, Prompt, Role,
-        StaticRoutingTable, Usage,
+        ApiProtocol, Content, DenyReason, FinishReason, GenerateResult, GenerationParams,
+        HookDecision, Message, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
+        PreRequestHook, Prompt, Role, SettlementContext, SettlementRecorder, StaticRoutingTable,
+        Usage,
     };
+
+    struct RejectingPreRequestHook;
+
+    #[async_trait]
+    impl PreRequestHook for RejectingPreRequestHook {
+        async fn check(
+            &self,
+            _ctx: &mut PipelineContext,
+        ) -> bitrouter_sdk::error::Result<HookDecision> {
+            Ok(HookDecision::Deny(DenyReason::Unauthorized(
+                "rejected".into(),
+            )))
+        }
+    }
+
+    struct BlockingSettlementRecorder {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for BlockingSettlementRecorder {
+        async fn record(&self, _ctx: &mut SettlementContext) -> bitrouter_sdk::error::Result<()> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
+    }
 
     /// In-process span processor that appends every ended span to a shared
     /// vector. Replaces the OTLP/HTTP exporter for tests so assertions can
@@ -2045,6 +2126,118 @@ mod hop_tests {
             Some(latency_ms),
             "streaming provider span closes with the finalized result"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_preflight_exports_request_latency_without_execution_result() {
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        exporter
+            .on_request_end(
+                &ctx,
+                &RequestOutcome::Failed(BitrouterError::UpstreamUnavailable),
+            )
+            .await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
+            .expect("root chat span");
+        assert!(
+            i64_attr(root_chat, "bitrouter.latency_ms").is_some_and(|latency| latency >= 1),
+            "an early failure still carries end-to-end request latency"
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_request_rejection_still_exports_a_root_request_span() {
+        let (exporter, captured) = make_test_exporter();
+        let exporter = Arc::new(exporter);
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("test-model", vec![fresh_target("openai")]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(MockExecutor::always_text("unused")))
+            .pre_request_hook(RejectingPreRequestHook)
+            .observe_hook(OtelObserveHook::new(exporter.clone()));
+        let pipeline = Arc::new(builder.build().expect("pipeline builds"));
+
+        let error = pipeline
+            .execute(fresh_request())
+            .await
+            .expect_err("pre-request rejects");
+        assert!(matches!(error, BitrouterError::Unauthorized(_)));
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
+            .expect("rejected request still has a root chat span");
+        assert!(i64_attr(root_chat, "bitrouter.latency_ms").is_some_and(|latency| latency >= 1));
+    }
+
+    #[tokio::test]
+    async fn provider_stream_span_ends_before_settlement_io() {
+        let (exporter, captured) = make_test_exporter();
+        let exporter = Arc::new(exporter);
+        let target = fresh_target("openai");
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("test-model", vec![target]);
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(MockExecutor::new(vec![MockResponse::Stream(
+                vec![
+                    StreamPart::TextDelta {
+                        text: "hello".into(),
+                    },
+                    StreamPart::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ],
+            )])))
+            .settlement_recorder(BlockingSettlementRecorder {
+                entered: entered.clone(),
+                release: release.clone(),
+            })
+            .observe_hook(OtelObserveHook::new(exporter.clone()));
+        let pipeline = Arc::new(builder.build().expect("pipeline builds"));
+
+        let mut request = fresh_request();
+        request.prompt.stream = true;
+        let stream = pipeline
+            .execute_stream(request)
+            .await
+            .expect("stream starts");
+        let drain = tokio::spawn(async move { stream.collect::<Vec<_>>().await });
+        entered.notified().await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        assert!(
+            spans.iter().any(|span| span.span_kind == SpanKind::Client),
+            "provider CLIENT span ends when its response body ends"
+        );
+        assert!(
+            spans
+                .iter()
+                .all(|span| !(span.name == "chat test-model"
+                    && span.span_kind == SpanKind::Internal)),
+            "root request span stays open while settlement is blocked"
+        );
+
+        release.notify_one();
+        assert!(drain.await.expect("drain task").iter().all(Result::is_ok));
     }
 
     #[tokio::test]

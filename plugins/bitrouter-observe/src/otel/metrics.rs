@@ -129,13 +129,6 @@ impl OtelMetrics {
                 attributes.push(KeyValue::new("bitrouter.account_label", label.clone()));
             }
 
-            // GenAI semconv: operation.duration is a histogram in seconds.
-            // `execution_result.latency_ms` is finalized by the SDK before
-            // settlement for both streamed and non-streamed requests.
-            if let Some(latency_seconds) = request_latency_seconds(ctx) {
-                self.latency_histogram.record(latency_seconds, &attributes);
-            }
-
             if let Some(usage) = &result.result.usage {
                 let mut input_attrs = attributes.clone();
                 input_attrs.push(KeyValue::new("gen_ai.token.type", "input"));
@@ -147,6 +140,12 @@ impl OtelMetrics {
                     .record(usage.completion_tokens, &output_attrs);
             }
         }
+
+        // GenAI semconv: operation.duration is a histogram in seconds. The SDK
+        // exposes elapsed time even when an early failure produced no
+        // `ExecutionResult`, so failed preflight requests are included too.
+        self.latency_histogram
+            .record(request_latency_seconds(ctx), &attributes);
 
         self.request_counter.add(1, &attributes);
 
@@ -179,10 +178,8 @@ impl OtelMetrics {
     }
 }
 
-fn request_latency_seconds(ctx: &PipelineContext) -> Option<f64> {
-    ctx.execution_result
-        .as_ref()
-        .map(|result| result.latency_ms as f64 / 1000.0)
+fn request_latency_seconds(ctx: &PipelineContext) -> f64 {
+    ctx.request_latency_ms() as f64 / 1000.0
 }
 
 fn stream_part_type(part: &StreamPart) -> &'static str {
@@ -247,6 +244,27 @@ mod tests {
             server_tool_calls: Vec::new(),
         });
 
-        assert_eq!(request_latency_seconds(&ctx), Some(0.042));
+        assert_eq!(request_latency_seconds(&ctx), 0.042);
+    }
+
+    #[test]
+    fn request_latency_histogram_includes_early_failures() {
+        let prompt = Prompt {
+            model: "test-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let request =
+            PipelineRequest::new("test-model", CallerContext::new("api-key", "user"), prompt);
+        let ctx = PipelineContext::new(request);
+        std::thread::sleep(Duration::from_millis(2));
+
+        assert!(request_latency_seconds(&ctx) > 0.0);
     }
 }

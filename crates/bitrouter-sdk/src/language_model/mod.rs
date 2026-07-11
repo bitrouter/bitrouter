@@ -84,7 +84,7 @@ pub use executor::{
 };
 pub use hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
-    PreRequestHook, RequestOutcome, RouteHook, StreamHook,
+    PreRequestHook, RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 pub use pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 pub use protocol::{

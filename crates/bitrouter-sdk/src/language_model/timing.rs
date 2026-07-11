@@ -44,9 +44,13 @@ impl FirstTokenKind {
 
     pub(crate) fn from_part(part: &StreamPart) -> Option<Self> {
         match part {
-            StreamPart::ReasoningDelta { .. } => Some(Self::Reasoning),
-            StreamPart::TextDelta { .. } => Some(Self::Text),
-            StreamPart::ToolCallDelta { .. } => Some(Self::Tool),
+            StreamPart::ReasoningDelta { text } if !text.is_empty() => Some(Self::Reasoning),
+            StreamPart::TextDelta { text } if !text.is_empty() => Some(Self::Text),
+            StreamPart::ToolCallDelta {
+                name, arguments, ..
+            } if name.as_ref().is_some_and(|name| !name.is_empty()) || !arguments.is_empty() => {
+                Some(Self::Tool)
+            }
             _ => None,
         }
     }
@@ -66,7 +70,8 @@ pub struct FirstTokenTiming {
 mod tests {
     use std::time::Duration;
 
-    use super::duration_millis;
+    use super::{FirstTokenKind, duration_millis};
+    use crate::language_model::types::StreamPart;
 
     #[test]
     fn positive_sub_millisecond_duration_rounds_to_one() {
@@ -81,5 +86,28 @@ mod tests {
     #[test]
     fn whole_milliseconds_are_preserved() {
         assert_eq!(duration_millis(Duration::from_millis(42)), 42);
+    }
+
+    #[test]
+    fn empty_deltas_are_not_semantic_tokens() {
+        let empty_parts = [
+            StreamPart::ReasoningDelta {
+                text: String::new(),
+            },
+            StreamPart::TextDelta {
+                text: String::new(),
+            },
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: None,
+                arguments: String::new(),
+            },
+        ];
+
+        assert!(
+            empty_parts
+                .iter()
+                .all(|part| FirstTokenKind::from_part(part).is_none())
+        );
     }
 }
