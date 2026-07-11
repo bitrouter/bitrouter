@@ -170,7 +170,11 @@ this doc, or if two iterations make no checkbox progress.
       — startup TCP probe of `cfg.server.listen` sets a warning notice
       (`probe_serve_*` tests); prompt failures surface as red `✗` pane lines
       instead of vanishing into tracing (`prompt_failed_*` tests)
-- [ ] `Ctrl-C` tears down all sessions cleanly from every mode
+- [x] `Ctrl-C` tears down all sessions cleanly from every mode
+      — hoisted to a global check in `reduce()` (was swallowed by
+      Agent/Picker/Broadcast fallthroughs, which also ate the loop's
+      synthesized quit on stream end); test `ctrl_c_quits_from_every_mode`;
+      teardown runs via the loop's `cleanup()` on every exit path
 
 ## Phase 1 — One screen: rail + splittable detail
 

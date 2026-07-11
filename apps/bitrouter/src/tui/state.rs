@@ -279,12 +279,23 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
             effects
         }
-        AppEvent::Key(key) => match state.mode {
-            Mode::Normal => reduce_key_normal(state, key),
-            Mode::Agent => reduce_key_agent(state, key),
-            Mode::Picker => reduce_key_picker(state, key),
-            Mode::Broadcast => reduce_key_broadcast(state, key),
-        },
+        AppEvent::Key(key) => {
+            // Ctrl-C is a global quit — every mode, even with a permission
+            // pending (the loop's teardown drops the pending handle, which
+            // Denies it in the substrate). Also the loop's synthesized quit
+            // key on input-stream end, so it must never be swallowed by a
+            // mode's fallthrough.
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                state.should_quit = true;
+                return vec![Effect::Quit];
+            }
+            match state.mode {
+                Mode::Normal => reduce_key_normal(state, key),
+                Mode::Agent => reduce_key_agent(state, key),
+                Mode::Picker => reduce_key_picker(state, key),
+                Mode::Broadcast => reduce_key_broadcast(state, key),
+            }
+        }
     }
 }
 
@@ -332,13 +343,6 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         .unwrap_or(false);
 
     if has_pending {
-        // Ctrl-C must escape even a pending permission. Dropping the pending
-        // handle in the run loop's teardown defaults the request to Deny, so
-        // this is safe.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            state.should_quit = true;
-            return vec![Effect::Quit];
-        }
         let outcome = match key.code {
             KeyCode::Char('y') => Some(PermissionOutcome::AllowOnce),
             KeyCode::Char('a') => Some(PermissionOutcome::AllowAlways),
@@ -355,12 +359,6 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }];
         }
         return Vec::new();
-    }
-
-    // Ctrl-C quits from anywhere.
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        state.should_quit = true;
-        return vec![Effect::Quit];
     }
 
     match key.code {
@@ -796,6 +794,24 @@ mod tests {
             st.tabs[0].panes[0].pending.is_some(),
             "pending permission untouched by scrolling"
         );
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_every_mode() {
+        for mode in [Mode::Normal, Mode::Agent, Mode::Picker, Mode::Broadcast] {
+            let mut st = AppState::new(pane());
+            st.mode = mode;
+            if mode == Mode::Picker {
+                st.picker = Some(PickerState {
+                    agents: vec!["alpha".into()],
+                    selected: 0,
+                });
+            }
+            let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+            let effects = reduce(&mut st, &AppEvent::Key(key));
+            assert!(st.should_quit, "Ctrl-C must quit from {mode:?}");
+            assert_eq!(effects, vec![Effect::Quit], "quit effect from {mode:?}");
+        }
     }
 
     #[test]
