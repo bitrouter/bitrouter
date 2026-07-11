@@ -679,12 +679,7 @@ impl Pipeline {
     }
 
     async fn observe_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) {
-        for hook in &self.observe_hooks {
-            let fut = std::panic::AssertUnwindSafe(hook.on_hop_start(ctx, target));
-            if fut.catch_unwind().await.is_err() {
-                tracing::warn!("ObserveHook::on_hop_start panicked; swallowed");
-            }
-        }
+        observe_hop_start_with(&self.observe_hooks, ctx, target).await;
     }
 
     async fn observe_hop_end(
@@ -693,12 +688,7 @@ impl Pipeline {
         target: &RoutingTarget,
         outcome: HopOutcome<'_>,
     ) {
-        for hook in &self.observe_hooks {
-            let fut = std::panic::AssertUnwindSafe(hook.on_hop_end(ctx, target, outcome));
-            if fut.catch_unwind().await.is_err() {
-                tracing::warn!("ObserveHook::on_hop_end panicked; swallowed");
-            }
-        }
+        observe_hop_end_with(&self.observe_hooks, ctx, target, outcome).await;
     }
 
     async fn observe_end(&self, ctx: &PipelineContext, outcome: RequestOutcome) {
@@ -707,6 +697,33 @@ impl Pipeline {
             if fut.catch_unwind().await.is_err() {
                 tracing::warn!("ObserveHook::on_request_end panicked; swallowed");
             }
+        }
+    }
+}
+
+async fn observe_hop_start_with(
+    hooks: &[Arc<dyn ObserveHook>],
+    ctx: &PipelineContext,
+    target: &RoutingTarget,
+) {
+    for hook in hooks {
+        let fut = std::panic::AssertUnwindSafe(hook.on_hop_start(ctx, target));
+        if fut.catch_unwind().await.is_err() {
+            tracing::warn!("ObserveHook::on_hop_start panicked; swallowed");
+        }
+    }
+}
+
+async fn observe_hop_end_with(
+    hooks: &[Arc<dyn ObserveHook>],
+    ctx: &PipelineContext,
+    target: &RoutingTarget,
+    outcome: HopOutcome<'_>,
+) {
+    for hook in hooks {
+        let fut = std::panic::AssertUnwindSafe(hook.on_hop_end(ctx, target, outcome));
+        if fut.catch_unwind().await.is_err() {
+            tracing::warn!("ObserveHook::on_hop_end panicked; swallowed");
         }
     }
 }

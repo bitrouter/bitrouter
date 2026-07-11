@@ -113,12 +113,11 @@ struct SpanEntry {
     stream_reasoning: Mutex<String>,
 }
 
-/// In-flight per-hop span state — created on `on_hop_start`, consumed on
-/// `on_hop_end`. `started_at` is the elapsed-timer source for TTFB
-/// propagation to the root chat span on a streaming hop.
+/// In-flight per-hop span state — created on `on_hop_start`. Non-streaming
+/// hops are consumed by `on_hop_end`; a streaming hop remains open across the
+/// response body and is consumed by `on_request_end`.
 struct HopState {
     context: Context,
-    started_at: Instant,
 }
 
 /// OpenTelemetry exporter with multi-tenant attribution.
@@ -564,10 +563,19 @@ impl ObserveHook for OtelExporter {
         });
         ctx.set_outbound_trace_headers(headers);
 
-        entry.hop = Some(HopState {
+        let previous_hop = entry.hop.replace(HopState {
             context: hop_context,
-            started_at: Instant::now(),
         });
+        drop(entry);
+
+        // A server-tool stream may open multiple upstream turns inside one
+        // caller-visible response. Starting the next turn is the terminal
+        // boundary for the previous successful CLIENT span.
+        if let Some(previous_hop) = previous_hop {
+            let previous_span = previous_hop.context.span();
+            previous_span.set_status(Status::Ok);
+            previous_span.end();
+        }
     }
 
     async fn on_hop_end(
@@ -576,20 +584,25 @@ impl ObserveHook for OtelExporter {
         _target: &RoutingTarget,
         outcome: HopOutcome<'_>,
     ) {
-        // Borrow the map only long enough to take the hop state + clone the
-        // root context. Holding the DashMap guard across the span work would
-        // serialise unrelated requests sharing a shard.
-        let (hop, root_context) = {
+        // A successful stream handshake only means response headers arrived.
+        // Keep the CLIENT span open across the response body; `on_request_end`
+        // closes it with the finalized execution result and terminal outcome.
+        if matches!(outcome, HopOutcome::StreamStarted) {
+            return;
+        }
+
+        // Borrow the map only long enough to take the hop state. Holding the
+        // DashMap guard across the span work would serialise unrelated
+        // requests sharing a shard.
+        let hop = {
             let Some(mut entry) = self.active_spans.get_mut(ctx.request_id()) else {
                 return;
             };
             let Some(hop) = entry.hop.take() else {
                 return;
             };
-            (hop, entry.context.clone())
+            hop
         };
-        let hop_elapsed = hop.started_at.elapsed();
-        let is_stream_start = matches!(outcome, HopOutcome::StreamStarted);
 
         // Close the hop CLIENT span. Access via `Context::span()` instead of
         // attaching the context + `get_active_span` — same effect, fewer
@@ -600,11 +613,7 @@ impl ObserveHook for OtelExporter {
                 set_hop_client_attrs(&hop_span, result);
                 hop_span.set_status(Status::Ok);
             }
-            HopOutcome::StreamStarted => {
-                // Stream handshake reached (TTFB). Body-level attrs land on
-                // the root span via `on_request_end`.
-                hop_span.set_status(Status::Ok);
-            }
+            HopOutcome::StreamStarted => unreachable!("stream start returned above"),
             HopOutcome::Failed(err) => {
                 let err_class = error_type(err);
                 hop_span.set_attribute(KeyValue::new("error.type", err_class.clone()));
@@ -621,16 +630,6 @@ impl ObserveHook for OtelExporter {
             }
         }
         hop_span.end();
-
-        // For a streaming hop that just reached TTFB, propagate the latency
-        // to the root chat span. Spec:
-        // gen_ai.response.time_to_first_chunk is in seconds (f64).
-        if is_stream_start {
-            root_context.span().set_attribute(KeyValue::new(
-                "gen_ai.response.time_to_first_chunk",
-                hop_elapsed.as_secs_f64(),
-            ));
-        }
     }
 
     fn stream_interest(&self) -> StreamInterest {
@@ -725,6 +724,37 @@ impl ObserveHook for OtelExporter {
             .lock()
             .map(|buf| buf.clone())
             .unwrap_or_default();
+
+        // Streaming hops deliberately survive `HopOutcome::StreamStarted` so
+        // the CLIENT span covers the complete upstream response body. Close
+        // that span now, after the SDK has finalized request/generation time.
+        if let Some(hop) = &entry.hop {
+            let hop_span = hop.context.span();
+            if let Some(result) = &ctx.execution_result {
+                set_hop_client_attrs(&hop_span, result);
+            }
+            match outcome {
+                RequestOutcome::Completed => hop_span.set_status(Status::Ok),
+                RequestOutcome::Failed(err) => {
+                    let err_class = error_type(err);
+                    hop_span.set_attribute(KeyValue::new("error.type", err_class.clone()));
+                    hop_span.add_event(
+                        "exception",
+                        vec![
+                            KeyValue::new("exception.type", err_class),
+                            KeyValue::new("exception.message", err.to_string()),
+                        ],
+                    );
+                    hop_span.set_status(Status::error(err.to_string()));
+                }
+                RequestOutcome::ClientDisconnected => {
+                    hop_span.set_attribute(KeyValue::new("error.type", "client_disconnected"));
+                    hop_span.set_status(Status::error("client_disconnected"));
+                }
+            }
+            hop_span.end();
+        }
+
         opentelemetry::trace::get_active_span(|span| {
             // PostHog's "URL / Screen" column reads `$screen_name`. Set it once,
             // here at request end, to the resolved `<provider>/<model>` route —
@@ -794,6 +824,23 @@ impl ObserveHook for OtelExporter {
                         ])),
                     ));
                 }
+            }
+
+            if let Some(first_token) = ctx.first_token_timing() {
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.first_token_latency_ms",
+                    first_token.latency_ms as i64,
+                ));
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.first_token_kind",
+                    first_token.kind.as_str(),
+                ));
+                // GenAI semconv uses seconds for time-to-first-chunk. The SDK
+                // source is the first reasoning/text/tool delta, never headers.
+                span.set_attribute(KeyValue::new(
+                    "gen_ai.response.time_to_first_chunk",
+                    first_token.latency_ms as f64 / 1000.0,
+                ));
             }
 
             // Cloud-forwarded attributes (cost / namespace / routing / …). A
@@ -1092,6 +1139,7 @@ mod hop_tests {
 
     use std::sync::Mutex;
 
+    use futures::StreamExt;
     use opentelemetry::Value;
     use opentelemetry::trace::TraceResult;
     use opentelemetry_sdk::export::trace::SpanData;
@@ -1101,7 +1149,8 @@ mod hop_tests {
     use bitrouter_sdk::error::BitrouterError;
     use bitrouter_sdk::language_model::{
         ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message,
-        PipelineRequest, Prompt, Role, Usage,
+        MockExecutor, MockResponse, PipelineBuilder, PipelineRequest, Prompt, Role,
+        StaticRoutingTable, Usage,
     };
 
     /// In-process span processor that appends every ended span to a shared
@@ -1828,23 +1877,31 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn streaming_hop_propagates_ttfb_to_root_chat() {
-        // `HopOutcome::StreamStarted` is the TTFB moment for a streaming
-        // request. The exporter writes `gen_ai.response.time_to_first_chunk`
-        // (seconds) on the root chat INTERNAL span, not the hop CLIENT span.
+    async fn streaming_hop_remains_open_until_request_end() {
+        // `HopOutcome::StreamStarted` only means that HTTP response headers
+        // arrived. The provider CLIENT span must stay open until the streamed
+        // body reaches its terminal request outcome.
         let (exporter, captured) = make_test_exporter();
-        let ctx = PipelineContext::new(fresh_request());
+        let mut ctx = PipelineContext::new(fresh_request());
         let target = fresh_target("openai");
 
         exporter.after_phase(Phase::PreRequest, &ctx).await;
         exporter.on_hop_start(&ctx, &target).await;
-        // Brief sleep so the elapsed time TTFB is > 0 — the attribute is
-        // an `f64` of seconds; even a few milliseconds is enough to make
-        // a non-zero assertion meaningful.
-        tokio::time::sleep(Duration::from_millis(5)).await;
         exporter
             .on_hop_end(&ctx, &target, HopOutcome::StreamStarted)
             .await;
+        exporter.provider.force_flush();
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|span| span.span_kind != SpanKind::Client),
+            "stream handshake must not end the provider CLIENT span"
+        );
+
+        ctx.execution_result = Some(fresh_result(&target));
         exporter
             .on_request_end(&ctx, &RequestOutcome::Completed)
             .await;
@@ -1860,26 +1917,133 @@ mod hop_tests {
             .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
             .expect("per-hop chat CLIENT span");
 
-        // TTFB lives on the ROOT chat span, not on the hop.
-        let ttfb = root_chat
-            .attributes
-            .iter()
-            .find(|kv| kv.key.as_str() == "gen_ai.response.time_to_first_chunk")
-            .and_then(|kv| match kv.value {
-                Value::F64(v) => Some(v),
-                _ => None,
-            })
-            .expect("root chat carries gen_ai.response.time_to_first_chunk on stream start");
+        assert_eq!(i64_attr(hop_chat, "bitrouter.latency_ms"), Some(42));
         assert!(
-            ttfb > 0.0,
-            "time_to_first_chunk should be positive seconds; got {ttfb}"
-        );
-        assert!(
-            hop_chat
+            root_chat
                 .attributes
                 .iter()
                 .all(|kv| kv.key.as_str() != "gen_ai.response.time_to_first_chunk"),
-            "TTFB belongs on the root chat span, not the hop"
+            "HTTP headers alone must not be reported as the first semantic chunk"
+        );
+    }
+
+    #[tokio::test]
+    async fn next_nested_streaming_hop_closes_the_previous_client_span() {
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+        let first = fresh_target("first");
+        let second = fresh_target("second");
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &first).await;
+        exporter
+            .on_hop_end(&ctx, &first, HopOutcome::StreamStarted)
+            .await;
+        exporter.on_hop_start(&ctx, &second).await;
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let clients: Vec<_> = spans
+            .iter()
+            .filter(|span| span.span_kind == SpanKind::Client)
+            .collect();
+        assert_eq!(clients.len(), 1, "the prior nested stream span is closed");
+        assert_eq!(str_attr(clients[0], "bitrouter.provider_id"), Some("first"));
+        assert_eq!(
+            clients[0].status,
+            Status::Ok,
+            "a completed intermediate stream turn is successful"
+        );
+
+        exporter
+            .on_hop_end(&ctx, &second, HopOutcome::StreamStarted)
+            .await;
+        ctx.execution_result = Some(fresh_result(&second));
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush();
+
+        assert_eq!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|span| span.span_kind == SpanKind::Client)
+                .count(),
+            2,
+            "the final nested stream span closes at request end"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_pipeline_exports_canonical_latency_and_first_token_timing() {
+        let (exporter, captured) = make_test_exporter();
+        let exporter = Arc::new(exporter);
+        let target = fresh_target("openai");
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("test-model", vec![target]);
+
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(MockExecutor::new(vec![MockResponse::Stream(
+                vec![
+                    StreamPart::ResponseStarted {
+                        id: "chatcmpl-streamed".into(),
+                    },
+                    StreamPart::TextDelta {
+                        text: "hello".into(),
+                    },
+                    StreamPart::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ],
+            )])))
+            .observe_hook(OtelObserveHook::new(exporter.clone()));
+        let pipeline = Arc::new(builder.build().expect("pipeline builds"));
+
+        let mut request = fresh_request();
+        request.prompt.stream = true;
+        let stream = pipeline
+            .execute_stream(request)
+            .await
+            .expect("stream starts");
+        let parts: Vec<_> = stream.collect().await;
+        assert!(parts.iter().all(Result::is_ok));
+        exporter.provider.force_flush();
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Internal)
+            .expect("root chat span");
+        let hop_chat = spans
+            .iter()
+            .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
+            .expect("provider CLIENT span");
+
+        let latency_ms = i64_attr(root_chat, "bitrouter.latency_ms")
+            .expect("root carries canonical request latency");
+        let generation_ms = i64_attr(root_chat, "bitrouter.generation_time_ms")
+            .expect("root carries canonical provider generation time");
+        let first_token_ms = i64_attr(root_chat, "bitrouter.first_token_latency_ms")
+            .expect("root carries canonical first semantic token latency");
+        assert!(latency_ms >= 1);
+        assert!(generation_ms >= 1);
+        assert!(first_token_ms >= 1);
+        assert_eq!(
+            str_attr(root_chat, "bitrouter.first_token_kind"),
+            Some("text")
+        );
+        assert_eq!(
+            f64_attr(root_chat, "gen_ai.response.time_to_first_chunk"),
+            Some(first_token_ms as f64 / 1000.0)
+        );
+        assert_eq!(
+            i64_attr(hop_chat, "bitrouter.latency_ms"),
+            Some(latency_ms),
+            "streaming provider span closes with the finalized result"
         );
     }
 

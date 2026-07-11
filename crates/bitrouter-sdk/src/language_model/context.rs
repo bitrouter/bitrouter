@@ -193,22 +193,6 @@ impl PipelineContext {
         self.first_token_timing
     }
 
-    fn execution_target(&self) -> Option<RoutingTarget> {
-        let chain = self.route_chain.as_ref()?;
-        let Some(result) = self.execution_result.as_ref() else {
-            return chain.first().cloned();
-        };
-        chain
-            .iter()
-            .find(|target| {
-                target.provider_name == result.provider_id
-                    && target.service_id == result.model_id
-                    && target.account_label == result.account_label
-            })
-            .cloned()
-            .or_else(|| chain.first().cloned())
-    }
-
     /// Store outbound HTTP headers for the next upstream request. The
     /// executor merges them into the request just before issuing it.
     /// Typically called by an `ObserveHook` from `on_hop_start` to inject
