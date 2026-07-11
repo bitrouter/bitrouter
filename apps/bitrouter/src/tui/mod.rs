@@ -34,6 +34,20 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     )
     .context("building acp catalog from config.agents")?;
     let agent_ids: Vec<String> = cfg.agents.keys().cloned().collect();
+    // Fail a bad --agent id up front with the fix in the message, instead of
+    // surfacing the substrate's bare lookup error.
+    if !cfg.agents.contains_key(agent_id) {
+        let mut available = agent_ids.clone();
+        available.sort();
+        anyhow::bail!(
+            "no acp agent '{agent_id}' under `agents:` in the config — available: {}",
+            if available.is_empty() {
+                "none configured (add one with `bitrouter agents install <id>`)".to_string()
+            } else {
+                available.join(", ")
+            }
+        );
+    }
     let base_repo = std::env::current_dir().context("resolving current directory")?;
 
     // ── Initial session. ──
