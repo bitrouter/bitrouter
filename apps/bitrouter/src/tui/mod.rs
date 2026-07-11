@@ -147,7 +147,10 @@ async fn event_loop(
         let app_event: Option<AppEvent> = tokio::select! {
             maybe_key = keys.next() => match maybe_key {
                 Some(Ok(CtEvent::Key(k))) => Some(AppEvent::Key(k)),
-                Some(Ok(_)) => None,           // resize/mouse ignored in M1
+                // Resize needs no state change: `None` continues to the top of
+                // the loop, whose draw autoresizes to the new size. Mouse is
+                // deliberately unhandled.
+                Some(Ok(_)) => None,
                 Some(Err(_)) | None => Some(AppEvent::Key(quit_key())),
             },
             maybe_in = rx.recv() => match maybe_in {

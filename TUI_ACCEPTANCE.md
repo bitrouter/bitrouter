@@ -156,7 +156,10 @@ this doc, or if two iterations make no checkbox progress.
       event loop — verified via a panic-hook/fault-injection test
       — `install_panic_restore` chains restore before the default hook;
       test `tui::tests::panic_hook_restores_terminal_before_reporting`
-- [ ] Resize down to a tiny terminal (e.g. 20×5) degrades without panic/artifacts
+- [x] Resize down to a tiny terminal (e.g. 20×5) degrades without panic/artifacts
+      — test `tui::ui::tests::tiny_terminals_render_every_surface_without_panic`
+      renders all surfaces (grid/popups/notice/zoom) at 1×1…80×1; resize
+      redraw path documented in the event loop
 - [ ] Focused detail pane scrolls its scrollback (PageUp/Down) with an off-tail
       indicator; new output while scrolled up does not yank to bottom
 - [ ] `bitrouter serve` not running → actionable error, not a hang

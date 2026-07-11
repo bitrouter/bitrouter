@@ -420,6 +420,44 @@ mod tests {
     }
 
     #[test]
+    fn tiny_terminals_render_every_surface_without_panic() {
+        use crate::tui::event::PermOption;
+        use crate::tui::state::PendingView;
+        use bitrouter_substrate::translate::PermissionOutcome;
+
+        // Every render surface active at once: tab bar, multi-pane grid,
+        // input, mode bar, picker overlay, permission popup, notice.
+        let mut st = three_panes();
+        st.tabs[0].panes[0].pending = Some(PendingView {
+            title: "write file".into(),
+            diff: Some("+added\n-removed".into()),
+            options: vec![PermOption {
+                outcome: PermissionOutcome::AllowOnce,
+                label: "allow".into(),
+            }],
+        });
+        st.tabs[0].panes[1].attention = true;
+        st.mode = Mode::Picker;
+        st.picker = Some(PickerState {
+            agents: vec!["alpha".into()],
+            selected: 0,
+        });
+        st.notice = Some("spawn failed".into());
+
+        // Degenerate sizes: the spec's 20x5, plus 1-cell and 1-row/1-col
+        // extremes. Passing = no panic; ratatui clamps layout.
+        for (w, h) in [(1, 1), (2, 2), (5, 3), (10, 2), (20, 5), (80, 1), (1, 24)] {
+            let _ = draw(&st, w, h);
+        }
+
+        // Zoomed path at the same extremes.
+        st.zoom = true;
+        for (w, h) in [(1, 1), (20, 5)] {
+            let _ = draw(&st, w, h);
+        }
+    }
+
+    #[test]
     fn broadcast_input_renders_in_broadcast_mode() {
         use crate::tui::state::Mode;
         let mut st = three_panes();
