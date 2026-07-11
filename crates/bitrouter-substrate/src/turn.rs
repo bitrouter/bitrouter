@@ -38,6 +38,10 @@ struct Job<T> {
 /// prompt result.
 pub struct TurnController<T> {
     tx: mpsc::Sender<Job<T>>,
+    /// The worker task, kept so [`shutdown`](Self::shutdown) can await its exit
+    /// — which proves everything the `run_turn` closure captured (pipeline,
+    /// executor, upstream connection) has been released.
+    worker: tokio::task::JoinHandle<()>,
 }
 
 impl<T: Send + 'static> TurnController<T> {
@@ -53,7 +57,7 @@ impl<T: Send + 'static> TurnController<T> {
     {
         let (tx, mut rx) = mpsc::channel::<Job<T>>(bound);
 
-        tokio::spawn(async move {
+        let worker = tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 let result = run_turn(job.label).await;
                 // Ignore send error: the caller may have dropped the receiver.
@@ -61,7 +65,19 @@ impl<T: Send + 'static> TurnController<T> {
             }
         });
 
-        Self { tx }
+        Self { tx, worker }
+    }
+
+    /// Close the queue and await the worker's exit, deterministically releasing
+    /// everything the `run_turn` closure captured. Returns `false` when the
+    /// worker did not exit within `timeout` (an in-flight turn is still
+    /// running); the worker keeps running detached in that case.
+    pub async fn shutdown(self, timeout: std::time::Duration) -> bool {
+        let Self { tx, worker } = self;
+        // Closing the job channel makes the worker's `recv()` yield `None`
+        // once the in-flight turn (if any) completes.
+        drop(tx);
+        tokio::time::timeout(timeout, worker).await.is_ok()
     }
 
     /// Enqueue a turn.
@@ -155,6 +171,44 @@ mod tests {
         let c_rx = c.submit("C".into()); // full — must not panic
         let result = c_rx.await.unwrap();
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_awaits_worker_and_releases_captures() {
+        use std::sync::Arc;
+        // The closure captures an Arc; after shutdown() the worker (the only
+        // other holder) must be gone, proving captured state is released.
+        let captured = Arc::new(());
+        let held = Arc::clone(&captured);
+        let c = TurnController::new(4, move |_l: String| {
+            let _held = Arc::clone(&held);
+            async move { Ok::<(), anyhow::Error>(()) }
+        });
+        c.submit("A".into()).await.unwrap().unwrap();
+        assert!(
+            c.shutdown(std::time::Duration::from_secs(1)).await,
+            "idle worker exits within the bound"
+        );
+        assert_eq!(
+            Arc::strong_count(&captured),
+            1,
+            "worker dropped the closure and its captures"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_times_out_on_a_hung_turn() {
+        let c = TurnController::new(4, |_l: String| async {
+            std::future::pending::<()>().await;
+            Ok::<(), anyhow::Error>(())
+        });
+        let _rx = c.submit("stuck".into());
+        // Give the worker a chance to pick the job up.
+        tokio::task::yield_now().await;
+        assert!(
+            !c.shutdown(std::time::Duration::from_millis(50)).await,
+            "a hung in-flight turn must not wedge shutdown"
+        );
     }
 
     #[tokio::test]

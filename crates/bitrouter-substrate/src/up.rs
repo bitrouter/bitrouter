@@ -46,16 +46,16 @@ use std::collections::HashMap;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, EnvVariable, InitializeRequest, McpServer, McpServerStdio,
-    NewSessionRequest, PermissionOption, PromptRequest, PromptResponse, RequestPermissionRequest,
-    RequestPermissionResponse, SessionId, SessionNotification, SessionUpdate, TextContent,
-    ToolCallUpdate,
+    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PermissionOption,
+    PromptRequest, PromptResponse, RequestPermissionRequest, RequestPermissionResponse, SessionId,
+    SessionNotification, SessionUpdate, TextContent, ToolCallUpdate,
 };
-use agent_client_protocol::{AcpAgent, Agent, ConnectionTo, Responder};
+use agent_client_protocol::{Agent, ByteStreams, ConnectionTo, Responder};
 use futures::channel::{mpsc, oneshot};
 use futures::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::translate::{PermissionOutcome, SessionUpdateKind, select_option, translate};
 
@@ -136,25 +136,64 @@ pub struct UpstreamConnection {
     _thread: std::thread::JoinHandle<()>,
 }
 
-/// Build an [`AcpAgent`] that spawns `command args` with `env` applied to the
-/// child process. Shared by [`UpstreamConnection::spawn`] and [`health_check`]
-/// so both spawn paths pass the configured agent environment identically —
-/// `AcpAgent::spawn_process` forwards each [`EnvVariable`] to the child via
-/// `Command::env`.
-fn build_agent(command: &str, args: &[String], env: &HashMap<String, String>) -> AcpAgent {
-    let name = std::path::Path::new(command)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("agent")
-        .to_string();
-    let env_vars: Vec<EnvVariable> = env
-        .iter()
-        .map(|(k, v)| EnvVariable::new(k.clone(), v.clone()))
-        .collect();
-    let server = McpServerStdio::new(name, command)
-        .args(args.to_vec())
-        .env(env_vars);
-    AcpAgent::new(McpServer::Stdio(server))
+/// Spawn `command args` with `env` applied, stdio piped, as its own
+/// **process-group leader** (unix). We own the spawn (instead of handing it to
+/// the ACP SDK's `AcpAgent`) because the SDK's teardown kills only its direct
+/// child: an `npx …` wrapper spawns the real agent as a *grandchild*, which a
+/// direct-child kill orphans. A group leader lets [`terminate_child_tree`]
+/// signal the whole tree.
+///
+/// The child's working directory is deliberately not set — ACP carries the
+/// session cwd at the protocol level via `NewSessionRequest`.
+fn spawn_child_group(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> std::io::Result<tokio::process::Child> {
+    let mut cmd = tokio::process::Command::new(command);
+    cmd.args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        // Backstop only — the deliberate kill path is `terminate_child_tree`.
+        .kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.spawn()
+}
+
+/// Kill the child's entire process group (unix: `killpg`; elsewhere: the
+/// direct child only) and reap it, so no descendant of an npx-style wrapper
+/// outlives the connection.
+async fn terminate_child_tree(mut child: tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // SAFETY: plain syscall; the pgid equals the child's pid because
+        // `spawn_child_group` made it a process-group leader. ESRCH (already
+        // gone) is harmless.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+/// Drain an agent's stderr into tracing so it can neither block the child on a
+/// full pipe nor scribble over the caller's terminal (the TUI runs on the
+/// alternate screen).
+fn drain_child_stderr(stderr: tokio::process::ChildStderr) {
+    use tokio::io::AsyncBufReadExt;
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::debug!(target: "bitrouter_substrate::agent_stderr", "{line}");
+        }
+    });
 }
 
 impl UpstreamConnection {
@@ -167,9 +206,10 @@ impl UpstreamConnection {
         env: &HashMap<String, String>,
         cwd: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
-        // `AcpAgent::spawn_process` does not set the child's working directory;
+        // The child process is spawned inside `drive()` on the driver thread's
+        // runtime (tokio process handling needs its owning reactor there);
         // ACP carries the session cwd at the protocol level via `NewSessionRequest`.
-        let agent = build_agent(command, args, env);
+        let spawn_spec = (command.to_string(), args.to_vec(), env.clone());
         let session_cwd =
             cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
 
@@ -196,7 +236,7 @@ impl UpstreamConnection {
                     }
                 };
                 rt.block_on(drive(
-                    agent,
+                    spawn_spec,
                     session_cwd,
                     cmd_rx,
                     updates_for_thread,
@@ -317,12 +357,39 @@ impl UpstreamConnection {
             })
             .map_err(|_| anyhow::anyhow!("upstream command loop closed"))
     }
+
+    /// Close the command loop and **join the driver thread**, bounded by
+    /// `timeout`. Returns `true` when the thread exited — which proves the SDK
+    /// connection unwound and its `ChildGuard` killed the agent child.
+    ///
+    /// Joining matters for one-shot CLIs (`bitrouter acp prompt`): their
+    /// process exits right after teardown, and an un-joined driver thread is
+    /// killed mid-unwind before the child-kill destructor runs, orphaning the
+    /// agent process. On `false` (timeout) the thread keeps unwinding
+    /// detached — a long-lived process still cleans up eventually, but a
+    /// process about to exit may leak the child.
+    pub async fn shutdown(self, timeout: std::time::Duration) -> bool {
+        let Self {
+            cmd_tx, _thread, ..
+        } = self;
+        // Sole sender: dropping it ends `drive()`'s command loop, the SDK
+        // connection unwinds, and `ChildGuard` kills the agent child.
+        drop(cmd_tx);
+        // Join off the async runtime; bound the wait.
+        let join = tokio::task::spawn_blocking(move || {
+            let _ = _thread.join();
+        });
+        tokio::time::timeout(timeout, join).await.is_ok()
+    }
 }
 
-/// Build the ACP client, perform the handshake (reporting it back over
-/// `handshake_tx`), then run the command loop until the command channel closes.
+/// Spawn the agent child (as a process-group leader), build the ACP client
+/// over its stdio, perform the handshake (reporting it back over
+/// `handshake_tx`), then run the command loop until the command channel
+/// closes — after which the **whole child process tree** is killed and reaped
+/// before this returns (and with it, the driver thread exits).
 async fn drive(
-    agent: AcpAgent,
+    spawn_spec: (String, Vec<String>, HashMap<String, String>),
     session_cwd: PathBuf,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     updates_tx: broadcast::Sender<SessionUpdateKind>,
@@ -330,6 +397,27 @@ async fn drive(
     perm_tx: mpsc::UnboundedSender<PendingPermission>,
     handshake_tx: oneshot::Sender<anyhow::Result<Handshake>>,
 ) {
+    let (command, args, env) = spawn_spec;
+    let mut child = match spawn_child_group(&command, &args, &env) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = handshake_tx.send(Err(anyhow::anyhow!("spawning agent '{command}': {e}")));
+            return;
+        }
+    };
+    let (child_stdin, child_stdout) = match (child.stdin.take(), child.stdout.take()) {
+        (Some(i), Some(o)) => (i, o),
+        _ => {
+            let _ = handshake_tx.send(Err(anyhow::anyhow!("agent '{command}': stdio not piped")));
+            terminate_child_tree(child).await;
+            return;
+        }
+    };
+    if let Some(stderr) = child.stderr.take() {
+        drain_child_stderr(stderr);
+    }
+    let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
+
     let notif_updates = updates_tx.clone();
     let notif_raw_updates = raw_updates_tx.clone();
     let handler_perm_tx = perm_tx.clone();
@@ -409,7 +497,7 @@ async fn drive(
             },
             agent_client_protocol::on_receive_request!(),
         )
-        .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+        .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
             // ── Handshake ──────────────────────────────────────────────────
             connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
@@ -472,6 +560,12 @@ async fn drive(
         })
         .await;
 
+    // The connection is done (command loop ended, or connect failed). Kill the
+    // whole child process tree and reap it BEFORE returning: the driver thread
+    // exiting is the signal `UpstreamConnection::shutdown` joins on, so by the
+    // time a caller's process exits, no agent descendant survives.
+    terminate_child_tree(child).await;
+
     // If the handshake never completed (connect/initialize/session-new failed),
     // surface the error to `spawn()` so it doesn't hang on the oneshot.
     let report = handshake_tx.lock().ok().and_then(|mut guard| guard.take());
@@ -517,7 +611,21 @@ async fn health_check_inner(
     args: &[String],
     env: &HashMap<String, String>,
 ) -> Result<std::time::Duration, String> {
-    let agent = build_agent(command, args, env);
+    let mut child = match spawn_child_group(command, args, env) {
+        Ok(c) => c,
+        Err(e) => return Err(format!("spawn failed: {e}")),
+    };
+    let (child_stdin, child_stdout) = match (child.stdin.take(), child.stdout.take()) {
+        (Some(i), Some(o)) => (i, o),
+        _ => {
+            terminate_child_tree(child).await;
+            return Err("stdio not piped".to_string());
+        }
+    };
+    if let Some(stderr) = child.stderr.take() {
+        drain_child_stderr(stderr);
+    }
+    let transport = ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
     let (result_tx, result_rx) =
         futures::channel::oneshot::channel::<Result<std::time::Duration, String>>();
@@ -527,7 +635,7 @@ async fn health_check_inner(
     let connect_result = agent_client_protocol::Client
         .builder()
         .name("bitrouter-health-check")
-        .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+        .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
             let started = std::time::Instant::now();
             let init_result = connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1))
@@ -548,6 +656,10 @@ async fn health_check_inner(
             Ok(())
         })
         .await;
+
+    // Kill and reap the probe child's whole tree before reporting — a
+    // health-check must never leave an agent process behind.
+    terminate_child_tree(child).await;
 
     // If the result was already sent via the closure, use it. Otherwise surface
     // the connect-level error (spawn failed, process exited before initialize, etc.).

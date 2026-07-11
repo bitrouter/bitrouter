@@ -100,9 +100,17 @@ pub async fn serve(config: Config, agent_id: &str, worktree: Option<&str>) -> Re
         });
     }
     let session = Arc::new(session);
-    bitrouter_substrate::down::serve(session)
+    let result = bitrouter_substrate::down::serve(Arc::clone(&session))
         .await
-        .map_err(|e| anyhow::anyhow!("acp serve: {e}"))
+        .map_err(|e| anyhow::anyhow!("acp serve: {e}"));
+    // Explicit teardown so the agent child is killed and reaped before this
+    // process exits — merely dropping the session would leave the driver
+    // thread unwinding as the process dies, orphaning the child.
+    match Arc::try_unwrap(session) {
+        Ok(only) => only.shutdown().await.context("shutting down acp session")?,
+        Err(_) => tracing::warn!("session still referenced after serve; skipping shutdown"),
+    }
+    result
 }
 
 // ── prompt ────────────────────────────────────────────────────────────────────
