@@ -10,8 +10,10 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::state::{AppState, Line, Mode, PaneState, PendingView, PickerState};
 
-/// Render the whole app for one frame.
-pub fn render(state: &AppState, frame: &mut Frame) {
+/// Render the whole app for one frame. Takes `&mut` so panes can record the
+/// viewport height they were drawn at (ratatui stateful-render idiom) — the
+/// reducer uses it to page the scrollback by exactly one screen.
+pub fn render(state: &mut AppState, frame: &mut Frame) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -27,18 +29,15 @@ pub fn render(state: &AppState, frame: &mut Frame) {
 
     render_tabbar(state, frame, tabbar_area);
 
-    let (panes, focus): (&[PaneState], usize) = match state.active() {
-        Some(t) => (t.panes.as_slice(), t.focus),
-        None => (&[], 0),
-    };
-
     if state.zoom {
-        if let Some(pane) = state.focused() {
+        let focus = state.active().map(|t| t.focus).unwrap_or(0);
+        if let Some(pane) = state.focused_mut() {
             render_grid_pane(pane, true, focus, frame, grid_area);
         }
-    } else {
-        let rects = grid_rects(grid_area, panes.len());
-        for (i, (pane, rect)) in panes.iter().zip(rects.iter()).enumerate() {
+    } else if let Some(tab) = state.active_mut() {
+        let focus = tab.focus;
+        let rects = grid_rects(grid_area, tab.panes.len());
+        for (i, (pane, rect)) in tab.panes.iter_mut().zip(rects.iter()).enumerate() {
             render_grid_pane(pane, i == focus, i, frame, *rect);
         }
     }
@@ -127,9 +126,23 @@ fn grid_rects(area: Rect, n: usize) -> Vec<Rect> {
 }
 
 /// Render one agent pane: bordered block titled `[i] agent · shortid [⚠]`, with
-/// the focused pane's border highlighted, showing the scrollback tail.
-fn render_grid_pane(pane: &PaneState, focused: bool, index: usize, frame: &mut Frame, area: Rect) {
+/// the focused pane's border highlighted. Shows the scrollback tail unless the
+/// pane is pinned (`scroll`), and records the drawn viewport height for paging.
+fn render_grid_pane(
+    pane: &mut PaneState,
+    focused: bool,
+    index: usize,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
+    let inner_height = area.height.saturating_sub(2) as usize;
+    pane.viewport = inner_height;
+    let tail_start = pane.lines.len().saturating_sub(inner_height);
+    // A pin never scrolls past the tail view (no blank space below the tail).
+    let start = pane.scroll.map(|s| s.min(tail_start)).unwrap_or(tail_start);
+    let hidden_below = pane.lines.len() - (start + inner_height).min(pane.lines.len());
+
     let mut markers = String::new();
     if pane.pending.is_some() {
         markers.push_str(" ⚠");
@@ -139,6 +152,10 @@ fn render_grid_pane(pane: &PaneState, focused: bool, index: usize, frame: &mut F
     }
     if pane.selected {
         markers.push_str(" ✓");
+    }
+    if hidden_below > 0 {
+        // Off-tail indicator: how many newer lines are below the pinned view.
+        markers.push_str(&format!(" ⇣{hidden_below}"));
     }
     let title = format!(" [{}] {} · {}{} ", index + 1, pane.agent_id, short, markers);
     // Focused = cyan; else selected (broadcast) = green; else default.
@@ -153,8 +170,6 @@ fn render_grid_pane(pane: &PaneState, focused: bool, index: usize, frame: &mut F
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title);
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let start = pane.lines.len().saturating_sub(inner_height);
     let lines: Vec<TuiLine> = pane.lines[start..].iter().map(render_line).collect();
     let para = Paragraph::new(lines)
         .block(block)
@@ -191,7 +206,7 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
 
 fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
-        Mode::Normal => "NORMAL  ^a agent · ^c quit",
+        Mode::Normal => "NORMAL  ^a agent · PgUp/PgDn scroll · ^c quit",
         Mode::Agent => "AGENT  n new · x close · Tab focus · 1-9 · f zoom · Esc",
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  space/1-9 select · a all · Enter send · Esc",
@@ -284,7 +299,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
 
-    fn draw(state: &AppState, w: u16, h: u16) -> String {
+    fn draw(state: &mut AppState, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal.draw(|f| render(state, f)).expect("draw");
@@ -310,7 +325,7 @@ mod tests {
 
     #[test]
     fn renders_all_panes_with_indices() {
-        let text = draw(&three_panes(), 80, 24);
+        let text = draw(&mut three_panes(), 80, 24);
         assert!(text.contains("a0") && text.contains("a1") && text.contains("a2"));
         assert!(text.contains("[1]") && text.contains("[2]") && text.contains("[3]"));
     }
@@ -323,7 +338,7 @@ mod tests {
             .push(Line::Message("SECOND_PANE_UNIQUE".into()));
         st.tabs[0].focus = 0;
         st.zoom = true;
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         assert!(text.contains("a0"), "focused agent present");
         assert!(
             !text.contains("SECOND_PANE_UNIQUE"),
@@ -339,7 +354,7 @@ mod tests {
             agents: vec!["alpha".into(), "beta".into()],
             selected: 0,
         });
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         assert!(text.contains("alpha") && text.contains("beta"));
     }
 
@@ -347,7 +362,7 @@ mod tests {
     fn single_message_line_renders_with_agent_title() {
         let mut pane = PaneState::new("rec-1".into(), "claude".into());
         pane.lines.push(Line::Message("hello world".into()));
-        let text = draw(&AppState::new(pane), 60, 12);
+        let text = draw(&mut AppState::new(pane), 60, 12);
         assert!(text.contains("hello world"));
         assert!(text.contains("claude"));
     }
@@ -380,7 +395,7 @@ mod tests {
             focus: 0,
         });
         // active tab is 0 ("1")
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         assert!(text.contains("‹1"), "active tab 1 marked: {text:?}");
         assert!(text.contains("2 (0)"), "second tab shown");
     }
@@ -389,7 +404,7 @@ mod tests {
     fn attention_pane_shows_marker() {
         let mut st = three_panes();
         st.tabs[0].panes[1].attention = true;
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         assert!(text.contains('●'), "attention marker rendered");
     }
 
@@ -404,7 +419,7 @@ mod tests {
             panes: vec![bg],
             focus: 0,
         });
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         // The ● surfaces on the *tab* label so it's visible from another tab.
         assert!(text.contains("2 (1) ●"), "background tab flagged: {text:?}");
     }
@@ -415,8 +430,28 @@ mod tests {
         let mut st = three_panes();
         st.mode = Mode::Broadcast;
         st.tabs[0].panes[0].selected = true;
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         assert!(text.contains('✓'), "selection marker rendered");
+    }
+
+    #[test]
+    fn pinned_pane_shows_off_tail_indicator_and_history() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        for i in 0..40 {
+            st.tabs[0].panes[0]
+                .lines
+                .push(Line::Message(format!("hist{i}end")));
+        }
+        st.tabs[0].panes[0].scroll = Some(0);
+        let text = draw(&mut st, 40, 12);
+        assert!(text.contains('⇣'), "off-tail indicator visible: {text:?}");
+        assert!(text.contains("hist0end"), "pinned view shows history top");
+        assert!(!text.contains("hist39end"), "tail hidden while pinned");
+
+        st.tabs[0].panes[0].scroll = None;
+        let text = draw(&mut st, 40, 12);
+        assert!(!text.contains('⇣'), "no indicator when following the tail");
+        assert!(text.contains("hist39end"), "tail visible when following");
     }
 
     #[test]
@@ -447,13 +482,13 @@ mod tests {
         // Degenerate sizes: the spec's 20x5, plus 1-cell and 1-row/1-col
         // extremes. Passing = no panic; ratatui clamps layout.
         for (w, h) in [(1, 1), (2, 2), (5, 3), (10, 2), (20, 5), (80, 1), (1, 24)] {
-            let _ = draw(&st, w, h);
+            let _ = draw(&mut st, w, h);
         }
 
         // Zoomed path at the same extremes.
         st.zoom = true;
         for (w, h) in [(1, 1), (20, 5)] {
-            let _ = draw(&st, w, h);
+            let _ = draw(&mut st, w, h);
         }
     }
 
@@ -463,7 +498,7 @@ mod tests {
         let mut st = three_panes();
         st.mode = Mode::Broadcast;
         st.broadcast_input = "BROADCAST_TEXT".into();
-        let text = draw(&st, 80, 24);
+        let text = draw(&mut st, 80, 24);
         assert!(text.contains("BROADCAST_TEXT"), "broadcast input shown");
     }
 }

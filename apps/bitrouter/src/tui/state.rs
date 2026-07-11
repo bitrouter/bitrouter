@@ -62,6 +62,12 @@ pub struct PaneState {
     pub exited: bool,
     pub selected: bool,
     pub attention: bool,
+    /// `None` = follow the tail; `Some(i)` = pinned with line `i` first visible.
+    /// Content-pinned: new output never moves a pinned view.
+    pub scroll: Option<usize>,
+    /// Inner height (rows) this pane last rendered at; recorded by the UI so
+    /// paging moves by exactly one screen (ratatui stateful-render idiom).
+    pub viewport: usize,
 }
 
 impl PaneState {
@@ -74,6 +80,8 @@ impl PaneState {
             exited: false,
             selected: false,
             attention: false,
+            scroll: None,
+            viewport: 0,
         }
     }
 
@@ -82,6 +90,31 @@ impl PaneState {
         if self.lines.len() > SCROLLBACK_CAP {
             let overflow = self.lines.len() - SCROLLBACK_CAP;
             self.lines.drain(0..overflow);
+            // Keep a pinned view on the same content as the buffer slides.
+            if let Some(s) = &mut self.scroll {
+                *s = s.saturating_sub(overflow);
+            }
+        }
+    }
+
+    /// Page the view up (into history), pinning it if it was following.
+    fn scroll_page_up(&mut self) {
+        let page = self.viewport.max(1);
+        let tail_start = self.lines.len().saturating_sub(page);
+        let start_now = self.scroll.unwrap_or(tail_start);
+        self.scroll = Some(start_now.saturating_sub(page));
+    }
+
+    /// Page the view down (toward the tail); reaching it resumes following.
+    fn scroll_page_down(&mut self) {
+        let page = self.viewport.max(1);
+        if let Some(s) = self.scroll {
+            let next = s + page;
+            if next + page >= self.lines.len() {
+                self.scroll = None; // back at the tail — follow again
+            } else {
+                self.scroll = Some(next);
+            }
         }
     }
 }
@@ -260,6 +293,23 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         Some(p) => p.record_id.clone(),
         None => return Vec::new(),
     };
+    // Scrollback paging works whether or not a permission is pending, so the
+    // user can read history before answering y/a/n.
+    match key.code {
+        KeyCode::PageUp => {
+            if let Some(pane) = state.focused_mut() {
+                pane.scroll_page_up();
+            }
+            return Vec::new();
+        }
+        KeyCode::PageDown => {
+            if let Some(pane) = state.focused_mut() {
+                pane.scroll_page_down();
+            }
+            return Vec::new();
+        }
+        _ => {}
+    }
     let has_pending = state
         .focused()
         .map(|p| p.pending.is_some())
@@ -622,6 +672,114 @@ mod tests {
                 label: "deny".into(),
             },
         ]
+    }
+
+    fn msg(i: usize) -> AppEvent {
+        AppEvent::Update {
+            record_id: "rec-1".into(),
+            update: SessionUpdateKind::MessageChunk {
+                message_id: None,
+                text: format!("line {i}"),
+            },
+        }
+    }
+
+    fn press(code: KeyCode) -> AppEvent {
+        AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn pageup_pins_view_and_new_output_does_not_move_it() {
+        let mut st = AppState::new(pane());
+        st.tabs[0].panes[0].viewport = 10;
+        for i in 0..50 {
+            reduce(&mut st, &msg(i));
+        }
+        reduce(&mut st, &press(KeyCode::PageUp));
+        // Follow start was 40 (50 - viewport); one page up pins at 30.
+        assert_eq!(st.tabs[0].panes[0].scroll, Some(30));
+        for i in 50..60 {
+            reduce(&mut st, &msg(i));
+        }
+        assert_eq!(
+            st.tabs[0].panes[0].scroll,
+            Some(30),
+            "pinned view must not move when new output arrives"
+        );
+    }
+
+    #[test]
+    fn pagedown_returns_to_follow_at_tail() {
+        let mut st = AppState::new(pane());
+        st.tabs[0].panes[0].viewport = 10;
+        for i in 0..50 {
+            reduce(&mut st, &msg(i));
+        }
+        reduce(&mut st, &press(KeyCode::PageUp)); // pin at 30
+        reduce(&mut st, &press(KeyCode::PageUp)); // pin at 20
+        assert_eq!(st.tabs[0].panes[0].scroll, Some(20));
+        reduce(&mut st, &press(KeyCode::PageDown)); // 30 — still off-tail
+        assert_eq!(st.tabs[0].panes[0].scroll, Some(30));
+        reduce(&mut st, &press(KeyCode::PageDown)); // window reaches tail
+        assert_eq!(
+            st.tabs[0].panes[0].scroll, None,
+            "reaching the tail resumes following"
+        );
+    }
+
+    #[test]
+    fn pageup_clamps_at_top() {
+        let mut st = AppState::new(pane());
+        st.tabs[0].panes[0].viewport = 10;
+        for i in 0..15 {
+            reduce(&mut st, &msg(i));
+        }
+        reduce(&mut st, &press(KeyCode::PageUp));
+        assert_eq!(st.tabs[0].panes[0].scroll, Some(0));
+        reduce(&mut st, &press(KeyCode::PageUp)); // already at top — stays
+        assert_eq!(st.tabs[0].panes[0].scroll, Some(0));
+    }
+
+    #[test]
+    fn scroll_pin_tracks_ring_buffer_drain() {
+        let mut st = AppState::new(pane());
+        st.tabs[0].panes[0].viewport = 10;
+        for i in 0..SCROLLBACK_CAP {
+            reduce(&mut st, &msg(i));
+        }
+        reduce(&mut st, &press(KeyCode::PageUp));
+        let pinned = st.tabs[0].panes[0].scroll.unwrap_or(0);
+        reduce(&mut st, &msg(SCROLLBACK_CAP)); // overflows the cap by one
+        assert_eq!(
+            st.tabs[0].panes[0].scroll,
+            Some(pinned.saturating_sub(1)),
+            "pin slides with the ring buffer so it stays on the same content"
+        );
+    }
+
+    #[test]
+    fn pageup_works_while_permission_pending() {
+        let mut st = AppState::new(pane());
+        st.tabs[0].panes[0].viewport = 10;
+        for i in 0..50 {
+            reduce(&mut st, &msg(i));
+        }
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "rec-1".into(),
+                title: "WRITE src/x.rs".into(),
+                diff: None,
+                options: allow_deny(),
+            },
+        );
+        let effects = reduce(&mut st, &press(KeyCode::PageUp));
+        assert!(effects.is_empty(), "scrolling resolves nothing");
+        assert_eq!(st.tabs[0].panes[0].scroll, Some(30));
+        assert!(
+            st.tabs[0].panes[0].pending.is_some(),
+            "pending permission untouched by scrolling"
+        );
     }
 
     #[test]

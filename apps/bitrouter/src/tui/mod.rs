@@ -134,7 +134,7 @@ async fn event_loop(
     let mut keys = EventStream::new();
 
     loop {
-        if let Err(e) = terminal.draw(|f| ui::render(&state, f)) {
+        if let Err(e) = terminal.draw(|f| ui::render(&mut state, f)) {
             cleanup(&mut rt).await;
             return Err(e).context("draw");
         }
