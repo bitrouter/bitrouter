@@ -77,6 +77,9 @@ pub struct PaneState {
     pub exited: bool,
     pub selected: bool,
     pub attention: bool,
+    /// Arrival order of the current `pending` (from `AppState.perm_seq`);
+    /// the queue orders needs-you rows oldest-first with it.
+    pub pending_seq: u64,
     /// `None` = follow the tail; `Some(i)` = pinned with line `i` first visible.
     /// Content-pinned: new output never moves a pinned view.
     pub scroll: Option<usize>,
@@ -96,6 +99,7 @@ impl PaneState {
             exited: false,
             selected: false,
             attention: false,
+            pending_seq: 0,
             scroll: None,
             viewport: 0,
         }
@@ -227,6 +231,11 @@ pub struct AppState {
     pub detail: DetailLayout,
     /// Rail cursor: an index into `roster()` order.
     pub rail_cursor: usize,
+    /// Queue focus mode (`q` in AGENT mode): the rail shows only agents that
+    /// need you. Cleared when leaving AGENT mode.
+    pub queue_only: bool,
+    /// Monotonic permission-arrival counter backing `PaneState.pending_seq`.
+    perm_seq: u64,
     /// agent_id → harness tag, from the config catalog.
     pub harness_by_agent: HashMap<String, String>,
     pub input: String,
@@ -245,6 +254,8 @@ impl AppState {
             agents: vec![pane],
             detail,
             rail_cursor: 0,
+            queue_only: false,
+            perm_seq: 0,
             harness_by_agent: HashMap::new(),
             input: String::new(),
             should_quit: false,
@@ -272,10 +283,22 @@ impl AppState {
     }
 
     /// Roster order: indices into `agents`, sorted by actionability bucket
-    /// (needs-you > attention > running > dead), stable within a bucket.
+    /// (needs-you > attention > running > dead). Needs-you rows order
+    /// oldest-pending-first (the queue); other buckets keep spawn order.
+    /// In queue focus mode (`queue_only`) only needs-you rows are listed.
     pub fn roster(&self) -> Vec<usize> {
-        let mut order: Vec<usize> = (0..self.agents.len()).collect();
-        order.sort_by_key(|&i| self.agents[i].bucket());
+        let mut order: Vec<usize> = (0..self.agents.len())
+            .filter(|&i| !self.queue_only || self.agents[i].pending.is_some())
+            .collect();
+        order.sort_by_key(|&i| {
+            let p = &self.agents[i];
+            let within = if p.bucket() == 0 {
+                p.pending_seq
+            } else {
+                i as u64
+            };
+            (p.bucket(), within)
+        });
         order
     }
 
@@ -308,9 +331,9 @@ impl AppState {
         self.agents.iter_mut().find(|p| p.record_id == record_id)
     }
 
-    /// Clamp the rail cursor into the current roster.
+    /// Clamp the rail cursor into the current roster (which may be filtered).
     fn clamp_rail_cursor(&mut self) {
-        let len = self.agents.len();
+        let len = self.roster().len();
         if len == 0 {
             self.rail_cursor = 0;
         } else if self.rail_cursor >= len {
@@ -334,11 +357,15 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.exited = true;
+                // A dead agent's decision is moot — drop it from the queue.
+                // (The loop's teardown drops the resolvable handle → Deny.)
+                pane.pending = None;
                 if !shown {
                     pane.attention = true;
                     effects.push(Effect::Bell);
                 }
             }
+            state.clamp_rail_cursor();
             effects
         }
         AppEvent::Permission {
@@ -348,6 +375,8 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             options,
         } => {
             let shown = state.is_shown(record_id);
+            state.perm_seq += 1;
+            let seq = state.perm_seq;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.pending = Some(PendingView {
@@ -355,6 +384,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     diff: diff.clone(),
                     options: options.clone(),
                 });
+                pane.pending_seq = seq;
                 if !shown {
                     pane.attention = true;
                     effects.push(Effect::Bell);
@@ -505,16 +535,18 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// AGENT-mode keys: rail navigation + detail layout + spawn/close.
+/// AGENT-mode keys: rail navigation + detail layout + queue + spawn/close.
 fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
+            state.queue_only = false;
+            state.clamp_rail_cursor();
             state.mode = Mode::Normal;
             Vec::new()
         }
         // ── Rail navigation. ──
         KeyCode::Down | KeyCode::Char('j') => {
-            let max = state.agents.len().saturating_sub(1);
+            let max = state.roster().len().saturating_sub(1);
             state.rail_cursor = (state.rail_cursor + 1).min(max);
             Vec::new()
         }
@@ -522,11 +554,33 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.rail_cursor = state.rail_cursor.saturating_sub(1);
             Vec::new()
         }
+        // ── Queue. ──
+        // Toggle queue focus: the rail shows only agents that need you.
+        KeyCode::Char('q') => {
+            state.queue_only = !state.queue_only;
+            state.clamp_rail_cursor();
+            Vec::new()
+        }
+        // Resolve the cursor agent's pending decision from the rail — the
+        // same `pending` the pane shows inline, so either surface clears both.
+        // `d` denies (not `n`, which spawns in this mode).
+        KeyCode::Char(c @ ('y' | 'a' | 'd'))
+            if state.rail_selected().is_some_and(|p| p.pending.is_some()) =>
+        {
+            let outcome = match c {
+                'y' => PermissionOutcome::AllowOnce,
+                'a' => PermissionOutcome::AllowAlways,
+                _ => PermissionOutcome::Deny,
+            };
+            resolve_rail_pending(state, outcome)
+        }
         // Open the cursor agent solo in the detail (and return to typing).
         KeyCode::Enter => {
             if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
                 state.detail = DetailLayout::solo(id);
                 clear_shown_attention(state);
+                state.queue_only = false;
+                state.clamp_rail_cursor();
                 state.mode = Mode::Normal;
             }
             Vec::new()
@@ -598,6 +652,24 @@ fn clear_shown_attention(state: &mut AppState) {
             pane.attention = false;
         }
     }
+}
+
+/// Resolve the rail-cursor agent's pending permission with `outcome`. One
+/// source of truth: this is the same `PaneState.pending` the pane shows
+/// inline, so resolving here clears that surface too (and vice versa).
+fn resolve_rail_pending(state: &mut AppState, outcome: PermissionOutcome) -> Vec<Effect> {
+    let record_id = match state.rail_selected().map(|p| p.record_id.clone()) {
+        Some(id) => id,
+        None => return Vec::new(),
+    };
+    if let Some(pane) = state.pane_by_id_mut(&record_id) {
+        if pane.pending.take().is_none() {
+            return Vec::new();
+        }
+        pane.attention = false; // decided — nothing left to look at
+    }
+    state.clamp_rail_cursor();
+    vec![Effect::ResolvePermission { record_id, outcome }]
 }
 
 /// Close the agent under the rail cursor: remove it, prune the detail layout
@@ -1716,6 +1788,126 @@ mod tests {
             "visible in a split — no attention needed"
         );
         assert!(!fx.contains(&Effect::Bell));
+    }
+
+    // ── Decision queue. ──
+
+    fn perm(record_id: &str, title: &str) -> AppEvent {
+        AppEvent::Permission {
+            record_id: record_id.into(),
+            title: title.into(),
+            diff: None,
+            options: vec![],
+        }
+    }
+
+    #[test]
+    fn queue_orders_pending_by_age_oldest_first() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r2", "second wants"));
+        reduce(&mut st, &perm("r1", "third wants"));
+        // r2's request arrived before r1's → r2 tops the queue.
+        let order = st.roster();
+        assert_eq!(order[0], 2, "oldest pending first");
+        assert_eq!(order[1], 1);
+        assert_eq!(order[2], 0, "running agent below the queue");
+    }
+
+    #[test]
+    fn rail_y_resolves_cursor_pending_not_the_focused_pane() {
+        let mut st = agents3(); // detail = [r0]
+        reduce(&mut st, &perm("r0", "focused wants"));
+        reduce(&mut st, &perm("r1", "background wants"));
+        st.mode = Mode::Agent;
+        // Queue: r0 (older) row 0, r1 row 1. Cursor to r1.
+        st.rail_cursor = 1;
+        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert_eq!(
+            fx,
+            vec![Effect::ResolvePermission {
+                record_id: "r1".into(),
+                outcome: PermissionOutcome::AllowOnce,
+            }]
+        );
+        assert!(st.agents[1].pending.is_none(), "rail resolve clears pane");
+        assert!(
+            st.agents[0].pending.is_some(),
+            "focused pane's pending untouched"
+        );
+    }
+
+    #[test]
+    fn rail_d_denies_cursor_pending() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r1", "wants"));
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0; // r1 tops the roster
+        let fx = reduce(&mut st, &press(KeyCode::Char('d')));
+        assert_eq!(
+            fx,
+            vec![Effect::ResolvePermission {
+                record_id: "r1".into(),
+                outcome: PermissionOutcome::Deny,
+            }]
+        );
+    }
+
+    #[test]
+    fn rail_y_without_pending_is_a_noop() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert!(fx.is_empty(), "no pending under cursor → nothing resolves");
+    }
+
+    #[test]
+    fn q_filters_rail_to_queue_and_esc_clears() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r1", "wants"));
+        st.mode = Mode::Agent;
+        reduce(&mut st, &press(KeyCode::Char('q')));
+        assert!(st.queue_only);
+        assert_eq!(st.roster(), vec![1], "only the needs-you row remains");
+        reduce(&mut st, &press(KeyCode::Esc));
+        assert!(!st.queue_only, "Esc restores the full rail");
+        assert_eq!(st.mode, Mode::Normal);
+        assert_eq!(st.roster().len(), 3);
+    }
+
+    #[test]
+    fn resolving_last_queued_item_clamps_cursor_in_queue_mode() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r1", "wants"));
+        st.mode = Mode::Agent;
+        reduce(&mut st, &press(KeyCode::Char('q')));
+        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert_eq!(fx.len(), 1);
+        assert!(st.roster().is_empty(), "queue drained");
+        assert_eq!(st.rail_cursor, 0, "cursor clamped, no panic");
+    }
+
+    #[test]
+    fn dead_agents_pending_leaves_the_queue() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r1", "wants"));
+        assert_eq!(st.roster()[0], 1);
+        reduce(
+            &mut st,
+            &AppEvent::Exited {
+                record_id: "r1".into(),
+            },
+        );
+        assert!(
+            st.agents[1].pending.is_none(),
+            "a dead agent's decision is moot"
+        );
+        // Still tops the roster (background death = attention), but the
+        // queue itself no longer lists it.
+        st.queue_only = true;
+        assert!(
+            st.roster().is_empty(),
+            "queue no longer lists the dead agent"
+        );
     }
 
     #[test]

@@ -204,13 +204,25 @@ this doc, or if two iterations make no checkbox progress.
 
 ## Phase 2 — Actionable head / decision queue (permissions)
 
-- [ ] Agents needing you surface at the top of the rail, ordered by risk then age
-- [ ] An actionable row expands inline to its pending action + risk + `y/n/a`;
+- [x] Agents needing you surface at the top of the rail, ordered by risk then age
+      — bucket 0 + `pending_seq` oldest-first (test `queue_orders_pending_by_age…`);
+      risk ordering slots in with Phase 3's `classify_risk`
+- [x] An actionable row expands inline to its pending action + risk + `y/n/a`;
       resolves via `ResolvePermission`
-- [ ] The rail head and the pane-inline prompt are two surfaces of the **same**
+      — rail rows expand to `└ title` + `y·a·d` hint on the cursor row (rail
+      deny is `d`; `n` spawns in AGENT mode); tests `rail_y_resolves…`,
+      `rail_d_denies…`, `rail_expands_pending_row…`
+- [x] The rail head and the pane-inline prompt are two surfaces of the **same**
       pending — resolving one clears the other (no double-resolve, no orphan)
-- [ ] `q` collapses the rail to actionable-only (focus mode); `Esc` restores
-- [ ] `Ctrl-C` / a dying agent removes its queued item cleanly
+      — single source `PaneState.pending`; test
+      `rail_y_resolves_cursor_pending_not_the_focused_pane`
+- [x] `q` collapses the rail to actionable-only (focus mode); `Esc` restores
+      — `queue_only` filter + `✓ all clear` empty state; tests
+      `q_filters_rail_to_queue_and_esc_clears`, `queue_only_rail_shows_all_clear…`
+- [x] `Ctrl-C` / a dying agent removes its queued item cleanly
+      — `Exited` clears `pending` (loop drop → Deny); cursor clamps on drain;
+      tests `dead_agents_pending_leaves_the_queue`,
+      `resolving_last_queued_item_clamps_cursor_in_queue_mode`
 
 ## Phase 3 — Tiered autonomy
 

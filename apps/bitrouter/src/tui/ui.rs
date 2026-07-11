@@ -79,11 +79,8 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
         let (glyph, color) = state_glyph(pane);
-        let cursor = if cursor_active && row == state.rail_cursor {
-            "▸"
-        } else {
-            " "
-        };
+        let at_cursor = cursor_active && row == state.rail_cursor;
+        let cursor = if at_cursor { "▸" } else { " " };
         let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
         let mut name_style = Style::default();
         if shown {
@@ -99,18 +96,41 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
         }
         lines.push(TuiLine::from(spans));
+        // Actionable rows expand inline: what the agent wants, and (on the
+        // cursor row in AGENT mode) the resolve keys.
+        if let Some(pending) = &pane.pending {
+            let mut detail = vec![
+                Span::raw(" └ "),
+                Span::styled(pending.title.clone(), Style::default().fg(Color::Red)),
+            ];
+            if at_cursor && state.mode == Mode::Agent {
+                detail.push(Span::styled(
+                    " y·a·d",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+            }
+            lines.push(TuiLine::from(detail));
+        }
     }
     if lines.is_empty() {
-        lines.push(TuiLine::styled(
-            "(no agents)",
-            Style::default().fg(Color::DarkGray),
-        ));
+        if state.queue_only {
+            lines.push(TuiLine::styled(
+                "✓ all clear",
+                Style::default().fg(Color::Green),
+            ));
+        } else {
+            lines.push(TuiLine::styled(
+                "(no agents)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
-    let roster = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::RIGHT)
-            .title(format!(" agents · {} ", state.agents.len())),
-    );
+    let title = if state.queue_only {
+        format!(" needs you · {} ", order.len())
+    } else {
+        format!(" agents · {} ", state.agents.len())
+    };
+    let roster = Paragraph::new(lines).block(Block::default().borders(Borders::RIGHT).title(title));
     frame.render_widget(roster, chunks[0]);
 
     // Radar: one glyph per agent in roster order — peripheral vision of every
@@ -262,7 +282,7 @@ fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
         Mode::Normal => "NORMAL  ^a manage · ^b broadcast · PgUp/PgDn scroll · ^c quit",
         Mode::Agent => {
-            "AGENT  j/k rail · Enter open · s/v split · u unsplit · Tab slot · n new · x close · Esc"
+            "AGENT  j/k rail · Enter open · s/v split · u unsplit · q queue · y/a/d resolve · Tab slot · n new · x close · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
@@ -540,6 +560,31 @@ mod tests {
         let text = draw(&mut st, 60, 12);
         assert!(!text.contains('⇣'), "no indicator when following the tail");
         assert!(text.contains("hist39end"), "tail visible when following");
+    }
+
+    #[test]
+    fn rail_expands_pending_row_with_title_and_resolve_hint() {
+        let mut st = agents3();
+        st.agents[1].pending = Some(crate::tui::state::PendingView {
+            title: "rm -rf legacy".into(),
+            diff: None,
+            options: vec![],
+        });
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0; // r1 tops the roster
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("rm -rf legacy"), "pending title inline");
+        assert!(text.contains('└'), "expanded row marker");
+        assert!(text.contains("y·a·d"), "resolve hint on the cursor row");
+    }
+
+    #[test]
+    fn queue_only_rail_shows_all_clear_when_empty() {
+        let mut st = agents3();
+        st.queue_only = true;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("all clear"), "empty queue reads calm");
+        assert!(text.contains("needs you · 0"), "queue header with count");
     }
 
     #[test]
