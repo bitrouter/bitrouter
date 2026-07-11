@@ -67,6 +67,7 @@ pub mod routing;
 pub mod server_tools;
 pub mod settlement;
 pub mod stream;
+pub mod timing;
 pub mod types;
 
 #[cfg(test)]
