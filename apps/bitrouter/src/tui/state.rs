@@ -42,6 +42,9 @@ pub enum Line {
         title: String,
         status: ToolStatus,
     },
+    /// A manager-side failure surfaced in the pane (e.g. a prompt that never
+    /// reached the agent). Rendered in the danger style.
+    Error(String),
 }
 
 /// A pending permission surfaced in the pane, as display data.
@@ -262,6 +265,19 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         AppEvent::AgentSpawnFailed { agent_id, error } => {
             state.notice = Some(format!("failed to spawn {agent_id}: {error}"));
             Vec::new()
+        }
+        AppEvent::PromptFailed { record_id, error } => {
+            let is_focused =
+                state.focused().map(|p| p.record_id.as_str()) == Some(record_id.as_str());
+            let mut effects = Vec::new();
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.push(Line::Error(format!("prompt failed: {error}")));
+                if !is_focused {
+                    pane.attention = true;
+                    effects.push(Effect::Bell);
+                }
+            }
+            effects
         }
         AppEvent::Key(key) => match state.mode {
             Mode::Normal => reduce_key_normal(state, key),
@@ -780,6 +796,47 @@ mod tests {
             st.tabs[0].panes[0].pending.is_some(),
             "pending permission untouched by scrolling"
         );
+    }
+
+    #[test]
+    fn prompt_failed_surfaces_error_line_in_pane() {
+        let mut st = AppState::new(pane());
+        let effects = reduce(
+            &mut st,
+            &AppEvent::PromptFailed {
+                record_id: "rec-1".into(),
+                error: "acp transport closed".into(),
+            },
+        );
+        // Focused pane: visible error line, no attention/bell needed.
+        assert!(effects.is_empty());
+        assert!(matches!(
+            st.tabs[0].panes[0].lines.last(),
+            Some(Line::Error(e)) if e.contains("acp transport closed")
+        ));
+        assert!(!st.tabs[0].panes[0].attention);
+    }
+
+    #[test]
+    fn prompt_failed_on_background_pane_flags_attention_and_bells() {
+        let mut st = AppState::new(pane());
+        st.tabs[0]
+            .panes
+            .push(PaneState::new("rec-2".into(), "codex".into()));
+        // Focus stays on pane 0; the failure hits background pane rec-2.
+        let effects = reduce(
+            &mut st,
+            &AppEvent::PromptFailed {
+                record_id: "rec-2".into(),
+                error: "boom".into(),
+            },
+        );
+        assert_eq!(effects, vec![Effect::Bell]);
+        assert!(st.tabs[0].panes[1].attention);
+        assert!(matches!(
+            st.tabs[0].panes[1].lines.last(),
+            Some(Line::Error(_))
+        ));
     }
 
     #[test]

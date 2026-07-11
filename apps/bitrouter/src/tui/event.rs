@@ -41,6 +41,9 @@ pub enum AppEvent {
     AgentSpawned { record_id: String, agent_id: String },
     /// Launching a session failed; surface a transient notice.
     AgentSpawnFailed { agent_id: String, error: String },
+    /// A submitted prompt failed to reach the agent; surface it in the pane
+    /// (otherwise a dead proxy/agent looks like a silent hang).
+    PromptFailed { record_id: String, error: String },
 }
 
 /// Side effect the loop performs after a reduce. Keeps `reduce` pure.
@@ -76,5 +79,9 @@ pub enum Incoming {
     },
     Exited {
         record_id: String,
+    },
+    PromptFailed {
+        record_id: String,
+        error: String,
     },
 }

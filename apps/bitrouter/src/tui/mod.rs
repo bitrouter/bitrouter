@@ -53,6 +53,11 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     // ── Initial state. ──
     let mut state = AppState::new(PaneState::new(record_id, agent_id.to_string()));
     state.set_available_agents(agent_ids);
+    // Agents route LLM traffic through `bitrouter serve`; probe it once so a
+    // missing proxy is an up-front notice instead of silent agent failures.
+    if let Some(warning) = probe_serve(&cfg.server.listen).await {
+        state.notice = Some(warning);
+    }
 
     // ── Run; the loop owns full session teardown. The panic hook guarantees
     // the terminal is restored even if the loop panics mid-draw. ──
@@ -61,6 +66,19 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     let result = event_loop(&mut terminal, state, rx, sessions, &catalog, base_repo, tx).await;
     restore_terminal();
     result
+}
+
+/// Probe the configured `bitrouter serve` listen address; `Some(warning)` when
+/// nothing accepts within 500ms. Wildcard binds probe via loopback.
+async fn probe_serve(listen: &str) -> Option<String> {
+    let addr = listen.replace("0.0.0.0", "127.0.0.1");
+    let connect = tokio::net::TcpStream::connect(&addr);
+    match tokio::time::timeout(std::time::Duration::from_millis(500), connect).await {
+        Ok(Ok(_)) => None,
+        _ => Some(format!(
+            "bitrouter serve unreachable at {addr} — agents' LLM calls will fail; start it with `bitrouter serve`"
+        )),
+    }
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
@@ -179,6 +197,9 @@ async fn event_loop(
                     }
                 }
                 Some(Incoming::Exited { record_id }) => Some(AppEvent::Exited { record_id }),
+                Some(Incoming::PromptFailed { record_id, error }) => {
+                    Some(AppEvent::PromptFailed { record_id, error })
+                }
                 None => Some(AppEvent::Key(quit_key())),
             },
         };
@@ -211,9 +232,16 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         Effect::Prompt { record_id, text } => {
             if let Some(sess) = rt.sessions.get(&record_id) {
                 let sess = Arc::clone(sess);
+                let tx = rt.spawner.tx.clone();
+                let rid = record_id.clone();
                 let handle = tokio::spawn(async move {
                     if let Err(e) = sess.prompt(&text).await {
-                        tracing::warn!(error = %e, "prompt failed");
+                        // Surface in the pane — a silent failure looks like a
+                        // hung agent. Send fails only at teardown; ignore.
+                        let _ = tx.send(Incoming::PromptFailed {
+                            record_id: rid,
+                            error: e.to_string(),
+                        });
                     }
                 });
                 rt.prompt_tasks.entry(record_id).or_default().push(handle);
@@ -342,6 +370,29 @@ fn quit_key() -> crossterm::event::KeyEvent {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn probe_serve_ok_when_listening() -> anyhow::Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?.to_string();
+        assert!(super::probe_serve(&addr).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probe_serve_warns_when_port_closed() -> anyhow::Result<()> {
+        // Bind then drop to get a local port that is very likely closed.
+        let addr = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            listener.local_addr()?.to_string()
+        };
+        let warning = super::probe_serve(&addr).await;
+        assert!(
+            warning.is_some_and(|w| w.contains("bitrouter serve")),
+            "closed port must produce an actionable warning"
+        );
+        Ok(())
+    }
 
     static RESTORED: AtomicBool = AtomicBool::new(false);
 

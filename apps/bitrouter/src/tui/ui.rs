@@ -190,6 +190,10 @@ fn render_line(line: &Line) -> TuiLine<'static> {
             Span::raw(title.clone()),
             Span::raw(format!(" [{status:?}]")),
         ]),
+        Line::Error(t) => TuiLine::from(vec![
+            Span::styled("✗ ", Style::default().fg(Color::Red)),
+            Span::styled(t.clone(), Style::default().fg(Color::Red)),
+        ]),
     }
 }
 

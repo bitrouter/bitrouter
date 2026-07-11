@@ -160,9 +160,16 @@ this doc, or if two iterations make no checkbox progress.
       — test `tui::ui::tests::tiny_terminals_render_every_surface_without_panic`
       renders all surfaces (grid/popups/notice/zoom) at 1×1…80×1; resize
       redraw path documented in the event loop
-- [ ] Focused detail pane scrolls its scrollback (PageUp/Down) with an off-tail
+- [x] Focused detail pane scrolls its scrollback (PageUp/Down) with an off-tail
       indicator; new output while scrolled up does not yank to bottom
-- [ ] `bitrouter serve` not running → actionable error, not a hang
+      — content-pinned `PaneState.scroll` + `⇣N` marker; tests
+      `pageup_pins_view_and_new_output_does_not_move_it`,
+      `pagedown_returns_to_follow_at_tail`, `scroll_pin_tracks_ring_buffer_drain`,
+      `pinned_pane_shows_off_tail_indicator_and_history`
+- [x] `bitrouter serve` not running → actionable error, not a hang
+      — startup TCP probe of `cfg.server.listen` sets a warning notice
+      (`probe_serve_*` tests); prompt failures surface as red `✗` pane lines
+      instead of vanishing into tracing (`prompt_failed_*` tests)
 - [ ] `Ctrl-C` tears down all sessions cleanly from every mode
 
 ## Phase 1 — One screen: rail + splittable detail
