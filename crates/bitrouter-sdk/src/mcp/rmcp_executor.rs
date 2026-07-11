@@ -309,9 +309,8 @@ async fn connect(
             // <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http>.
             //
             // We construct the transport via `from_config`, which uses rmcp's
-            // internally-bundled reqwest client. That keeps rmcp's reqwest
-            // version independent of the workspace reqwest used by the
-            // language_model executor.
+            // reqwest client. rmcp and the workspace intentionally resolve to
+            // the same reqwest line so transport errors can be downcast below.
             use http::{HeaderName, HeaderValue};
             let mut header_map: std::collections::HashMap<HeaderName, HeaderValue> =
                 std::collections::HashMap::new();

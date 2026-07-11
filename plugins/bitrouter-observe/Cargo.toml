@@ -44,6 +44,7 @@ tower-http = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+futures-core = { version = "0.3", optional = true }
 http = { workspace = true, optional = true }
 dashmap = { version = "6", optional = true }
 # OTLP/gRPC transport (tonic). Only compiled under `otel-grpc`; the bulk of the
@@ -80,6 +81,7 @@ otel-base = [
     "dep:axum",
     "dep:tracing-subscriber",
     "dep:tokio",
+    "dep:futures-core",
     "dep:http",
     "dep:dashmap",
 ]
@@ -111,7 +113,7 @@ otel-grpc = [
 ]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 futures.workspace = true
 criterion = { version = "0.8", features = ["async_tokio"] }
 

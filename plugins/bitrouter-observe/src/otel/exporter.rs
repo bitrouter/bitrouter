@@ -45,12 +45,12 @@ use opentelemetry::{
     propagation::{Extractor, Injector},
     trace::{Span, SpanKind, Status, TraceContextExt, Tracer},
 };
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, RandomIdGenerator, Sampler, SdkTracerProvider, Tracer as SdkTracer,
 };
-use opentelemetry_sdk::{Resource, runtime};
 use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,8 @@ use bitrouter_sdk::language_model::{
 };
 
 use crate::otel::cardinality::CardinalityLimiter;
-use crate::otel::config::{ContentCaptureMode, OtelConfig, SamplerKind, async_processor_interval};
+use crate::otel::config::{ContentCaptureMode, OtelConfig, SamplerKind};
+use crate::otel::processor_runtime::ProcessorRuntime;
 use crate::otel::span_attributes::SpanAttributes;
 
 /// HTTP header extractor for W3C trace context propagation
@@ -181,11 +182,9 @@ impl OtelExporter {
 
         let batch_config = BatchConfigBuilder::default()
             .with_max_queue_size(config.traces.batch.max_queue_size)
-            .with_scheduled_delay(async_processor_interval(Duration::from_millis(
-                config.traces.batch.flush_ms,
-            )))
+            .with_scheduled_delay(Duration::from_millis(config.traces.batch.flush_ms))
             .build();
-        let processor = BatchSpanProcessor::builder(span_exporter, runtime::TokioCurrentThread)
+        let processor = BatchSpanProcessor::builder(span_exporter, ProcessorRuntime::new())
             .with_batch_config(batch_config)
             .build();
 
@@ -266,12 +265,10 @@ impl OtelExporter {
     /// Flush and shut down both the tracer and the metric provider.
     ///
     /// **Synchronous** — must be driven from a context that can park: a
-    /// dedicated thread, `tokio::task::spawn_blocking`, or a
-    /// non‑async `main`. Calling it directly from an `async fn` parks
-    /// the tokio worker that the SDK's `rt-tokio` background tasks need
-    /// to make progress, and on a `current_thread` runtime that's a
-    /// deadlock. The `OtelObserveHook` adapter in the bin crate wraps
-    /// this in `spawn_blocking` for the async path.
+    /// dedicated thread, `tokio::task::spawn_blocking`, or a non-async `main`.
+    /// The SDK waits synchronously for its background processor to acknowledge
+    /// flush and shutdown messages, so the `OtelObserveHook` adapter wraps this
+    /// method in `spawn_blocking` for the async path.
     ///
     /// Idempotent: subsequent calls are no‑ops. The SDK itself panics
     /// on double-shutdown; the `Once` guard makes "shutdown then Drop"

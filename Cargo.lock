@@ -685,6 +685,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "futures",
+ "futures-core",
  "http",
  "opentelemetry",
  "opentelemetry-http",

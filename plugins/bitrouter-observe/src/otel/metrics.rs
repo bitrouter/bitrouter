@@ -18,7 +18,8 @@ use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicRead
 use bitrouter_sdk::language_model::{PipelineContext, RequestOutcome, StreamPart};
 
 use crate::otel::cardinality::CardinalityLimiter;
-use crate::otel::config::{OtelConfig, async_processor_interval};
+use crate::otel::config::OtelConfig;
+use crate::otel::processor_runtime::ProcessorRuntime;
 
 /// OpenTelemetry metrics with multi-tenant attribution.
 pub struct OtelMetrics {
@@ -49,12 +50,9 @@ impl OtelMetrics {
         // crate's feature flags — see `crate::otel::transport`.
         let exporter = crate::otel::transport::metric_exporter(config)?;
 
-        let reader =
-            PeriodicReader::builder(exporter, opentelemetry_sdk::runtime::TokioCurrentThread)
-                .with_interval(async_processor_interval(Duration::from_millis(
-                    config.metrics.export_interval_ms,
-                )))
-                .build();
+        let reader = PeriodicReader::builder(exporter, ProcessorRuntime::new())
+            .with_interval(Duration::from_millis(config.metrics.export_interval_ms))
+            .build();
 
         let provider = SdkMeterProvider::builder()
             .with_reader(reader)

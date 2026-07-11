@@ -10,7 +10,6 @@
 //! upstream OTel SDK spec: <https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/>.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,16 +68,6 @@ pub struct OtelConfig {
 
 /// Default cap for a single captured content attribute (128 KiB).
 pub const DEFAULT_CONTENT_ATTR_MAX_BYTES: usize = 128 * 1024;
-
-/// Compensate for the OpenTelemetry 0.32 async processors waiting twice before
-/// their first scheduled export.
-///
-/// The SDK's interval stream already waits before yielding, while both async
-/// processors still skip the first item. See the upstream implementation:
-/// <https://docs.rs/opentelemetry_sdk/0.32.1/src/opentelemetry_sdk/runtime.rs.html#46-58>.
-pub(super) fn async_processor_interval(configured: Duration) -> Duration {
-    configured / 2
-}
 
 /// Subset of OTel-spec sampler kinds the SDK actually supports. The default
 /// (`parentbased_always_on`) matches the OTel-spec default — every trace is
@@ -437,17 +426,5 @@ mod tests {
         let cfg = OtelConfig::default()
             .with_env_from(env(&[("BITROUTER_OBSERVE_CONTENT_CAPTURE", "bogus")]));
         assert_eq!(cfg.content_capture, ContentCaptureMode::Off);
-    }
-
-    #[test]
-    fn async_processor_interval_offsets_the_skipped_first_tick() {
-        assert_eq!(
-            async_processor_interval(Duration::from_secs(5)),
-            Duration::from_millis(2_500)
-        );
-        assert_eq!(
-            async_processor_interval(Duration::from_millis(1)),
-            Duration::from_micros(500)
-        );
     }
 }
