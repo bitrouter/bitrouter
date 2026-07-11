@@ -744,17 +744,11 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         // Split the detail: add the cursor agent side-by-side / stacked.
         KeyCode::Char('s') => {
-            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
-                state.detail.add(id, Split::H);
-                clear_shown_attention(state);
-            }
+            split_detail(state, Split::H);
             Vec::new()
         }
         KeyCode::Char('v') => {
-            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
-                state.detail.add(id, Split::V);
-                clear_shown_attention(state);
-            }
+            split_detail(state, Split::V);
             Vec::new()
         }
         // Drop the focused detail slot (never below one).
@@ -902,16 +896,7 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             } else {
                 Split::V
             };
-            // Add the most actionable agent not already shown.
-            let next = state
-                .roster()
-                .into_iter()
-                .map(|i| state.agents[i].record_id.clone())
-                .find(|id| !state.detail.shown.contains(id));
-            if let Some(id) = next {
-                state.detail.add(id, split);
-                clear_shown_attention(state);
-            }
+            split_detail(state, split);
             Vec::new()
         }
         Command::Unsplit => {
@@ -970,6 +955,39 @@ fn clear_shown_attention(state: &mut AppState) {
     for pane in state.agents.iter_mut() {
         if shown.iter().any(|r| r == &pane.record_id) {
             pane.attention = false;
+        }
+    }
+}
+
+/// Split the detail in `split` direction. Adds the rail-cursor agent — or,
+/// when that agent is already shown (`Ctrl-A` parks the cursor on the focused
+/// agent, so this is the common case), the most actionable agent not yet
+/// shown. A notice explains the no-op cases (all shown / viewport full).
+fn split_detail(state: &mut AppState, split: Split) {
+    if state.detail.shown.len() >= MAX_SHOWN {
+        state.notice = Some(format!(
+            "detail is full ({MAX_SHOWN} panes) — u drops a slot"
+        ));
+        return;
+    }
+    let cursor = state.rail_selected().map(|p| p.record_id.clone());
+    let target = match cursor.filter(|id| !state.detail.shown.contains(id)) {
+        Some(id) => Some(id),
+        // Cursor agent already visible → fall back to the roster's most
+        // actionable non-shown agent.
+        None => state
+            .roster()
+            .into_iter()
+            .map(|i| state.agents[i].record_id.clone())
+            .find(|id| !state.detail.shown.contains(id)),
+    };
+    match target {
+        Some(id) => {
+            state.detail.add(id, split);
+            clear_shown_attention(state);
+        }
+        None => {
+            state.notice = Some("nothing to split with — every agent is already shown".into());
         }
     }
 }
@@ -1767,13 +1785,33 @@ mod tests {
     }
 
     #[test]
-    fn split_on_already_shown_agent_refocuses_instead_of_duplicating() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // r0 already shown
+    fn ctrl_a_then_s_immediately_splits_with_next_agent() {
+        // The reported dead path: Ctrl-A parks the cursor on the focused
+        // (already-shown) agent, so `s` must fall back to the next
+        // most-actionable non-shown agent instead of no-oping.
+        let mut st = agents3(); // detail = [r0]
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
         reduce(&mut st, &press(KeyCode::Char('s')));
-        assert_eq!(st.detail.shown, vec!["r0".to_string()], "no duplicate");
-        assert_eq!(st.detail.focus, 0);
+        assert_eq!(
+            st.detail.shown,
+            vec!["r0".to_string(), "r1".to_string()],
+            "no duplicate; next agent added"
+        );
+    }
+
+    #[test]
+    fn split_with_every_agent_shown_sets_a_notice() {
+        let mut st = AppState::new(pane()); // one agent, already shown
+        st.mode = Mode::Agent;
+        reduce(&mut st, &press(KeyCode::Char('s')));
+        assert_eq!(st.detail.shown, vec!["rec-1".to_string()], "unchanged");
+        assert!(
+            st.notice.as_deref().is_some_and(|n| n.contains("split")),
+            "explains why nothing happened"
+        );
     }
 
     #[test]
