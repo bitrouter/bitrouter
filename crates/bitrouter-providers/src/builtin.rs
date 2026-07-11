@@ -3,11 +3,11 @@
 //! The other known providers (openai/anthropic/google + the gateways) are NOT
 //! compiled in — they come from the fetched-or-cached provider registry and are
 //! configured by the registry merge ([`crate::registry::apply`]). Only the
-//! `bitrouter` hosted cloud *gateway* lives here: its id shadows the registry's
-//! pool entry and it is the cloud-applier / serves-all-canonical mechanism, so
-//! it cannot be a public-registry entry. [`entry_from_registry`] reuses the same
-//! mapper for a fetched registry provider when a consumer (e.g. `bitrouter
-//! login`) needs the auth/transport shape of one of those providers.
+//! `bitrouter` hosted cloud *gateway* lives here: the public registry owns its
+//! provider metadata, while this built-in keeps the zero-config auth/transport
+//! defaults and the local cloud OAuth/API-key auth applier. [`entry_from_registry`]
+//! reuses the same mapper for a fetched registry provider when a consumer (e.g.
+//! `bitrouter login`) needs the auth/transport shape of one of those providers.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -21,9 +21,9 @@ use crate::registry::types::{
     Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
 };
 
-/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Its id
-/// shadows the registry's pool entry, so it is hand-authored here rather than
-/// taken from the registry.
+/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Public
+/// provider metadata comes from the registry; this hand-authored entry carries
+/// auth defaults and local OAuth/API-key integration.
 const BITROUTER_TOML: &str = include_str!("../providers/bitrouter.toml");
 
 static REGISTRY: OnceLock<Vec<ProviderEntry>> = OnceLock::new();
@@ -64,10 +64,13 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
     let auth = p.auth.as_ref().ok_or_else(|| LoadError::Snapshot {
         message: format!("provider '{}' has no auth", p.name),
     })?;
+    let api_base = p.api_base.clone().ok_or_else(|| LoadError::Snapshot {
+        message: format!("provider '{}' has no fixed api_base", p.name),
+    })?;
     Ok(ProviderEntry {
         id: p.name.clone(),
         display_name: p.display_name.clone().unwrap_or_else(|| p.name.clone()),
-        api_base: p.api_base.clone(),
+        api_base,
         api_protocol: derive_protocol_mapping(p),
         protocol_endpoints: p.protocol_endpoints.clone().unwrap_or_default(),
         auth: map_auth(&p.name, auth)?,
@@ -83,7 +86,7 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
 /// `oauth::registry` holds their client config), but device-code providers
 /// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
 /// `token_endpoint` / `scope` ONLY here, so dropping them breaks
-/// `bitrouter login github-copilot`. JSON values that TOML cannot represent
+/// `bitrouter providers login github-copilot`. JSON values that TOML cannot represent
 /// (e.g. `null`) are skipped — login then surfaces a clear "missing param".
 fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
     let missing = |field: &str| LoadError::Snapshot {
@@ -125,9 +128,10 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
     }
 }
 
-/// Derive the wire-protocol mapping. A runtime-discovered provider carries
-/// provider-level globs (kept in the dist); a curated provider's protocol was
-/// resolved onto its models, so reconstruct the mapping from them.
+/// Derive the wire-protocol mapping. Older dist files and explicitly
+/// configured gateway providers may carry provider-level globs; complete
+/// registry dist resolves protocol data onto each model, so reconstruct the
+/// mapping from those entries when the globs are absent.
 fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
     let mut globs: BTreeMap<String, ProtocolList> = BTreeMap::new();
     for entry in &p.api_protocol {
@@ -294,7 +298,7 @@ mod tests {
 
     #[test]
     fn entry_from_registry_collapses_per_model_protocol_set() {
-        // A curated provider (no provider-level globs) whose models carry the
+        // A provider with explicit model entries (no provider-level globs) whose models carry the
         // ordered [openai, responses] set: the mapping is reconstructed from
         // the models, and the bearer env var + class are derived.
         let provider = reg(serde_json::json!({

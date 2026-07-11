@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.23](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.22...v1.0.0-alpha.23)
+
+
+### ⛰️ Features
+
+- *(agents)* Add pi-acp to the ACP catalog ([#685](https://github.com/bitrouter/bitrouter/pull/685)) - ([c12f5d8](https://github.com/bitrouter/bitrouter/commit/c12f5d842932d1fb843dc218fbdf81662d6e3248))
+- *(providers)* Add SuperGrok BYO subscription ([#676](https://github.com/bitrouter/bitrouter/pull/676)) - ([ad266c7](https://github.com/bitrouter/bitrouter/commit/ad266c7bf13aa480e9f02ea46e7f9716f88fc4cf))
+- Ship Claude Code and Codex agent plugins ([#683](https://github.com/bitrouter/bitrouter/pull/683)) - ([6ea6458](https://github.com/bitrouter/bitrouter/commit/6ea6458926e0bde62ffd55415d4cd2460c7af34a))
+- Add AWS Bedrock, Azure, Vertex built-in providers ([#647](https://github.com/bitrouter/bitrouter/pull/647)) - ([6b92fcf](https://github.com/bitrouter/bitrouter/commit/6b92fcf612ee5eff54e426f7ba8b50a023002caa))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Preserve token limits and upstream errors ([#692](https://github.com/bitrouter/bitrouter/pull/692)) - ([495b1e9](https://github.com/bitrouter/bitrouter/commit/495b1e9aa4de4e79f877ca2d7fda0cf88bffad65))
+
+
+## [1.0.0-alpha.22](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.21...v1.0.0-alpha.22)
+
+
+### ⛰️ Features
+
+- Configurable upstream HTTP timeouts ([#662](https://github.com/bitrouter/bitrouter/pull/662)) - ([88d1e4d](https://github.com/bitrouter/bitrouter/commit/88d1e4da5a774bf44a7e569be2fda3e60dd47c7a))
+
+### 🐛 Bug Fixes
+
+- *(messages)* Drop unsigned reasoning on Anthropic wire ([#669](https://github.com/bitrouter/bitrouter/pull/669)) - ([d78ddec](https://github.com/bitrouter/bitrouter/commit/d78ddec4a3bc05e11c60e00f64874387fbdccb38))
+
+
+## [1.0.0-alpha.21](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.20...v1.0.0-alpha.21)
+
+
+### ⛰️ Features
+
+- Make registry dist runtime-only ([#641](https://github.com/bitrouter/bitrouter/pull/641)) - ([733bf7f](https://github.com/bitrouter/bitrouter/commit/733bf7f576607dd5e47ca0853e241df531e3468e))
+- Refactor registry provider variants ([#639](https://github.com/bitrouter/bitrouter/pull/639)) - ([0436241](https://github.com/bitrouter/bitrouter/commit/04362417b9821b715d9c858789083534cf302a3b))
+
+### 🐛 Bug Fixes
+
+- Preserve stream error settlement ([#656](https://github.com/bitrouter/bitrouter/pull/656)) - ([4e1df77](https://github.com/bitrouter/bitrouter/commit/4e1df77805a6f91a1607d44035ab1fea2e82d988))
+
+
+## [1.0.0-alpha.20](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.19...v1.0.0-alpha.20)
+
+
+### ⛰️ Features
+
+- *(cli)* Spawn codex agent ([#631](https://github.com/bitrouter/bitrouter/pull/631)) - ([27b5bae](https://github.com/bitrouter/bitrouter/commit/27b5baecccd20ace3cf3bb211ff5a577a7cbc4a7))
+- *(cli)* Route `update` through the JSON output layer ([#620](https://github.com/bitrouter/bitrouter/pull/620)) - ([a2edc3f](https://github.com/bitrouter/bitrouter/commit/a2edc3f409627cd595ffe9429196ec4648ad40ae))
+- *(cli)* JSON output layer with a uniform error envelope ([#610](https://github.com/bitrouter/bitrouter/pull/610)) - ([df6e3cc](https://github.com/bitrouter/bitrouter/commit/df6e3cc487bba9e60461828c86a028656a619e21))
+- *(server-tools)* Built-in web_fetch tool (BYOK) ([#612](https://github.com/bitrouter/bitrouter/pull/612)) - ([ba5308d](https://github.com/bitrouter/bitrouter/commit/ba5308df77cf8457812b93af6ff557a8c8f24728))
+- *(server-tools)* Add Tavily web_search backend, drop Perplexity ([#608](https://github.com/bitrouter/bitrouter/pull/608)) - ([6579faa](https://github.com/bitrouter/bitrouter/commit/6579faa122381208b5b4902b8c59b1429fd640e6))
+- *(server-tools)* Built-in web_search with BYOK backends ([#603](https://github.com/bitrouter/bitrouter/pull/603)) - ([7ebc572](https://github.com/bitrouter/bitrouter/commit/7ebc572ef33cb902a8a1ecea2b7d351a1300c4c1))
+- *(update)* Add bitrouter update self-updater ([#607](https://github.com/bitrouter/bitrouter/pull/607)) - ([2b95d0c](https://github.com/bitrouter/bitrouter/commit/2b95d0c941930c8a7b10c58e33b5c66e2db16e4d))
+
+### 🐛 Bug Fixes
+
+- *(codex)* Harden Codex spawn checks ([#632](https://github.com/bitrouter/bitrouter/pull/632)) - ([e2264d6](https://github.com/bitrouter/bitrouter/commit/e2264d636e35689a4ac4366c421836cf4c43ed72))
+- *(config)* Don't expand ${VAR} inside YAML comments ([#609](https://github.com/bitrouter/bitrouter/pull/609)) - ([7628d98](https://github.com/bitrouter/bitrouter/commit/7628d9855412da2a51e07ac11fe31a8b3510850e))
+- *(observe)* Stop the settle span double-counting as a telemetry event ([#605](https://github.com/bitrouter/bitrouter/pull/605)) - ([2453112](https://github.com/bitrouter/bitrouter/commit/2453112f6e7703186c67cb1ae1f8578a5548084f))
+
+### 📚 Documentation
+
+- Align docs with current CLI ([#637](https://github.com/bitrouter/bitrouter/pull/637)) - ([29a693d](https://github.com/bitrouter/bitrouter/commit/29a693d9e97913b516449f9cfe11908d35c6af82))
+
+### ⚙️ Miscellaneous Tasks
+
+- Migrate registry into OSS dist ([#636](https://github.com/bitrouter/bitrouter/pull/636)) - ([afdb4b7](https://github.com/bitrouter/bitrouter/commit/afdb4b7f68723456efa804e1d2760ed103a59a84))
+
+
 ## [1.0.0-alpha.19](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.18...v1.0.0-alpha.19)
 
 

@@ -35,7 +35,7 @@ BitRouter 有意止步于网关。没有 `tensorzero.toml` 要维护，没有 Cl
 
 TensorZero 的网关是面向提供商的 —— 它统一上游。BitRouter 补上**面向 Agent**的另一半：用于工具的 [MCP 网关](/docs/concepts/tools)、用于 Agent 身份与调度的 [ACP 网关](/docs/concepts/agents)、一个[服务端工具循环](/docs/features/server-tools)，以及 [Agent 支付](/docs/features/payment) —— 让 Agent 无需你为其预置密钥即可按请求付费。
 
-而且**托管云与本地二进制暴露同一个 OpenAI 兼容端点** —— 开发时在本地启动，生产时指向 `api.bitrouter.ai`（或反过来），无需改动客户端代码。两种流程都见[快速开始](/docs/get-started/quickstart)。
+而且**托管云与本地二进制暴露同一个 OpenAI 兼容端点** —— 开发时在本地启动，生产时指向 `api.bitrouter.ai`（或反过来），无需改动客户端代码。两种流程都见[快速开始](/docs/get-started/configuration)。
 
 ## 迁移路径
 
@@ -64,7 +64,7 @@ response = client.chat.completions.create(
 ```python
 import openai
 
-# 本地：`bitrouter`（通过环境变量 BYOK）—— 见 /docs/get-started/quickstart
+# 本地：`bitrouter`（通过环境变量 BYOK）—— 见 /docs/get-started/configuration
 # 云端：base_url="https://api.bitrouter.ai/v1", api_key=$BITROUTER_API_KEY
 client = openai.OpenAI(
     base_url="http://127.0.0.1:4356/v1",
@@ -147,7 +147,7 @@ bitrouter
 
 <Callout type="success">
 **迁移中**
-- [ ] 安装 BitRouter CLI（[快速开始](/docs/get-started/quickstart)）
+- [ ] 安装 BitRouter CLI（[快速开始](/docs/get-started/configuration)）
 - [ ] 导出提供商密钥，或粘贴进云端控制台（sealed-box 加密）
 - [ ] 将客户端 `base_url` 改为 `http://127.0.0.1:4356/v1`（本地）或 `https://api.bitrouter.ai/v1`（云端）
 - [ ] 把 `tensorzero::…` 模型字符串替换为 `provider/model` id
@@ -159,8 +159,8 @@ bitrouter
 ## 下一步
 
 <Cards>
-  <Card title="快速开始" href="/docs/get-started/quickstart" description="一分钟内在本地或云端运行 BitRouter" />
-  <Card title="对比" href="/docs/get-started/comparison" description="与 OpenRouter、LiteLLM 及通用网关的并列对比" />
+  <Card title="快速开始" href="/docs/get-started/configuration" description="一分钟内在本地或云端运行 BitRouter" />
+  <Card title="对比" href="/docs/get-started/faqs" description="与 OpenRouter、LiteLLM 及通用网关的并列对比" />
   <Card title="Agent 功能" href="/docs/concepts/tools" description="MCP、ACP、技能、Agent 防火墙、x402 支付" />
   <Card title="API 参考" href="/docs/reference" description="OpenAI 与 Anthropic 兼容端点" />
 </Cards>

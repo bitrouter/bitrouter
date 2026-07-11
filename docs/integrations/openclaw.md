@@ -8,7 +8,7 @@ OpenClaw is a self-hosted gateway that bridges messaging platforms — WhatsApp,
 
 ## Prerequisites
 
-- BitRouter running — local proxy at `http://127.0.0.1:4356`, or [BitRouter Cloud](/docs/get-started/quickstart) at `https://api.bitrouter.ai`.
+- BitRouter running — local proxy at `http://127.0.0.1:4356`, or [BitRouter Cloud](/docs/get-started/configuration) at `https://api.bitrouter.ai`.
 - OpenClaw installed. See the [OpenClaw docs](https://docs.openclaw.ai/) for setup.
 
 ## Point OpenClaw at BitRouter

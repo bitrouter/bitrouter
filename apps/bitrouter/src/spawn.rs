@@ -298,14 +298,59 @@ pub async fn run(
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
 
+    // Timestamp the wrapped session so the exit summary can attribute
+    // spend to exactly this run of the agent.
+    let session_start = chrono::Utc::now();
+
     let status = cmd
         .status()
         .await
         .with_context(|| format!("spawning agent '{}' ({})", spec.id, binary.display()))?;
 
+    print_exit_summary(source, session_start, &p).await;
+
     // Propagate the agent's exit code. A launcher should be transparent: the
     // shell sees the agent's status, not bitrouter's.
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// The cost-feed exit renderer: after the wrapped agent exits, report
+/// what the session spent through the local daemon. Silent when the
+/// metering database is absent or recorded nothing in the window (e.g.
+/// a `--base-url` pointed at Cloud) — a launcher must never turn a
+/// clean exit into noise or an error. Printed to stderr like every
+/// other spawn diagnostic; stdout belongs to the child.
+async fn print_exit_summary(
+    source: &crate::paths::ConfigSource,
+    session_start: chrono::DateTime<chrono::Utc>,
+    p: &Palette,
+) {
+    use crate::metering::store::TimeWindow;
+    let Some(store) = crate::metering::reader::open_readonly(source).await else {
+        return;
+    };
+    let window = TimeWindow::Custom {
+        start: session_start,
+        end: chrono::Utc::now(),
+    };
+    let (Ok(session), Ok(today)) = (
+        store.spend_summary(window).await,
+        store.spend_summary(TimeWindow::Today).await,
+    ) else {
+        return;
+    };
+    if session.requests == 0 {
+        return;
+    }
+    eprintln!(
+        "{cyan}{bold}spawn:{reset} session spend {bold}{}{reset} ({} requests) · today {}",
+        crate::metering::fmt_usd(session.spend_micro_usd),
+        session.requests,
+        crate::metering::fmt_usd(today.spend_micro_usd),
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+    );
 }
 
 /// Check a spawn invocation without launching the child process.
@@ -828,9 +873,9 @@ fn home_dir() -> Option<PathBuf> {
 
 /// Ensure `agent`'s binary is installed — locating it on `PATH` (+
 /// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bitrouter spawn` and `bitrouter login
-/// anthropic` (which needs the `claude` CLI to sign the user in) so both go
-/// through one detect-and-install path.
+/// and return its path. Shared by `bitrouter spawn` and
+/// `bitrouter providers login claude-code` (which needs the `claude` CLI to
+/// sign the user in) so both go through one detect-and-install path.
 pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
     let spec = agent.spec();
     match resolve_binary(spec.binary) {

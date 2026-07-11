@@ -328,6 +328,7 @@ providers:
     let reloader = AppReloader::new(
         assembled.policy_store.clone(),
         assembled.routing_table.clone(),
+        assembled.upstream_executor.clone(),
         ReloadSource::File(cfg_path.clone()),
     );
     reloader.reload().await.expect("reload succeeds");

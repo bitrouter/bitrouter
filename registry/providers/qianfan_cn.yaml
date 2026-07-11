@@ -1,0 +1,105 @@
+# Verified 2026-07-08 from Baidu Qianfan China `/v2/models` documentation. The
+# live catalog endpoint requires a Bearer API key, so this remains a manual
+# provider rather than `auto_sync: v1_models`. Official prices are RMB per 1K
+# tokens; values below are converted to USD per 1M tokens at ~7.2 CNY/USD.
+name: qianfan_cn
+display_name: Baidu Qianfan (China)
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: Baidu AI Cloud
+  privacy_policy_url: https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en
+  slug: qianfan
+  status_page_url: https://cloud.baidu.com/status.html
+  terms_of_service_url: https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en
+api_base: https://qianfan.baidubce.com/v2
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: cloud
+models:
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.67
+      output_tokens:
+        text: 3.33
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.28
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+      output_tokens:
+        text: 0.42
+      context_tiers:
+        - above_input_tokens: 32000
+          input_tokens:
+            no_cache: 0.56
+          output_tokens:
+            text: 0.83
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.56
+      output_tokens:
+        text: 2.92
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.29
+      output_tokens:
+        text: 1.17
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 0.83
+      output_tokens:
+        text: 3.33
+      context_tiers:
+        - above_input_tokens: 32000
+          input_tokens:
+            no_cache: 1.11
+          output_tokens:
+            text: 3.89
+  - id: baidu/ernie-5.0
+    provider_model_id: ernie-5.0
+    pricing:
+      input_tokens:
+        no_cache: 0.83
+      output_tokens:
+        text: 3.33
+      context_tiers:
+        - above_input_tokens: 32000
+          input_tokens:
+            no_cache: 1.39
+          output_tokens:
+            text: 5.56
+  - id: baidu/ernie-4.5-turbo-128k
+    provider_model_id: ernie-4.5-turbo-128k
+    pricing:
+      input_tokens:
+        no_cache: 0.11
+      output_tokens:
+        text: 0.44
+  - id: baidu/ernie-x1-turbo-32k
+    provider_model_id: ernie-x1-turbo-32k
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+      output_tokens:
+        text: 0.56
+status: active
+weight: 1
+submitted_at: 2026-07-07

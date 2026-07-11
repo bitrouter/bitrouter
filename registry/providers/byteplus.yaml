@@ -1,0 +1,41 @@
+# SCAFFOLD — UNVERIFIED. status: staging (does not route until a human verifies
+# and flips to active). Researched 2026-07 from BytePlus ModelArk docs
+# (docs.byteplus.com). BytePlus ModelArk is ByteDance's INTERNATIONAL LLM cloud
+# (ap-southeast / Southeast Asia), billed in USD — the separately-branded intl
+# counterpart of Volcengine Ark (provider `volcengine`, China/RMB). Same "Ark"
+# /api/v3 OpenAI-compatible protocol and Bearer API-key auth.
+# NAMING: ByteDance's first-party models are rebranded here (China "Doubao" ->
+# intl "Skylark"/"Seed"), so model ids are NOT interchangeable with `volcengine`.
+# ACCESS: BytePlus commonly routes through created inference-endpoint ids
+# (ep-.../ep-m-...); some models (e.g. deepseek-v3.2) must be enabled in-console.
+# VERIFY BEFORE ACTIVATING:
+#   - Full catalog + USD prices via GET https://ark.ap-southeast.bytepluses.com/api/v3/models
+#     — only deepseek-v3.1 pricing is captured below; add Skylark/Seed + Kimi once
+#     confirmed.
+#   - Whether stable model-name ids work or an ep-... endpoint id is required.
+#   - Provider name `byteplus` → env BYTEPLUS_API_KEY.
+name: byteplus
+display_name: BytePlus ModelArk
+metadata:
+  headquarters: CN
+  datacenters:
+    - SG
+  name: BytePlus
+  slug: byteplus
+api_base: https://ark.ap-southeast.bytepluses.com/api/v3
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: cloud
+doc_url: https://docs.byteplus.com/en/docs/ModelArk
+models:
+  - id: deepseek/deepseek-v3.1
+    provider_model_id: deepseek-v3.1
+    pricing:
+      input_tokens:
+        no_cache: 0.56
+      output_tokens:
+        text: 1.68
+status: staging
+weight: 1
+submitted_at: 2026-07-07

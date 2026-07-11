@@ -24,6 +24,7 @@
 //! startup. Typed health-checking (initialize-only) is provided by
 //! `bitrouter-substrate::up::health_check`.
 
+#[cfg(feature = "acp")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -32,7 +33,10 @@ use async_trait::async_trait;
 use agent_client_protocol_schema::v1::{PromptRequest, PromptResponse};
 
 use crate::caller::CallerContext;
-use crate::error::{BitrouterError, Result};
+#[cfg(feature = "acp")]
+use crate::error::BitrouterError;
+use crate::error::Result;
+#[cfg(feature = "acp")]
 use crate::language_model::HookDecision;
 
 pub mod transport;
@@ -156,6 +160,8 @@ pub struct AcpContext {
     /// The resolved target (Stage 2).
     pub target: Option<AcpTarget>,
     events: crate::event::EventBus,
+    /// When this context was created (pipeline entry).
+    started_at: std::time::Instant,
 }
 
 #[cfg(feature = "acp")]
@@ -166,12 +172,19 @@ impl AcpContext {
             request,
             target: None,
             events: crate::event::EventBus::new(),
+            started_at: std::time::Instant::now(),
         }
     }
 
     /// The inbound request.
     pub fn request(&self) -> &AcpRequest {
         &self.request
+    }
+
+    /// When this context was created (pipeline entry). Execution hooks derive
+    /// per-turn latency from it.
+    pub fn started_at(&self) -> std::time::Instant {
+        self.started_at
     }
 
     /// The caller.

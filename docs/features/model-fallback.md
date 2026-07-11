@@ -56,11 +56,9 @@ Fallback is single-pass. BitRouter attempts each model at most once per request,
 
 ## Inspecting which model answered
 
-Three breadcrumbs:
+For every settled request BitRouter emits a `request finished` log line carrying the upstream that actually answered — `provider`, `model`, and, for a multi-account provider, the `account` that served it (which reflects any failover hop) — alongside token counts and latency. Read it from the gateway's log output (`~/.bitrouter/bitrouter.log` for a local install) to confirm which provider and model handled a request, including after a fallback fell through to a later model.
 
-- **Response body `model` field** — set to the model that actually generated the response, not the one you requested first. (OpenAI convention.)
-- **Response header `bitrouter-served-by`** — `<provider-id>/<model-id>`, e.g. `anthropic-direct/anthropic/claude-sonnet-4-6`.
-- **Response header `bitrouter-fallback-trace`** — comma-separated list of attempts and outcomes, e.g. `openai/gpt-4o:rate_limit,anthropic/claude-sonnet-4-6:served`. Only emitted when at least one fallback fired.
+The response body's `model` field echoes the model you requested first, so it does not by itself reveal which fallback served the response — use the log line for that.
 
 ## Cost and latency tradeoffs
 

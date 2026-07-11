@@ -8,7 +8,7 @@ Claude Code 会和一个 Anthropic Messages 端点对话。把它指向 BitRoute
 
 ## 前置条件
 
-- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/quickstart)（`https://api.bitrouter.ai`）。
+- BitRouter 正在运行——本地代理位于 `http://127.0.0.1:4356`，或使用 [BitRouter Cloud](/docs/get-started/configuration)（`https://api.bitrouter.ai`）。
 - 已安装 Claude Code：
 
   ```bash
@@ -29,7 +29,7 @@ claude
 ```
 
 <Callout type="info">
-**本地代理不需要密钥。** 本地代理对回环（loopback）请求无需鉴权即可接受，因此 `ANTHROPIC_AUTH_TOKEN` 可以是任意占位符。对于 **Cloud**，把 `ANTHROPIC_BASE_URL` 设为 `https://api.bitrouter.ai`，并用你的 BitRouter 密钥（来自 `bitrouter auth login` 或控制台）作为 token。
+**本地代理不需要密钥。** 本地代理对回环（loopback）请求无需鉴权即可接受，因此 `ANTHROPIC_AUTH_TOKEN` 可以是任意占位符。对于 **Cloud**，把 `ANTHROPIC_BASE_URL` 设为 `https://api.bitrouter.ai`，并用你的 BitRouter 密钥（来自 `bitrouter cloud login` 或控制台）作为 token。
 </Callout>
 
 更喜欢用文件配置？把同样的值放进 `.claude/settings.json`，这样就能按项目生效而无需手动 export：
@@ -50,7 +50,7 @@ claude
 
 ## 验证
 
-启动 `claude`，问它任意问题，并确认收到响应。BitRouter 的 `bitrouter-served-by` 响应头会告诉你实际作答的是哪个供应商。
+启动 `claude`，问它任意问题，并确认收到响应。想知道实际作答的是哪个供应商，可查看 BitRouter 的 `request finished` 日志行（本地安装为 `~/.bitrouter/bitrouter.log`）——其中记录了服务该请求的 `provider` 和 `model`。
 
 ## 延伸阅读
 

@@ -18,10 +18,24 @@ pub struct AgentRow {
     pub description: String,
 }
 
-/// Result of `bitrouter agents list`.
+/// One agent in the ACP registry (`agents list --remote`).
+#[derive(Serialize)]
+pub struct AgentRegistryRow {
+    pub id: String,
+    pub version: String,
+    /// How the entry installs: `npx` / `uvx` (stub-able), `manual`
+    /// (binary-only), or `-` (no distribution).
+    pub install: String,
+    pub description: String,
+}
+
+/// Result of `bitrouter agents list`. `registry` is present only with
+/// `--remote` (the fetched ACP registry).
 #[derive(Serialize)]
 pub struct AgentsListReport {
     pub agents: Vec<AgentRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<Vec<AgentRegistryRow>>,
 }
 
 impl CliReport for AgentsListReport {
@@ -35,7 +49,24 @@ impl CliReport for AgentsListReport {
                 a.description.clone(),
             ]);
         }
-        h.table(&t)
+        h.table(&t)?;
+        if let Some(registry) = &self.registry {
+            h.line("")?;
+            h.line(&format!("ACP registry ({} agents):", registry.len()))?;
+            let mut t = Table::new(["ID", "VERSION", "INSTALL", "DESCRIPTION"]);
+            for r in registry {
+                t.push([
+                    r.id.clone(),
+                    r.version.clone(),
+                    r.install.clone(),
+                    r.description.clone(),
+                ]);
+            }
+            h.table(&t)?;
+            h.line("")?;
+            h.line("  install a stub with: bitrouter agents install <id>")?;
+        }
+        Ok(())
     }
 }
 

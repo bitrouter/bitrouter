@@ -25,14 +25,14 @@ BitRouter offers several advantages over OpenRouter for agent workloads:
 
 **Option A: Headless CLI (recommended)**
 
-Install the CLI and sign in — `bitrouter auth login` runs the RFC 8628 device-code flow, opens an approval URL in your browser, and persists the resulting OAuth credential (auto-refreshed) under `$XDG_DATA_HOME/bitrouter/account-credentials.json`. After that, every request through the `bitrouter` provider is authenticated automatically — no API key in your config:
+Install the CLI and sign in — `bitrouter cloud login` runs the RFC 8628 device-code flow, opens an approval URL in your browser, and persists the resulting OAuth credential (auto-refreshed) under `$XDG_DATA_HOME/bitrouter/account-credentials.json`. After that, every request through the `bitrouter` provider is authenticated automatically — no API key in your config:
 
 ```bash
 npm install -g bitrouter
-bitrouter auth login
+bitrouter cloud login
 ```
 
-Inspect the local session with `bitrouter auth whoami`, and manage account-level resources (API keys, usage, billing, policies, BYOK, OAuth clients) with `bitrouter cloud --help`.
+Inspect the local session with `bitrouter cloud whoami`, and manage account-level resources (API keys, usage, billing, policies, BYOK) with `bitrouter cloud --help`.
 
 **Option B: Dashboard**
 
@@ -105,7 +105,7 @@ If your OpenRouter integration sets any of these headers, you can safely drop th
 ## Next Steps
 
 <Cards>
-  <Card title="Quick Start" href="/docs/get-started/quickstart" description="Get BitRouter running in under a minute" />
+  <Card title="Quick Start" href="/docs/get-started/configuration" description="Get BitRouter running in under a minute" />
   <Card title="Configuration" href="/docs/features/presets" description="Advanced routing and configuration options" />
   <Card title="Integrations" href="/docs/integrations" description="Integration guides for specific agents" />
   <Card title="API Reference" href="/docs/reference" description="Complete API documentation" />

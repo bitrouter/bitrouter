@@ -42,6 +42,10 @@ pub enum BitrouterError {
     #[error("payment required: {0}")]
     PaymentRequired(String),
 
+    /// 402 — an upstream provider account has insufficient credit.
+    #[error("upstream payment required")]
+    UpstreamPaymentRequired,
+
     /// 403 — policy violation.
     #[error("forbidden: {0}")]
     Forbidden(String),
@@ -57,12 +61,28 @@ pub enum BitrouterError {
         retry_after: Option<u64>,
     },
 
+    /// 429 — every usable upstream route is temporarily rate limited.
+    #[error("upstream rate limited")]
+    UpstreamRateLimited {
+        /// Seconds the caller should wait before retrying the earliest route.
+        retry_after: Option<u64>,
+    },
+
     /// 502 — upstream provider returned an error.
     #[error("upstream error ({status}): {message}")]
     Upstream {
         /// Upstream HTTP status.
         status: u16,
         /// Upstream error body / detail.
+        message: String,
+    },
+
+    /// 502 — upstream returned a successful HTTP response that did not match
+    /// the selected protocol.
+    #[error("upstream returned an invalid response: {message}")]
+    UpstreamInvalidResponse {
+        /// Internal diagnostic detail. Public HTTP/SSE responses use a fixed
+        /// safe message and never expose this value.
         message: String,
     },
 
@@ -85,6 +105,10 @@ pub enum BitrouterError {
     #[error("upstream timeout")]
     UpstreamTimeout,
 
+    /// 503 — the upstream route set is temporarily unavailable.
+    #[error("upstream unavailable")]
+    UpstreamUnavailable,
+
     /// 500 — internal error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -97,12 +121,16 @@ impl BitrouterError {
             Self::BadRequest { .. } => 400,
             Self::Unauthorized(_) => 401,
             Self::PaymentRequired(_) => 402,
+            Self::UpstreamPaymentRequired => 402,
             Self::Forbidden(_) => 403,
             Self::NotFound(_) => 404,
             Self::RateLimited { .. } => 429,
+            Self::UpstreamRateLimited { .. } => 429,
             Self::Upstream { .. } => 502,
+            Self::UpstreamInvalidResponse { .. } => 502,
             Self::UpstreamAuth { status, .. } => *status,
             Self::UpstreamTimeout => 504,
+            Self::UpstreamUnavailable => 503,
             Self::Internal(_) => 500,
         }
     }
@@ -113,12 +141,37 @@ impl BitrouterError {
             Self::BadRequest { .. } => "invalid_request_error",
             Self::Unauthorized(_) => "authentication_error",
             Self::PaymentRequired(_) => "payment_required",
+            Self::UpstreamPaymentRequired => "payment_required",
             Self::Forbidden(_) => "permission_error",
             Self::NotFound(_) => "not_found_error",
             Self::RateLimited { .. } => "rate_limit_error",
-            Self::Upstream { .. } | Self::UpstreamTimeout => "upstream_error",
+            Self::UpstreamRateLimited { .. } => "rate_limit_error",
+            Self::Upstream { .. }
+            | Self::UpstreamInvalidResponse { .. }
+            | Self::UpstreamTimeout => "upstream_error",
+            Self::UpstreamUnavailable => "upstream_error",
             Self::UpstreamAuth { status: 403, .. } => "permission_error",
             Self::UpstreamAuth { .. } => "authentication_error",
+            Self::Internal(_) => "internal_error",
+        }
+    }
+
+    /// Stable machine-readable code for OpenAI-compatible error envelopes.
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            Self::BadRequest { .. } => "invalid_request",
+            Self::Unauthorized(_) => "authentication_error",
+            Self::PaymentRequired(_) => "payment_required",
+            Self::UpstreamPaymentRequired => "upstream_payment_required",
+            Self::Forbidden(_) => "permission_denied",
+            Self::NotFound(_) => "not_found",
+            Self::RateLimited { .. } => "rate_limit_exceeded",
+            Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
+            Self::Upstream { .. } => "upstream_bad_gateway",
+            Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
+            Self::UpstreamAuth { .. } => "upstream_auth_required",
+            Self::UpstreamTimeout => "upstream_timeout",
+            Self::UpstreamUnavailable => "upstream_unavailable",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -141,12 +194,16 @@ impl BitrouterError {
             Self::BadRequest { .. } => ErrorKind::BadRequest,
             Self::Unauthorized(_) => ErrorKind::Unauthorized,
             Self::PaymentRequired(_) => ErrorKind::PaymentRequired,
+            Self::UpstreamPaymentRequired => ErrorKind::UpstreamPaymentRequired,
             Self::Forbidden(_) => ErrorKind::Forbidden,
             Self::NotFound(_) => ErrorKind::NotFound,
             Self::RateLimited { .. } => ErrorKind::RateLimited,
+            Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
             Self::Upstream { .. } => ErrorKind::Upstream,
+            Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
             Self::UpstreamTimeout => ErrorKind::UpstreamTimeout,
+            Self::UpstreamUnavailable => ErrorKind::UpstreamUnavailable,
             Self::Internal(_) => ErrorKind::Internal,
         }
     }
@@ -164,13 +221,19 @@ impl BitrouterError {
             | Self::NotFound(m)
             | Self::Internal(m) => m.clone(),
             Self::RateLimited { .. } => "rate limited".to_string(),
+            Self::UpstreamPaymentRequired => "upstream payment required".to_string(),
+            Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
+            }
+            Self::UpstreamInvalidResponse { message } => {
+                format!("upstream returned an invalid response: {message}")
             }
             Self::UpstreamAuth { status, .. } => {
                 format!("upstream auth required ({status})")
             }
             Self::UpstreamTimeout => "upstream timeout".to_string(),
+            Self::UpstreamUnavailable => "upstream unavailable".to_string(),
         };
         ErrorEnvelope {
             error: ErrorBody {
@@ -179,6 +242,21 @@ impl BitrouterError {
                 context: Vec::new(),
                 hint: None,
             },
+        }
+    }
+
+    /// A message safe to return to an untrusted HTTP/SSE client.
+    ///
+    /// Upstream diagnostics may contain echoed prompts, credentials, provider
+    /// stack traces, or account details. Keep those on the internal error while
+    /// exposing only a stable summary at the public boundary.
+    pub fn public_message(&self) -> String {
+        match self {
+            Self::Upstream { .. } => "upstream request failed".to_string(),
+            Self::UpstreamInvalidResponse { .. } => {
+                "upstream returned an invalid response".to_string()
+            }
+            _ => self.to_string(),
         }
     }
 }
@@ -195,18 +273,26 @@ pub enum ErrorKind {
     Unauthorized,
     /// 402 — payment required.
     PaymentRequired,
+    /// 402 — insufficient credit at every usable upstream route.
+    UpstreamPaymentRequired,
     /// 403 — policy violation.
     Forbidden,
     /// 404 — no route / resource not found.
     NotFound,
     /// 429 — rate limited.
     RateLimited,
+    /// 429 — all usable upstream routes are rate limited.
+    UpstreamRateLimited,
     /// 502 — upstream provider error.
     Upstream,
+    /// 502 — malformed success response from an upstream protocol.
+    UpstreamInvalidResponse,
     /// 401/403 — upstream demanded authorization.
     UpstreamAuth,
     /// 504 — upstream timed out.
     UpstreamTimeout,
+    /// 503 — the upstream route set is temporarily unavailable.
+    UpstreamUnavailable,
     /// 500 — internal error.
     Internal,
 }

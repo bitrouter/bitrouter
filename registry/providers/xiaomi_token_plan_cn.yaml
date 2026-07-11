@@ -1,0 +1,37 @@
+name: xiaomi_token_plan_cn
+display_name: Xiaomi MiMo Token Plan (China)
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: Xiaomi
+  privacy_policy_url: https://mimo.mi.com/docs/terms/privacy-policy
+  slug: xiaomi
+  terms_of_service_url: https://mimo.mi.com/docs/terms/user-agreement
+billing: subscription
+api_base: https://token-plan-cn.xiaomimimo.com/v1
+protocol_endpoints:
+  anthropic: https://token-plan-cn.xiaomimimo.com/anthropic
+api_protocol:
+  - "*": [openai, responses, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: xiaomi/mimo-v2.5-pro
+    provider_model_id: mimo-v2.5-pro
+    capabilities:
+      - reasoning
+      - tools
+  - id: xiaomi/mimo-v2.5
+    provider_model_id: mimo-v2.5
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-07-06
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
+  key: xiaomi-token-plan-cn

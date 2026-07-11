@@ -19,12 +19,14 @@
 //! ```
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde::Deserialize;
 
 use crate::error::{BitrouterError, Result};
+use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::{ApiProtocol, ProtocolList};
+use crate::language_model::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
 pub mod pattern;
 pub mod presets;
@@ -43,6 +45,8 @@ pub use routing_table::ConfigRoutingTable;
 pub struct Config {
     /// HTTP server settings.
     pub server: ServerConfig,
+    /// Outbound / upstream HTTP settings (the client that calls providers).
+    pub upstream: UpstreamConfig,
     /// Database connection settings.
     pub database: DatabaseConfig,
     /// Upstream providers, keyed by provider id.
@@ -72,7 +76,7 @@ pub struct Config {
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
-    /// Provider-registry integration: whether to fetch + merge the registry's
+    /// Public registry integration: whether to fetch + merge the registry's
     /// BYOK providers, where to fetch it from, and the provider-class priority
     /// ladder used to order the auto-cascade.
     pub registry: RegistryConfig,
@@ -82,6 +86,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
+            upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
@@ -98,14 +103,13 @@ impl Default for Config {
     }
 }
 
-/// Default base URL for the provider-registry `dist/` artifacts — the raw files
-/// on the registry's `main` branch (`providers.json` + `canonical.json` live
-/// under it). The single source of truth for the registry location; the
+/// Default base URL for the public registry distribution artifacts — the raw
+/// files on bitrouter OSS `main` under `dist/registry/`. The
 /// `bitrouter-providers` fetch layer reads it through [`RegistryConfig`].
 pub const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/bitrouter/provider-registry/main/dist";
+    "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry";
 
-/// Runtime provider-registry integration settings — the top-level `registry:`
+/// Runtime public registry integration settings — the top-level `registry:`
 /// block in `bitrouter.yaml`.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -261,6 +265,69 @@ impl Default for ServerConfig {
     }
 }
 
+/// Outbound / upstream HTTP settings — the client BitRouter uses to call
+/// providers. Distinct from [`ServerConfig`], which is the inbound listen
+/// socket. Currently just [`timeouts`](Self::timeouts); grouped under
+/// `upstream:` so future outbound knobs have a home.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct UpstreamConfig {
+    /// Global upstream timeout defaults. A provider may override any field
+    /// under `providers.<id>.timeouts:`.
+    pub timeouts: TimeoutConfig,
+}
+
+/// Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset
+/// field inherits the level above — a provider override inherits the resolved
+/// global value, and an unset global inherits the built-in default
+/// ([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒
+/// no overall wall-clock cap (the right default for long agentic streams).
+///
+/// Used both as the top-level `upstream.timeouts` block and as the per-provider
+/// `providers.<id>.timeouts` override; timeouts are **not** inherited via a
+/// provider's `derives:` chain.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TimeoutConfig {
+    /// TCP connect timeout, seconds.
+    pub connect_secs: Option<u64>,
+    /// Idle (per-read) timeout, seconds — fires when the upstream sends no
+    /// bytes for this long, including mid-stream. The effective stream-idle
+    /// guard.
+    pub read_secs: Option<u64>,
+    /// Idle pooled-connection eviction, seconds.
+    pub pool_idle_secs: Option<u64>,
+    /// TCP keepalive probe interval, seconds.
+    pub tcp_keepalive_secs: Option<u64>,
+    /// Overall wall-clock cap for the entire request/stream, seconds. Opt-in:
+    /// unset ⇒ no cap. Setting it bounds total stream duration, so keep it
+    /// generous for reasoning / agentic providers.
+    pub total_secs: Option<u64>,
+}
+
+impl TimeoutConfig {
+    /// Resolve this (partial) config over a base [`HttpTimeouts`]: every set
+    /// field overrides the base, every unset field inherits it.
+    pub fn apply_to(&self, base: HttpTimeouts) -> HttpTimeouts {
+        HttpTimeouts {
+            connect: self
+                .connect_secs
+                .map(Duration::from_secs)
+                .unwrap_or(base.connect),
+            read: self.read_secs.map(Duration::from_secs).unwrap_or(base.read),
+            pool_idle: self
+                .pool_idle_secs
+                .map(Duration::from_secs)
+                .unwrap_or(base.pool_idle),
+            tcp_keepalive: self
+                .tcp_keepalive_secs
+                .map(Duration::from_secs)
+                .unwrap_or(base.tcp_keepalive),
+            total: self.total_secs.map(Duration::from_secs).or(base.total),
+        }
+    }
+}
+
 /// Database connection settings.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -380,7 +447,7 @@ pub struct ProviderConfig {
     pub accounts: Vec<ProviderAccount>,
     /// How the per-account targets are ordered when `accounts` is set.
     pub account_strategy: AccountStrategy,
-    /// Routing-preference class. Set by the provider-registry merge (or
+    /// Routing-preference class. Set by the public registry merge (or
     /// directly in config), then mapped to a numeric rank via
     /// [`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider
     /// sorts after every classed one in the auto-cascade (Strategy 3). Plain
@@ -390,6 +457,10 @@ pub struct ProviderConfig {
     /// class-derived rank, so an operator can pin one provider ahead of others
     /// regardless of class. `None` ⇒ derive the rank from [`class`](Self::class).
     pub priority: Option<i32>,
+    /// Per-provider upstream timeout overrides. Each set field layers over the
+    /// resolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.
+    /// Not inherited via [`derives`](Self::derives).
+    pub timeouts: TimeoutConfig,
 }
 
 /// One credential within a multi-account provider. An account varies
@@ -489,6 +560,7 @@ impl Default for ProviderConfig {
             account_strategy: AccountStrategy::default(),
             class: None,
             priority: None,
+            timeouts: TimeoutConfig::default(),
         }
     }
 }
@@ -590,6 +662,9 @@ pub struct ProviderModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
+    /// Provider/model request-shape quirks that do not change model semantics.
+    #[serde(default)]
+    pub compatibility: ModelCompatibility,
 }
 
 /// An explicit virtual-model definition (Strategy 2).
@@ -692,6 +767,11 @@ pub struct VariantConfig {
 /// Replace every `${VAR}` reference with the value resolved by `lookup`, an
 /// unresolved variable being an error (config F8: `${VAR}` substitution).
 ///
+/// A `${VAR:-default}` reference uses `default` when `VAR` is unset instead of
+/// erroring — so a registry `api_base` can carry a fallback (e.g.
+/// `${AWS_REGION:-us-east-1}`). The `:-` split is on its first occurrence; a
+/// bare `${VAR}` is unchanged (real env names never contain `:-`).
+///
 /// Substitution is **YAML-comment-aware**: a `${VAR}` that falls inside a `#`
 /// comment is left literal and never looked up — so a commented-out example
 /// (e.g. the `bitrouter init` starter config) that references an unset variable
@@ -740,12 +820,24 @@ where
             let after_brace = &input[idx + 2..];
             match after_brace.find('}') {
                 Some(rel) => {
-                    let name = &after_brace[..rel];
-                    let value = lookup(name).ok_or_else(|| {
-                        BitrouterError::bad_request(format!(
-                            "config references undefined environment variable '{name}'"
-                        ))
-                    })?;
+                    let token = &after_brace[..rel];
+                    // `${VAR:-default}` falls back to `default` when `VAR` is
+                    // unset; a bare `${VAR}` still errors on an unset variable.
+                    let (name, default) = match token.split_once(":-") {
+                        Some((n, d)) => (n, Some(d)),
+                        None => (token, None),
+                    };
+                    let value = match lookup(name) {
+                        Some(v) => v,
+                        None => match default {
+                            Some(d) => d.to_string(),
+                            None => {
+                                return Err(BitrouterError::bad_request(format!(
+                                    "config references undefined environment variable '{name}'"
+                                )));
+                            }
+                        },
+                    };
                     out.push_str(&value);
                     // Advance the iterator past `{name}` (up to and including `}`).
                     let resume = idx + 2 + rel + 1;
@@ -1011,6 +1103,7 @@ pub async fn discover_models(config: &mut Config) {
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
+                        compatibility: ModelCompatibility::default(),
                     })
                     .collect();
             }

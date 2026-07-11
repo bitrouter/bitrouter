@@ -22,6 +22,7 @@ fn target(provider: &str) -> RoutingTarget {
         api_base: "https://example.invalid".to_string(),
         api_key: "k".to_string(),
         api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -122,6 +123,53 @@ impl SettlementRecorder for UsageCapturingRecorder {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettlementSnapshot {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    has_error: bool,
+}
+
+struct SettlementSnapshotRecorder(Arc<std::sync::Mutex<Vec<SettlementSnapshot>>>);
+#[async_trait]
+impl SettlementRecorder for SettlementSnapshotRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        self.0.lock().unwrap().push(SettlementSnapshot {
+            prompt_tokens: ctx.prompt_tokens,
+            completion_tokens: ctx.completion_tokens,
+            has_error: ctx.error.is_some(),
+        });
+        Ok(())
+    }
+}
+
+struct StreamErrorExecutor {
+    error: BitrouterError,
+}
+
+#[async_trait]
+impl Executor for StreamErrorExecutor {
+    async fn execute(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(self.error.clone())
+    }
+
+    async fn execute_stream(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Ok(Box::pin(futures::stream::iter(vec![Err(self
+            .error
+            .clone())])))
+    }
+}
+
 /// A `StreamHook` that records `on_stream_end` outcomes and can rewrite / abort.
 struct ScriptedStreamHook {
     interest: StreamInterest,
@@ -186,6 +234,24 @@ impl ObserveHook for PanicObserveHook {
     }
 }
 
+struct OutcomeRecordingObserveHook(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+#[async_trait]
+impl ObserveHook for OutcomeRecordingObserveHook {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let label = match outcome {
+            RequestOutcome::Completed => "completed",
+            RequestOutcome::Failed(_) => "failed",
+            RequestOutcome::ClientDisconnected => "disconnected",
+        };
+        self.0.lock().unwrap().push(label);
+    }
+}
+
 fn pipeline_with(
     rt: Arc<StaticRoutingTable>,
     executor: Arc<dyn Executor>,
@@ -216,6 +282,40 @@ async fn full_pipeline_runs_all_four_stages() {
     let resp = pipeline.execute(request()).await.expect("request succeeds");
     assert_eq!(resp.result.content.len(), 1);
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
+}
+
+#[tokio::test]
+async fn streaming_preflight_error_runs_settlement_and_observe_end() {
+    let settlements = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Error(
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(3),
+            },
+        )])),
+        |builder| {
+            builder
+                .settlement_recorder(SettlementSnapshotRecorder(settlements.clone()))
+                .observe_hook(OutcomeRecordingObserveHook(outcomes.clone()));
+        },
+    );
+
+    let error = match pipeline.clone().execute_stream(stream_request()).await {
+        Ok(_) => panic!("preflight rate limit must fail before opening a stream"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, BitrouterError::UpstreamRateLimited { .. }));
+    assert_eq!(
+        settlements.lock().unwrap().as_slice(),
+        &[SettlementSnapshot {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            has_error: true,
+        }]
+    );
+    assert_eq!(outcomes.lock().unwrap().as_slice(), &["failed"]);
 }
 
 #[tokio::test]
@@ -310,8 +410,8 @@ async fn settlement_recorder_runs_even_on_failure() {
     );
 
     let err = pipeline.execute(request()).await.unwrap_err();
-    // An upstream 500 surfaces to the client as a 502 Bad Gateway.
-    assert_eq!(err.status(), 502);
+    // Exhausting the only temporarily unavailable route is a 503.
+    assert_eq!(err.status(), 503);
     assert_eq!(
         recorded.load(Ordering::SeqCst),
         1,
@@ -351,6 +451,111 @@ async fn fallback_tries_next_on_5xx_then_succeeds() {
             provider_metadata: Default::default(),
         }]
     );
+}
+
+#[tokio::test]
+async fn fallback_tries_next_on_upstream_429_then_succeeds() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+            }),
+            MockResponse::Generate(GenerateResult {
+                content: vec![Content::Text {
+                    text: "from b".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: None,
+                finish_reason: Some(FinishReason::Stop),
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            }),
+        ])),
+        |_b| {},
+    );
+
+    let response = pipeline.execute(request()).await.unwrap();
+    assert_eq!(
+        response.result.content,
+        vec![Content::Text {
+            text: "from b".into(),
+            provider_metadata: Default::default(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn exhausted_upstream_429s_use_the_earliest_retry_after() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider", "c-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+            }),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited { retry_after: None }),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+        ])),
+        |_b| {},
+    );
+
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::UpstreamRateLimited {
+            retry_after: Some(12)
+        }
+    ));
+}
+
+#[tokio::test]
+async fn mixed_retryable_upstream_failures_become_service_unavailable() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(10),
+            }),
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 503,
+                message: "maintenance".into(),
+            }),
+        ])),
+        |_b| {},
+    );
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::UpstreamUnavailable
+    ));
+}
+
+#[tokio::test]
+async fn local_rate_limit_does_not_fall_back() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::RateLimited {
+                retry_after: Some(5),
+            }),
+            MockResponse::Generate(GenerateResult {
+                content: vec![],
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            }),
+        ])),
+        |_b| {},
+    );
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::RateLimited {
+            retry_after: Some(5)
+        }
+    ));
 }
 
 #[tokio::test]
@@ -641,6 +846,57 @@ async fn disconnect_before_usage_bills_estimated_output() {
 }
 
 #[tokio::test]
+async fn upstream_stream_error_is_not_reclassified_as_client_disconnect_when_dropped() {
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured: Arc<std::sync::Mutex<Vec<SettlementSnapshot>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let upstream_error = BitrouterError::Upstream {
+        status: 401,
+        message: "upstream auth failed".into(),
+    };
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(StreamErrorExecutor {
+            error: upstream_error,
+        }),
+        |b| {
+            b.stream_hook(ScriptedStreamHook {
+                interest: StreamInterest::all(),
+                mode: StreamMode::Pass,
+                ended_with: ended.clone(),
+            })
+            .settlement_recorder(SettlementSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let first = stream.next().await.expect("upstream error item");
+    assert!(first.is_err(), "the upstream error surfaced to the client");
+
+    drop(stream);
+    let _ = pipeline.drain_pending_settlements().await;
+
+    assert_eq!(
+        *ended.lock().unwrap(),
+        vec!["upstream_error"],
+        "dropping after receiving the error must not overwrite the terminal outcome"
+    );
+    assert_eq!(
+        captured.lock().unwrap().as_slice(),
+        &[SettlementSnapshot {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            has_error: true,
+        }],
+        "failed streams without usage must settle as failed and unbillable"
+    );
+}
+
+#[tokio::test]
 async fn stream_on_stream_end_fires_on_upstream_error() {
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
@@ -921,6 +1177,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Custom("fake".into()),
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,

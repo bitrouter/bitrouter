@@ -122,7 +122,7 @@ bitrouter start                 # proxy running at http://localhost:4356
 **Or sign in to BitRouter Cloud** — one OAuth account covers every model, no upstream provider keys:
 
 ```bash
-bitrouter auth login            # RFC 8628 device flow against api.bitrouter.ai
+bitrouter cloud login           # RFC 8628 device flow against api.bitrouter.ai
 bitrouter start                 # `bitrouter` provider auto-enables once signed in
 ```
 
@@ -178,7 +178,7 @@ BitRouter routes to a *model*, not a provider. Each open-weight family below is 
 | MiMo V2               | Xiaomi   |
 | Step 3.5              | StepFun  |
 
-Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [provider registry](https://github.com/bitrouter/provider-registry).
+Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
 
 **Want to add a provider?** Open an issue or submit a PR. **Interested in a first-party integration?** Email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
 
@@ -197,13 +197,13 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 
 **Building an open-source agent?** Reach out at [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu) — we offer **up to 50% off** for you and your community.
 
-The full provider and harness catalog lives at [github.com/bitrouter/provider-registry](https://github.com/bitrouter/provider-registry).
+The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Documentation
 
 - [`CLI.md`](CLI.md) — full CLI reference with flags and examples
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
-- [`docs/`](docs/) — guides and recipes (e.g. [Claude Code on your subscription](docs/claude-code-subscription.md))
+- [`docs/`](docs/) — guides and recipes (e.g. [Claude Code on your subscription](docs/integrations/claude-subscription.md))
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)

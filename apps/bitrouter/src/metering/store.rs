@@ -64,6 +64,20 @@ pub struct RateMetrics {
     pub tokens_per_minute: f64,
 }
 
+/// Spend / request rollup over a window, across **every** caller.
+///
+/// Read by the agent-facing CLI surfaces (`status --agent`,
+/// the MCP cost footer, the `spawn` exit summary) — unlike the
+/// per-key getters above, nothing here is
+/// scoped to one `api_key_id`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpendSummary {
+    /// Total estimated spend in micro-USD.
+    pub spend_micro_usd: u64,
+    /// Requests observed (success and failure alike).
+    pub requests: u64,
+}
+
 /// sea-orm-backed metering store.
 #[derive(Clone)]
 pub struct MeteringStore {
@@ -151,6 +165,23 @@ impl MeteringStore {
         Ok(RateMetrics {
             requests_per_minute: rows.len() as f64,
             tokens_per_minute: tokens as f64,
+        })
+    }
+
+    /// Total spend + request count within `window`, across every caller.
+    pub async fn spend_summary(&self, window: TimeWindow) -> Result<SpendSummary> {
+        let start = window_start(window).to_rfc3339();
+        let charges: Vec<i64> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("spend_summary: {e}")))?;
+        Ok(SpendSummary {
+            requests: charges.len() as u64,
+            spend_micro_usd: charges.into_iter().map(|c| c.max(0) as u64).sum(),
         })
     }
 

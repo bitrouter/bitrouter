@@ -8,7 +8,7 @@ Claude Code talks to an Anthropic Messages endpoint. Point it at BitRouter inste
 
 ## Prerequisites
 
-- BitRouter running — local proxy at `http://127.0.0.1:4356`, or [BitRouter Cloud](/docs/get-started/quickstart) at `https://api.bitrouter.ai`.
+- BitRouter running — local proxy at `http://127.0.0.1:4356`, or [BitRouter Cloud](/docs/get-started/configuration) at `https://api.bitrouter.ai`.
 - Claude Code installed:
 
   ```bash
@@ -29,7 +29,7 @@ claude
 ```
 
 <Callout type="info">
-**No key for the local proxy.** The local proxy accepts loopback requests without auth, so `ANTHROPIC_AUTH_TOKEN` can be any placeholder. For **Cloud**, set `ANTHROPIC_BASE_URL=https://api.bitrouter.ai` and use your BitRouter key (from `bitrouter auth login` or the dashboard) as the token.
+**No key for the local proxy.** The local proxy accepts loopback requests without auth, so `ANTHROPIC_AUTH_TOKEN` can be any placeholder. For **Cloud**, set `ANTHROPIC_BASE_URL=https://api.bitrouter.ai` and use your BitRouter key (from `bitrouter cloud login` or the dashboard) as the token.
 </Callout>
 
 Prefer a file? Put the same values in `.claude/settings.json` so they apply per-project without exporting:
@@ -50,7 +50,7 @@ Prefer a file? Put the same values in `.claude/settings.json` so they apply per-
 
 ## Verify
 
-Launch `claude`, ask it anything, and confirm the response. BitRouter's `bitrouter-served-by` response header tells you which provider actually answered.
+Launch `claude`, ask it anything, and confirm the response. To see which provider actually answered, read BitRouter's `request finished` log line (`~/.bitrouter/bitrouter.log` for a local install) — it records the `provider` and `model` that served the request.
 
 ## Learn more
 

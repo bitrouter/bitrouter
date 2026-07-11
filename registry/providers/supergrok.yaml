@@ -1,0 +1,68 @@
+# SuperGrok — xAI's consumer subscription (grok.com / X Premium+), routed with
+# the user's subscription credentials rather than a metered API key. Modeled on
+# the `claude-code` / `openai-codex` subscription pattern: flat-rate (no
+# per-token pricing), activated by importing the official Grok CLI's session.
+#
+# The `supergrok` handler is implemented in bitrouter_providers::supergrok: it
+# adopts the Grok CLI's OIDC session (`~/.grok/auth.json`) via
+# `bitrouter providers login supergrok`, sets `Authorization: Bearer <jwt>`
+# against `api.x.ai/v1`, and refreshes via the public OIDC client below. The
+# subscription grant is distinct from the metered `xai` API-key provider.
+name: supergrok
+display_name: SuperGrok (subscription)
+metadata:
+  headquarters: US
+  name: xAI
+  privacy_policy_url: https://x.ai/legal/privacy-policy
+  slug: xai
+  status_page_url: https://status.x.ai
+  terms_of_service_url: https://x.ai/legal/terms-of-service
+kind: first_party
+access: local_oauth
+billing: subscription
+api_base: https://api.x.ai/v1
+api_protocol:
+  - "*": [responses, openai]
+rate_limits: []
+models:
+  - id: x-ai/grok-4.5
+    provider_model_id: grok-4.5
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.20-multi-agent
+    provider_model_id: grok-4.20-multi-agent
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.20
+    provider_model_id: grok-4.20
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-4.3
+    provider_model_id: grok-4.3
+    capabilities:
+      - reasoning
+      - tools
+  - id: x-ai/grok-build-0.1
+    provider_model_id: grok-build-0.1
+    capabilities:
+      - tools
+status: active
+auth:
+  kind: oauth
+  handler: supergrok
+  # Public OIDC client the official Grok CLI ships with (confirmed as the
+  # `<issuer>::<client_id>` key in `~/.grok/auth.json`). PKCE, no client secret,
+  # so refresh needs only the client id. The `supergrok` handler pins these; the
+  # params are recorded here for documentation and a future native login.
+  params:
+    client_id: b1a00492-073a-47ea-816f-4c329264a828
+    issuer: https://auth.x.ai
+    authorize_endpoint: https://auth.x.ai/oauth2/authorize
+    token_endpoint: https://auth.x.ai/oauth2/token
+    scope: openid profile email offline_access grok-cli:access api:access
+auto_sync:
+  feed: models_dev
+  key: xai

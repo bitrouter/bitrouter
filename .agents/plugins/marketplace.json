@@ -1,0 +1,11 @@
+{
+  "name": "bitrouter",
+  "description": "BitRouter's official plugin marketplace — the agent plugin ships from the same repo as the router itself.",
+  "plugins": [
+    {
+      "name": "bitrouter",
+      "description": "Cost-optimize your agentic loops: setup skill, ambient daemon status, per-turn cost lines, and in-session model arbitrage via the BitRouter gateway.",
+      "source": "."
+    }
+  ]
+}

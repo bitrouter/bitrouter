@@ -10,8 +10,8 @@ rust-version.workspace = true
 
 [features]
 # Browser-based OAuth Authorization Code flow + PKCE — drives the
-# interactive subscription logins (`bitrouter login anthropic`,
-# `bitrouter login openai-codex`). Off by default so library consumers of
+# interactive subscription logins (`bitrouter providers login claude-code`,
+# `bitrouter providers login openai-codex`). Off by default so library consumers of
 # `bitrouter-providers` (`bitrouter-cloud`, downstream crates) don't pull
 # `sha2` / `base64` / `rand` they don't use. `apps/bitrouter` enables it.
 default = []

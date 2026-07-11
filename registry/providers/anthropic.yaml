@@ -1,0 +1,128 @@
+name: anthropic
+display_name: Anthropic
+metadata:
+  headquarters: US
+  name: Anthropic
+  privacy_policy_url: https://www.anthropic.com/privacy
+  slug: anthropic
+  status_page_url: https://status.anthropic.com
+  terms_of_service_url: https://www.anthropic.com/legal/consumer-terms
+kind: first_party
+api_protocol:
+  - "*": anthropic
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: anthropic/claude-opus-4.8
+    provider_model_id: claude-opus-4-8
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: anthropic/claude-opus-4.7
+    provider_model_id: claude-opus-4-7
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: anthropic/claude-opus-4.6
+    provider_model_id: claude-opus-4-6
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
+    # Introductory pricing through 2026-08-31; rises to $3/$15 after.
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+      - image_input
+  - id: anthropic/claude-sonnet-4.6
+    provider_model_id: claude-sonnet-4-6
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+      - image_input
+  - id: anthropic/claude-sonnet-4.5
+    provider_model_id: claude-sonnet-4-5
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: anthropic/claude-fable-5
+    provider_model_id: claude-fable-5
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: anthropic/claude-haiku-4.5
+    provider_model_id: claude-haiku-4-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 5
+status: active
+weight: 1
+submitted_at: 2026-05-25
+api_base: https://api.anthropic.com/v1
+doc_url: https://docs.anthropic.com/en/api/messages
+auth:
+  kind: header
+  header: x-api-key
+  env: ANTHROPIC_API_KEY
+  extra_headers:
+    anthropic-version: "2023-06-01"
+auto_sync:
+  feed: models_dev

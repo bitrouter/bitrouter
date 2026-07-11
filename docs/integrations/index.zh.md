@@ -4,7 +4,7 @@ description: 把模型、工具与 Agent 运行时接入 BitRouter。
 sourceHash: 04eb19e177d2ad12fc475f1bfc45165f8993c065d097985acfdad627583a6c84
 ---
 
-每个指南做的都是同一件事：把目标指向 BitRouter 的端点（本地代理 `http://127.0.0.1:4356`，或云端 `https://api.bitrouter.ai`），并用 `provider/model` 形式的模型 id 调用模型。这样即可获得完整的[模型注册表](/docs/concepts/models)、提供商优选与[失败回退](/docs/features/model-fallback)。初次使用？先看[快速开始](/docs/get-started/quickstart)。
+每个指南做的都是同一件事：把目标指向 BitRouter 的端点（本地代理 `http://127.0.0.1:4356`，或云端 `https://api.bitrouter.ai`），并用 `provider/model` 形式的模型 id 调用模型。这样即可获得完整的[模型注册表](/docs/concepts/models)、提供商优选与[失败回退](/docs/features/model-fallback)。初次使用？先看[快速开始](/docs/get-started/configuration)。
 
 集成分为三类：
 

@@ -145,14 +145,19 @@ impl FallbackPolicy for DefaultFallbackPolicy {
                 FallbackDecision::TryNext
             }
             BitrouterError::UpstreamTimeout => FallbackDecision::TryNext,
-            BitrouterError::RateLimited { .. } => FallbackDecision::TryNext,
+            BitrouterError::UpstreamRateLimited { .. } | BitrouterError::UpstreamUnavailable => {
+                FallbackDecision::TryNext
+            }
             // Payment / credit exhaustion → try the next target. For a
             // multi-account provider this drops to the next account
             // (the "fall back when a subscription runs out" path); for
             // a plain cascade it tries the next provider, which may
             // still have funds. If every target is drained the chain
             // exhausts and the original error is returned.
-            BitrouterError::PaymentRequired(_) => FallbackDecision::TryNext,
+            BitrouterError::PaymentRequired(_) | BitrouterError::UpstreamPaymentRequired => {
+                FallbackDecision::TryNext
+            }
+            BitrouterError::UpstreamInvalidResponse { .. } => FallbackDecision::TryNext,
             // Any other error is the request's own fault — do not retry; the
             // original error is preserved.
             other => FallbackDecision::Fail(other.clone()),

@@ -30,6 +30,33 @@ fn env_substitution_errors_on_undefined() {
 }
 
 #[test]
+fn env_substitution_uses_default_when_var_unset() {
+    // `${VAR:-default}` falls back to the default when the var is unset...
+    let out = substitute_with(
+        "https://bedrock-mantle.${AWS_REGION:-us-east-1}.api.aws/v1",
+        |_| None,
+    )
+    .unwrap();
+    assert_eq!(out, "https://bedrock-mantle.us-east-1.api.aws/v1");
+    // ...but the set value still wins over the default.
+    let out = substitute_with("${AWS_REGION:-us-east-1}", |n| {
+        (n == "AWS_REGION").then(|| "eu-west-1".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "eu-west-1");
+    // A default containing hyphens is preserved (split is on the first `:-`).
+    let out = substitute_with("${X:-a-b-c}", |_| None).unwrap();
+    assert_eq!(out, "a-b-c");
+    // A bare `${VAR}` (no `:-`) still errors when unset.
+    assert_eq!(
+        substitute_with("${AZURE_OPENAI_RESOURCE}", |_| None)
+            .unwrap_err()
+            .status(),
+        400
+    );
+}
+
+#[test]
 fn env_substitution_handles_multiple_and_literals() {
     let out = substitute_with("a=${A} b=${B} c", |n| Some(format!("<{n}>"))).unwrap();
     assert_eq!(out, "a=<A> b=<B> c");
@@ -532,4 +559,98 @@ fn primary_api_key_prefers_top_level_then_first_account() {
         ..ProviderConfig::default()
     };
     assert_eq!(p2.primary_api_key(), "second");
+}
+
+// ===== upstream HTTP timeouts (global + per-provider) =====
+
+#[test]
+fn timeout_config_empty_inherits_base() {
+    use crate::language_model::HttpTimeouts;
+    let base = HttpTimeouts::default();
+    let resolved = TimeoutConfig::default().apply_to(base.clone());
+    assert_eq!(resolved, base, "an empty override must equal the base");
+}
+
+#[test]
+fn timeout_config_overrides_only_set_fields() {
+    use crate::language_model::HttpTimeouts;
+    use std::time::Duration;
+    let base = HttpTimeouts::default();
+    let resolved = TimeoutConfig {
+        read_secs: Some(300),
+        ..Default::default()
+    }
+    .apply_to(base.clone());
+    assert_eq!(resolved.read, Duration::from_secs(300));
+    // Untouched fields keep the base value.
+    assert_eq!(resolved.connect, base.connect);
+    assert_eq!(resolved.pool_idle, base.pool_idle);
+    assert_eq!(resolved.tcp_keepalive, base.tcp_keepalive);
+}
+
+#[test]
+fn total_wall_clock_cap_is_off_by_default_and_opt_in() {
+    use crate::language_model::HttpTimeouts;
+    use std::time::Duration;
+    // No overall cap by default — correct for long agentic streams.
+    assert_eq!(HttpTimeouts::default().total, None);
+    // Opt-in via config.
+    let resolved = TimeoutConfig {
+        total_secs: Some(900),
+        ..Default::default()
+    }
+    .apply_to(HttpTimeouts::default());
+    assert_eq!(resolved.total, Some(Duration::from_secs(900)));
+}
+
+#[test]
+fn per_provider_override_layers_over_resolved_global() {
+    use crate::language_model::HttpTimeouts;
+    use std::time::Duration;
+    // A provider inherits the global read but sets its own total cap.
+    let global = TimeoutConfig {
+        read_secs: Some(200),
+        ..Default::default()
+    }
+    .apply_to(HttpTimeouts::default());
+    let provider = TimeoutConfig {
+        total_secs: Some(600),
+        ..Default::default()
+    }
+    .apply_to(global.clone());
+    assert_eq!(
+        provider.read,
+        Duration::from_secs(200),
+        "inherits global read"
+    );
+    assert_eq!(
+        provider.total,
+        Some(Duration::from_secs(600)),
+        "own total cap"
+    );
+}
+
+#[test]
+fn parses_global_and_per_provider_timeouts() {
+    let yaml = r#"
+upstream:
+  timeouts:
+    read_secs: 200
+    total_secs: 600
+providers:
+  slow:
+    api_base: https://api.example.com
+    api_key: k
+    timeouts:
+      read_secs: 300
+"#;
+    let cfg = parse(yaml).expect("parse");
+    assert_eq!(cfg.upstream.timeouts.read_secs, Some(200));
+    assert_eq!(cfg.upstream.timeouts.total_secs, Some(600));
+    let p = cfg.providers.get("slow").expect("provider 'slow'");
+    assert_eq!(p.timeouts.read_secs, Some(300));
+    assert_eq!(
+        p.timeouts.total_secs, None,
+        "unset provider field stays None"
+    );
 }

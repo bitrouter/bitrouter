@@ -261,6 +261,7 @@ mod tests {
             api_base: "https://api.bitrouter.ai/v1".to_string(),
             api_key: key.to_string(),
             api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

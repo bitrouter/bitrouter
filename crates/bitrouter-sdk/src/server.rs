@@ -690,6 +690,7 @@ async fn handle(
             inbound.clone(),
             &prompt.model,
         )
+        .await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
         // completion and settle even if the client disconnects (axum drops this
@@ -708,7 +709,7 @@ async fn handle(
 /// Build a `text/event-stream` response: pipe the canonical part stream through
 /// the inbound protocol's `StreamEncoder`, wrap it in `SseKeepaliveStream`, and
 /// stream the wire bytes.
-fn stream_response(
+async fn stream_response(
     pipeline: Arc<Pipeline>,
     req: PipelineRequest,
     inbound: ApiProtocol,
@@ -727,39 +728,38 @@ fn stream_response(
     let mut encoder = adapter.stream_encoder(&req.request_id, model);
     let keepalive = pipeline.keepalive_interval();
 
+    // Route resolution and the upstream HTTP handshake happen before the SSE
+    // response is constructed. Pre-stream failures therefore retain their real
+    // HTTP status (notably upstream 429) instead of being trapped inside an
+    // already-committed HTTP 200 event stream.
+    let mut parts = match pipeline.execute_stream(req).await {
+        Ok(parts) => parts,
+        Err(error) => return error.into_response(),
+    };
+
     let frame_stream = async_stream::stream! {
-        match pipeline.execute_stream(req).await {
-            Ok(mut parts) => {
-                while let Some(item) = parts.next().await {
-                    match item {
-                        Ok(part) => {
-                            if let Ok(frames) = encoder.encode(&part) {
-                                for f in frames {
-                                    yield f;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            // Surface the error as a protocol-shaped terminal
-                            // error event the client will actually recognise,
-                            // then stop.
-                            for f in encoder.encode_error(&e.to_string()) {
-                                yield f;
-                            }
-                            return;
+        while let Some(item) = parts.next().await {
+            match item {
+                Ok(part) => {
+                    if let Ok(frames) = encoder.encode(&part) {
+                        for f in frames {
+                            yield f;
                         }
                     }
-                }
-                if let Ok(frames) = encoder.finish() {
-                    for f in frames {
+                },
+                Err(e) => {
+                    // HTTP status is immutable after streaming begins. Emit a
+                    // typed protocol-shaped terminal event instead.
+                    for f in encoder.encode_bitrouter_error(&e) {
                         yield f;
                     }
+                    return;
                 }
             }
-            Err(e) => {
-                for f in encoder.encode_error(&e.to_string()) {
-                    yield f;
-                }
+        }
+        if let Ok(frames) = encoder.finish() {
+            for f in frames {
+                yield f;
             }
         }
     };
@@ -784,8 +784,9 @@ impl IntoResponse for BitrouterError {
             StatusCode::from_u16(self.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let body = Json(serde_json::json!({
             "error": {
-                "message": self.to_string(),
+                "message": self.public_message(),
                 "type": self.error_type(),
+                "code": self.error_code(),
             }
         }));
         //.4 — payment / rate-limit responses must carry the headers
@@ -821,6 +822,17 @@ impl IntoResponse for BitrouterError {
                     response.headers_mut().insert(header::RETRY_AFTER, v);
                 }
             }
+            BitrouterError::UpstreamRateLimited { retry_after } => {
+                if let Some(secs) = retry_after
+                    && let Ok(v) = header::HeaderValue::from_str(&secs.to_string())
+                {
+                    response.headers_mut().insert(header::RETRY_AFTER, v);
+                }
+                response.headers_mut().insert(
+                    header::HeaderName::from_static("x-bitrouter-error-source"),
+                    header::HeaderValue::from_static("upstream"),
+                );
+            }
             _ => {}
         }
         response
@@ -831,7 +843,7 @@ impl IntoResponse for BitrouterError {
 mod tests {
     use super::*;
     use crate::language_model::PipelineBuilder;
-    use crate::language_model::executor::MockExecutor;
+    use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
     use crate::language_model::types::{ApiProtocol, AuthScheme, RoutingTarget};
     use axum::body::to_bytes;
@@ -839,6 +851,10 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state_with_models() -> AppState {
+        test_state_with_executor(Arc::new(MockExecutor::always_text("ok")))
+    }
+
+    fn test_state_with_executor(executor: Arc<dyn Executor>) -> AppState {
         let table = StaticRoutingTable::new();
         table.insert(
             "gpt-5.5",
@@ -848,6 +864,7 @@ mod tests {
                 api_base: "https://example.invalid".to_string(),
                 api_key: "test-key".to_string(),
                 api_protocol: ApiProtocol::Responses,
+                chat_token_limit_field: None,
                 account_label: None,
                 api_key_override: None,
                 api_base_override: None,
@@ -855,9 +872,7 @@ mod tests {
             }],
         );
         let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(Arc::new(table))
-            .executor(Arc::new(MockExecutor::always_text("ok")));
+        builder.routing_table(Arc::new(table)).executor(executor);
         let pipeline = builder.build().unwrap();
         AppState {
             language_model: Arc::new(pipeline),
@@ -920,6 +935,20 @@ mod tests {
         assert!(www_auth.contains("tempo-voucher"));
     }
 
+    #[tokio::test]
+    async fn upstream_diagnostics_are_not_exposed_in_http_errors() {
+        let response = BitrouterError::Upstream {
+            status: 500,
+            message: "provider secret stack trace".to_string(),
+        }
+        .into_response();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["message"], "upstream request failed");
+        assert_eq!(body["error"]["code"], "upstream_bad_gateway");
+        assert!(!String::from_utf8_lossy(&bytes).contains("secret"));
+    }
+
     #[test]
     fn unauthorized_emits_www_authenticate_bearer() {
         // RFC 7235 §3.1: 401 MUST include WWW-Authenticate.
@@ -961,5 +990,59 @@ mod tests {
             response.headers().get(header::RETRY_AFTER).is_none(),
             "no Retry-After when the daemon doesn't know how long to wait"
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_rate_limit_has_wrapped_code_source_and_retry_after() {
+        let response = BitrouterError::UpstreamRateLimited {
+            retry_after: Some(12),
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "12");
+        assert_eq!(response.headers()["x-bitrouter-error-source"], "upstream");
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(value["error"]["type"], "rate_limit_error");
+        assert_eq!(value["error"]["code"], "upstream_rate_limited");
+        assert_eq!(value["error"]["message"], "upstream rate limited");
+    }
+
+    #[tokio::test]
+    async fn streaming_preflight_rate_limit_keeps_http_429() {
+        let state =
+            test_state_with_executor(Arc::new(MockExecutor::new(vec![MockResponse::Error(
+                BitrouterError::UpstreamRateLimited {
+                    retry_after: Some(7),
+                },
+            )])));
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "model": "gpt-5.5",
+                            "messages": [{"role": "user", "content": "ping"}],
+                            "stream": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_ne!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(response.headers()[header::RETRY_AFTER], "7");
     }
 }

@@ -830,6 +830,7 @@ impl InboundAdapter for GenerateContentAdapter {
                         temperature,
                         top_p,
                         max_tokens: max_output_tokens,
+                        chat_token_limit_field: None,
                         reasoning_effort: None,
                         response_modalities,
                         top_k,
@@ -1605,6 +1606,26 @@ impl StreamEncoder for GenerateContentStreamEncoder {
             event: None,
             data: serde_json::json!({
                 "error": { "code": 502, "status": "UNAVAILABLE", "message": message }
+            })
+            .to_string(),
+        }]
+    }
+
+    fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        let status = if matches!(error, BitrouterError::UpstreamRateLimited { .. }) {
+            "RESOURCE_EXHAUSTED"
+        } else {
+            "UNAVAILABLE"
+        };
+        vec![SseFrame::Event {
+            event: None,
+            data: serde_json::json!({
+                "error": {
+                    "code": error.status(),
+                    "status": status,
+                    "message": error.public_message(),
+                    "details": [{ "reason": error.error_code() }],
+                }
             })
             .to_string(),
         }]

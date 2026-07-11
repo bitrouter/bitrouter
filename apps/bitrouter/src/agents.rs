@@ -2,20 +2,25 @@
 //!
 //! Three verbs:
 //! - `list` — show the bundled catalog of well-known agents and which of
-//!   them are currently configured under `agents:` in `bitrouter.yaml`.
+//!   them are currently configured under `agents:` in `bitrouter.yaml`;
+//!   `--remote` additionally fetches the official ACP registry and lists
+//!   its agents.
 //! - `check` — spawn each configured agent and verify it answers
 //!   `initialize`. Same shape as `bitrouter tools status` for MCP.
-//! - `install <id>` — look up the agent in the catalog and emit a YAML
-//!   stub the user can paste into the `agents:` block.
+//! - `install <id>` — look up the agent in the compiled catalog, falling
+//!   back to the ACP registry (`npx`/`uvx` distributions only), and emit a
+//!   YAML stub the user can paste into the `agents:` block.
 //!
-//! v1.0 deliberately ships a compiled-in catalog rather than fetching an
-//! external registry: the well-known ACP agents are all npm packages
-//! invoked via `npx -y`, so there is no binary to download or checksum.
-//! External-registry + binary-install support is tracked as a follow-up.
+//! The compiled-in catalog stays as the offline baseline; the registry
+//! ([`crate::agent_registry`]) is the discovery tier on top. `binary`
+//! registry distributions are listed but never auto-installed — the registry
+//! carries no checksums, so those installs stay manual and user-verified.
 
 use std::time::Duration;
 
 use bitrouter_sdk::config::Config;
+
+use crate::agent_registry::{InstallSupport, Registry, RegistryAgent};
 
 /// One well-known ACP agent in the bundled catalog.
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +65,13 @@ pub const CATALOG: &[KnownAgent] = &[
             "@google/gemini-cli@latest",
             "--experimental-acp",
         ],
+    },
+    KnownAgent {
+        id: "pi-acp",
+        description: "pi coding agent via `pi-acp` (needs `pi` on PATH)",
+        project_url: "https://github.com/svkozak/pi-acp",
+        command: "npx",
+        args: &["-y", "pi-acp@latest"],
     },
 ];
 
@@ -124,7 +136,7 @@ pub fn list(config: &Config) -> Vec<ListRow> {
 
 fn describe_invocation(cfg: &bitrouter_sdk::acp::AcpAgentConfig) -> String {
     use bitrouter_sdk::acp::AcpTransport;
-    match &cfg.transport {
+    let full = match &cfg.transport {
         AcpTransport::Stdio { command, args, .. } => {
             if args.is_empty() {
                 format!("stdio {command}")
@@ -132,7 +144,15 @@ fn describe_invocation(cfg: &bitrouter_sdk::acp::AcpAgentConfig) -> String {
                 format!("stdio {command} {}", args.join(" "))
             }
         }
+    };
+    // Keep the list table one row per agent: collapse embedded newlines/runs
+    // of whitespace (inline scripts as args) and cap the length.
+    let mut one_line = full.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX: usize = 80;
+    if one_line.chars().count() > MAX {
+        one_line = one_line.chars().take(MAX - 1).collect::<String>() + "…";
     }
+    one_line
 }
 
 /// `bitrouter agents check` — spawn each *configured* agent, send an
@@ -156,30 +176,123 @@ pub async fn check(config: &Config) -> Vec<CheckRow> {
     out
 }
 
-/// `bitrouter agents install <id>` — look up `id` in the catalog and emit
-/// a YAML stub the user can paste under `agents:` in `bitrouter.yaml`.
-/// Returns an error if `id` is not a catalog entry.
-pub fn install(id: &str) -> Result<String, String> {
-    let agent = lookup_catalog(id)
-        .ok_or_else(|| format!("'{id}' is not in the bundled v1.0 catalog. Run `bitrouter agents list` to see the available ids."))?;
-    Ok(render_install_stub(agent))
+/// One row in the registry table of `bitrouter agents list --remote`.
+#[derive(Debug, Clone)]
+pub struct RemoteRow {
+    pub id: String,
+    pub version: String,
+    /// How the entry installs: `npx` / `uvx` (stub-able), `manual`
+    /// (binary-only), or `-` (no distribution).
+    pub install: &'static str,
+    pub description: String,
 }
 
-fn render_install_stub(agent: &KnownAgent) -> String {
+/// Rows for the ACP registry table, sorted by id.
+pub fn registry_rows(registry: &Registry) -> Vec<RemoteRow> {
+    let mut rows: Vec<RemoteRow> = registry
+        .agents
+        .iter()
+        .map(|a| RemoteRow {
+            id: a.id.clone(),
+            version: a.version.clone().unwrap_or_else(|| "-".to_string()),
+            install: match a.install_support() {
+                InstallSupport::Stub(runner) => runner,
+                InstallSupport::Manual => "manual",
+                InstallSupport::None => "-",
+            },
+            description: a
+                .description
+                .clone()
+                .or_else(|| a.name.clone())
+                .unwrap_or_default(),
+        })
+        .collect();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    rows
+}
+
+/// `bitrouter agents install <id>`, catalog tier — look up `id` in the
+/// compiled catalog and emit a YAML stub the user can paste under `agents:`
+/// in `bitrouter.yaml`. Returns an error if `id` is not a catalog entry (the
+/// CLI then falls back to the registry tier).
+pub fn install(id: &str) -> Result<String, String> {
+    let agent = lookup_catalog(id)
+        .ok_or_else(|| format!("'{id}' is not in the bundled catalog. Run `bitrouter agents list` (or `--remote` for the ACP registry) to see the available ids."))?;
+    Ok(render_stub(&StubSpec {
+        id: agent.id,
+        comment: agent.description,
+        source: agent.project_url,
+        command: agent.command,
+        args: agent.args.iter().map(|a| a.to_string()).collect(),
+        env: Vec::new(),
+    }))
+}
+
+/// `bitrouter agents install <id>`, registry tier — emit a stub for a
+/// registry entry whose distribution maps onto a package runner (`npx` /
+/// `uvx`). Binary-only entries are refused with a pointer to the project
+/// (no checksums in the registry — manual install stays user-verified).
+pub fn install_from_registry(registry: &Registry, id: &str) -> Result<String, String> {
+    let agent: &RegistryAgent = registry
+        .agents
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| format!("'{id}' is not in the ACP registry either. Run `bitrouter agents list --remote` to see the available ids."))?;
+    let Some(invocation) = agent.stdio_invocation() else {
+        let hint = agent
+            .repository
+            .as_deref()
+            .unwrap_or("the project's documentation");
+        return Err(format!(
+            "'{id}' is distributed as a platform binary; the registry carries no checksums, so install it manually from {hint} and add a stdio `agents:` entry pointing at the installed command."
+        ));
+    };
+    let comment = agent
+        .description
+        .clone()
+        .or_else(|| agent.name.clone())
+        .unwrap_or_else(|| agent.id.clone());
+    Ok(render_stub(&StubSpec {
+        id: &agent.id,
+        comment: &comment,
+        source: agent.repository.as_deref().unwrap_or("ACP registry"),
+        command: invocation.command,
+        args: invocation.args,
+        env: invocation.env.into_iter().collect(),
+    }))
+}
+
+/// Everything the YAML stub renderer needs, whichever tier it came from.
+struct StubSpec<'a> {
+    id: &'a str,
+    comment: &'a str,
+    source: &'a str,
+    command: &'a str,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+}
+
+fn render_stub(spec: &StubSpec<'_>) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "# {} — paste under `agents:` in bitrouter.yaml.\n",
-        agent.description
+        spec.comment
     ));
-    out.push_str(&format!("# Source: {}\n", agent.project_url));
-    out.push_str(&format!("{}:\n", agent.id));
-    out.push_str(&format!("  name: {}\n", agent.id));
+    out.push_str(&format!("# Source: {}\n", spec.source));
+    out.push_str(&format!("{}:\n", spec.id));
+    out.push_str(&format!("  name: {}\n", spec.id));
     out.push_str("  transport:\n");
     out.push_str("    type: stdio\n");
-    out.push_str(&format!("    command: {}\n", yaml_scalar(agent.command)));
+    out.push_str(&format!("    command: {}\n", yaml_scalar(spec.command)));
     out.push_str("    args:\n");
-    for a in agent.args {
+    for a in &spec.args {
         out.push_str(&format!("      - {}\n", yaml_scalar(a)));
+    }
+    if !spec.env.is_empty() {
+        out.push_str("    env:\n");
+        for (k, v) in &spec.env {
+            out.push_str(&format!("      {}: {}\n", yaml_scalar(k), yaml_scalar(v)));
+        }
     }
     out
 }
@@ -320,8 +433,88 @@ mod tests {
     #[test]
     fn install_unknown_id_errors_with_hint() {
         let err = install("nonexistent").unwrap_err();
-        assert!(err.contains("not in the bundled v1.0 catalog"));
+        assert!(err.contains("not in the bundled catalog"));
         assert!(err.contains("bitrouter agents list"));
+    }
+
+    /// Registry fixture mirroring the real document shape: npx (stub-able),
+    /// uvx with env (stub-able), binary-only (manual).
+    const REGISTRY_FIXTURE: &str = r#"{
+      "agents": [
+        {
+          "id": "gemini",
+          "name": "Gemini CLI",
+          "version": "0.50.0",
+          "description": "Google's official CLI for Gemini",
+          "repository": "https://github.com/google-gemini/gemini-cli",
+          "distribution": { "npx": { "package": "@google/gemini-cli@0.50.0", "args": ["--acp"] } }
+        },
+        {
+          "id": "pytool",
+          "name": "PyTool",
+          "distribution": { "uvx": { "package": "pytool-acp@1.2.0", "env": { "PYTOOL_API_KEY": "" } } }
+        },
+        {
+          "id": "opencode",
+          "name": "OpenCode",
+          "version": "1.17.15",
+          "repository": "https://github.com/anomalyco/opencode",
+          "distribution": { "binary": { "darwin-aarch64": { "archive": "https://example.com/o.zip", "cmd": "./opencode", "args": ["acp"] } } }
+        }
+      ]
+    }"#;
+
+    fn fixture_registry() -> crate::agent_registry::Registry {
+        crate::agent_registry::parse(REGISTRY_FIXTURE).expect("fixture parses")
+    }
+
+    #[test]
+    fn registry_rows_classify_install_support() {
+        let rows = registry_rows(&fixture_registry());
+        assert_eq!(rows.len(), 3);
+        let by_id = |id: &str| rows.iter().find(|r| r.id == id).expect("row");
+        assert_eq!(by_id("gemini").install, "npx");
+        assert_eq!(by_id("gemini").version, "0.50.0");
+        assert_eq!(by_id("pytool").install, "uvx");
+        assert_eq!(by_id("opencode").install, "manual");
+    }
+
+    #[test]
+    fn install_from_registry_emits_schema_valid_stub_with_env() {
+        let out = install_from_registry(&fixture_registry(), "pytool").expect("stub");
+        let body: HashMap<String, AcpAgentConfig> =
+            serde_saphyr::from_str(&out).expect("stub must deserialise into the config schema");
+        let entry = body.get("pytool").expect("pytool key present");
+        match &entry.transport {
+            AcpTransport::Stdio { command, args, env } => {
+                assert_eq!(command, "uvx");
+                assert_eq!(args, &["pytool-acp@1.2.0".to_string()]);
+                assert!(env.contains_key("PYTOOL_API_KEY"));
+            }
+        }
+    }
+
+    #[test]
+    fn install_from_registry_npx_pins_version() {
+        let out = install_from_registry(&fixture_registry(), "gemini").expect("stub");
+        assert!(out.contains("@google/gemini-cli@0.50.0"));
+        assert!(
+            out.contains("- \"--acp\"") || out.contains("- --acp"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn install_from_registry_refuses_binary_only_with_pointer() {
+        let err = install_from_registry(&fixture_registry(), "opencode").unwrap_err();
+        assert!(err.contains("platform binary"));
+        assert!(err.contains("github.com/anomalyco/opencode"));
+    }
+
+    #[test]
+    fn install_from_registry_unknown_id_hints_remote_list() {
+        let err = install_from_registry(&fixture_registry(), "nope").unwrap_err();
+        assert!(err.contains("agents list --remote"));
     }
 
     #[test]
@@ -341,6 +534,17 @@ mod tests {
     fn install_emits_project_url_for_attribution() {
         let out = install("gemini-cli").unwrap();
         assert!(out.contains("github.com"));
+    }
+
+    #[test]
+    fn catalog_includes_pi_acp() {
+        let a = lookup_catalog("pi-acp").expect("pi-acp is in the bundled catalog");
+        assert_eq!(a.command, "npx");
+        assert_eq!(a.args, &["-y", "pi-acp@latest"]);
+        let out = install("pi-acp").unwrap();
+        assert!(out.contains("pi-acp:"));
+        assert!(out.contains("pi-acp@latest"));
+        assert!(out.contains("github.com/svkozak/pi-acp"));
     }
 
     #[test]

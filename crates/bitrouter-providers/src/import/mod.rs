@@ -1,12 +1,12 @@
 //! Importers that adopt another coding CLI's OAuth session into bitrouter's
-//! credential store, so `bitrouter login anthropic` / `bitrouter login
-//! openai-codex` can reuse an existing Claude Code / Codex login instead of a
-//! fresh browser sign-in.
+//! credential store, so `bitrouter providers login claude-code` /
+//! `bitrouter providers login openai-codex` can reuse an existing Claude Code /
+//! Codex login instead of a fresh browser sign-in.
 //!
 //! Each importer reads the vendor CLI's own on-disk / Keychain credential,
 //! maps it onto [`crate::oauth::credential_store::OAuthToken`], and hands it
 //! back for the caller to persist under the matching bitrouter provider id
-//! (`anthropic` for Claude Code, `openai-codex` for Codex). Refresh then works
+//! (`claude-code` for Claude Code, `openai-codex` for Codex). Refresh then works
 //! exactly as it does for a credential obtained through the browser flow.
 //!
 //! Credential locations mirror the vendor CLIs and the OpenClaw reference
@@ -16,9 +16,12 @@
 //!   `~/.claude/.credentials.json`. See [`claude_code`].
 //! - Codex — macOS Keychain `Codex Auth`, else `$CODEX_HOME/auth.json`
 //!   (default `~/.codex/auth.json`). See [`codex`].
+//! - Grok — `$GROK_HOME/auth.json` (default `~/.grok/auth.json`), the OIDC
+//!   (SuperGrok subscription) entry. See [`grok`].
 
 pub mod claude_code;
 pub mod codex;
+pub mod grok;
 mod keychain;
 
 use std::path::PathBuf;

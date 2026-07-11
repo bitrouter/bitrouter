@@ -347,12 +347,18 @@ fn render_pane(
     } else {
         format!(" · {}", pane.harness)
     };
+    // Context-window occupancy, when the upstream reports it.
+    let usage = match pane.usage {
+        Some((used, size)) => format!(" · {}/{}", fmt_tokens(used), fmt_tokens(size)),
+        None => String::new(),
+    };
     let title = format!(
-        " [{}] {}{} · {}{} ",
+        " [{}] {}{} · {}{}{} ",
         slot + 1,
         pane.agent_id,
         harness,
         short,
+        usage,
         markers
     );
     let border_style = if focused {
@@ -381,6 +387,15 @@ fn render_pane(
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
+}
+
+/// Compact token count for the pane header (`182300` → `182k`).
+fn fmt_tokens(n: u64) -> String {
+    if n >= 1000 {
+        format!("{}k", n / 1000)
+    } else {
+        n.to_string()
+    }
 }
 
 fn render_line(line: &Line, nc: bool) -> TuiLine<'static> {

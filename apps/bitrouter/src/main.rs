@@ -25,7 +25,8 @@ use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
 use bitrouter::output::reports::agents::{
-    AgentCheckRow, AgentInstallReport, AgentRow, AgentsCheckReport, AgentsListReport,
+    AgentCheckRow, AgentInstallReport, AgentRegistryRow, AgentRow, AgentsCheckReport,
+    AgentsListReport,
 };
 use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
@@ -252,7 +253,7 @@ enum Command {
         agent_args: Vec<String>,
     },
     /// Manage your BitRouter Cloud account — sign in/out, API keys, usage,
-    /// billing, policies, BYOK, OAuth clients. Start with `cloud login`.
+    /// billing, policies, and BYOK. Start with `cloud login`.
     Cloud {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
@@ -420,9 +421,14 @@ impl From<McpClient> for bitrouter_mcp::install::Client {
 
 #[derive(Subcommand)]
 enum AgentsAction {
-    /// Show the bundled v1.0 catalog of well-known agents and which of
-    /// them are present under `agents:` in the loaded config.
+    /// Show the bundled catalog of well-known agents and which of them are
+    /// present under `agents:` in the loaded config. With `--remote`, also
+    /// fetch and list the official ACP agent registry.
     List {
+        /// Also fetch the ACP agent registry
+        /// (cdn.agentclientprotocol.com) and list its agents.
+        #[arg(long)]
+        remote: bool,
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
@@ -439,10 +445,11 @@ enum AgentsAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Print a YAML stub for an agent in the catalog (paste under
-    /// `agents:` in `bitrouter.yaml`).
+    /// Print a YAML stub for an agent (paste under `agents:` in
+    /// `bitrouter.yaml`). Resolves from the bundled catalog first, then the
+    /// ACP registry (`npx`/`uvx` distributions only).
     Install {
-        /// Agent id from the catalog (see `bitrouter agents list`).
+        /// Agent id (see `bitrouter agents list` / `list --remote`).
         id: String,
     },
 }
@@ -540,14 +547,14 @@ enum ProviderAction {
     },
     /// Log in to an upstream provider — interactive credential setup.
     ///
-    /// Per-provider methods are auto-derived from the catalog: `anthropic`
-    /// prompts for subscription (browser PKCE) or API-key paste;
-    /// `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the GitHub
-    /// device flow; everything else accepts a pasted API key. Logging in to
-    /// the built-in `bitrouter` provider runs the same cloud sign-in as
+    /// Per-provider methods are auto-derived from the catalog: `claude-code`
+    /// adopts the live Claude Code session; `anthropic` accepts an API-key
+    /// paste; `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the
+    /// GitHub device flow; everything else accepts a pasted API key. Logging
+    /// in to the built-in `bitrouter` provider runs the same cloud sign-in as
     /// `bitrouter cloud login`.
     Login {
-        /// Provider id (e.g. `anthropic`, `openai-codex`, `bitrouter`).
+        /// Provider id (e.g. `claude-code`, `openai-codex`, `bitrouter`).
         provider: String,
         /// Account label this credential is stored under (default `default`).
         /// Ignored for the `bitrouter` provider (it uses the cloud credential).
@@ -578,10 +585,35 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to create inside the repo before launching.
-        /// When omitted the session runs in the current directory.
+        /// Name of a git worktree to provision inside the repo before
+        /// launching (created, or reused when it already exists). When
+        /// omitted the session runs in the current directory.
         #[arg(long)]
         worktree: Option<String>,
+        /// Remove the worktree when the session ends. Off by default: the
+        /// worktree holds the agent's work, and removal discards anything
+        /// uncommitted. Only a worktree created by this session is removed.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
+        /// Disable the durable session transcript
+        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        /// Keep the session alive after the manager disconnects and accept
+        /// reattach connections on `.bitrouter/sessions/<record_id>.sock`
+        /// (same stdio JSON-RPC framing over a unix socket; reconnect with
+        /// `bitrouter acp attach <record>` and rejoin history via
+        /// `session/load`). Unix-only.
+        #[arg(long)]
+        warm: bool,
+        /// Shut a warm session down after this many seconds with no manager
+        /// attached.
+        #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
+        idle_timeout: u64,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -597,9 +629,23 @@ enum AcpCmd {
         /// Agent id — must exist under `agents:` in the config.
         #[arg(long)]
         agent: String,
-        /// Name of a git worktree to create inside the repo before launching.
+        /// Name of a git worktree to provision inside the repo before
+        /// launching (created, or reused when it already exists).
         #[arg(long)]
         worktree: Option<String>,
+        /// Remove the worktree when the session ends. Off by default: the
+        /// worktree holds the agent's work, and removal discards anything
+        /// uncommitted. Only a worktree created by this session is removed.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
+        /// Disable the durable session transcript
+        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
         /// Return immediately after submitting the prompt (emit
         /// `{"type":"submitted"}`). The session is torn down after ack.
         #[arg(long)]
@@ -611,6 +657,17 @@ enum AcpCmd {
         config: Option<PathBuf>,
         /// The prompt text to send.
         text: String,
+    },
+    /// List the session records under the current repo's
+    /// `.bitrouter/sessions/`, newest first. A `running` record whose process
+    /// no longer exists is shown as `dead`.
+    Sessions,
+    /// Reattach to a warm session: bridge this terminal's stdio to the
+    /// session's unix socket. Speak ACP as usual; `session/load` replays the
+    /// conversation so far. Unix-only.
+    Attach {
+        /// Session record id (or unique prefix) from `bitrouter acp sessions`.
+        record: String,
     },
 }
 
@@ -825,7 +882,7 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
 /// Validation runs the real parse path — deserialization, `${VAR}`
 /// substitution, `derives` resolution, and the upstream-URL (SSRF) gate. It
 /// does **not** load the JSON Schema (that artifact is for IDE autocomplete and
-/// the `xtask` drift check); structural validation here is what `serde` +
+/// the generated-dist drift check); structural validation here is what `serde` +
 /// `serde-saphyr` enforce.
 ///
 /// To validate without secrets present, any *unset* `${VAR}` is substituted
@@ -881,6 +938,29 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
 
 // ===== `bitrouter mcp …` (origin MCP server: serve / install) =====
 
+/// `CostFooter` over the local metering database: the origin MCP server
+/// appends this spend line to `complete` / `status` results so
+/// in-session model arbitrage stays cost-visible to the calling agent.
+struct LocalCostFooter {
+    source: bitrouter::paths::ConfigSource,
+}
+
+#[async_trait::async_trait]
+impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
+    async fn line(&self) -> Option<String> {
+        use bitrouter::metering::store::TimeWindow;
+        let store = bitrouter::metering::reader::open_readonly(&self.source).await?;
+        let today = store.spend_summary(TimeWindow::Today).await.ok()?;
+        (today.requests > 0).then(|| {
+            format!(
+                "bitrouter: spend today {} ({} requests)",
+                bitrouter::metering::fmt_usd(today.spend_micro_usd),
+                today.requests
+            )
+        })
+    }
+}
+
 async fn mcp_cmd(action: McpAction) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -902,6 +982,18 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                     "note: --token/BITROUTER_TOKEN is ignored for --transport http (multi-tenant; each client sends its own Authorization)"
                 );
             }
+            // The spend footer only makes sense where the local metering
+            // database *is* the caller's spend: stdio → local daemon.
+            let cost_footer: Option<std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>> =
+                match (transport, backend) {
+                    (bitrouter_mcp::Transport::Stdio, bitrouter_mcp::BackendKind::Local) => {
+                        bitrouter::paths::resolve_config(None).ok().map(|source| {
+                            std::sync::Arc::new(LocalCostFooter { source })
+                                as std::sync::Arc<dyn bitrouter_mcp::server::CostFooter>
+                        })
+                    }
+                    _ => None,
+                };
             bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
                 transport,
                 backend,
@@ -909,6 +1001,7 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 cloud_url,
                 cloud_token,
                 bind,
+                cost_footer,
             })
             .await
         }
@@ -1063,10 +1156,9 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // the registry merge so the merge fills the inserted provider's
     // `api_base` / `api_protocol` / auth from the fetched registry entry.
     bitrouter::claude_code::enable_if_logged_in(&mut cfg);
-    // Fetch + merge the provider registry (BYOK providers + the canonical model
-    // catalog) before assembly, so the daemon routes every credentialed
-    // provider's canonical models. Best-effort and cache-backed; a no-op when
-    // disabled or unreachable with no cache.
+    // Fetch + merge the public provider registry before assembly, so the daemon
+    // routes every credentialed provider's registered models. Best-effort and
+    // cache-backed; a no-op when disabled or unreachable with no cache.
     bitrouter::merge_registry_into(&mut cfg).await;
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
@@ -1107,6 +1199,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(bitrouter::reload::AppReloader::new(
         policy_store.clone(),
         assembled.routing_table,
+        assembled.upstream_executor,
         reload_source,
     ));
 
@@ -1972,7 +2065,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
-        AgentsAction::List { config } => {
+        AgentsAction::List { remote, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let agents = agents_cmd::list(&cfg)
@@ -1984,7 +2077,27 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                     description: row.description,
                 })
                 .collect();
-            output.emit(&AgentsListReport { agents })?;
+            // `--remote`: append the ACP registry as an optional section of the
+            // same report (one JSON document either way).
+            let registry = if remote {
+                let fetched =
+                    bitrouter::agent_registry::fetch(bitrouter::agent_registry::REGISTRY_URL)
+                        .await?;
+                Some(
+                    agents_cmd::registry_rows(&fetched)
+                        .into_iter()
+                        .map(|row| AgentRegistryRow {
+                            id: row.id,
+                            version: row.version,
+                            install: row.install.to_string(),
+                            description: row.description,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            output.emit(&AgentsListReport { agents, registry })?;
             Ok(())
         }
         AgentsAction::Check { config } => {
@@ -2014,7 +2127,29 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
                 output.emit(&AgentInstallReport { id, yaml })?;
                 Ok(())
             }
-            Err(e) => anyhow::bail!(e),
+            // Not in the compiled catalog: fall back to the ACP registry
+            // (npx/uvx distributions only).
+            Err(catalog_miss) => {
+                let registry = match bitrouter::agent_registry::fetch(
+                    bitrouter::agent_registry::REGISTRY_URL,
+                )
+                .await
+                {
+                    Ok(registry) => registry,
+                    Err(fetch_err) => {
+                        anyhow::bail!(
+                            "{catalog_miss}\n(also failed to consult the ACP registry: {fetch_err})"
+                        )
+                    }
+                };
+                match agents_cmd::install_from_registry(&registry, &id) {
+                    Ok(yaml) => {
+                        output.emit(&AgentInstallReport { id, yaml })?;
+                        Ok(())
+                    }
+                    Err(e) => anyhow::bail!(e),
+                }
+            }
         },
     }
 }
@@ -2026,32 +2161,52 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         AcpCmd::Serve {
             agent,
             worktree,
+            rm_worktree,
+            no_transcript,
+            turn_timeout,
+            warm,
+            idle_timeout,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            bitrouter::acp_cli::serve(cfg, &agent, worktree.as_deref()).await
+            let options = bitrouter::acp_cli::launch_options(
+                worktree.as_deref(),
+                rm_worktree,
+                no_transcript,
+                turn_timeout,
+            );
+            let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
+                idle_timeout: std::time::Duration::from_secs(idle_timeout),
+            });
+            bitrouter::acp_cli::serve(cfg, &agent, options, warm).await
         }
         AcpCmd::Prompt {
             agent,
             worktree,
+            rm_worktree,
+            no_transcript,
+            turn_timeout,
             no_wait,
             config,
             text,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let mut stdout = tokio::io::stdout();
-            bitrouter::acp_cli::prompt(
-                cfg,
-                &agent,
+            let options = bitrouter::acp_cli::launch_options(
                 worktree.as_deref(),
-                &text,
-                no_wait,
-                &mut stdout,
-            )
-            .await
+                rm_worktree,
+                no_transcript,
+                turn_timeout,
+            );
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::prompt(cfg, &agent, options, &text, no_wait, &mut stdout).await
         }
+        AcpCmd::Sessions => {
+            let mut stdout = tokio::io::stdout();
+            bitrouter::acp_cli::sessions(&mut stdout).await
+        }
+        AcpCmd::Attach { record } => bitrouter::acp_cli::attach(&record).await,
     }
 }
 

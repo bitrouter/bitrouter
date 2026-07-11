@@ -1,0 +1,11 @@
+- id: kuaishou/kat-coder-pro-v2
+  name: 'KAT Coder Pro V2'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 256000
+  release_date: 2026-03-27
+  open_weights: false
+  family: kat-coder

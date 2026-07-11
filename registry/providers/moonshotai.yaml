@@ -1,0 +1,56 @@
+name: moonshotai
+metadata:
+  headquarters: CN
+  datacenters:
+    - SG
+  name: Moonshot AI
+  privacy_policy_url: https://platform.kimi.ai/docs/agreement/userprivacy
+  slug: moonshotai
+  terms_of_service_url: https://platform.kimi.ai/docs/agreement/modeluse
+api_protocol:
+  - "*": [openai, anthropic]
+protocol_endpoints:
+  anthropic: https://api.moonshot.ai/anthropic
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.16
+      output_tokens:
+        text: 4
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.1
+      output_tokens:
+        text: 3
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: moonshotai/kimi-k2.7-code
+    provider_model_id: kimi-k2.7-code
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.19
+      output_tokens:
+        text: 4
+status: active
+weight: 1
+submitted_at: 2026-05-25
+api_base: https://api.moonshot.ai/v1
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev

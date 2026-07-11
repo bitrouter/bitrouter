@@ -188,6 +188,9 @@ pub struct PaneState {
     /// Inner height (rows) this pane last rendered at; recorded by the UI so
     /// paging moves by exactly one screen (ratatui stateful-render idiom).
     pub viewport: usize,
+    /// Context-window occupancy `(used, size)` from the latest upstream
+    /// `usage` update; shown in the pane header.
+    pub usage: Option<(u64, u64)>,
 }
 
 impl PaneState {
@@ -205,6 +208,7 @@ impl PaneState {
             pending_seq: 0,
             scroll: None,
             viewport: 0,
+            usage: None,
         }
     }
 
@@ -1192,6 +1196,10 @@ fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
                     status: status.clone().unwrap_or(ToolStatus::Pending),
                 });
             }
+        }
+        // Context-window occupancy: shown in the pane header, not scrollback.
+        SessionUpdateKind::Usage { used, size, .. } => {
+            pane.usage = Some((*used, *size));
         }
     }
 }

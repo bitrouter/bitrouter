@@ -1,11 +1,11 @@
-//! `bitrouter cloud …` — typed wrappers around every endpoint on
-//! [`bitrouter_cloud_sdk::management::ManagementClient`].
+//! `bitrouter cloud …` — typed wrappers around the user-facing management
+//! endpoints on [`bitrouter_cloud_sdk::management::ManagementClient`].
 //!
 //! The subcommand tree is grouped by resource (`keys`, `usage`,
-//! `billing`, `policy`, `budget`, `preset`, `byok`, `oauth-client`)
-//! plus a top-level `whoami` that prints the local identity + the
-//! configured cloud base URL. Every leaf accepts `--json` for raw
-//! response output; the default is a compact human-readable form.
+//! `billing`, `policy`, `budget`, `preset`, `byok`) plus a top-level
+//! `whoami` that prints the local identity + the configured cloud base
+//! URL. Every leaf accepts `--json` for raw response output; the default
+//! is a compact human-readable form.
 //!
 //! Spec inputs that need a free-form JSON body (the generic
 //! `policy create` / `policy update` and every `preset create` /
@@ -25,11 +25,11 @@ use clap::{Subcommand, ValueEnum};
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout};
 use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
 use bitrouter_cloud_sdk::management::types::{
-    BudgetWindow as SdkBudgetWindow, ClientType as SdkClientType, PolicyKind as SdkPolicyKind,
+    BudgetWindow as SdkBudgetWindow, PolicyKind as SdkPolicyKind,
 };
 use bitrouter_cloud_sdk::management::{
-    Error as SdkError, ManagementClient, billing, budgets, byok, keys, namespaces, oauth_clients,
-    policies, presets, usage,
+    Error as SdkError, ManagementClient, billing, budgets, byok, keys, namespaces, policies,
+    presets, usage,
 };
 
 /// `bitrouter cloud …`. All variants land in [`run`].
@@ -108,12 +108,6 @@ pub enum CloudAction {
     Byok {
         #[command(subcommand)]
         action: ByokAction,
-    },
-    /// Registered OAuth clients on your account.
-    #[command(name = "oauth-client")]
-    OauthClient {
-        #[command(subcommand)]
-        action: OauthClientAction,
     },
 }
 
@@ -523,85 +517,6 @@ pub struct ByokDeleteArgs {
     pub json: JsonFlag,
 }
 
-// ===== OAuth clients =====
-
-#[derive(Debug, Subcommand)]
-pub enum OauthClientAction {
-    /// List every OAuth client on the account.
-    List(JsonFlag),
-    /// Register a new client.
-    Register(OauthRegisterArgs),
-    /// Patch one or more fields of an existing client.
-    Update(OauthUpdateArgs),
-    /// Remove a client.
-    Delete(OauthDeleteArgs),
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum ClientTypeArg {
-    Confidential,
-    Public,
-}
-
-impl From<ClientTypeArg> for SdkClientType {
-    fn from(value: ClientTypeArg) -> Self {
-        match value {
-            ClientTypeArg::Confidential => SdkClientType::Confidential,
-            ClientTypeArg::Public => SdkClientType::Public,
-        }
-    }
-}
-
-#[derive(Debug, clap::Args)]
-pub struct OauthRegisterArgs {
-    /// Display name.
-    #[arg(long)]
-    pub name: String,
-    /// Client type.
-    #[arg(long = "type")]
-    pub client_type: ClientTypeArg,
-    /// Redirect URI. Repeat for multiple values.
-    #[arg(long = "redirect-uri")]
-    pub redirect_uris: Vec<String>,
-    /// Wire-format scope. Repeat for multiple values.
-    #[arg(long = "scope", value_name = "SCOPE")]
-    pub allowed_scopes: Vec<String>,
-    /// Grant type — at least one of `authorization_code`,
-    /// `refresh_token`, or the RFC 8628 URN.
-    #[arg(long = "grant")]
-    pub allowed_grant_types: Vec<String>,
-    #[command(flatten)]
-    pub json: JsonFlag,
-}
-
-#[derive(Debug, clap::Args)]
-pub struct OauthUpdateArgs {
-    /// The client id (the public `client_id`, not the row id).
-    pub client_id: String,
-    /// New display name.
-    #[arg(long)]
-    pub name: Option<String>,
-    /// Replace the redirect-URI list. Repeat for multiple values.
-    #[arg(long = "redirect-uri")]
-    pub redirect_uris: Option<Vec<String>>,
-    /// Replace the scope set.
-    #[arg(long = "scope", value_name = "SCOPE")]
-    pub allowed_scopes: Option<Vec<String>>,
-    /// Replace the grant-type list.
-    #[arg(long = "grant")]
-    pub allowed_grant_types: Option<Vec<String>>,
-    #[command(flatten)]
-    pub json: JsonFlag,
-}
-
-#[derive(Debug, clap::Args)]
-pub struct OauthDeleteArgs {
-    /// The client id.
-    pub client_id: String,
-    #[command(flatten)]
-    pub json: JsonFlag,
-}
-
 // ===== Shared little-arg structs =====
 
 #[derive(Debug, clap::Args)]
@@ -689,7 +604,6 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
         CloudAction::Budget { action } => run_budget(action).await,
         CloudAction::Preset { action } => run_preset(action).await,
         CloudAction::Byok { action } => run_byok(action).await,
-        CloudAction::OauthClient { action } => run_oauth_client(action).await,
     }
 }
 
@@ -1308,95 +1222,6 @@ fn format_byok_list(resp: &byok::ByokKeyListResponse) -> String {
             k.last_used_at
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_else(|| "—".into()),
-        ));
-    }
-    out
-}
-
-// ----- OAuth clients -----
-
-async fn run_oauth_client(action: OauthClientAction) -> std::result::Result<(), SdkError> {
-    let client = client()?;
-    match action {
-        OauthClientAction::List(flag) => {
-            let resp = client.list_oauth_clients().await?;
-            emit(flag.json, &resp, format_oauth_client_list)
-        }
-        OauthClientAction::Register(args) => {
-            let body = oauth_clients::RegisterOauthClientRequest {
-                client_name: args.name,
-                client_type: args.client_type.into(),
-                redirect_uris: args.redirect_uris,
-                allowed_scopes: args.allowed_scopes,
-                allowed_grant_types: args.allowed_grant_types,
-            };
-            let resp = client.register_oauth_client(&body).await?;
-            emit(args.json.json, &resp, format_oauth_client_register)
-        }
-        OauthClientAction::Update(args) => {
-            let body = oauth_clients::UpdateOauthClientRequest {
-                client_name: args.name,
-                redirect_uris: args.redirect_uris,
-                allowed_scopes: args.allowed_scopes,
-                allowed_grant_types: args.allowed_grant_types,
-            };
-            let resp = client.update_oauth_client(&args.client_id, &body).await?;
-            emit(args.json.json, &resp, format_oauth_client_envelope)
-        }
-        OauthClientAction::Delete(args) => {
-            let resp = client.delete_oauth_client(&args.client_id).await?;
-            emit(args.json.json, &resp, |r| {
-                format!("deleted: {}\n", r.deleted)
-            })
-        }
-    }
-}
-
-fn format_oauth_client_list(resp: &oauth_clients::OauthClientListResponse) -> String {
-    if resp.data.is_empty() {
-        return "no clients".to_owned();
-    }
-    let mut out = String::new();
-    for c in &resp.data {
-        out.push_str(&format!(
-            "{:<24}  {:<24}  type={:?}  grants=[{}]  scopes=[{}]\n",
-            c.client_id,
-            c.client_name,
-            c.client_type,
-            c.allowed_grant_types.join(","),
-            c.allowed_scopes.join(","),
-        ));
-    }
-    out
-}
-
-fn format_oauth_client_envelope(c: &oauth_clients::OauthClientEnvelope) -> String {
-    format!(
-        "id:           {}\nclient_id:    {}\nname:         {}\ntype:         {:?}\nredirect_uris: {:?}\nscopes:       [{}]\ngrants:       [{}]\n",
-        c.id,
-        c.client_id,
-        c.client_name,
-        c.client_type,
-        c.redirect_uris,
-        c.allowed_scopes.join(", "),
-        c.allowed_grant_types.join(", "),
-    )
-}
-
-fn format_oauth_client_register(c: &oauth_clients::RegisterOauthClientResponse) -> String {
-    let mut out = format!(
-        "id:           {}\nclient_id:    {}\nname:         {}\ntype:         {:?}\nredirect_uris: {:?}\nscopes:       [{}]\ngrants:       [{}]\n",
-        c.id,
-        c.client_id,
-        c.client_name,
-        c.client_type,
-        c.redirect_uris,
-        c.allowed_scopes.join(", "),
-        c.allowed_grant_types.join(", "),
-    );
-    if let Some(secret) = c.client_secret.as_deref() {
-        out.push_str(&format!(
-            "client_secret: {secret}   (shown once — save it now)\n"
         ));
     }
     out

@@ -1,0 +1,42 @@
+name: alibaba_coding_plan
+display_name: Alibaba Cloud Coding Plan (International)
+metadata:
+  headquarters: CN
+  datacenters:
+    - SG
+  name: Alibaba Cloud
+  privacy_policy_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy
+  slug: alibaba-cloud
+  status_page_url: https://status.alibabacloud.com
+  terms_of_service_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use
+billing: subscription
+api_base: https://coding-intl.dashscope.aliyuncs.com/v1
+api_protocol:
+  - "*": openai
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: qwen/qwen3.7-max
+    provider_model_id: qwen3.7-max
+  - id: qwen/qwen3.6-plus
+    provider_model_id: qwen3.6-plus
+  - id: qwen/qwen3.7-plus
+    provider_model_id: qwen3.7-plus
+  - id: qwen/qwen3.6-flash
+    provider_model_id: qwen3.6-flash
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+  - id: minimax/minimax-m2.5
+    provider_model_id: MiniMax-M2.5
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+  - id: z-ai/glm-4.7
+    provider_model_id: glm-4.7
+status: active
+weight: 1
+submitted_at: 2026-06-05
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
+  key: alibaba-coding-plan

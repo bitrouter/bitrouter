@@ -50,8 +50,16 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     }
     let base_repo = std::env::current_dir().context("resolving current directory")?;
 
-    // ── Initial session. ──
-    let session = Session::launch(&catalog, agent_id, base_repo.clone(), worktree)
+    // ── Initial session. Worktrees are retained on close (they hold the
+    // agent's work); transcripts stay on (LaunchOptions default). ──
+    let options = bitrouter_substrate::engine::LaunchOptions {
+        worktree: worktree.map(|name| bitrouter_substrate::worktree::WorktreeSpec {
+            name: name.to_string(),
+            remove_on_shutdown: false,
+        }),
+        ..Default::default()
+    };
+    let session = Session::launch(&catalog, agent_id, base_repo.clone(), options)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let record_id = session.state().record_id.clone();
@@ -317,7 +325,10 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         }
         Effect::ResolvePermission { record_id, outcome } => {
             if let Some(p) = rt.pending.remove(&record_id) {
-                p.resolve(outcome);
+                // Map the reducer's y/a/n outcome onto the exact option the
+                // upstream offered (validated `optionId`, per ACP).
+                let selected = bitrouter_substrate::translate::select_option(outcome, &p.options);
+                p.resolve(selected);
             }
         }
         Effect::SpawnAgent { agent_id } => {
@@ -325,7 +336,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 rt.spawner.catalog,
                 &agent_id,
                 rt.spawner.base_repo.clone(),
-                None,
+                bitrouter_substrate::engine::LaunchOptions::default(),
             )
             .await
             {

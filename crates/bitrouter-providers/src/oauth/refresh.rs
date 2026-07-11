@@ -37,7 +37,9 @@ pub async fn refresh(
             .refresh_token
             .as_deref()
             .ok_or_else(|| AuthCodeError::Malformed {
-                message: "stored credential has no refresh_token — re-run `bitrouter login`".into(),
+                message: "stored credential has no refresh_token — re-run \
+                          `bitrouter providers login <provider>`"
+                    .into(),
             })?;
     let form = [
         ("grant_type", "refresh_token"),
@@ -214,7 +216,7 @@ mod tests {
     async fn missing_refresh_token_surfaces_helpful_error() {
         // OAuthToken with no refresh_token → refresh() bails before any
         // network call with a `Malformed` containing the user-facing
-        // "re-run `bitrouter login`" hint.
+        // "re-run `bitrouter providers login <provider>`" hint.
         let client = reqwest::Client::new();
         let token = OAuthToken {
             access_token: "stale".into(),
@@ -232,7 +234,8 @@ mod tests {
         match err {
             AuthCodeError::Malformed { message } => {
                 assert!(
-                    message.contains("no refresh_token") && message.contains("bitrouter login"),
+                    message.contains("no refresh_token")
+                        && message.contains("bitrouter providers login"),
                     "expected re-login hint, got: {message}"
                 );
             }

@@ -7,7 +7,7 @@ a skill change ships in the same PR as the change that motivates it.
 
 ## What's here
 
-One skill, following the [Agent Skills specification](https://agentskills.io/specification).
+Skills follow the [Agent Skills specification](https://agentskills.io/specification).
 
 ### `/bitrouter`, at [`bitrouter/`](bitrouter/)
 

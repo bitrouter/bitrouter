@@ -20,11 +20,11 @@ There are three shapes of source, by how you authenticate:
 
 | Source | Auth | Where it's configured |
 | --- | --- | --- |
-| **Subscriptions** (Claude, Codex) | OAuth — your plan's login | `bitrouter login <provider>` (no key, no yaml) |
+| **Subscriptions** (Claude, Codex) | OAuth — your plan's login | `bitrouter providers login <provider>` (no key, no yaml) |
 | **Aggregators / hosted** (OpenRouter, …) | Bring-your-own API key | A provider block in `bitrouter.yaml` |
 | **Self-hosted** (Ollama, vLLM) | Usually none — loopback | A provider block in `bitrouter.yaml` |
 
-Subscriptions skip `bitrouter.yaml` entirely: `bitrouter providers login anthropic` or `bitrouter providers login openai-codex` runs the plan's OAuth flow and stores the refreshing token for BitRouter to attach at request time. Everything else is a provider block — an `api_base`, an optional `api_key`, and the models that source serves.
+Subscriptions skip `bitrouter.yaml` entirely: `bitrouter providers login claude-code` or `bitrouter providers login openai-codex` stores a refreshing subscription credential for BitRouter to attach at request time. Everything else is a provider block — an `api_base`, an optional `api_key`, and the models that source serves.
 
 ```yaml
 # bitrouter.yaml
@@ -35,10 +35,15 @@ providers:
     api_protocol:
       - "*": chat_completions          # upstream wire format
     models:
-      - id: openai/gpt-4o
+      - id: openai/gpt-5.5
+        compatibility:
+          chat_completions:
+            token_limit_field: max_completion_tokens
 ```
 
 `providers` is a map keyed by an id you choose; `api_base` is the source's base URL; `api_protocol` is the upstream wire format (`chat_completions` for any OpenAI-compatible host — also the inferred default); each `models` entry is a model that source serves.
+
+Most providers need no `compatibility` block. Set `chat_completions.token_limit_field` only when an upstream requires a particular output-token field: current OpenAI models use `max_completion_tokens`, while some older compatible APIs still require `max_tokens`. BitRouter otherwise preserves the caller's Chat Completions spelling and translates the semantic limit across Messages, Responses, and Generate Content automatically.
 
 ## Scaffold a config
 
@@ -48,7 +53,7 @@ Generate a starter `bitrouter.yaml` (defaults to `./bitrouter.yaml`):
 bitrouter init
 ```
 
-This writes a commented config with `skip_auth: true`, ready for a provider block. Use `-c <path>` to write it elsewhere, then follow your source's page to fill in the block. (Subscriptions need no config — just `bitrouter login`.)
+This writes a commented config with `skip_auth: true`, ready for a provider block. Use `-c <path>` to write it elsewhere, then follow your source's page to fill in the block. (Subscriptions need no config — just `bitrouter providers login <provider>`.)
 
 ## Start BitRouter and send a request
 

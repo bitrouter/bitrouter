@@ -68,7 +68,9 @@ pub enum LoginError {
         source: ListenerError,
     },
     /// User pasted nothing (or only whitespace) in manual-fallback mode.
-    #[error("manual redirect paste was empty — re-run `bitrouter login` to try again")]
+    #[error(
+        "manual redirect paste was empty — re-run `bitrouter providers login <provider>` to try again"
+    )]
     EmptyPaste,
     /// `state` echoed by the redirect didn't match what we sent on the
     /// authorize URL. Signals a CSRF attempt or a stale paste from an

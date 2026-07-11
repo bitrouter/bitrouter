@@ -1,7 +1,7 @@
-//! Fetch the provider-registry distribution artifacts over the network.
+//! Fetch the public registry distribution artifacts over the network.
 //!
-//! Source: the public registry repo's generated `dist/` directory, served raw
-//! from GitHub. See <https://github.com/bitrouter/provider-registry>. Two files
+//! Source: the bitrouter OSS repo's generated `dist/registry/` directory,
+//! served raw from GitHub. See <https://github.com/bitrouter/bitrouter>. Two files
 //! are read and merged into one [`RegistryData`]:
 //! `{base}/providers.json` (provider view) and `{base}/models.json` (model
 //! view — bitrouter reads its `id`s for the canonical set).

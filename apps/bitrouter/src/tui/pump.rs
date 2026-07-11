@@ -89,9 +89,17 @@ mod tests {
     #[tokio::test]
     async fn pump_forwards_a_message_update() {
         let base = tempfile::tempdir().expect("tempdir");
-        let session = Session::launch(&stub_catalog(), "stub", base.path().to_path_buf(), None)
-            .await
-            .expect("launch");
+        let session = Session::launch(
+            &stub_catalog(),
+            "stub",
+            base.path().to_path_buf(),
+            bitrouter_substrate::engine::LaunchOptions {
+                transcript: false, // tempdir test — no durable transcript
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("launch");
         let session = Arc::new(session);
 
         let (tx, mut rx) = unbounded_channel();

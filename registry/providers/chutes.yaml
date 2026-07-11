@@ -1,0 +1,98 @@
+name: chutes
+metadata:
+  headquarters: US
+  name: Chutes
+  privacy_policy_url: https://chutes.ai/privacy
+  slug: chutes
+  status_page_url: https://status.chutes.ai
+  terms_of_service_url: https://chutes.ai/terms
+api_protocol:
+  - "*": openai
+api_base: https://llm.chutes.ai/v1
+rate_limits:
+  - "*":
+      requests_per_minute: 30
+models:
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: moonshotai/Kimi-K2.5-TEE
+    pricing:
+      input_tokens:
+        no_cache: 0.44
+        cache_read: 0.22
+      output_tokens:
+        text: 2
+    capabilities:
+      - reasoning
+      - tools
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: moonshotai/Kimi-K2.6-TEE
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.475
+      output_tokens:
+        text: 4
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.1
+    provider_model_id: zai-org/GLM-5.1-TEE
+    pricing:
+      input_tokens:
+        no_cache: 1.05
+        cache_read: 0.525
+      output_tokens:
+        text: 3.5
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5
+    provider_model_id: zai-org/GLM-5-TEE
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.475
+      output_tokens:
+        text: 2.55
+    capabilities:
+      - reasoning
+      - tools
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-ai/DeepSeek-V3.2-TEE
+    pricing:
+      input_tokens:
+        no_cache: 0.28
+        cache_read: 0.14
+      output_tokens:
+        text: 0.42
+    capabilities:
+      - reasoning
+      - tools
+  - id: minimax/minimax-m2.5
+    provider_model_id: MiniMaxAI/MiniMax-M2.5-TEE
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.075
+      output_tokens:
+        text: 1.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: xiaomi/mimo-v2-flash
+    provider_model_id: XiaomiMiMo/MiMo-V2-Flash-TEE
+    pricing:
+      input_tokens:
+        no_cache: 0.09
+        cache_read: 0.045
+      output_tokens:
+        text: 0.29
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+auth_scheme: x-api-key
+community: true
+auto_sync:
+  feed: models_dev

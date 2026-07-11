@@ -901,6 +901,7 @@ impl InboundAdapter for ResponsesAdapter {
                 temperature: req.temperature,
                 top_p: req.top_p,
                 max_tokens: req.max_output_tokens,
+                chat_token_limit_field: None,
                 reasoning_effort: req.reasoning.and_then(|r| r.effort),
                 response_modalities: Vec::new(),
                 // The Responses API has no top-level top_k / seed / stop /
@@ -3001,6 +3002,20 @@ impl StreamEncoder for ResponsesStreamEncoder {
             "model": self.model,
             "status": "failed",
             "error": { "code": "upstream_error", "message": message },
+        });
+        vec![self.ev(
+            "response.failed",
+            serde_json::json!({ "response": response }),
+        )]
+    }
+
+    fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        let response = serde_json::json!({
+            "id": self.request_id,
+            "object": "response",
+            "model": self.model,
+            "status": "failed",
+            "error": { "code": error.error_code(), "message": error.public_message() },
         });
         vec![self.ev(
             "response.failed",

@@ -127,17 +127,22 @@ mod tests {
         done
     "#;
 
-    async fn make_conn() -> Arc<UpstreamConnection> {
-        Arc::new(
+    async fn make_conn() -> (Arc<UpstreamConnection>, String) {
+        let conn = Arc::new(
             UpstreamConnection::spawn(
                 "bash",
                 &["-c".to_string(), BASH_STUB.to_string()],
                 &HashMap::new(),
-                None,
             )
             .await
             .expect("spawn upstream"),
-        )
+        );
+        let session_id = conn
+            .new_session(std::path::PathBuf::from("/"), vec![])
+            .await
+            .expect("session/new")
+            .acp_session_id;
+        (conn, session_id)
     }
 
     fn prompt_request(session_id: &str) -> AcpRequest {
@@ -155,9 +160,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_executor_routes_prompt_via_pipeline() {
-        let conn = make_conn().await;
+        let (conn, session_id) = make_conn().await;
         let executor = Arc::new(SessionExecutor::new(Arc::clone(&conn)));
-        let session_id = conn.acp_session_id().to_string();
 
         let mut b = PipelineBuilder::new();
         b.routing_table(Arc::new(StaticTable)).executor(executor);
@@ -170,8 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_executor_cancel_returns_cancelled_response() {
-        let conn = make_conn().await;
-        let session_id = conn.acp_session_id().to_string();
+        let (conn, session_id) = make_conn().await;
         let executor = SessionExecutor::new(Arc::clone(&conn));
 
         // Build a dummy target (not actually used for cancel routing).

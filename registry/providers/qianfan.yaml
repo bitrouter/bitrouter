@@ -1,0 +1,94 @@
+# Verified 2026-07-11 against Baidu Qianfan international docs and the public
+# `GET https://api.baiduqianfan.ai/v1/models` catalog. The endpoint is
+# OpenAI-compatible and uses Bearer API keys (`bce-v3/ALTAK-...`). Prices below
+# are the live catalog's per-token prices converted to USD per 1M tokens.
+# ERNIE 5.1 accepts requests despite not yet being listed by the catalog; its
+# temporary price matches ERNIE 5.0 until a public ERNIE 5.1 price is available.
+name: qianfan
+display_name: Baidu Qianfan (International)
+metadata:
+  headquarters: CN
+  name: Baidu AI Cloud
+  privacy_policy_url: https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en
+  slug: qianfan
+  terms_of_service_url: https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en
+api_base: https://api.baiduqianfan.ai/v1
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: cloud
+models:
+  - id: baidu/ernie-5.1
+    provider_model_id: ernie-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+      output_tokens:
+        text: 5.6
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.252
+        cache_read: 0.0252
+      output_tokens:
+        text: 0.378
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.69
+        cache_read: 0.14
+      output_tokens:
+        text: 3.38
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.0983
+        cache_read: 0.0197
+      output_tokens:
+        text: 0.1966
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.684
+        cache_read: 0.144
+      output_tokens:
+        text: 3.42
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+    pricing:
+      input_tokens:
+        no_cache: 0.7
+        cache_read: 0.14
+      output_tokens:
+        text: 2.24
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 0.98
+        cache_read: 0.182
+      output_tokens:
+        text: 3.08
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 0.97
+        cache_read: 0.181
+      output_tokens:
+        text: 3.07
+  - id: tencent/hy3
+    provider_model_id: hy3-preview
+    pricing:
+      input_tokens:
+        no_cache: 0.066
+        cache_read: 0.0261
+      output_tokens:
+        text: 0.26
+status: active
+weight: 1
+submitted_at: 2026-07-07

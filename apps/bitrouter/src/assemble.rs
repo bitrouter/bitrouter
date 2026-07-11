@@ -79,6 +79,9 @@ pub struct Assembled {
     /// [`ConfigRoutingTable::replace_config`] when there's no source
     /// file to re-read from (zero-config mode).
     pub routing_table: Arc<ConfigRoutingTable>,
+    /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
+    /// object, but reload needs the concrete handle to replace timeout clients.
+    pub upstream_executor: Arc<HttpExecutor>,
     /// Snapshot provider for `bitrouter observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
@@ -94,6 +97,24 @@ pub struct Assembled {
     /// the subscriber on the `serve` path, so logging directly here
     /// would be dropped.
     pub otel_init_error: Option<String>,
+}
+
+pub(crate) fn resolved_upstream_timeouts(
+    config: &Config,
+) -> (
+    HttpTimeouts,
+    std::collections::HashMap<String, HttpTimeouts>,
+) {
+    let global_timeouts = config.upstream.timeouts.apply_to(HttpTimeouts::default());
+    let provider_timeouts: std::collections::HashMap<String, HttpTimeouts> = config
+        .providers
+        .iter()
+        .filter_map(|(id, provider)| {
+            let resolved = provider.timeouts.apply_to(global_timeouts.clone());
+            (resolved != global_timeouts).then(|| (id.clone(), resolved))
+        })
+        .collect();
+    (global_timeouts, provider_timeouts)
 }
 
 /// `ObserveStatusProvider` impl backed by a real [`OtelExporter`]. The
@@ -215,14 +236,22 @@ pub async fn build_app_with_path(
     // request. Listed only when the user configures the provider, so an
     // operator who doesn't use Copilot doesn't pay a token-store read.
     let auth_appliers = build_auth_appliers(config)?;
+    // Upstream timeouts: the `upstream.timeouts` block layered over the
+    // built-in defaults, plus a per-provider override for any provider whose
+    // resolved timeouts differ (v0 #394 fixed these; now they're configurable).
+    // Read from the user's `config` — per-provider timeouts are a user-only
+    // field, never set by the registry/builtin-defaults merge.
+    let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
     let executor = Arc::new(
-        HttpExecutor::with_dispatch_and_auth(
-            HttpTimeouts::default(),
+        HttpExecutor::with_provider_timeouts(
+            global_timeouts,
+            provider_timeouts,
             OutboundDispatch::builtin(),
             auth_appliers,
         )
         .context("building the upstream HTTP executor")?,
     );
+    let executor_for_reload = executor.clone();
 
     // ---- pricing, metering, policy, guardrails — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
@@ -500,6 +529,7 @@ pub async fn build_app_with_path(
         db,
         policy_store: policy_store_for_reload,
         routing_table: routing_table_for_reload,
+        upstream_executor: executor_for_reload,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
         otel_init_error,
@@ -536,18 +566,6 @@ pub async fn merge_registry_into(config: &mut Config) {
         return;
     };
     bitrouter_providers::registry::apply::apply_registry(config, &data);
-    // Best-effort: pull the FULL catalog for `models_dev` auto-sync providers
-    // from models.dev (beyond the curated canonical subset the registry ships).
-    // A fetch failure leaves the curated models in place — they already route —
-    // so this never blocks startup on an offline host.
-    match bitrouter_providers::catalog::fetch::fetch_catalog().await {
-        Ok(catalog) => {
-            bitrouter_providers::registry::apply::apply_catalog(config, &data, &catalog);
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "models.dev catalog fetch failed; using curated models only");
-        }
-    }
     bitrouter_providers::apply_builtin_defaults(config);
 }
 
@@ -837,6 +855,14 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
             .context("building the openai-codex AuthApplier")?;
         appliers.register("openai-codex", Arc::new(applier));
     }
+    // The SuperGrok subscription applier (OAuth imported from the Grok CLI
+    // session). Registered under `supergrok`, distinct from the metered `xai`
+    // API-key provider.
+    if config.providers.contains_key("supergrok") {
+        let applier = bitrouter_providers::supergrok::SuperGrokAuthApplier::new(&store_path)
+            .context("building the supergrok AuthApplier")?;
+        appliers.register("supergrok", Arc::new(applier));
+    }
     Ok(appliers)
 }
 
@@ -922,6 +948,42 @@ enum BearerPlan {
     /// No live source — static `Authorization` header (or anonymous). The
     /// credential store is never read.
     StaticOnly,
+}
+
+/// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
+/// serve|prompt`). Same config resolution as the daemon path (telemetry
+/// opt-in / `otel:` block / legacy shim / env vars), including the live
+/// account-bearer plan. Returns `None` when nothing opts telemetry in;
+/// telemetry failures are surfaced as warnings, never as session failures.
+pub async fn build_otel_exporter_standalone(config: &Config) -> Option<Arc<OtelExporter>> {
+    let plan = match build_otel_config(config) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!("telemetry: invalid observe config, exporting disabled: {e:#}");
+            return None;
+        }
+    };
+    let bearer: Option<Arc<dyn bitrouter_observe::otel::TelemetryBearer>> = match plan.bearer_plan {
+        BearerPlan::LiveSource { warn_if_unmet } => {
+            let source = crate::cloud::cloud_bearer_source().await;
+            if source.is_none() && warn_if_unmet {
+                tracing::warn!(
+                    "telemetry: attribution=account but no signed-in session is available — \
+                     exporting anonymously (sign in with `bitrouter cloud login`)"
+                );
+            }
+            source
+        }
+        BearerPlan::StaticOnly => None,
+    };
+    match OtelExporter::new(plan.config, bearer) {
+        Ok(exporter) => Some(Arc::new(exporter)),
+        Err(e) => {
+            tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
+            None
+        }
+    }
 }
 
 /// An exporter config plus the account-bearer resolution plan for it. Returned

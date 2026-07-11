@@ -12,7 +12,7 @@ rust-version.workspace = true
 bitrouter-sdk = { workspace = true, features = ["acp"] }
 agent-client-protocol = { workspace = true }
 agent-client-protocol-schema = { workspace = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "process", "io-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros", "process", "io-util", "fs"] }
 tokio-stream = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true, features = ["compat"] }
 futures.workspace = true
@@ -22,9 +22,9 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-# `killpg` for whole-process-tree teardown of npx-style agent wrappers.
 libc = "0.2"
 
 [dev-dependencies]
