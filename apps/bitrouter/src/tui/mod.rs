@@ -54,10 +54,12 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     let mut state = AppState::new(PaneState::new(record_id, agent_id.to_string()));
     state.set_available_agents(agent_ids);
 
-    // ── Run; the loop owns full session teardown. ──
+    // ── Run; the loop owns full session teardown. The panic hook guarantees
+    // the terminal is restored even if the loop panics mid-draw. ──
+    install_panic_restore(restore_terminal);
     let mut terminal = setup_terminal().context("entering raw mode")?;
     let result = event_loop(&mut terminal, state, rx, sessions, &catalog, base_repo, tx).await;
-    restore_terminal(&mut terminal).ok();
+    restore_terminal();
     result
 }
 
@@ -68,11 +70,24 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     Ok(Terminal::new(CrosstermBackend::new(out))?)
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
+/// Best-effort terminal restore (raw mode off, leave alt-screen, show cursor).
+/// Needs no `Terminal` handle so the panic hook can call it from any thread;
+/// errors are ignored — by then we're exiting anyway.
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let mut out = io::stdout();
+    let _ = execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
+}
+
+/// Chain `restore` in front of the current panic hook so a panic anywhere in
+/// the TUI (draw, reducer, an effect) restores the user's terminal before the
+/// default hook prints the message onto a readable screen.
+fn install_panic_restore(restore: fn()) {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore();
+        prev(info);
+    }));
 }
 
 /// Bundles what's needed to launch new sessions from inside the loop.
@@ -319,4 +334,34 @@ fn perm_options(p: &bitrouter_substrate::up::PendingPermission) -> Vec<PermOptio
 fn quit_key() -> crossterm::event::KeyEvent {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static RESTORED: AtomicBool = AtomicBool::new(false);
+
+    fn mark_restored() {
+        RESTORED.store(true, Ordering::SeqCst);
+    }
+
+    /// Fault-injection: a panic on any thread must run the chained restore
+    /// (terminal un-rawed) before the previous hook prints the message. The
+    /// injected restore records instead of touching the real terminal.
+    #[test]
+    fn panic_hook_restores_terminal_before_reporting() {
+        super::install_panic_restore(mark_restored);
+        let joined = std::thread::spawn(|| {
+            // Deliberate fault injection — the behavior under test is the
+            // panic hook itself, so the thread must actually panic.
+            std::panic::panic_any("injected tui fault");
+        })
+        .join();
+        assert!(joined.is_err(), "injected fault should panic the thread");
+        assert!(
+            RESTORED.load(Ordering::SeqCst),
+            "panic hook must run the terminal restore"
+        );
+    }
 }
