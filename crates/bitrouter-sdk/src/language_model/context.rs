@@ -69,6 +69,7 @@ pub struct PipelineContext {
     /// a native, same-protocol upstream. `None` when the request was built
     /// without a known inbound protocol.
     inbound_protocol: Option<ApiProtocol>,
+    request_started_at: Instant,
 
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
@@ -78,6 +79,7 @@ pub struct PipelineContext {
     pub execution_result: Option<ExecutionResult>,
     stream_provider_started_at: Option<Instant>,
     first_token_timing: Option<FirstTokenTiming>,
+    finalized_request_latency_ms: Option<u64>,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -112,10 +114,12 @@ impl PipelineContext {
             headers: req.headers,
             prompt: req.prompt,
             inbound_protocol: req.inbound_protocol,
+            request_started_at: Instant::now(),
             route_chain: None,
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
+            finalized_request_latency_ms: None,
             metadata: HashMap::new(),
             extensions: Extensions::default(),
             events: EventBus::new(),
@@ -135,10 +139,12 @@ impl PipelineContext {
             headers: self.headers.clone(),
             prompt,
             inbound_protocol: self.inbound_protocol.clone(),
+            request_started_at: self.request_started_at,
             route_chain: self.route_chain.clone(),
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
+            finalized_request_latency_ms: None,
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
             events: self.events.clone(),
@@ -165,9 +171,42 @@ impl PipelineContext {
         self.stream_provider_started_at = Some(started_at);
     }
 
+    pub(crate) fn finalize_request_latency(&mut self) {
+        let latency_ms = elapsed_millis(self.request_started_at);
+        self.finalized_request_latency_ms = Some(latency_ms);
+        if let Some(result) = self.execution_result.as_mut() {
+            result.latency_ms = latency_ms;
+        }
+    }
+
+    pub(crate) fn finalize_stream_generation_time(&mut self) {
+        let Some(provider_started_at) = self.stream_provider_started_at else {
+            return;
+        };
+        if let Some(result) = self.execution_result.as_mut() {
+            result.generation_time_ms = elapsed_millis(provider_started_at);
+        }
+    }
+
     /// The first semantic output timing captured for a streamed request.
     pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
         self.first_token_timing
+    }
+
+    fn execution_target(&self) -> Option<RoutingTarget> {
+        let chain = self.route_chain.as_ref()?;
+        let Some(result) = self.execution_result.as_ref() else {
+            return chain.first().cloned();
+        };
+        chain
+            .iter()
+            .find(|target| {
+                target.provider_name == result.provider_id
+                    && target.service_id == result.model_id
+                    && target.account_label == result.account_label
+            })
+            .cloned()
+            .or_else(|| chain.first().cloned())
     }
 
     /// Store outbound HTTP headers for the next upstream request. The
@@ -413,7 +452,10 @@ impl PipelineContext {
                 .map(|e| e.server_tool_calls.clone())
                 .unwrap_or_default(),
             streamed: false,
-            latency_ms: exec.map(|e| e.latency_ms).unwrap_or(0),
+            latency_ms: self
+                .finalized_request_latency_ms
+                .or_else(|| exec.map(|e| e.latency_ms))
+                .unwrap_or(0),
             generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
             first_token_latency_ms: self.first_token_timing.map(|timing| timing.latency_ms),
             first_token_kind: self.first_token_timing.map(|timing| timing.kind),

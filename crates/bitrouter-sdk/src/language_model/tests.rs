@@ -157,6 +157,35 @@ impl SettlementRecorder for ProviderCapturingRecorder {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TimingSnapshot {
+    provider_id: String,
+    model_id: String,
+    latency_ms: u64,
+    generation_time_ms: u64,
+    first_token_latency_ms: Option<u64>,
+    first_token_kind: Option<timing::FirstTokenKind>,
+    has_error: bool,
+}
+
+struct TimingSnapshotRecorder(Arc<std::sync::Mutex<Vec<TimingSnapshot>>>);
+
+#[async_trait]
+impl SettlementRecorder for TimingSnapshotRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        self.0.lock().unwrap().push(TimingSnapshot {
+            provider_id: ctx.provider_id.clone(),
+            model_id: ctx.model_id.clone(),
+            latency_ms: ctx.latency_ms,
+            generation_time_ms: ctx.generation_time_ms,
+            first_token_latency_ms: ctx.first_token_latency_ms,
+            first_token_kind: ctx.first_token_kind,
+            has_error: ctx.error.is_some(),
+        });
+        Ok(())
+    }
+}
+
 struct ContextCheckingExecutionHook {
     expected_request_id: String,
     seen: Arc<std::sync::Mutex<Vec<bool>>>,
@@ -180,6 +209,16 @@ impl ExecutionHook for ContextCheckingExecutionHook {
             Err(poisoned) => poisoned.into_inner().push(context_preserved),
         }
         FallbackDecision::TryNext
+    }
+}
+
+struct DelayPreHook(std::time::Duration);
+
+#[async_trait]
+impl PreRequestHook for DelayPreHook {
+    async fn check(&self, _ctx: &mut PipelineContext) -> Result<HookDecision> {
+        tokio::time::sleep(self.0).await;
+        Ok(HookDecision::Allow)
     }
 }
 
@@ -762,6 +801,209 @@ async fn collect_stream(
 ) -> Vec<Result<StreamPart>> {
     use futures::StreamExt;
     stream.collect().await
+}
+
+#[tokio::test]
+async fn streamed_settlement_has_positive_canonical_timing() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "hello".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let parts = collect_stream(stream).await;
+    assert!(parts.iter().all(Result::is_ok));
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert_eq!(snapshot.provider_id, "openai");
+    assert_eq!(snapshot.model_id, "test-model");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(
+        snapshot
+            .first_token_latency_ms
+            .is_some_and(|value| value >= 1)
+    );
+    assert_eq!(
+        snapshot.first_token_kind,
+        Some(timing::FirstTokenKind::Text)
+    );
+    assert!(!snapshot.has_error);
+}
+
+#[tokio::test]
+async fn streamed_fallback_attributes_timing_to_successful_target() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["first", "second"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamUnavailable),
+            MockResponse::Stream(vec![
+                StreamPart::ReasoningDelta {
+                    text: "thinking".into(),
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("fallback stream starts");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert_eq!(snapshot.provider_id, "second");
+    assert_eq!(snapshot.model_id, "test-model");
+    assert!(snapshot.generation_time_ms >= 1);
+    assert_eq!(
+        snapshot.first_token_kind,
+        Some(timing::FirstTokenKind::Reasoning)
+    );
+}
+
+#[tokio::test]
+async fn streamed_upstream_error_finalizes_timing_before_settlement() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(StreamErrorExecutor {
+            error: BitrouterError::UpstreamUnavailable,
+        }),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts before body error");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.has_error);
+}
+
+#[tokio::test]
+async fn streamed_hook_abort_finalizes_timing_before_settlement() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("lookup".into()),
+                arguments: "{}".into(),
+            },
+            StreamPart::TextDelta {
+                text: "blocked".into(),
+            },
+        ])])),
+        |builder| {
+            builder
+                .stream_hook(ScriptedStreamHook {
+                    interest: StreamInterest::all(),
+                    mode: StreamMode::AbortOnText,
+                    ended_with: ended.clone(),
+                })
+                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert_eq!(
+        snapshot.first_token_kind,
+        Some(timing::FirstTokenKind::Tool)
+    );
+    assert!(snapshot.has_error);
+}
+
+#[tokio::test]
+async fn dropped_stream_finalizes_timing_before_detached_settlement() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    drop(stream);
+    pipeline.drain_pending_settlements().await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("detached settlement snapshot");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(!snapshot.has_error);
+}
+
+#[tokio::test]
+async fn non_stream_latency_includes_pre_request_pipeline_time() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::always_text("hello")),
+        |builder| {
+            builder
+                .pre_request_hook(DelayPreHook(std::time::Duration::from_millis(20)))
+                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    pipeline.execute(request()).await.expect("request succeeds");
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert!(snapshot.latency_ms >= 20);
+    assert!(snapshot.generation_time_ms >= 1);
 }
 
 #[tokio::test]
