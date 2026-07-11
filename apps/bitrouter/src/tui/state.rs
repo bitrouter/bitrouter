@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::tui::event::{AppEvent, Effect, PermOption};
+use crate::tui::event::{AppEvent, Effect, PermOption, Risk};
 use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -54,6 +54,9 @@ pub enum Line {
     /// A manager-side failure surfaced in the pane (e.g. a prompt that never
     /// reached the agent). Rendered in the danger style.
     Error(String),
+    /// An autonomy-tier decision the manager made on the user's behalf.
+    /// Nothing auto-resolves silently — every one lands here.
+    AutoResolved(String),
 }
 
 /// A pending permission surfaced in the pane, as display data.
@@ -62,6 +65,39 @@ pub struct PendingView {
     pub title: String,
     pub diff: Option<String>,
     pub options: Vec<PermOption>,
+    pub risk: Risk,
+}
+
+/// Per-agent autonomy tier: which permission requests reach the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Autonomy {
+    /// Every request surfaces (default for a fresh, untrusted agent).
+    #[default]
+    Manual,
+    /// Low-risk requests auto-allow; high-risk surface.
+    Assisted,
+    /// Everything auto-allows (logged, never silent).
+    Auto,
+}
+
+impl Autonomy {
+    /// Cycle Manual → Assisted → Auto → Manual.
+    fn next(self) -> Self {
+        match self {
+            Autonomy::Manual => Autonomy::Assisted,
+            Autonomy::Assisted => Autonomy::Auto,
+            Autonomy::Auto => Autonomy::Manual,
+        }
+    }
+
+    /// Short label for the rail row and log lines.
+    pub fn label(self) -> &'static str {
+        match self {
+            Autonomy::Manual => "manual",
+            Autonomy::Assisted => "assisted",
+            Autonomy::Auto => "auto",
+        }
+    }
 }
 
 /// One agent pane's state.
@@ -77,6 +113,8 @@ pub struct PaneState {
     pub exited: bool,
     pub selected: bool,
     pub attention: bool,
+    /// Which permission requests reach the user (cycled with `A` on the rail).
+    pub autonomy: Autonomy,
     /// Arrival order of the current `pending` (from `AppState.perm_seq`);
     /// the queue orders needs-you rows oldest-first with it.
     pub pending_seq: u64,
@@ -99,6 +137,7 @@ impl PaneState {
             exited: false,
             selected: false,
             attention: false,
+            autonomy: Autonomy::default(),
             pending_seq: 0,
             scroll: None,
             viewport: 0,
@@ -283,21 +322,26 @@ impl AppState {
     }
 
     /// Roster order: indices into `agents`, sorted by actionability bucket
-    /// (needs-you > attention > running > dead). Needs-you rows order
-    /// oldest-pending-first (the queue); other buckets keep spawn order.
-    /// In queue focus mode (`queue_only`) only needs-you rows are listed.
+    /// (needs-you > attention > running > dead). Needs-you rows order by risk
+    /// (high first) then age (oldest pending first) — the queue; other buckets
+    /// keep spawn order. In queue focus mode (`queue_only`) only needs-you
+    /// rows are listed.
     pub fn roster(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.agents.len())
             .filter(|&i| !self.queue_only || self.agents[i].pending.is_some())
             .collect();
         order.sort_by_key(|&i| {
             let p = &self.agents[i];
-            let within = if p.bucket() == 0 {
-                p.pending_seq
-            } else {
-                i as u64
-            };
-            (p.bucket(), within)
+            match &p.pending {
+                Some(pending) => {
+                    let risk_rank = match pending.risk {
+                        Risk::High => 0u64,
+                        Risk::Low => 1,
+                    };
+                    (p.bucket(), risk_rank, p.pending_seq)
+                }
+                None => (p.bucket(), 0, i as u64),
+            }
         });
         order
     }
@@ -373,21 +417,41 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             title,
             diff,
             options,
+            risk,
         } => {
             let shown = state.is_shown(record_id);
             state.perm_seq += 1;
             let seq = state.perm_seq;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
-                pane.pending = Some(PendingView {
-                    title: title.clone(),
-                    diff: diff.clone(),
-                    options: options.clone(),
-                });
-                pane.pending_seq = seq;
-                if !shown {
-                    pane.attention = true;
-                    effects.push(Effect::Bell);
+                // Autonomy policy: does this request reach the user?
+                let auto_allow = match pane.autonomy {
+                    Autonomy::Manual => false,
+                    Autonomy::Assisted => *risk == Risk::Low,
+                    Autonomy::Auto => true,
+                };
+                if auto_allow {
+                    // Logged, never silent.
+                    pane.push(Line::AutoResolved(format!(
+                        "auto-allowed ({}): {title}",
+                        pane.autonomy.label()
+                    )));
+                    effects.push(Effect::ResolvePermission {
+                        record_id: record_id.clone(),
+                        outcome: PermissionOutcome::AllowOnce,
+                    });
+                } else {
+                    pane.pending = Some(PendingView {
+                        title: title.clone(),
+                        diff: diff.clone(),
+                        options: options.clone(),
+                        risk: *risk,
+                    });
+                    pane.pending_seq = seq;
+                    if !shown {
+                        pane.attention = true;
+                        effects.push(Effect::Bell);
+                    }
                 }
             }
             effects
@@ -637,6 +701,18 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.mode = Mode::Picker;
             Vec::new()
         }
+        // Cycle the cursor agent's autonomy tier (capital A — lowercase `a`
+        // grants allow-always on a pending row).
+        KeyCode::Char('A') => {
+            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
+                && let Some(pane) = state.pane_by_id_mut(&id)
+            {
+                pane.autonomy = pane.autonomy.next();
+                let label = pane.autonomy.label();
+                pane.push(Line::AutoResolved(format!("autonomy set to {label}")));
+            }
+            Vec::new()
+        }
         // Close the cursor agent.
         KeyCode::Char('x') => close_rail_selected(state),
         _ => Vec::new(),
@@ -852,7 +928,7 @@ fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::event::{AppEvent, Effect, PermOption};
+    use crate::tui::event::{AppEvent, Effect, PermOption, Risk};
     use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -980,6 +1056,7 @@ mod tests {
                 title: "WRITE src/x.rs".into(),
                 diff: None,
                 options: allow_deny(),
+                risk: Risk::High,
             },
         );
         let effects = reduce(&mut st, &press(KeyCode::PageUp));
@@ -1021,6 +1098,7 @@ mod tests {
                 title: "WRITE".into(),
                 diff: None,
                 options: allow_deny(),
+                risk: Risk::High,
             },
         );
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
@@ -1085,6 +1163,7 @@ mod tests {
                 title: "WRITE src/x.rs".into(),
                 diff: Some("- a\n+ b".into()),
                 options: allow_deny(),
+                risk: Risk::High,
             },
         );
         let pending = st.agents[0].pending.as_ref().expect("pending set");
@@ -1103,6 +1182,7 @@ mod tests {
                 title: "WRITE".into(),
                 diff: None,
                 options: allow_deny(),
+                risk: Risk::High,
             },
         );
         let effects = reduce(&mut st, &press(KeyCode::Char('y')));
@@ -1129,6 +1209,7 @@ mod tests {
                 title: "WRITE".into(),
                 diff: None,
                 options: allow_deny(),
+                risk: Risk::High,
             },
         );
         let effects = reduce(&mut st, &press(KeyCode::Char('n')));
@@ -1359,6 +1440,7 @@ mod tests {
             title: "WRITE".into(),
             diff: None,
             options: vec![],
+            risk: Risk::High,
         }); // r2 needs you → top
         st.agents[0].exited = true; // r0 dead → bottom
         let order = st.roster();
@@ -1732,6 +1814,7 @@ mod tests {
                 title: "WRITE".into(),
                 diff: None,
                 options: vec![],
+                risk: Risk::High,
             },
         );
         assert!(st.agents[1].attention);
@@ -1748,6 +1831,7 @@ mod tests {
                 title: "WRITE".into(),
                 diff: None,
                 options: vec![],
+                risk: Risk::High,
             },
         );
         assert!(!st.agents[0].attention);
@@ -1781,6 +1865,7 @@ mod tests {
                 title: "WRITE".into(),
                 diff: None,
                 options: vec![],
+                risk: Risk::High,
             },
         );
         assert!(
@@ -1793,11 +1878,16 @@ mod tests {
     // ── Decision queue. ──
 
     fn perm(record_id: &str, title: &str) -> AppEvent {
+        perm_with_risk(record_id, title, Risk::High)
+    }
+
+    fn perm_with_risk(record_id: &str, title: &str, risk: Risk) -> AppEvent {
         AppEvent::Permission {
             record_id: record_id.into(),
             title: title.into(),
             diff: None,
             options: vec![],
+            risk,
         }
     }
 
@@ -1908,6 +1998,88 @@ mod tests {
             st.roster().is_empty(),
             "queue no longer lists the dead agent"
         );
+    }
+
+    // ── Tiered autonomy. ──
+
+    #[test]
+    fn manual_surfaces_every_request_even_low_risk() {
+        let mut st = agents3(); // default Manual
+        let fx = reduce(&mut st, &perm_with_risk("r0", "read file", Risk::Low));
+        assert!(fx.is_empty(), "shown pane, no bell; nothing auto-resolves");
+        assert!(st.agents[0].pending.is_some(), "manual always surfaces");
+    }
+
+    #[test]
+    fn assisted_auto_allows_low_risk_and_logs_it() {
+        let mut st = agents3();
+        st.agents[0].autonomy = Autonomy::Assisted;
+        let fx = reduce(&mut st, &perm_with_risk("r0", "edit src/x.rs", Risk::Low));
+        assert_eq!(
+            fx,
+            vec![Effect::ResolvePermission {
+                record_id: "r0".into(),
+                outcome: PermissionOutcome::AllowOnce,
+            }]
+        );
+        assert!(st.agents[0].pending.is_none(), "nothing surfaces");
+        assert!(
+            matches!(
+                st.agents[0].lines.last(),
+                Some(Line::AutoResolved(l)) if l.contains("assisted") && l.contains("edit src/x.rs")
+            ),
+            "auto-resolve is logged, never silent"
+        );
+    }
+
+    #[test]
+    fn assisted_surfaces_high_risk() {
+        let mut st = agents3();
+        st.agents[0].autonomy = Autonomy::Assisted;
+        let fx = reduce(&mut st, &perm_with_risk("r0", "rm -rf legacy", Risk::High));
+        assert!(fx.is_empty());
+        assert!(st.agents[0].pending.is_some(), "high risk reaches the user");
+    }
+
+    #[test]
+    fn auto_allows_even_high_risk_and_logs_it() {
+        let mut st = agents3();
+        st.agents[0].autonomy = Autonomy::Auto;
+        let fx = reduce(&mut st, &perm_with_risk("r0", "rm -rf legacy", Risk::High));
+        assert_eq!(fx.len(), 1, "resolved without surfacing");
+        assert!(st.agents[0].pending.is_none());
+        assert!(matches!(
+            st.agents[0].lines.last(),
+            Some(Line::AutoResolved(l)) if l.contains("auto")
+        ));
+    }
+
+    #[test]
+    fn capital_a_cycles_autonomy_and_logs() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0; // r0
+        reduce(&mut st, &press(KeyCode::Char('A')));
+        assert_eq!(st.agents[0].autonomy, Autonomy::Assisted);
+        reduce(&mut st, &press(KeyCode::Char('A')));
+        assert_eq!(st.agents[0].autonomy, Autonomy::Auto);
+        reduce(&mut st, &press(KeyCode::Char('A')));
+        assert_eq!(st.agents[0].autonomy, Autonomy::Manual, "cycles back");
+        assert!(
+            matches!(st.agents[0].lines.last(), Some(Line::AutoResolved(l)) if l.contains("manual")),
+            "tier changes are logged in the pane"
+        );
+        assert_eq!(st.agents[1].autonomy, Autonomy::Manual, "per-agent only");
+    }
+
+    #[test]
+    fn queue_orders_high_risk_above_older_low_risk() {
+        let mut st = agents3();
+        reduce(&mut st, &perm_with_risk("r0", "older low", Risk::Low));
+        reduce(&mut st, &perm_with_risk("r1", "newer high", Risk::High));
+        let order = st.roster();
+        assert_eq!(order[0], 1, "high risk outranks age");
+        assert_eq!(order[1], 0);
     }
 
     #[test]

@@ -205,6 +205,7 @@ async fn event_loop(
                                 .as_deref()
                                 .and_then(bitrouter_substrate::translate::render_diff),
                             options: perm_options(&p),
+                            risk: classify_risk(&p.tool_call.fields, &rt.spawner.base_repo),
                         };
                         rt.pending.insert(record_id, *p);
                         Some(ev)
@@ -356,6 +357,36 @@ async fn shutdown_session(sess: Arc<Session>) {
     }
 }
 
+/// Deterministic risk classification from the tool call's structured fields.
+/// Conservative: only reads/searches and writes provably confined to the
+/// project tree (`workroot`, which also contains `.bitrouter/worktrees/`)
+/// classify Low; deletes, command execution, network access, unknown kinds,
+/// and unverifiable writes are High. (Spend-based classification needs
+/// metering data that isn't available at permission time.)
+fn classify_risk(
+    fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
+    workroot: &std::path::Path,
+) -> crate::tui::event::Risk {
+    use crate::tui::event::Risk;
+    use agent_client_protocol::schema::v1::ToolKind;
+    match fields.kind {
+        Some(ToolKind::Read | ToolKind::Search | ToolKind::Think | ToolKind::SwitchMode) => {
+            Risk::Low
+        }
+        Some(ToolKind::Edit | ToolKind::Move) => {
+            let locations = fields.locations.as_deref().unwrap_or(&[]);
+            if !locations.is_empty() && locations.iter().all(|l| l.path.starts_with(workroot)) {
+                Risk::Low
+            } else {
+                // Outside the tree, or no locations to verify against.
+                Risk::High
+            }
+        }
+        // Delete, Execute (arbitrary commands), Fetch (network), Other/None.
+        _ => Risk::High,
+    }
+}
+
 /// Map a `PendingPermission`'s options to display data, matching `reduce_key`'s
 /// y/a/n handling (allow-once / allow-always / deny).
 fn perm_options(p: &bitrouter_substrate::up::PendingPermission) -> Vec<PermOption> {
@@ -387,6 +418,78 @@ fn quit_key() -> crossterm::event::KeyEvent {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::tui::event::Risk;
+    use agent_client_protocol::schema::v1::{ToolCallLocation, ToolCallUpdateFields, ToolKind};
+
+    fn fields(kind: Option<ToolKind>, paths: &[&str]) -> ToolCallUpdateFields {
+        let locations: Vec<ToolCallLocation> =
+            paths.iter().map(|p| ToolCallLocation::new(*p)).collect();
+        ToolCallUpdateFields::new().kind(kind).locations(locations)
+    }
+
+    #[test]
+    fn classify_risk_is_deterministic_over_kind_and_paths() {
+        let root = std::path::Path::new("/repo");
+        // Reads/searches: low regardless of location.
+        for kind in [ToolKind::Read, ToolKind::Search, ToolKind::Think] {
+            assert_eq!(
+                super::classify_risk(&fields(Some(kind), &["/etc/passwd"]), root),
+                Risk::Low,
+                "{kind:?} is low"
+            );
+        }
+        // Writes inside the tree (including bitrouter worktrees): low.
+        assert_eq!(
+            super::classify_risk(
+                &fields(
+                    Some(ToolKind::Edit),
+                    &["/repo/src/x.rs", "/repo/.bitrouter/worktrees/w1/y.rs"]
+                ),
+                root
+            ),
+            Risk::Low
+        );
+        // Writes outside the tree: high.
+        assert_eq!(
+            super::classify_risk(
+                &fields(Some(ToolKind::Edit), &["/home/user/.ssh/config"]),
+                root
+            ),
+            Risk::High
+        );
+        // One outside path taints the whole request.
+        assert_eq!(
+            super::classify_risk(
+                &fields(Some(ToolKind::Edit), &["/repo/src/x.rs", "/tmp/out"]),
+                root
+            ),
+            Risk::High
+        );
+        // A write with no locations is unverifiable: high.
+        assert_eq!(
+            super::classify_risk(&fields(Some(ToolKind::Edit), &[]), root),
+            Risk::High
+        );
+        // Deletes, execution, network, unknown: high.
+        for kind in [
+            ToolKind::Delete,
+            ToolKind::Execute,
+            ToolKind::Fetch,
+            ToolKind::Other,
+        ] {
+            assert_eq!(
+                super::classify_risk(&fields(Some(kind), &["/repo/src/x.rs"]), root),
+                Risk::High,
+                "{kind:?} is high"
+            );
+        }
+        assert_eq!(
+            super::classify_risk(&fields(None, &["/repo/src/x.rs"]), root),
+            Risk::High,
+            "missing kind is high"
+        );
+    }
 
     #[tokio::test]
     async fn probe_serve_ok_when_listening() -> anyhow::Result<()> {

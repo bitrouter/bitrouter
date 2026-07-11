@@ -17,6 +17,18 @@ pub struct PermOption {
     pub label: String,
 }
 
+/// Deterministic risk classification of a permission request, computed by the
+/// loop from the tool call's structured fields (kind + locations). The reducer
+/// combines it with the pane's autonomy level to decide surface vs auto-allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Risk {
+    /// Reads/searches and writes confined to the project tree.
+    Low,
+    /// Deletes, command execution, network access, writes outside the project
+    /// tree, or anything unclassifiable (conservative default).
+    High,
+}
+
 /// Pure event the reducer folds into `AppState`.
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -34,6 +46,8 @@ pub enum AppEvent {
         title: String,
         diff: Option<String>,
         options: Vec<PermOption>,
+        /// Classified by the loop from the tool call's kind + locations.
+        risk: Risk,
     },
     /// The session's agent child exited.
     Exited { record_id: String },

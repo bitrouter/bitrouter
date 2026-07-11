@@ -10,8 +10,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::state::{AppState, Line, Mode, PaneState, PendingView, PickerState, Split};
 
-/// Preferred rail width; shrinks on narrow terminals.
-const RAIL_WIDTH: u16 = 24;
+/// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
+/// plus its expanded `└ y·a·d risk · title` line to stay readable.
+const RAIL_WIDTH: u16 = 28;
 
 /// Render the whole app for one frame. Takes `&mut` so panes can record the
 /// viewport height they were drawn at (ratatui stateful-render idiom) — the
@@ -95,20 +96,43 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         if pane.selected {
             spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
         }
+        // Non-default autonomy is worth knowing at a glance.
+        match pane.autonomy {
+            crate::tui::state::Autonomy::Manual => {}
+            crate::tui::state::Autonomy::Assisted => {
+                spans.push(Span::styled(" [a]", Style::default().fg(Color::DarkGray)))
+            }
+            crate::tui::state::Autonomy::Auto => {
+                spans.push(Span::styled(" [A]", Style::default().fg(Color::DarkGray)))
+            }
+        }
         lines.push(TuiLine::from(spans));
-        // Actionable rows expand inline: what the agent wants, and (on the
-        // cursor row in AGENT mode) the resolve keys.
+        // Actionable rows expand inline: risk + what the agent wants, and (on
+        // the cursor row in AGENT mode) the resolve keys.
         if let Some(pending) = &pane.pending {
-            let mut detail = vec![
-                Span::raw(" └ "),
-                Span::styled(pending.title.clone(), Style::default().fg(Color::Red)),
-            ];
+            let risk_span = match pending.risk {
+                crate::tui::event::Risk::High => Span::styled(
+                    "high · ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                crate::tui::event::Risk::Low => {
+                    Span::styled("low · ", Style::default().fg(Color::DarkGray))
+                }
+            };
+            // Keys first, then risk, then the (clippable) title — on a narrow
+            // rail the actionable part must survive truncation.
+            let mut detail = vec![Span::raw(" └ ")];
             if at_cursor && state.mode == Mode::Agent {
                 detail.push(Span::styled(
-                    " y·a·d",
+                    "y·a·d ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ));
             }
+            detail.push(risk_span);
+            detail.push(Span::styled(
+                pending.title.clone(),
+                Style::default().fg(Color::Red),
+            ));
             lines.push(TuiLine::from(detail));
         }
     }
@@ -264,6 +288,10 @@ fn render_line(line: &Line) -> TuiLine<'static> {
             Span::styled("✗ ", Style::default().fg(Color::Red)),
             Span::styled(t.clone(), Style::default().fg(Color::Red)),
         ]),
+        Line::AutoResolved(t) => TuiLine::from(vec![
+            Span::styled("· ", Style::default().fg(Color::DarkGray)),
+            Span::styled(t.clone(), Style::default().fg(Color::DarkGray)),
+        ]),
     }
 }
 
@@ -410,6 +438,7 @@ mod tests {
             title: "WRITE".into(),
             diff: None,
             options: vec![],
+            risk: crate::tui::event::Risk::High,
         });
         // Show r2's pane so the permission popup doesn't cover the rail.
         st.detail = DetailLayout {
@@ -566,16 +595,32 @@ mod tests {
     fn rail_expands_pending_row_with_title_and_resolve_hint() {
         let mut st = agents3();
         st.agents[1].pending = Some(crate::tui::state::PendingView {
-            title: "rm -rf legacy".into(),
+            title: "rm -rf".into(),
             diff: None,
             options: vec![],
+            risk: crate::tui::event::Risk::High,
         });
         st.mode = Mode::Agent;
         st.rail_cursor = 0; // r1 tops the roster
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains("rm -rf legacy"), "pending title inline");
+        let text = draw(&mut st, 100, 24);
+        assert!(text.contains("rm -rf"), "pending title inline");
         assert!(text.contains('└'), "expanded row marker");
         assert!(text.contains("y·a·d"), "resolve hint on the cursor row");
+    }
+
+    #[test]
+    fn rail_shows_risk_label_and_autonomy_tag() {
+        let mut st = agents3();
+        st.agents[1].pending = Some(crate::tui::state::PendingView {
+            title: "wants".into(),
+            diff: None,
+            options: vec![],
+            risk: crate::tui::event::Risk::High,
+        });
+        st.agents[2].autonomy = crate::tui::state::Autonomy::Auto;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("high ·"), "risk label on the expanded row");
+        assert!(text.contains("[A]"), "auto tier tagged on the row");
     }
 
     #[test]
@@ -622,6 +667,7 @@ mod tests {
                 outcome: PermissionOutcome::AllowOnce,
                 label: "allow".into(),
             }],
+            risk: crate::tui::event::Risk::High,
         });
         st.agents[1].attention = true;
         st.mode = Mode::Picker;

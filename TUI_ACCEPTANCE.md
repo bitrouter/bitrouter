@@ -226,13 +226,25 @@ this doc, or if two iterations make no checkbox progress.
 
 ## Phase 3 — Tiered autonomy
 
-- [ ] Per-agent level `Manual | Assisted | Auto`, default `Manual`; changed with
+- [x] Per-agent level `Manual | Assisted | Auto`, default `Manual`; changed with
       `a` from the rail; shown on the row
-- [ ] `classify_risk` is deterministic and unit-tested (write-in-worktree=low;
+      — key is **`A`** (capital), deliberately not `a`, which grants
+      allow-always on a pending row — the collision risked accidental grants;
+      `[a]`/`[A]` row tags; test `capital_a_cycles_autonomy_and_logs`
+- [x] `classify_risk` is deterministic and unit-tested (write-in-worktree=low;
       write-outside / delete / network / spend>threshold=high)
-- [ ] `Assisted` auto-allows low-risk & surfaces high-risk; `Auto` auto-allows
+      — pure fn over ACP `ToolKind` + locations vs the project root
+      (worktrees live inside it); spend-based classification needs metering
+      data unavailable at permission time — deferred with Phase 5 substrate
+      work; test `classify_risk_is_deterministic_over_kind_and_paths`
+- [x] `Assisted` auto-allows low-risk & surfaces high-risk; `Auto` auto-allows
       all; `Manual` surfaces all
-- [ ] Every auto-resolved decision is logged into the pane scrollback
+      — policy applied purely in the reducer; queue orders high-risk first;
+      tests `manual_surfaces…`, `assisted_auto_allows…`, `assisted_surfaces…`,
+      `auto_allows_even_high_risk…`, `queue_orders_high_risk_above_older_low_risk`
+- [x] Every auto-resolved decision is logged into the pane scrollback
+      — `Line::AutoResolved` rendered dim (`· auto-allowed (tier): title`);
+      asserted in the auto-allow tests
 
 ## Phase 4 — Command palette + which-key
 
