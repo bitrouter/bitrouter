@@ -4,19 +4,21 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 ## Workspace Architecture
 
-BitRouter is a Cargo workspace with three tiers — `crates/` (the SDK and provider crates), `plugins/` (hook libraries), and `apps/` (the shipped binary):
+BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the library crates built on it) and `apps/` (the shipped binary):
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, config loading, and the axum HTTP server |
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
-| `plugins/bitrouter-guardrails`   | plugin  | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
-| `plugins/bitrouter-observe`      | plugin  | `ObserveHook` implementations — a Prometheus accumulator and an optional OTLP/HTTP JSON span exporter                     |
+| `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
+| `crates/bitrouter-observe`       | crate   | OpenTelemetry traces + metrics with multi-tenant attribution, exported over OTLP (feature-gated HTTP or gRPC transport)    |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI/TUI binary — turns a `Config` into a running `App` and owns the management commands |
+
+The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails or observe is an ordinary library that implements those traits.
 
 ### Dependency Logic
 
-The layering is strictly one-directional — **`plugins → sdk`**, **`apps → sdk + plugins + providers`**, and the SDK never depends back on anything above it:
+The layering is strictly one-directional — every library crate points down at **`bitrouter-sdk`**, **`apps`** composes them all, and the SDK never depends back on anything above it:
 
 1. **`bitrouter-sdk`** — the foundation. Knows nothing about which providers exist or how the binary is wired. It owns:
    - **Three independent pipelines**, one per wire family. They are deliberately *not* generic over a shared hook trait — each has its own hook set:
@@ -28,7 +30,7 @@ The layering is strictly one-directional — **`plugins → sdk`**, **`apps → 
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in built-in is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
-3. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and nothing else. They must **not** pull the axum HTTP stack — the `feature-isolation` CI job enforces this.
+3. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and keep their default builds lean. Guardrails never pulls the axum HTTP stack; observe pulls axum/tower-http (for the inbound `TraceLayer`) only under its opt-in `otel-*` features. The `feature-isolation` CI job enforces this.
 4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI/TUI shell over that library.
 
 ### SDK feature flags
@@ -99,7 +101,7 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ## CLI Surface
 
-`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `verify` / `tools` / `observe` / `policy` / `providers` / `agents` / `acp` / `spawn` / `cloud` / `skills` / `mcp` / `update`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
+`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `tools` / `observe` / `policy` / `providers` / `agents` / `acp` / `spawn` / `cloud` / `skills` / `mcp` / `update`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
 
 ## Where To Extend The System
 
@@ -117,7 +119,7 @@ Rare — no built-in provider needs this. The big clouds (Bedrock, Azure) speak 
 
 ### Add a hook (auth, policy, metering, guardrail, observability)
 
-Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs in its own `plugins/` crate (the guardrails / observe pattern); a lightweight one can live in the binary.
+Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs in its own `crates/` library (the guardrails / observe pattern); a lightweight one can live in the binary.
 
 ### Embed the SDK in your own service
 
@@ -133,4 +135,4 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (plugins must not pull axum), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](CLAUDE.md).
+CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (default builds of the hook crates stay axum-free), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](CLAUDE.md).

@@ -12,9 +12,9 @@ ordered chain of **hooks**, dispatched to an upstream provider, and rendered bac
 in the inbound protocol. A **plugin** is the unit that packages one or more hooks
 (plus any database migrations) and installs them into the router in a single call.
 
-Everything here is verified against the `bitrouter-sdk` crate and the three
+Everything here is verified against the `bitrouter-sdk` crate and the two
 plugins that ship in the [core repository](https://github.com/bitrouterai/bitrouter):
-`bitrouter-guardrails`, `bitrouter-observe`, and `bitrouter-attestation`.
+`bitrouter-guardrails` and `bitrouter-observe`.
 
 <Callout type="info">
 Plugins are a **build-time, Rust** extension mechanism — you compile them into a
@@ -34,8 +34,8 @@ allowed to do.
 A **plugin** bundles a related set of hooks (plus any migrations they need) and
 installs them in one call. It's a *convenience package, not the atomic unit*: every
 plugin can be reproduced by registering its hooks one by one — bundling just makes a
-capability reproducible and installable in a single step. The core ships several
-this way: `bitrouter-guardrails`, `bitrouter-observe`, and `bitrouter-attestation`.
+capability reproducible and installable in a single step. The core ships two
+this way: `bitrouter-guardrails` and `bitrouter-observe`.
 
 ## The pipeline a plugin hooks into
 
@@ -141,12 +141,10 @@ order.
 
 ## A minimal annotated example
 
-The smallest real plugin in the repo is `bitrouter-attestation`: it registers a
-single `RouteHook`. Here is a minimal plugin in the same shape — a
-`PreRequestHook` that denies any request carrying a banned substring in its
-system prompt. The structure (an `id`, an `install` that registers one hook)
-mirrors `plugins/bitrouter-attestation/src/lib.rs` and
-`plugins/bitrouter-guardrails/src/plugin.rs` exactly.
+Here is a minimal plugin — a `PreRequestHook` that denies any request carrying
+a banned substring in its system prompt. The structure (an `id`, an `install`
+that registers hooks) mirrors `crates/bitrouter-guardrails/src/plugin.rs`
+exactly.
 
 ```rust
 use async_trait::async_trait;
@@ -237,20 +235,17 @@ HTTP router and runs it until SIGTERM.
 
 ## How the shipped plugins use these hooks
 
-The three plugins in the repo are the canonical worked examples:
+The two plugins in the repo are the canonical worked examples:
 
 - **`bitrouter-guardrails`** — registers a `PreRequestHook` (`GuardrailPreHook`,
   denies request content on a `Block` rule) and a `StreamHook`
   (`GuardrailStreamHook`, redacts `Redact` matches and aborts on `Block` in the
   response stream). Both read the active `RuleSet` from the pipeline's typed
-  extensions. See `plugins/bitrouter-guardrails/src/`.
-- **`bitrouter-attestation`** — registers a single `RouteHook` that looks up a
-  TEE-attestation verdict per confidential routing target and either records it or
-  drops unverified targets (fail-closed). See `plugins/bitrouter-attestation/src/lib.rs`.
+  extensions. See `crates/bitrouter-guardrails/src/`.
 - **`bitrouter-observe`** — an OpenTelemetry exporter (OTLP traces + metrics) that
   installs an `ObserveHook`; the same handle is also wired as the app's
   `metrics_renderer` so `GET /metrics` can serve it. It is feature-gated behind a
-  transport (`otel-http` / `otel-grpc`). See `plugins/bitrouter-observe/src/`.
+  transport (`otel-http` / `otel-grpc`). See `crates/bitrouter-observe/src/`.
 
 <Callout type="warn">
 The SDK is the public, stable extension surface, but its supporting types
@@ -267,7 +262,7 @@ The SDK is opinionated about pipeline-data correctness, not business logic. Auth
 policy, charging, and metering are **deployment-specific** — the open-source
 `bitrouter` binary provides its own implementations of those traits, and a hosted
 deployment writes its own. Shared, reusable cross-cutting behaviour (guardrails,
-observability, attestation) is what ships as a plugin.
+observability) is what ships as a plugin.
 
 ## Next steps
 
