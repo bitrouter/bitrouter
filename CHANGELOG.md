@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.25](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.24...v1.0.0-alpha.25)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- Refresh Rust dependencies and MSRV ([#699](https://github.com/bitrouter/bitrouter/pull/699)) - ([f7ad755](https://github.com/bitrouter/bitrouter/commit/f7ad75509b5a7195f279f93dbcad0e66c52e0a60))
+
+
 ## [1.0.0-alpha.24](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.23...v1.0.0-alpha.24)
 
 
