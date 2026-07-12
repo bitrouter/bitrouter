@@ -1,0 +1,72 @@
+- id: bytedance/doubao-seed-2.1-pro
+  name: 'Doubao Seed 2.1 Pro'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 256000
+  release_date: 2026-06-24
+  open_weights: false
+  family: doubao-seed
+- id: bytedance/doubao-seed-2.1-turbo
+  name: 'Doubao Seed 2.1 Turbo'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 256000
+  release_date: 2026-06-24
+  open_weights: false
+  family: doubao-seed
+- id: bytedance/doubao-seed-2.0-pro
+  name: 'Doubao Seed 2.0 Pro'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 128000
+  release_date: 2026-02-14
+  open_weights: false
+  family: doubao-seed
+- id: bytedance/doubao-seed-2.0-code
+  name: 'Doubao Seed 2.0 Code'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 128000
+  release_date: 2026-02-14
+  open_weights: false
+  family: doubao-seed
+- id: bytedance/doubao-seed-2.0-lite
+  name: 'Doubao Seed 2.0 Lite'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 32000
+  release_date: 2026-02-14
+  open_weights: false
+  family: doubao-seed
+- id: bytedance/doubao-seed-2.0-mini
+  name: 'Doubao Seed 2.0 Mini'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 32000
+  release_date: 2026-02-14
+  open_weights: false
+  family: doubao-seed

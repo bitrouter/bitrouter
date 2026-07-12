@@ -14,7 +14,6 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
-tracing.workspace = true
 # `JsonSchema` derives on the serializable config types (`RuleSpec`,
 # `GuardrailConfig`, `Action`) so a downstream host (e.g. bitrouter-cloud) can
 # embed them in its own OpenAPI-published policy types. Mirrors how

@@ -13,6 +13,7 @@ use crate::caller::CallerContext;
 use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
+use crate::language_model::timing::FirstTokenKind;
 use crate::language_model::types::RoutingTarget;
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries
@@ -62,6 +63,11 @@ pub struct SettlementContext {
     pub latency_ms: u64,
     /// Upstream generation time in milliseconds.
     pub generation_time_ms: u64,
+    /// Time from the successful provider attempt start to the first semantic
+    /// stream delta.
+    pub first_token_latency_ms: Option<u64>,
+    /// Kind of the first semantic stream delta.
+    pub first_token_kind: Option<FirstTokenKind>,
     /// The error, if the request failed (Settlement still runs).
     pub error: Option<BitrouterError>,
     /// Events carried over from the request lifecycle (so recorders can
@@ -139,6 +145,8 @@ mod tests {
             streamed: false,
             latency_ms: 0,
             generation_time_ms: 0,
+            first_token_latency_ms: None,
+            first_token_kind: None,
             error: None,
             events: EventBus::default(),
         }

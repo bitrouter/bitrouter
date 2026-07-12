@@ -8,7 +8,7 @@
 # at runtime, resolved by `BitrouterCloudAuthApplier` (registered when this
 # provider is configured):
 #
-#   1. An OAuth 2.0 access token minted via `bitrouter auth login` (RFC 8628
+#   1. An OAuth 2.0 access token minted via `bitrouter cloud login` (RFC 8628
 #      Device Authorization Grant against the cloud authorization server).
 #      Refreshed automatically per RFC 6749 §6.
 #   2. A long-lived `brk_…` API key exposed via `BITROUTER_API_KEY`. This is

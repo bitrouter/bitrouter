@@ -2,6 +2,32 @@
 
 `bitrouter <subcommand> [flags]`
 
+## Output format
+
+Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags, accepted on any subcommand:
+
+- `-j`, `--json` — force JSON (the default).
+- `-H`, `--human` — render a human-readable view to stdout instead of JSON.
+- `-h`, `--help` — unchanged (`-h` is **not** human output; that's `-H`).
+
+All diagnostics — progress, warnings, internal logs, and a human echo of errors — go to **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). So:
+
+```
+bitrouter <cmd> 2>/dev/null | jq .
+```
+
+always yields one clean JSON value. A failed command emits a uniform error envelope to stdout and exits non-zero:
+
+```json
+{ "error": { "kind": "not_found", "message": "…", "context": ["…"], "hint": "…" } }
+```
+
+`kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
+
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `agent-proxy` is a stdio JSON-RPC bridge, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
+
+Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
+
 ## Config resolution
 
 All subcommands accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
@@ -167,25 +193,19 @@ bitrouter agents install claude-code
 
 Prints a YAML stub for the named catalog agent. Paste the output under `agents:` in `bitrouter.yaml`.
 
-### `bitrouter agent-proxy <id>`
-
-```
-bitrouter agent-proxy claude-code [-c <path>]
-```
-
-Stdio bridge between an ACP-aware editor and a configured upstream agent. The editor spawns this as a child process; `agent-proxy` routes JSON-RPC over the `acp` pipeline and relays notifications back.
-
 ### `bitrouter spawn`
 
 ```
 bitrouter spawn -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] -- <agent args…>
 ```
 
-Launches a coding-agent harness (`-a claude` for Claude Code) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files** — only the child process environment is set (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions`.
+Launches a coding-agent harness (`-a claude` for Claude Code, `-a codex` for Codex CLI) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. Claude Code gets child-process environment overrides (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`); Codex gets one-shot `-c` config overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions` or `bitrouter spawn -a codex -- --model openai/gpt-5-codex`.
 
 The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing agent binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines).
 
 When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `spawn` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
+
+After the wrapped agent exits, `spawn` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
 
 ### `bitrouter key sign`
 
@@ -201,43 +221,43 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 | `--db` | `sqlite://./bitrouter.db` | Database URL — `sqlite://`, `postgres://`, or `mysql://` |
 | `--policy` | *(none)* | Policy id to bind to the key |
 
-### `bitrouter login <provider>`
+### `bitrouter providers login <provider>`
 
 ```
-bitrouter login anthropic            # Claude Pro/Max subscription PKCE flow
-bitrouter login openai-codex         # ChatGPT subscription PKCE flow
-bitrouter login github-copilot       # GitHub device-code flow
+bitrouter providers login claude-code     # Claude Pro/Max subscription via Claude Code
+bitrouter providers login openai-codex    # ChatGPT subscription via Codex
+bitrouter providers login github-copilot  # GitHub device-code flow
 ```
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
 
-For `anthropic` and `openai-codex`, the login menu also offers **"Import an existing session from the vendor CLI"** — bitrouter reads the credential the matching first-party CLI already stored (Claude Code from the macOS Keychain or `~/.claude/.credentials.json`; Codex from the macOS Keychain or `$CODEX_HOME/auth.json`) and adopts it, with no fresh browser sign-in. The imported token refreshes automatically like any other.
+For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 
-For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami) below.
+For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami) below.
 
-### `bitrouter logout <provider>`
+### `bitrouter providers logout <provider>`
 
 ```
-bitrouter logout github-copilot
+bitrouter providers logout github-copilot
 ```
 
 Removes every stored credential for the provider (subscription OAuth tokens and pasted API keys alike).
 
-### `bitrouter auth login` / `logout` / `whoami`
+### `bitrouter cloud login` / `logout` / `whoami`
 
-Cloud sign-in, distinct from the per-provider `bitrouter login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter auth login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
+Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter cloud login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
 
 ```
-bitrouter auth login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
-bitrouter auth logout [--oauth-as <URL>] [--client-id <ID>]
-bitrouter auth whoami
+bitrouter cloud login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
+bitrouter cloud logout [--oauth-as <URL>] [--client-id <ID>]
+bitrouter cloud whoami
 ```
 
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--oauth-as` | `https://api.bitrouter.ai` (env: `BITROUTER_OAUTH_AS`) | Authorization server base URL — override only for a self-hosted deployment |
 | `--client-id` | `bitrouter-cli` (env: `BITROUTER_OAUTH_CLIENT_ID`) | Public OAuth client id |
-| `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive scopes (`billing:write`, `clients:read`/`write`, `user:write`) are opt-in. |
+| `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in. |
 
 Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). `whoami` answers from the local file with no network call; it also prints the bound namespace.
 
@@ -261,9 +281,9 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter auth login`](#bitrouter-auth-login--logout--whoami). Sign in first, then call any subcommand.
+`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call any subcommand.
 
-The credential is **namespace-baked** — keys, usage, policies, and OAuth clients are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
+The credential is **namespace-baked** — keys, usage, and policies are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
 
 Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, the CLI prints a copy-pasteable re-login hint that appends the missing scope to your current set.
 
@@ -284,7 +304,7 @@ bitrouter cloud namespace list    [--json]
 bitrouter cloud namespace current [--json]
 ```
 
-`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bitrouter auth login\`)`.
+`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bitrouter cloud login\`)`.
 
 ### `bitrouter cloud keys`
 
@@ -318,7 +338,7 @@ bitrouter cloud billing balance [--json]
 bitrouter cloud billing checkout --amount-cents <N> [--json]
 ```
 
-`checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter auth login` to request it.
+`checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter cloud login` to request it.
 
 ### `bitrouter cloud policy`
 
@@ -369,17 +389,6 @@ User-level — not workspace-scoped; BYOK provider keys are account-wide. The cl
 bitrouter cloud byok list [--json]
 bitrouter cloud byok set    --provider <ID> --ciphertext-b64 <B64> --kek-id <ID> --key-prefix <PREFIX> [--api-base <URL>] [--json]
 bitrouter cloud byok delete <PROVIDER> [--json]
-```
-
-### `bitrouter cloud oauth-client`
-
-Manage OAuth client registrations on your account. Requires `clients:read` / `clients:write`, both opt-in — request them via `bitrouter auth login --scope "<existing> clients:read clients:write"`.
-
-```
-bitrouter cloud oauth-client list [--json]
-bitrouter cloud oauth-client register --name <NAME> --type <confidential|public> --grant <GRANT> [--grant <GRANT> …] [--scope <SCOPE> …] [--redirect-uri <URI> …] [--json]
-bitrouter cloud oauth-client update <CLIENT_ID> [--name <NAME>] [--grant <GRANT> …] [--scope <SCOPE> …] [--redirect-uri <URI> …] [--json]
-bitrouter cloud oauth-client delete <CLIENT_ID> [--json]
 ```
 
 ## Skills
@@ -437,5 +446,3 @@ bitrouter skills update [<NAME>] [-g|--global] [--registry <URL>] [-n|--namespac
 ```
 
 Re-installs installed skills from a namespace's registry hub to their latest version (`-n/--namespace <NSID>` required; all installed skills, or just `<NAME>`). Skills absent from the registry are skipped; a per-skill failure is reported without aborting the rest.
-
-Grant types: `authorization_code`, `refresh_token`, `urn:ietf:params:oauth:grant-type:device_code`. For confidential clients, the freshly minted `client_secret` is returned exactly once in the `register` response.

@@ -1,0 +1,137 @@
+name: openai
+display_name: OpenAI
+metadata:
+  headquarters: US
+  name: OpenAI
+  privacy_policy_url: https://openai.com/privacy
+  slug: openai
+  status_page_url: https://status.openai.com
+  terms_of_service_url: https://openai.com/terms
+kind: first_party
+api_protocol:
+  - "*": [openai, responses]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  # GPT-5.6 family. Pricing per 1M tokens from OpenAI's launch catalog. Like
+  # GPT-5.5, input above 272k tokens bills at the long-context tier (roughly 2x
+  # input, higher output) — encoded via context_tiers. cache_read is the 90%-off
+  # input rate; cache_write is the one-time cost to populate the prompt cache.
+  - id: openai/gpt-5.6-sol
+    provider_model_id: gpt-5.6-sol
+    compatibility: &modern_openai_chat
+      chat_completions:
+        token_limit_field: max_completion_tokens
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 30
+      context_tiers:
+        - above_input_tokens: 272000
+          input_tokens:
+            no_cache: 10
+            cache_read: 1
+            cache_write: 12.5
+          output_tokens:
+            text: 45
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: openai/gpt-5.6-terra
+    provider_model_id: gpt-5.6-terra
+    compatibility: *modern_openai_chat
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+        cache_write: 3.125
+      output_tokens:
+        text: 15
+      context_tiers:
+        - above_input_tokens: 272000
+          input_tokens:
+            no_cache: 5
+            cache_read: 0.5
+            cache_write: 6.25
+          output_tokens:
+            text: 22.5
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: openai/gpt-5.6-luna
+    provider_model_id: gpt-5.6-luna
+    compatibility: *modern_openai_chat
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 6
+      context_tiers:
+        - above_input_tokens: 272000
+          input_tokens:
+            no_cache: 2
+            cache_read: 0.2
+            cache_write: 2.5
+          output_tokens:
+            text: 9
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: openai/gpt-5.5
+    provider_model_id: gpt-5.5
+    compatibility: *modern_openai_chat
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+      output_tokens:
+        text: 30
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: openai/gpt-5.4
+    provider_model_id: gpt-5.4
+    compatibility: *modern_openai_chat
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+  - id: openai/gpt-5.4-mini
+    provider_model_id: gpt-5.4-mini
+    compatibility: *modern_openai_chat
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 4.5
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-05-25
+api_base: https://api.openai.com/v1
+doc_url: https://platform.openai.com/docs/api-reference
+auth:
+  kind: bearer
+  env: OPENAI_API_KEY
+auto_sync:
+  feed: models_dev

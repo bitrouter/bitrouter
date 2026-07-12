@@ -1,0 +1,17 @@
+{
+  "title": "Concepts",
+  "icon": "BookOpen",
+  "defaultOpen": false,
+  "pages": [
+    "---Gateways---",
+    "models",
+    "tools",
+    "agents",
+    "---Routing---",
+    "policy",
+    "---Interfaces---",
+    "cli",
+    "mcp",
+    "agent-skill"
+  ]
+}

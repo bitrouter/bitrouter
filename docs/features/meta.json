@@ -1,0 +1,26 @@
+{
+  "title": "Features",
+  "icon": "Boxes",
+  "defaultOpen": false,
+  "pages": [
+    "---Models gateway---",
+    "provider-selection",
+    "model-fallback",
+    "model-variants",
+    "presets",
+    "structured-outputs",
+    "byok",
+    "---Tools gateway---",
+    "server-tools",
+    "websearch",
+    "web-fetch",
+    "subagent",
+    "advisor",
+    "fusion",
+    "---Cross-cutting---",
+    "namespaces",
+    "guardrails",
+    "opentelemetry",
+    "payment"
+  ]
+}

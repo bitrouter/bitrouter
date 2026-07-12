@@ -30,10 +30,114 @@ fn env_substitution_errors_on_undefined() {
 }
 
 #[test]
+fn env_substitution_uses_default_when_var_unset() {
+    // `${VAR:-default}` falls back to the default when the var is unset...
+    let out = substitute_with(
+        "https://bedrock-mantle.${AWS_REGION:-us-east-1}.api.aws/v1",
+        |_| None,
+    )
+    .unwrap();
+    assert_eq!(out, "https://bedrock-mantle.us-east-1.api.aws/v1");
+    // ...but the set value still wins over the default.
+    let out = substitute_with("${AWS_REGION:-us-east-1}", |n| {
+        (n == "AWS_REGION").then(|| "eu-west-1".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "eu-west-1");
+    // A default containing hyphens is preserved (split is on the first `:-`).
+    let out = substitute_with("${X:-a-b-c}", |_| None).unwrap();
+    assert_eq!(out, "a-b-c");
+    // A bare `${VAR}` (no `:-`) still errors when unset.
+    assert_eq!(
+        substitute_with("${AZURE_OPENAI_RESOURCE}", |_| None)
+            .unwrap_err()
+            .status(),
+        400
+    );
+}
+
+#[test]
 fn env_substitution_handles_multiple_and_literals() {
     let out = substitute_with("a=${A} b=${B} c", |n| Some(format!("<{n}>"))).unwrap();
     assert_eq!(out, "a=<A> b=<B> c");
     assert_eq!(substitute_with("x ${oops", |_| None).unwrap(), "x ${oops");
+}
+
+// ===== comment-aware substitution (a `${VAR}` in a YAML comment must NOT be
+// expanded, and an unset var referenced only from a comment must NOT error) =====
+
+#[test]
+fn env_substitution_skips_full_line_comments() {
+    // The reference is in a `#` comment → left literal, no lookup, no error,
+    // even though the var is unset.
+    let out = substitute_with("# api_key: ${MISSING}\nlisten: x", |_| None).unwrap();
+    assert_eq!(out, "# api_key: ${MISSING}\nlisten: x");
+}
+
+#[test]
+fn env_substitution_skips_indented_comments() {
+    // Mirrors the `bitrouter init` starter config: a commented example deep in
+    // the file referencing an unset var must not break loading.
+    let yaml = "providers:\n  # opencode: { key: \"${OPENCODE_KEY_A}\" }\n  openai: {}";
+    let out = substitute_with(yaml, |_| None).unwrap();
+    assert_eq!(out, yaml);
+}
+
+#[test]
+fn env_substitution_still_runs_before_an_inline_comment() {
+    // The real value is substituted; the `${X}` in the trailing comment is not.
+    let out = substitute_with("api_key: ${REAL}  # fallback ${UNUSED}", |n| {
+        (n == "REAL").then(|| "sk-123".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "api_key: sk-123  # fallback ${UNUSED}");
+}
+
+#[test]
+fn env_substitution_treats_hash_in_value_as_literal_not_comment() {
+    // A `#` that is NOT preceded by whitespace (e.g. a URL fragment) is part of
+    // the value, so a following `${VAR}` is still substituted.
+    let out = substitute_with("url: https://h/p#x=${TOK}", |n| {
+        (n == "TOK").then(|| "t".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "url: https://h/p#x=t");
+}
+
+#[test]
+fn env_substitution_handles_crlf_line_endings() {
+    // Windows CRLF: real values on either side of a commented line are still
+    // substituted, and the commented `${C}` is skipped — i.e. comment/quote
+    // state resets across the line break, not just a bare `\n`.
+    let out =
+        substitute_with("a: ${V}\r\n# c ${C}\r\nb: ${W}", |n| Some(format!("<{n}>"))).unwrap();
+    assert_eq!(out, "a: <V>\r\n# c ${C}\r\nb: <W>");
+}
+
+#[test]
+fn env_substitution_inside_quotes_ignores_hash() {
+    // A `#` preceded by a space but *inside* a quoted scalar is literal, so the
+    // `${VAR}` after it is still substituted.
+    let out = substitute_with("note: \"a # b ${V}\"", |n| {
+        (n == "V").then(|| "z".to_string())
+    })
+    .unwrap();
+    assert_eq!(out, "note: \"a # b z\"");
+}
+
+#[test]
+fn env_substitution_in_comment_never_calls_lookup() {
+    // Stronger than "no error": the lookup must not even be consulted for a
+    // commented reference (so validate-style callers don't record it as missing).
+    // `substitute_with` takes `Fn`, so interior mutability is needed to record.
+    let seen = std::cell::RefCell::new(Vec::<String>::new());
+    let out = substitute_with("k: ${REAL} # ${COMMENTED}", |n| {
+        seen.borrow_mut().push(n.to_string());
+        Some(format!("<{n}>"))
+    })
+    .unwrap();
+    assert_eq!(out, "k: <REAL> # ${COMMENTED}");
+    assert_eq!(seen.into_inner(), vec!["REAL".to_string()]);
 }
 
 #[test]
@@ -742,5 +846,99 @@ policy_table:
         err.to_string()
             .contains("explore_enabled requires adequacy.enabled"),
         "got: {err}"
+    );
+}
+
+// ===== upstream HTTP timeouts (global + per-provider) =====
+
+#[test]
+fn timeout_config_empty_inherits_base() {
+    use crate::language_model::HttpTimeouts;
+    let base = HttpTimeouts::default();
+    let resolved = TimeoutConfig::default().apply_to(base.clone());
+    assert_eq!(resolved, base, "an empty override must equal the base");
+}
+
+#[test]
+fn timeout_config_overrides_only_set_fields() {
+    use crate::language_model::HttpTimeouts;
+    use std::time::Duration;
+    let base = HttpTimeouts::default();
+    let resolved = TimeoutConfig {
+        read_secs: Some(300),
+        ..Default::default()
+    }
+    .apply_to(base.clone());
+    assert_eq!(resolved.read, Duration::from_secs(300));
+    // Untouched fields keep the base value.
+    assert_eq!(resolved.connect, base.connect);
+    assert_eq!(resolved.pool_idle, base.pool_idle);
+    assert_eq!(resolved.tcp_keepalive, base.tcp_keepalive);
+}
+
+#[test]
+fn total_wall_clock_cap_is_off_by_default_and_opt_in() {
+    use crate::language_model::HttpTimeouts;
+    use std::time::Duration;
+    // No overall cap by default — correct for long agentic streams.
+    assert_eq!(HttpTimeouts::default().total, None);
+    // Opt-in via config.
+    let resolved = TimeoutConfig {
+        total_secs: Some(900),
+        ..Default::default()
+    }
+    .apply_to(HttpTimeouts::default());
+    assert_eq!(resolved.total, Some(Duration::from_secs(900)));
+}
+
+#[test]
+fn per_provider_override_layers_over_resolved_global() {
+    use crate::language_model::HttpTimeouts;
+    use std::time::Duration;
+    // A provider inherits the global read but sets its own total cap.
+    let global = TimeoutConfig {
+        read_secs: Some(200),
+        ..Default::default()
+    }
+    .apply_to(HttpTimeouts::default());
+    let provider = TimeoutConfig {
+        total_secs: Some(600),
+        ..Default::default()
+    }
+    .apply_to(global.clone());
+    assert_eq!(
+        provider.read,
+        Duration::from_secs(200),
+        "inherits global read"
+    );
+    assert_eq!(
+        provider.total,
+        Some(Duration::from_secs(600)),
+        "own total cap"
+    );
+}
+
+#[test]
+fn parses_global_and_per_provider_timeouts() {
+    let yaml = r#"
+upstream:
+  timeouts:
+    read_secs: 200
+    total_secs: 600
+providers:
+  slow:
+    api_base: https://api.example.com
+    api_key: k
+    timeouts:
+      read_secs: 300
+"#;
+    let cfg = parse(yaml).expect("parse");
+    assert_eq!(cfg.upstream.timeouts.read_secs, Some(200));
+    assert_eq!(cfg.upstream.timeouts.total_secs, Some(600));
+    let p = cfg.providers.get("slow").expect("provider 'slow'");
+    assert_eq!(p.timeouts.read_secs, Some(300));
+    assert_eq!(
+        p.timeouts.total_secs, None,
+        "unset provider field stays None"
     );
 }

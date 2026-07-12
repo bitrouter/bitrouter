@@ -1,0 +1,33 @@
+- id: inclusionai/ling-2.6-1t
+  name: 'Ling 2.6 1T'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 32768
+  release_date: 2026-04-23
+  open_weights: true
+  family: ling
+- id: inclusionai/ling-2.6-flash
+  name: 'Ling 2.6 Flash'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 32768
+  release_date: 2026-04-24
+  open_weights: true
+  family: ling
+- id: inclusionai/ring-2.6-1t
+  name: 'Ring 2.6 1T'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 262144
+  max_output_tokens: 65536
+  release_date: 2026-05-08
+  open_weights: true
+  family: ring

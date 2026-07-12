@@ -1,0 +1,81 @@
+name: xiaomi
+metadata:
+  headquarters: CN
+  name: Xiaomi
+  privacy_policy_url: https://mimo.mi.com/docs/terms/privacy-policy
+  slug: xiaomi
+  terms_of_service_url: https://mimo.mi.com/docs/terms/user-agreement
+api_base: https://api.xiaomimimo.com/v1
+protocol_endpoints:
+  anthropic: https://api.xiaomimimo.com/anthropic
+api_protocol:
+  - "*": [openai, responses, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+# Catalog source: https://models.dev/api.json (provider key `xiaomi`, api=https://api.xiaomimimo.com/v1); mimo-v2.5 family has a higher >256k context tier not represented here.
+# Pricing is per 1M tokens.
+models:
+  - id: xiaomi/mimo-v2.5-pro
+    provider_model_id: mimo-v2.5-pro
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 3
+    capabilities:
+      - reasoning
+      - tools
+  - id: xiaomi/mimo-v2.5
+    provider_model_id: mimo-v2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 2
+    capabilities:
+      - reasoning
+      - tools
+  - id: xiaomi/mimo-v2-pro
+    provider_model_id: mimo-v2-pro
+    deprecation_date: 2026-06-30
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 3
+    capabilities:
+      - reasoning
+      - tools
+  - id: xiaomi/mimo-v2-omni
+    provider_model_id: mimo-v2-omni
+    deprecation_date: 2026-06-30
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 2
+    capabilities:
+      - reasoning
+      - tools
+  - id: xiaomi/mimo-v2-flash
+    provider_model_id: mimo-v2-flash
+    deprecation_date: 2026-06-30
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+      output_tokens:
+        text: 0.3
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-05-25
+auto_sync:
+  feed: models_dev

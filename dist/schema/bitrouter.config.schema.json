@@ -1,0 +1,1571 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BitRouter config",
+  "description": "The top-level configuration.",
+  "type": "object",
+  "properties": {
+    "server": {
+      "description": "HTTP server settings.",
+      "$ref": "#/$defs/ServerConfig"
+    },
+    "upstream": {
+      "description": "Outbound / upstream HTTP settings (the client that calls providers).",
+      "$ref": "#/$defs/UpstreamConfig"
+    },
+    "database": {
+      "description": "Database connection settings.",
+      "$ref": "#/$defs/DatabaseConfig"
+    },
+    "providers": {
+      "description": "Upstream providers, keyed by provider id.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ProviderConfig"
+      }
+    },
+    "models": {
+      "description": "Explicit virtual-model definitions (Strategy 2.2). Optional —\nwhen absent, bare model names fall through to Strategy 3 auto-cascade.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/VirtualModel"
+      }
+    },
+    "presets": {
+      "description": "`@preset` definitions.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PresetConfig"
+      }
+    },
+    "variants": {
+      "description": "`:variant` definitions.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/VariantConfig"
+      }
+    },
+    "plugins": {
+      "description": "Plugin config, keyed by plugin / bundle id.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "mcp": {
+      "description": "Top-level MCP gateway settings (aggregation, caching). All fields\ndefault — `mcp:` is optional in `bitrouter.yaml`.",
+      "$ref": "#/$defs/McpConfig"
+    },
+    "mcp_servers": {
+      "description": "Upstream MCP servers, keyed by server id. The id is what appears in\n`POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.\nEmpty by default — when empty, the binary does not mount the MCP route.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/McpServerConfig"
+      },
+      "default": {}
+    },
+    "server_tools": {
+      "description": "Server-side tool loop: MCP server ids whose tools BitRouter injects into\nLLM requests and executes itself. Empty by default — the pipeline stays\nsingle-shot.",
+      "$ref": "#/$defs/ServerToolsConfig"
+    },
+    "agents": {
+      "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bitrouter agents` CLI (list / check / install). Empty by default.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/AcpAgentConfig"
+      },
+      "default": {}
+    },
+    "inherit_defaults": {
+      "description": "Whether providers inherit workspace defaults.",
+      "type": "boolean",
+      "default": true
+    },
+    "registry": {
+      "description": "Public registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade.",
+      "$ref": "#/$defs/RegistryConfig"
+    },
+    "policy_table": {
+      "description": "Config-driven per-request model routing: a fingerprint → tier → model\npolicy table an ingress transform applies, with a hard tool-use\nguardrail. Empty by default — when no tiers are defined the transform is\nnot registered and traffic routes exactly as it would without it.",
+      "$ref": "#/$defs/PolicyTableConfig"
+    }
+  },
+  "$defs": {
+    "ServerConfig": {
+      "description": "HTTP server settings.",
+      "type": "object",
+      "properties": {
+        "listen": {
+          "description": "`host:port` to listen on.",
+          "type": "string",
+          "default": "0.0.0.0:4356"
+        },
+        "control_socket": {
+          "description": "Unix control socket path.",
+          "type": "string",
+          "default": "./bitrouter.sock"
+        },
+        "log_level": {
+          "description": "Log level.",
+          "type": "string",
+          "default": "info"
+        },
+        "skip_auth": {
+          "description": "SDK-level flag: when `true`, credential-less requests are admitted with\na synthesised local caller. Code default is **`false`** — only the\nconfig file produced by `bitrouter init` writes `true`.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "UpstreamConfig": {
+      "description": "Outbound / upstream HTTP settings — the client BitRouter uses to call\nproviders. Distinct from [`ServerConfig`], which is the inbound listen\nsocket. Currently just [`timeouts`](Self::timeouts); grouped under\n`upstream:` so future outbound knobs have a home.",
+      "type": "object",
+      "properties": {
+        "timeouts": {
+          "description": "Global upstream timeout defaults. A provider may override any field\nunder `providers.<id>.timeouts:`.",
+          "$ref": "#/$defs/TimeoutConfig"
+        }
+      }
+    },
+    "TimeoutConfig": {
+      "description": "Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset\nfield inherits the level above — a provider override inherits the resolved\nglobal value, and an unset global inherits the built-in default\n([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒\nno overall wall-clock cap (the right default for long agentic streams).\n\nUsed both as the top-level `upstream.timeouts` block and as the per-provider\n`providers.<id>.timeouts` override; timeouts are **not** inherited via a\nprovider's `derives:` chain.",
+      "type": "object",
+      "properties": {
+        "connect_secs": {
+          "description": "TCP connect timeout, seconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "read_secs": {
+          "description": "Idle (per-read) timeout, seconds — fires when the upstream sends no\nbytes for this long, including mid-stream. The effective stream-idle\nguard.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "pool_idle_secs": {
+          "description": "Idle pooled-connection eviction, seconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "tcp_keepalive_secs": {
+          "description": "TCP keepalive probe interval, seconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        },
+        "total_secs": {
+          "description": "Overall wall-clock cap for the entire request/stream, seconds. Opt-in:\nunset ⇒ no cap. Setting it bounds total stream duration, so keep it\ngenerous for reasoning / agentic providers.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "default": null
+        }
+      }
+    },
+    "DatabaseConfig": {
+      "description": "Database connection settings.",
+      "type": "object",
+      "properties": {
+        "url": {
+          "description": "Connection URL (e.g. `sqlite://./bitrouter.db`).",
+          "type": "string",
+          "default": "sqlite://./bitrouter.db"
+        }
+      }
+    },
+    "ProviderConfig": {
+      "description": "One upstream provider entry — registry-style.\n\n`Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?config, …)`\ncan't dump the platform credential straight into structured logs.",
+      "type": "object",
+      "properties": {
+        "api_base": {
+          "description": "Upstream API base URL.",
+          "type": "string",
+          "default": ""
+        },
+        "api_key": {
+          "description": "Upstream API key (often a `${VAR}` reference).",
+          "type": "string",
+          "default": ""
+        },
+        "api_protocol": {
+          "description": "Glob-prefix `api_protocol` pattern list — each pattern maps to an\nordered set of supported wire protocols (the head is the preferred\ndefault). Precedence: per-model override > longest matching pattern >\nhost-inferred default. A bare protocol string still parses to a\none-element set, so single-protocol providers are unchanged.",
+          "$ref": "#/$defs/PatternMap_for_ProtocolList"
+        },
+        "protocol_endpoints": {
+          "description": "Optional per-protocol base-URL override, keyed by protocol name\n([`ApiProtocol::as_str`]). When one provider serves different protocols\nat different paths under a single host — e.g. OpenAI-style under\n`BASE/v1` and Anthropic Messages under `BASE/anthropic` — give each\nprotocol's base here; protocol-native routing copies the chosen\nprotocol's base onto the routing target. Protocols absent here use\n[`api_base`](Self::api_base).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "rate_limits": {
+          "description": "Glob-prefix `rate_limits` pattern list, keyed per matched pattern.",
+          "$ref": "#/$defs/PatternMap_for_RateLimit"
+        },
+        "models": {
+          "description": "Declared model entries. Empty + `auto_discover` triggers discovery.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderModel"
+          }
+        },
+        "auto_discover": {
+          "description": "When `true` and `models` is empty, discover models from the provider's\n`/models` endpoint at startup and on reload.",
+          "type": "boolean",
+          "default": false
+        },
+        "active": {
+          "description": "Whether this provider is active / routable.",
+          "type": "boolean",
+          "default": true
+        },
+        "tags": {
+          "description": "Free-form tags, used by `RoutingPrefs.require_tags` filtering.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "derives": {
+          "description": "Inherit defaults from another provider in this config (acceptance F20 /\nv0 `derives`). The named provider's `api_protocol`, `rate_limits`,\n`models`, `tags` and `auto_discover` flow into *this* provider's empty\nfields; explicit fields here win. Resolved by\n[`resolve_derivations`] after the config is parsed.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "accounts": {
+          "description": "Multiple credentials for this one provider — e.g. two\nsubscriptions to the same upstream. When non-empty, the routing\ntable expands the provider into one routing target per account;\n[`account_strategy`](Self::account_strategy) decides their\norder. Empty = a single-credential provider keyed off the\ntop-level [`api_key`](Self::api_key) (the common case).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderAccount"
+          }
+        },
+        "account_strategy": {
+          "description": "How the per-account targets are ordered when `accounts` is set.",
+          "$ref": "#/$defs/AccountStrategy"
+        },
+        "class": {
+          "description": "Routing-preference class. Set by the public registry merge (or\ndirectly in config), then mapped to a numeric rank via\n[`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider\nsorts after every classed one in the auto-cascade (Strategy 3). Plain\nconfigs leave this `None`, preserving the alphabetical default order.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderClass"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "description": "Explicit routing priority (lower = preferred). When set it overrides the\nclass-derived rank, so an operator can pin one provider ahead of others\nregardless of class. `None` ⇒ derive the rank from [`class`](Self::class).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "default": null
+        },
+        "timeouts": {
+          "description": "Per-provider upstream timeout overrides. Each set field layers over the\nresolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.\nNot inherited via [`derives`](Self::derives).",
+          "$ref": "#/$defs/TimeoutConfig"
+        }
+      }
+    },
+    "PatternMap_for_ProtocolList": {
+      "description": "Glob-prefix pattern list; each entry is a single-key object mapping a pattern (`*`, `prefix*`, or an exact literal) to its value.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/ProtocolList"
+        }
+      }
+    },
+    "ProtocolList": {
+      "description": "One protocol (bare string) or an ordered set of them (array); the head is the preferred outbound protocol.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ApiProtocol"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiProtocol"
+          }
+        }
+      ]
+    },
+    "ApiProtocol": {
+      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `generate_content`, `responses`; any other string names an externally-registered (outbound-only) custom protocol.",
+      "type": "string",
+      "examples": [
+        "chat_completions",
+        "messages",
+        "generate_content",
+        "responses"
+      ]
+    },
+    "PatternMap_for_RateLimit": {
+      "description": "Glob-prefix pattern list; each entry is a single-key object mapping a pattern (`*`, `prefix*`, or an exact literal) to its value.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/RateLimit"
+        }
+      }
+    },
+    "RateLimit": {
+      "description": "A rate limit for one `(provider, pattern)` bucket. Limits are keyed\nper-`(provider, matched pattern)` — two patterns with different RPMs get\nindependent windows.",
+      "type": "object",
+      "properties": {
+        "requests_per_minute": {
+          "description": "Requests-per-minute ceiling for this bucket.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
+        "tokens_per_minute": {
+          "description": "Tokens-per-minute ceiling for this bucket.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        }
+      }
+    },
+    "ProviderModel": {
+      "description": "One model entry under a provider.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The id this model is addressed by — a canonical `<org>/<model>` id when\nthe entry comes from the provider registry, or the upstream id for a\nhand-written config. This is the **match key** the auto-cascade compares\nthe requested model against.",
+          "type": "string"
+        },
+        "provider_model_id": {
+          "description": "The provider's own upstream model id — what is sent on the wire. When\n`None`, [`id`](Self::id) is used for both matching and dispatch (the\nhand-written-config case, where the two coincide). The registry merge\nsets this so a canonical [`id`](Self::id) routes to the provider's\nupstream name (e.g. `anthropic/claude-sonnet-4.6` → `claude-sonnet-4-6`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "api_protocol": {
+          "description": "Per-model protocol override (highest precedence) — an ordered set of\nsupported protocols, or a bare string for a single one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtocolList"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rate_limits": {
+          "description": "Per-model rate-limit override.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pricing": {
+          "description": "Per-model pricing.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PricingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compatibility": {
+          "description": "Provider/model request-shape quirks that do not change model semantics.",
+          "$ref": "#/$defs/ModelCompatibility",
+          "default": {
+            "chat_completions": {
+              "token_limit_field": null
+            }
+          }
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "PricingConfig": {
+      "description": "Per-model pricing as written in config: micro-USD per token.\n\nThe top-level rates are the **base bracket**. [`context_tiers`] optionally\nraises the per-token rate once a request's input (prompt) token count\ncrosses a threshold — some upstreams bill a steeper rate above a context\nlength (e.g. a higher rate past 128k input tokens). Empty ⇒ flat pricing.\n\n[`context_tiers`]: PricingConfig::context_tiers",
+      "type": "object",
+      "properties": {
+        "input_micro_usd_per_token": {
+          "description": "Micro-USD per prompt (input) token (base bracket).",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "output_micro_usd_per_token": {
+          "description": "Micro-USD per completion (output) token (base bracket).",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "context_tiers": {
+          "description": "Optional higher context brackets, applied by total input-token count.\nThe selected bracket's rates apply to the whole request (a step\nfunction); the consumer's bracket pick is order-independent.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PricingTierConfig"
+          }
+        }
+      }
+    },
+    "PricingTierConfig": {
+      "description": "One higher context-pricing bracket in config — see\n[`PricingConfig::context_tiers`].",
+      "type": "object",
+      "properties": {
+        "above_input_tokens": {
+          "description": "Exclusive lower bound on total input tokens: a request whose input\nsize is strictly greater than this enters the bracket (a base bracket\ndocumented as \"≤ 128k\" is written as `above_input_tokens: 128000`).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "input_micro_usd_per_token": {
+          "description": "Micro-USD per prompt (input) token for this bracket.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "output_micro_usd_per_token": {
+          "description": "Micro-USD per completion (output) token for this bracket.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        }
+      },
+      "required": [
+        "above_input_tokens"
+      ]
+    },
+    "ModelCompatibility": {
+      "description": "Provider/model request-shape compatibility settings.",
+      "type": "object",
+      "properties": {
+        "chat_completions": {
+          "description": "Chat Completions-specific request settings.",
+          "$ref": "#/$defs/ChatCompletionsCompatibility",
+          "default": {
+            "token_limit_field": null
+          }
+        }
+      }
+    },
+    "ChatCompletionsCompatibility": {
+      "description": "Chat Completions request-shape compatibility settings.",
+      "type": "object",
+      "properties": {
+        "token_limit_field": {
+          "description": "Token-limit field required by this upstream model.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatTokenLimitField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "ChatTokenLimitField": {
+      "description": "Chat Completions field used to carry the output-token budget.\n\nOpenAI-compatible providers are split between the legacy `max_tokens`\nspelling and the current `max_completion_tokens` spelling. The canonical\nprompt keeps one semantic token budget; this enum only records which wire\nspelling should be used when the prompt is rendered back to Chat\nCompletions.",
+      "oneOf": [
+        {
+          "description": "Legacy Chat Completions field.",
+          "type": "string",
+          "const": "max_tokens"
+        },
+        {
+          "description": "Current Chat Completions field, including reasoning tokens.",
+          "type": "string",
+          "const": "max_completion_tokens"
+        }
+      ]
+    },
+    "ProviderAccount": {
+      "description": "One credential within a multi-account provider. An account varies\nonly the credential (and optionally the base URL) — the protocol,\nmodel catalog, and rate limits are the provider's.",
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "description": "This account's API key (often a `${VAR}` reference).",
+          "type": "string",
+          "default": ""
+        },
+        "api_base": {
+          "description": "Optional per-account `api_base` override. Empty inherits the\nprovider's `api_base` — set it only for multi-region / multi-org\ndeployments where each account lives on a different host.",
+          "type": "string",
+          "default": ""
+        },
+        "label": {
+          "description": "Optional human label, surfaced in the request log so an operator\ncan see which account served a request. Defaults to\n`account-<n>` (1-based) when empty.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "AccountStrategy": {
+      "description": "How a multi-account provider's per-account targets are ordered.",
+      "oneOf": [
+        {
+          "description": "Accounts in declared order — the first is primary; routing drops\nto the next on a retryable failure (5xx / 429 / timeout) or a\npayment / credit-exhaustion error. The default.",
+          "type": "string",
+          "const": "failover"
+        },
+        {
+          "description": "Accounts ordered with a process-random rotation so the primary\n(and therefore the load) spreads evenly across accounts. The\nremaining accounts still act as failover targets for that\nrequest.",
+          "type": "string",
+          "const": "balance"
+        }
+      ]
+    },
+    "ProviderClass": {
+      "description": "A provider's routing-preference class. Its position in\n[`RegistryConfig::provider_priority`] is its rank (earlier = preferred); the\ndefault ladder, highest first, is: first-party subscription ▸ gateway\nsubscription ▸ first-party token API ▸ bitrouter-cloud ▸ third-party token\nAPI.",
+      "oneOf": [
+        {
+          "description": "A first-party / official upstream billed by flat-rate subscription\n(e.g. a first-party coding plan).",
+          "type": "string",
+          "const": "first-party-subscription"
+        },
+        {
+          "description": "A gateway / aggregator billed by subscription.",
+          "type": "string",
+          "const": "gateway-subscription"
+        },
+        {
+          "description": "A first-party / official upstream billed pay-as-you-go per token.",
+          "type": "string",
+          "const": "first-party-api"
+        },
+        {
+          "description": "The bitrouter hosted gateway.",
+          "type": "string",
+          "const": "bitrouter-cloud"
+        },
+        {
+          "description": "A third-party / community reseller billed pay-as-you-go per token.",
+          "type": "string",
+          "const": "third-party-api"
+        }
+      ]
+    },
+    "VirtualModel": {
+      "description": "An explicit virtual-model definition (Strategy 2).",
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "description": "How this virtual model's [`endpoints`](Self::endpoints) are ordered\ninto the fallback chain. See [`VirtualModelStrategy`]. Defaults to\n[`Priority`](VirtualModelStrategy::Priority).",
+          "$ref": "#/$defs/VirtualModelStrategy"
+        },
+        "endpoints": {
+          "description": "The endpoints this virtual model maps to. Their meaning depends on\n[`strategy`](Self::strategy): under `priority` they are an *ordered*\npreference list; under `cascade` the order is a starting point that\nthe cascade ordering then re-sorts.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VirtualEndpoint"
+          }
+        },
+        "pricing": {
+          "description": "Optional pricing for the virtual model.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PricingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "endpoints"
+      ]
+    },
+    "VirtualModelStrategy": {
+      "description": "How a [`VirtualModel`]'s endpoints are ordered into its fallback chain\n(Strategy 2). Mirrors the typed-enum + serde pattern of\n[`AccountStrategy`].\n\nBoth strategies build a chain that `execute_with_fallback` walks: a\nretryable failure (5xx / 408 / 429 / timeout / credit-exhaustion) always\nadvances to the next endpoint — that failover-on-error behaviour is a\nproperty of *any* chain and is shared by both. They differ only in the\n**order** the endpoints take in that chain.",
+      "oneOf": [
+        {
+          "description": "Endpoints are tried in **declared YAML order** — the first is the\npreferred endpoint, the rest are failover targets reached only when a\npreceding one fails with a retryable error. Routing preferences\n(`sort` / `only` / `ignore`) do **not** reorder or filter the chain:\nthe operator's declared priority is authoritative. This is the\ndefault and matches the historical (pre-typed-`strategy`) behaviour.",
+          "type": "string",
+          "const": "priority"
+        },
+        {
+          "description": "Endpoints are treated as an unordered candidate set and **re-ordered by\nthe request's [`SortOrder`]** (the same cascade ordering Strategy-3\nauto-cascade applies to providers), and filtered by `only` / `ignore` /\n`require_tags`.\nUse this when the endpoints are interchangeable and you want\ncost/latency-aware (or, today, alphabetical) selection rather than a\nfixed priority order. `Latency` / `Cost` have no metrics source yet, so\nthey currently fall back to alphabetical-by-provider — the same honest\nlimitation Strategy-3 documents.",
+          "type": "string",
+          "const": "cascade"
+        }
+      ]
+    },
+    "VirtualEndpoint": {
+      "description": "One endpoint of a virtual model.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "The provider id this endpoint routes to.",
+          "type": "string"
+        },
+        "service_id": {
+          "description": "The service / model id at that provider.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "service_id"
+      ]
+    },
+    "PresetConfig": {
+      "description": "An `@preset` definition.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "Substitute the request's model with this one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "system_prompt": {
+          "description": "Prepend / replace the system prompt.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "params": {
+          "description": "Generation-parameter overrides, merged shallowly into the request.",
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "routing": {
+          "description": "Routing knobs fed into the cascade.",
+          "$ref": "#/$defs/RoutingConfig"
+        }
+      }
+    },
+    "RoutingConfig": {
+      "description": "Routing knobs shared by presets and variants.",
+      "type": "object",
+      "properties": {
+        "sort": {
+          "description": "Cascade-chain ordering.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SortOrder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "require_tags": {
+          "description": "Require providers carrying all these tags.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "only": {
+          "description": "Restrict the chain to exactly these providers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "ignore": {
+          "description": "Drop these providers from the chain.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      }
+    },
+    "SortOrder": {
+      "description": "How a cascade chain should be ordered.",
+      "oneOf": [
+        {
+          "description": "Sort by provider name, ascending. The Phase-1 default; later replaced by\na recommender (cost / latency / throughput scoring).",
+          "type": "string",
+          "const": "alphabetical"
+        },
+        {
+          "description": "Sort by lowest latency first.",
+          "type": "string",
+          "const": "latency"
+        },
+        {
+          "description": "Sort by lowest cost first.",
+          "type": "string",
+          "const": "cost"
+        }
+      ]
+    },
+    "VariantConfig": {
+      "description": "A `:variant` definition — a routing modifier only.",
+      "type": "object",
+      "properties": {
+        "routing": {
+          "description": "Routing knobs fed into the cascade.",
+          "$ref": "#/$defs/RoutingConfig"
+        }
+      }
+    },
+    "McpConfig": {
+      "description": "Top-level MCP gateway settings.",
+      "type": "object",
+      "properties": {
+        "aggregate": {
+          "description": "Aggregation (fan-out) endpoint settings.",
+          "$ref": "#/$defs/McpAggregateConfig"
+        },
+        "cache": {
+          "description": "List-call cache settings.",
+          "$ref": "#/$defs/McpCacheConfig"
+        }
+      }
+    },
+    "McpAggregateConfig": {
+      "description": "`mcp.aggregate` — the virtual aggregate endpoint.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "When `true` (the default), mount the aggregate route. When `false`,\nonly per-server routes (`/mcp/{server}`) are mounted.",
+          "type": "boolean",
+          "default": true
+        },
+        "route": {
+          "description": "HTTP path for the aggregate endpoint. Default `/mcp`.",
+          "type": "string",
+          "default": "/mcp"
+        }
+      }
+    },
+    "McpCacheConfig": {
+      "description": "`mcp.cache` — the TTL cache wrapping cheap list calls.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "When `false`, the cache layer is not installed.",
+          "type": "boolean",
+          "default": true
+        },
+        "tools_list_ttl_secs": {
+          "description": "TTL for `tools/list`. `0` disables for this method.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 60
+        },
+        "resources_list_ttl_secs": {
+          "description": "TTL for `resources/list`. `0` disables for this method.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 60
+        },
+        "resources_templates_list_ttl_secs": {
+          "description": "TTL for `resources/templates/list`. `0` disables for this method.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 300
+        },
+        "prompts_list_ttl_secs": {
+          "description": "TTL for `prompts/list`. `0` disables for this method.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 300
+        },
+        "max_entries_per_server": {
+          "description": "LRU safety bound — max entries per server.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 64
+        }
+      }
+    },
+    "McpServerConfig": {
+      "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`super::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Server id. URL-safe; no slashes.",
+          "type": "string"
+        },
+        "transport": {
+          "description": "Wire transport.",
+          "$ref": "#/$defs/McpTransport"
+        },
+        "aggregate": {
+          "description": "Whether this server participates in the aggregate fan-out endpoint\n(typically `POST /mcp`). Default: `true`.",
+          "type": "boolean",
+          "default": true
+        },
+        "tool_prefix": {
+          "description": "Prefix prepended to upstream tool/prompt names when this server\nparticipates in aggregate fan-out. When `None`, the config-load layer\nfills in `{server_name}__`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "transport"
+      ]
+    },
+    "McpTransport": {
+      "description": "How to dial one upstream MCP server.\n\nSerde tag is `type: \"http\" | \"stdio\"` to match the wire shape used in\n`bitrouter.yaml`.",
+      "oneOf": [
+        {
+          "description": "Streamable HTTP transport — `POST <url>` JSON-RPC with optional SSE\nresponses.",
+          "type": "object",
+          "properties": {
+            "url": {
+              "description": "The MCP endpoint URL (e.g. `https://mcp.example.com/v1/mcp`).",
+              "type": "string"
+            },
+            "headers": {
+              "description": "Static headers added to every request (e.g. `Authorization`).",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "type": {
+              "type": "string",
+              "const": "http"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "description": "Stdio transport — spawn `command` with `args` and exchange JSON-RPC\nover the child's stdin/stdout.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "The program to spawn (resolved via `$PATH`).",
+              "type": "string"
+            },
+            "args": {
+              "description": "Arguments to pass to the child.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "env": {
+              "description": "Extra environment variables for the child. Inherited env is kept.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "type": {
+              "type": "string",
+              "const": "stdio"
+            }
+          },
+          "required": [
+            "type",
+            "command"
+          ]
+        }
+      ]
+    },
+    "ServerToolsConfig": {
+      "description": "The OSS `server_tools` config section. Names the MCP servers whose tools\nBitRouter attaches to LLM requests and executes inside the loop, with an\noptional override of the loop's iteration cap. An empty `mcp_servers`\nleaves the pipeline strictly single-shot.",
+      "type": "object",
+      "properties": {
+        "mcp_servers": {
+          "description": "MCP server names (keys of `mcp_servers`) whose tools are injected into\nLLM requests and executed by the loop.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "max_iterations": {
+          "description": "Optional override of the loop's maximum tool-execution rounds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
+        "advisor": {
+          "description": "Enable the `advisor` server tool (consult a stronger model mid-task).\nAdvertised per-request only when the caller declares `bitrouter:advisor`.",
+          "type": "boolean",
+          "default": false
+        },
+        "subagent": {
+          "description": "Enable the `subagent` server tool (delegate a task to a worker model).\nAdvertised per-request only when the caller declares `bitrouter:subagent`.",
+          "type": "boolean",
+          "default": false
+        },
+        "fusion": {
+          "description": "Multi-model deliberation (Fusion). When set, the `bitrouter:fusion`\nserver tool and the `bitrouter/fusion` model alias are enabled.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FusionSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "web_search": {
+          "description": "Built-in `web_search` server tool (BYOK). When set, the\n`bitrouter:web_search` tool is enabled, served by the configured search\nbackends. Advertised per-request only when the caller declares it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSearchSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "web_fetch": {
+          "description": "Built-in `web_fetch` server tool (BYOK). When set, the\n`bitrouter:web_fetch` tool is enabled, served by the configured fetch\nbackends. Advertised per-request only when the caller declares it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebFetchSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "FusionSettings": {
+      "description": "The `server_tools.fusion` config section. Its presence enables the Fusion\nserver tool and the `bitrouter/fusion` model alias; its fields supply the\nalias defaults (the panel/judge a bare `bitrouter/fusion` request expands\nto). An explicit `bitrouter:fusion` declaration on a request overrides these.",
+      "type": "object",
+      "properties": {
+        "panel": {
+          "description": "Default panel models the alias expands to.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "judge": {
+          "description": "Default judge model (defaults to the first panel model).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "synthesizer": {
+          "description": "Optional dedicated synthesizer model.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "alias": {
+          "description": "Alias slug (defaults to `bitrouter/fusion`).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "outer_model": {
+          "description": "The model the alias resolves to (defaults to the judge, then the first\npanel model).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "web_tools": {
+          "description": "Provider web tools forwarded to every panel member, in\nprovider-namespaced declaration form (e.g. `{type: \"<provider>:<tool>\"}`).",
+          "type": "array",
+          "items": true,
+          "default": []
+        }
+      }
+    },
+    "WebSearchSettings": {
+      "description": "The `server_tools.web_search` section. Its presence enables the\n`bitrouter:web_search` server tool (advertised only when a request declares\nit). An empty `backends` list leaves the tool effectively off.",
+      "type": "object",
+      "properties": {
+        "backends": {
+          "description": "Search backends in preference/failover order; the first that resolves a\nkey is the default.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WebSearchBackendConfig"
+          }
+        },
+        "max_results": {
+          "description": "Default maximum results per call (caller may lower it). Defaults to\n[`DEFAULT_MAX_RESULTS`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        }
+      }
+    },
+    "WebSearchBackendConfig": {
+      "description": "One configured search backend. The `kind` tag selects the engine; the BYOK\nkey resolves from `api_key` (supports `${VAR}` substitution) or, when\nomitted, the engine's conventional environment variable.",
+      "oneOf": [
+        {
+          "description": "parallel.ai — key `api_key` or `PARALLEL_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `PARALLEL_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "parallel"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "exa.ai — key `api_key` or `EXA_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `EXA_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "exa"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "firecrawl.dev — key `api_key` or `FIRECRAWL_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `FIRECRAWL_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "firecrawl"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "tavily.com — key `api_key` or `TAVILY_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `TAVILY_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "tavily"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "A web-search-capable model whose *native* search tool is forwarded, made\navailable to every model routed through BitRouter.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "Backend id the caller pins (e.g. `\"native\"`); defaults to `\"native\"`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "model": {
+              "description": "The search-capable model serving the call.",
+              "type": "string"
+            },
+            "tool": {
+              "description": "The provider-defined native search tool, e.g.\n`{ \"type\": \"anthropic:web_search_20250305\" }`."
+            },
+            "kind": {
+              "type": "string",
+              "const": "native"
+            }
+          },
+          "required": [
+            "kind",
+            "model",
+            "tool"
+          ]
+        }
+      ]
+    },
+    "WebFetchSettings": {
+      "description": "The `server_tools.web_fetch` section. Its presence enables the\n`bitrouter:web_fetch` server tool (advertised only when a request declares\nit). An empty `backends` list leaves the tool effectively off.",
+      "type": "object",
+      "properties": {
+        "backends": {
+          "description": "Extraction backends in preference/failover order; the first that resolves\na key is the default.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WebFetchBackendConfig"
+          }
+        },
+        "max_content_tokens": {
+          "description": "Default cap on returned content per fetch, in tokens (caller may lower\nit). Defaults to [`DEFAULT_MAX_CONTENT_TOKENS`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        }
+      }
+    },
+    "WebFetchBackendConfig": {
+      "description": "One configured extraction backend. The `kind` tag selects the engine; the\nBYOK key resolves from `api_key` (supports `${VAR}` substitution) or, when\nomitted, the engine's conventional environment variable.",
+      "oneOf": [
+        {
+          "description": "exa.ai `/contents` — key `api_key` or `EXA_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `EXA_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "exa"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "firecrawl.dev `/v2/scrape` — key `api_key` or `FIRECRAWL_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `FIRECRAWL_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "firecrawl"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "tavily.com `/extract` — key `api_key` or `TAVILY_API_KEY`.",
+          "type": "object",
+          "properties": {
+            "api_key": {
+              "description": "Explicit API key (else `TAVILY_API_KEY`).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "api_base": {
+              "description": "Endpoint override (else the engine default).",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "tavily"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "AcpAgentConfig": {
+      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what the [`super::RoutingTable`] resolves against;\nfuture inbound entry points (the `agent-proxy` CLI) address agents by\nthis name.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Agent id. Non-empty; no `/`.",
+          "type": "string"
+        },
+        "transport": {
+          "description": "Wire transport.",
+          "$ref": "#/$defs/AcpTransport"
+        }
+      },
+      "required": [
+        "name",
+        "transport"
+      ]
+    },
+    "AcpTransport": {
+      "description": "How to dial one upstream ACP agent.\n\nv1.0 ships stdio only — the spec lists stdio as the primary transport for\nagent processes spawned by an IDE / CLI client.",
+      "oneOf": [
+        {
+          "description": "Stdio transport: launch `command` with `args` and exchange JSON-RPC\nover the child's stdin/stdout.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "description": "The program to spawn (resolved via `$PATH`).",
+              "type": "string"
+            },
+            "args": {
+              "description": "Arguments to pass to the child.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "env": {
+              "description": "Extra environment variables for the child. Inherited env is kept.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "type": {
+              "type": "string",
+              "const": "stdio"
+            }
+          },
+          "required": [
+            "type",
+            "command"
+          ]
+        }
+      ]
+    },
+    "RegistryConfig": {
+      "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether to fetch the registry and merge its BYOK providers into the\nrouting table. Default `true`. Also gated by\n[`inherit_defaults`](Config::inherit_defaults) — either being false\ndisables the merge.",
+          "type": "boolean",
+          "default": true
+        },
+        "url": {
+          "description": "Base URL of the registry `dist/` artifacts. Defaults to\n[`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or\nan internal mirror for reproducible deployments.",
+          "type": "string",
+          "default": "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry"
+        },
+        "provider_priority": {
+          "description": "Provider-class priority, highest first. A provider's auto-cascade rank\nis its class's index here; a per-provider [`ProviderConfig::priority`]\noverrides it, and a class absent from this list ranks last. Defaults to\n[`ProviderClass::default_priority`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderClass"
+          }
+        }
+      }
+    },
+    "PolicyTableConfig": {
+      "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform fingerprints each request by its agent-loop step (the\nmost recent tool the model called, or the opening turn) and looks the\nfingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;\n[`tiers`](Self::tiers) then maps that tier to the model id the request is\nrewritten to. A hard tool-use guardrail keeps tool-carrying requests on a\ntier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
+      "type": "object",
+      "properties": {
+        "key_strategy": {
+          "description": "Which request key the policy table uses for `fingerprints`. The default\npreserves the original coarse key (`opening`, `after_<tool>`,\n`midstream`). `workflow_state` switches lookup and adequacy learning to\nthe cross-harness Workflow State IR routing key.",
+          "$ref": "#/$defs/PolicyKeyStrategy"
+        },
+        "tiers": {
+          "description": "Tier name → the model id every request on that tier is routed to. The\nvalue is fed straight into the routing table, so it may be a bare\ncanonical id (resolved via the cascade/registry) or an explicit\n`provider:model` id (a Strategy-1 direct route). The section is inert\nwhile this map is empty.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "fingerprints": {
+          "description": "Request fingerprint → tier name. A fingerprint is the agent-loop step:\n`opening` (no model turn yet), `after_<tool>` (the model last called\n`<tool>`), or `midstream` (a model turn with no tool call). A fingerprint\nabsent from this map falls back to [`default_tier`](Self::default_tier).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "default_tier": {
+          "description": "Tier applied to any fingerprint not listed in\n[`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint\nis left on the model the caller requested (the transform no-ops).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "tool_use_tier": {
+          "description": "Tool-use guardrail target: the tier a request carrying tools is clamped\nup to when the tier it would otherwise get is not in\n[`tool_safe_tiers`](Self::tool_safe_tiers). When unset, the guardrail is\ndisabled and tool requests route by fingerprint like any other.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "tool_safe_tiers": {
+          "description": "Tiers known to handle tool calls reliably. A tool-carrying request whose\nchosen tier is in this list is left as-is; one whose tier is absent is\nclamped to [`tool_use_tier`](Self::tool_use_tier).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "adequacy": {
+          "description": "Online adequacy learning. When enabled, the daemon observes each\ndowngraded request's outcome and, after repeated failures, escalates the\noffending fingerprint to a more capable tier — so an operator's downgrade\nthat proves inadequate is self-correcting. Off by default.",
+          "$ref": "#/$defs/AdequacyConfig"
+        }
+      }
+    },
+    "PolicyKeyStrategy": {
+      "description": "Request-key family used by `policy_table.fingerprints`.",
+      "oneOf": [
+        {
+          "description": "The original coarse prompt fingerprint: `opening`, `midstream`, or\n`after_<tool>`.",
+          "type": "string",
+          "const": "legacy_fingerprint"
+        },
+        {
+          "description": "The cross-harness Workflow State IR routing key.",
+          "type": "string",
+          "const": "workflow_state"
+        }
+      ]
+    },
+    "AdequacyConfig": {
+      "description": "Online adequacy-learning settings — the `policy_table.adequacy` block.\n\nWhen [`enabled`](Self::enabled), the daemon watches every request a downgrade\nproduced and counts the ones that hard-fail (an upstream error or a stream\nerror). Once a fingerprint accumulates\n[`escalation_threshold`](Self::escalation_threshold) such failures it is\n*pinned*: subsequent requests with that fingerprint route to\n[`escalation_tier`](Self::escalation_tier) instead of the cheap tier the\nstatic table would pick. A pin decays after\n[`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried\nlater. This is a safety net layered on the static table — it never downgrades\non its own, only escalates a downgrade that is failing.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether online adequacy learning is active. Off by default, so a\n`policy_table:` with no `adequacy:` block behaves exactly as the static\ntable.",
+          "type": "boolean",
+          "default": false
+        },
+        "escalation_tier": {
+          "description": "Tier a pinned fingerprint escalates to. When unset, falls back to\n[`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when\n[`enabled`](Self::enabled).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "escalation_threshold": {
+          "description": "Number of *consecutive* hard failures on a downgraded fingerprint before\nit is pinned to the escalation tier (a clean outcome resets the tally).\nDefault `1` — escalate on the first failure (conservative / sticky).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "pin_cooldown_secs": {
+          "description": "How long, in seconds, a pin lasts before the downgrade is re-attempted.\n`0` means the pin never decays (until the process restarts or the row is\ncleared). Default `1800` (30 minutes).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 1800
+        },
+        "explore_enabled": {
+          "description": "Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)\nis on, the daemon periodically trials [`explore_tier`](Self::explore_tier)\non fingerprints the static table routes to the escalation tier (i.e. ones\nthe operator did *not* downgrade), and locks a fingerprint to the cheap\ntier once it survives [`explore_threshold`](Self::explore_threshold)\ntrials — so safe downgrades are found automatically rather than only\nhand-configured. A trial that fails escalates and stops (the same pin as\nthe safety path). Off by default; requires `enabled`. This is the\n*aggressive* half — it routes traffic the operator left at the capable\ntier to a cheaper one on a fraction of requests.",
+          "type": "boolean",
+          "default": false
+        },
+        "explore_tier": {
+          "description": "The cheap tier exploration trials toward. Must resolve to a defined tier\nwhen [`explore_enabled`](Self::explore_enabled). Required to explore.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "explore_interval": {
+          "description": "Trial cadence: roughly one in `explore_interval` eligible requests is a\ntrial (the rest stay on the escalation tier). Default `5`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 5
+        },
+        "explore_threshold": {
+          "description": "Consecutive adequate trials before a fingerprint is locked to the cheap\ntier (the learned downgrade). Default `3`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 3
+        },
+        "min_semantic_successes_for_lock": {
+          "description": "Distinct benchmark tasks that must finish successfully after using a\ncheap replacement before a request-level lock becomes active. `0` keeps\nthe legacy request-only behavior. Default `0`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "explore_opening": {
+          "description": "Whether the opening turn is eligible for aggressive exploration. Default\n`false`, because opening/planning errors tend to propagate through the\nwhole task and Terminal-Bench showed this state is high leverage.",
+          "type": "boolean",
+          "default": false
+        },
+        "min_semantic_successes_for_opening": {
+          "description": "Minimum distinct benchmark-task successes required before an opening\nrequest-level lock becomes active. This is combined with\n[`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)\nby taking the stricter threshold. Default `1`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        }
+      }
+    }
+  },
+  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.25/config.schema.json"
+}

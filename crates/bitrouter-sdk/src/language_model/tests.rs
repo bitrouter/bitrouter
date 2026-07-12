@@ -22,6 +22,7 @@ fn target(provider: &str) -> RoutingTarget {
         api_base: "https://example.invalid".to_string(),
         api_key: "k".to_string(),
         api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -134,6 +135,178 @@ impl SettlementRecorder for UsageCapturingRecorder {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettlementSnapshot {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    has_error: bool,
+}
+
+struct SettlementSnapshotRecorder(Arc<std::sync::Mutex<Vec<SettlementSnapshot>>>);
+#[async_trait]
+impl SettlementRecorder for SettlementSnapshotRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        self.0.lock().unwrap().push(SettlementSnapshot {
+            prompt_tokens: ctx.prompt_tokens,
+            completion_tokens: ctx.completion_tokens,
+            has_error: ctx.error.is_some(),
+        });
+        Ok(())
+    }
+}
+
+struct ProviderCapturingRecorder(Arc<std::sync::Mutex<Vec<(String, String)>>>);
+
+#[async_trait]
+impl SettlementRecorder for ProviderCapturingRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        let value = (ctx.provider_id.clone(), ctx.model_id.clone());
+        match self.0.lock() {
+            Ok(mut captured) => captured.push(value),
+            Err(poisoned) => poisoned.into_inner().push(value),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TimingSnapshot {
+    provider_id: String,
+    model_id: String,
+    latency_ms: u64,
+    generation_time_ms: u64,
+    first_token_latency_ms: Option<u64>,
+    first_token_kind: Option<timing::FirstTokenKind>,
+    has_error: bool,
+}
+
+struct TimingSnapshotRecorder(Arc<std::sync::Mutex<Vec<TimingSnapshot>>>);
+
+#[async_trait]
+impl SettlementRecorder for TimingSnapshotRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        self.0.lock().unwrap().push(TimingSnapshot {
+            provider_id: ctx.provider_id.clone(),
+            model_id: ctx.model_id.clone(),
+            latency_ms: ctx.latency_ms,
+            generation_time_ms: ctx.generation_time_ms,
+            first_token_latency_ms: ctx.first_token_latency_ms,
+            first_token_kind: ctx.first_token_kind,
+            has_error: ctx.error.is_some(),
+        });
+        Ok(())
+    }
+}
+
+struct ContextCheckingExecutionHook {
+    expected_request_id: String,
+    seen: Arc<std::sync::Mutex<Vec<bool>>>,
+}
+
+#[async_trait]
+impl ExecutionHook for ContextCheckingExecutionHook {
+    async fn on_success(&self, _ctx: &PipelineContext, _result: &ExecutionResult) -> Result<()> {
+        Ok(())
+    }
+
+    async fn on_failure(&self, ctx: &PipelineContext, _error: &BitrouterError) -> FallbackDecision {
+        let context_preserved = ctx.request_id() == self.expected_request_id
+            && ctx
+                .headers()
+                .get("x-test-context")
+                .is_some_and(|value| value == "preserved")
+            && ctx.has_event::<TestRouteEvent>();
+        match self.seen.lock() {
+            Ok(mut seen) => seen.push(context_preserved),
+            Err(poisoned) => poisoned.into_inner().push(context_preserved),
+        }
+        FallbackDecision::TryNext
+    }
+}
+
+struct HopEventRecorder(Arc<std::sync::Mutex<Vec<String>>>);
+
+#[async_trait]
+impl ObserveHook for HopEventRecorder {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_hop_start(&self, _ctx: &PipelineContext, target: &RoutingTarget) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("start:{}", target.provider_name));
+    }
+
+    async fn on_hop_end(
+        &self,
+        _ctx: &PipelineContext,
+        target: &RoutingTarget,
+        outcome: HopOutcome<'_>,
+    ) {
+        let outcome = match outcome {
+            HopOutcome::Generated(_) => "generated",
+            HopOutcome::StreamStarted => "stream_started",
+            HopOutcome::Failed(_) => "failed",
+        };
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("end:{}:{outcome}", target.provider_name));
+    }
+
+    fn stream_interest(&self) -> StreamInterest {
+        StreamInterest::none()
+    }
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let outcome = match outcome {
+            RequestOutcome::Completed => "completed",
+            RequestOutcome::Failed(_) => "failed",
+            RequestOutcome::ClientDisconnected => "disconnected",
+        };
+        self.0.lock().unwrap().push(format!("request:{outcome}"));
+    }
+}
+
+struct DelayPreHook(std::time::Duration);
+
+#[async_trait]
+impl PreRequestHook for DelayPreHook {
+    async fn check(&self, _ctx: &mut PipelineContext) -> Result<HookDecision> {
+        tokio::time::sleep(self.0).await;
+        Ok(HookDecision::Allow)
+    }
+}
+
+struct StreamErrorExecutor {
+    error: BitrouterError,
+}
+
+#[async_trait]
+impl Executor for StreamErrorExecutor {
+    async fn execute(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(self.error.clone())
+    }
+
+    async fn execute_stream(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Ok(Box::pin(futures::stream::iter(vec![Err(self
+            .error
+            .clone())])))
+    }
+}
+
 /// A `StreamHook` that records `on_stream_end` outcomes and can rewrite / abort.
 struct ScriptedStreamHook {
     interest: StreamInterest,
@@ -198,6 +371,24 @@ impl ObserveHook for PanicObserveHook {
     }
 }
 
+struct OutcomeRecordingObserveHook(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+#[async_trait]
+impl ObserveHook for OutcomeRecordingObserveHook {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let label = match outcome {
+            RequestOutcome::Completed => "completed",
+            RequestOutcome::Failed(_) => "failed",
+            RequestOutcome::ClientDisconnected => "disconnected",
+        };
+        self.0.lock().unwrap().push(label);
+    }
+}
+
 fn pipeline_with(
     rt: Arc<StaticRoutingTable>,
     executor: Arc<dyn Executor>,
@@ -228,6 +419,40 @@ async fn full_pipeline_runs_all_four_stages() {
     let resp = pipeline.execute(request()).await.expect("request succeeds");
     assert_eq!(resp.result.content.len(), 1);
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
+}
+
+#[tokio::test]
+async fn streaming_preflight_error_runs_settlement_and_observe_end() {
+    let settlements = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Error(
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(3),
+            },
+        )])),
+        |builder| {
+            builder
+                .settlement_recorder(SettlementSnapshotRecorder(settlements.clone()))
+                .observe_hook(OutcomeRecordingObserveHook(outcomes.clone()));
+        },
+    );
+
+    let error = match pipeline.clone().execute_stream(stream_request()).await {
+        Ok(_) => panic!("preflight rate limit must fail before opening a stream"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, BitrouterError::UpstreamRateLimited { .. }));
+    assert_eq!(
+        settlements.lock().unwrap().as_slice(),
+        &[SettlementSnapshot {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            has_error: true,
+        }]
+    );
+    assert_eq!(outcomes.lock().unwrap().as_slice(), &["failed"]);
 }
 
 #[tokio::test]
@@ -322,8 +547,8 @@ async fn settlement_recorder_runs_even_on_failure() {
     );
 
     let err = pipeline.execute(request()).await.unwrap_err();
-    // An upstream 500 surfaces to the client as a 502 Bad Gateway.
-    assert_eq!(err.status(), 502);
+    // Exhausting the only temporarily unavailable route is a 503.
+    assert_eq!(err.status(), 503);
     assert_eq!(
         recorded.load(Ordering::SeqCst),
         1,
@@ -363,6 +588,111 @@ async fn fallback_tries_next_on_5xx_then_succeeds() {
             provider_metadata: Default::default(),
         }]
     );
+}
+
+#[tokio::test]
+async fn fallback_tries_next_on_upstream_429_then_succeeds() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+            }),
+            MockResponse::Generate(GenerateResult {
+                content: vec![Content::Text {
+                    text: "from b".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: None,
+                finish_reason: Some(FinishReason::Stop),
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            }),
+        ])),
+        |_b| {},
+    );
+
+    let response = pipeline.execute(request()).await.unwrap();
+    assert_eq!(
+        response.result.content,
+        vec![Content::Text {
+            text: "from b".into(),
+            provider_metadata: Default::default(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn exhausted_upstream_429s_use_the_earliest_retry_after() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider", "c-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+            }),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited { retry_after: None }),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+        ])),
+        |_b| {},
+    );
+
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::UpstreamRateLimited {
+            retry_after: Some(12)
+        }
+    ));
+}
+
+#[tokio::test]
+async fn mixed_retryable_upstream_failures_become_service_unavailable() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(10),
+            }),
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 503,
+                message: "maintenance".into(),
+            }),
+        ])),
+        |_b| {},
+    );
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::UpstreamUnavailable
+    ));
+}
+
+#[tokio::test]
+async fn local_rate_limit_does_not_fall_back() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::RateLimited {
+                retry_after: Some(5),
+            }),
+            MockResponse::Generate(GenerateResult {
+                content: vec![],
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            }),
+        ])),
+        |_b| {},
+    );
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::RateLimited {
+            retry_after: Some(5)
+        }
+    ));
 }
 
 #[tokio::test]
@@ -529,6 +859,209 @@ async fn collect_stream(
 ) -> Vec<Result<StreamPart>> {
     use futures::StreamExt;
     stream.collect().await
+}
+
+#[tokio::test]
+async fn streamed_settlement_has_positive_canonical_timing() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "hello".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let parts = collect_stream(stream).await;
+    assert!(parts.iter().all(Result::is_ok));
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert_eq!(snapshot.provider_id, "openai");
+    assert_eq!(snapshot.model_id, "test-model");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(
+        snapshot
+            .first_token_latency_ms
+            .is_some_and(|value| value >= 1)
+    );
+    assert_eq!(
+        snapshot.first_token_kind,
+        Some(timing::FirstTokenKind::Text)
+    );
+    assert!(!snapshot.has_error);
+}
+
+#[tokio::test]
+async fn streamed_fallback_attributes_timing_to_successful_target() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["first", "second"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamUnavailable),
+            MockResponse::Stream(vec![
+                StreamPart::ReasoningDelta {
+                    text: "thinking".into(),
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("fallback stream starts");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert_eq!(snapshot.provider_id, "second");
+    assert_eq!(snapshot.model_id, "test-model");
+    assert!(snapshot.generation_time_ms >= 1);
+    assert_eq!(
+        snapshot.first_token_kind,
+        Some(timing::FirstTokenKind::Reasoning)
+    );
+}
+
+#[tokio::test]
+async fn streamed_upstream_error_finalizes_timing_before_settlement() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(StreamErrorExecutor {
+            error: BitrouterError::UpstreamUnavailable,
+        }),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts before body error");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.has_error);
+}
+
+#[tokio::test]
+async fn streamed_hook_abort_finalizes_timing_before_settlement() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("lookup".into()),
+                arguments: "{}".into(),
+            },
+            StreamPart::TextDelta {
+                text: "blocked".into(),
+            },
+        ])])),
+        |builder| {
+            builder
+                .stream_hook(ScriptedStreamHook {
+                    interest: StreamInterest::all(),
+                    mode: StreamMode::AbortOnText,
+                    ended_with: ended.clone(),
+                })
+                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert_eq!(
+        snapshot.first_token_kind,
+        Some(timing::FirstTokenKind::Tool)
+    );
+    assert!(snapshot.has_error);
+}
+
+#[tokio::test]
+async fn dropped_stream_finalizes_timing_before_detached_settlement() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    drop(stream);
+    pipeline.drain_pending_settlements().await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("detached settlement snapshot");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(!snapshot.has_error);
+}
+
+#[tokio::test]
+async fn non_stream_latency_includes_pre_request_pipeline_time() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::always_text("hello")),
+        |builder| {
+            builder
+                .pre_request_hook(DelayPreHook(std::time::Duration::from_millis(20)))
+                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    pipeline.execute(request()).await.expect("request succeeds");
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert!(snapshot.latency_ms >= 20);
+    assert!(snapshot.generation_time_ms >= 1);
 }
 
 #[tokio::test]
@@ -712,15 +1245,28 @@ async fn disconnect_during_inline_settlement_does_not_cancel_remaining_recorders
         .await
         .expect("stream starts");
     assert!(stream.next().await.unwrap().is_ok());
-    assert!(stream.next().await.unwrap().is_ok());
 
+    // The terminal part settles before it is yielded. Poll it on a separate
+    // task so we can cancel the response-body future while settlement blocks.
     let poller = tokio::spawn(async move { stream.next().await });
-    started.notified().await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .expect("first settlement recorder should start");
     poller.abort();
-    let _ = poller.await;
-    release.notify_waiters();
+    tokio::time::timeout(std::time::Duration::from_secs(1), poller)
+        .await
+        .expect("stream poller should abort promptly")
+        .expect_err("stream poller should be cancelled");
+    // Preserve a permit if the detached finalizer has not polled `notified()`
+    // yet. `notify_waiters()` would lose the wake-up in that scheduling gap.
+    release.notify_one();
 
-    pipeline.drain_pending_settlements().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        pipeline.drain_pending_settlements(),
+    )
+    .await
+    .expect("detached settlement should finish after release");
     assert_eq!(
         recorded.lock().unwrap().as_slice(),
         &["first-started", "first-finished", "second"]
@@ -810,6 +1356,57 @@ async fn disconnect_before_usage_bills_estimated_output() {
     assert!(
         completion >= 1,
         "completion-token estimate must be non-zero ({completion}); ~31 chars / 4 ≈ 8 tokens"
+    );
+}
+
+#[tokio::test]
+async fn upstream_stream_error_is_not_reclassified_as_client_disconnect_when_dropped() {
+    let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured: Arc<std::sync::Mutex<Vec<SettlementSnapshot>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let upstream_error = BitrouterError::Upstream {
+        status: 401,
+        message: "upstream auth failed".into(),
+    };
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(StreamErrorExecutor {
+            error: upstream_error,
+        }),
+        |b| {
+            b.stream_hook(ScriptedStreamHook {
+                interest: StreamInterest::all(),
+                mode: StreamMode::Pass,
+                ended_with: ended.clone(),
+            })
+            .settlement_recorder(SettlementSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let first = stream.next().await.expect("upstream error item");
+    assert!(first.is_err(), "the upstream error surfaced to the client");
+
+    drop(stream);
+    let _ = pipeline.drain_pending_settlements().await;
+
+    assert_eq!(
+        *ended.lock().unwrap(),
+        vec!["upstream_error"],
+        "dropping after receiving the error must not overwrite the terminal outcome"
+    );
+    assert_eq!(
+        captured.lock().unwrap().as_slice(),
+        &[SettlementSnapshot {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            has_error: true,
+        }],
+        "failed streams without usage must settle as failed and unbillable"
     );
 }
 
@@ -1094,6 +1691,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Custom("fake".into()),
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1246,6 +1844,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         api_base,
         api_key: String::new(),
         api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1466,6 +2065,242 @@ async fn nonstream_disconnect_still_runs_to_completion_and_bills_full() {
 }
 
 // ===== server-side tool loop wiring =====
+
+fn empty_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoop> {
+    Arc::new(server_tools::loop_controller::ServerToolLoop::new(
+        server_tools::toolset::ToolsetRegistry::new(Vec::new()),
+        server_tools::config::ServerToolLoopConfig::default(),
+        Arc::new(server_tools::approval::AllowAll),
+    ))
+}
+
+struct SearchTool;
+
+#[async_trait]
+impl server_tools::toolset::RouterToolset for SearchTool {
+    async fn list_tools(&self, _ctx: &server_tools::toolset::ToolContext) -> Result<Vec<Tool>> {
+        Ok(vec![Tool::Function {
+            name: "search".into(),
+            description: None,
+            parameters: serde_json::json!({"type": "object"}),
+            strict: None,
+            provider_metadata: Default::default(),
+        }])
+    }
+
+    async fn call_tool(
+        &self,
+        _name: &str,
+        _arguments: &str,
+        _ctx: &server_tools::toolset::ToolContext,
+    ) -> Result<ToolResultOutput> {
+        Ok(ToolResultOutput::Text {
+            value: "result".into(),
+        })
+    }
+
+    fn owns(&self, name: &str) -> bool {
+        name == "search"
+    }
+}
+
+fn search_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoop> {
+    Arc::new(server_tools::loop_controller::ServerToolLoop::new(
+        server_tools::toolset::ToolsetRegistry::new(vec![Arc::new(SearchTool)]),
+        server_tools::config::ServerToolLoopConfig::default(),
+        Arc::new(server_tools::approval::AllowAll),
+    ))
+}
+
+#[tokio::test]
+async fn server_tool_streaming_preflight_respects_fail_decision() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::bad_request("invalid request")),
+            MockResponse::Stream(vec![StreamPart::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ])),
+        |builder| {
+            builder.server_tool_loop(empty_server_tool_loop());
+        },
+    );
+
+    let result = pipeline.execute_stream(stream_request()).await;
+    assert!(matches!(result, Err(BitrouterError::BadRequest { .. })));
+}
+
+#[tokio::test]
+async fn server_tool_streaming_preflight_aggregates_rate_limits() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+            }),
+        ])),
+        |builder| {
+            builder.server_tool_loop(empty_server_tool_loop());
+        },
+    );
+
+    let result = pipeline.execute_stream(stream_request()).await;
+    assert!(matches!(
+        result,
+        Err(BitrouterError::UpstreamRateLimited {
+            retry_after: Some(12)
+        })
+    ));
+}
+
+#[tokio::test]
+async fn server_tool_streaming_preflight_aggregates_mixed_availability_failures() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 503,
+                message: "maintenance".into(),
+            }),
+        ])),
+        |builder| {
+            builder.server_tool_loop(empty_server_tool_loop());
+        },
+    );
+
+    let result = pipeline.execute_stream(stream_request()).await;
+    assert!(matches!(result, Err(BitrouterError::UpstreamUnavailable)));
+}
+
+#[tokio::test]
+async fn server_tool_streaming_fallback_settles_the_winning_target()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+            MockResponse::Stream(vec![StreamPart::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ])),
+        |builder| {
+            builder
+                .server_tool_loop(empty_server_tool_loop())
+                .settlement_recorder(ProviderCapturingRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline.execute_stream(stream_request()).await?;
+    let parts = collect_stream(stream).await;
+    assert!(parts.into_iter().all(|part| part.is_ok()));
+    let captured = match captured.lock() {
+        Ok(captured) => captured.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    assert_eq!(
+        captured.as_slice(),
+        &[("b-provider".to_string(), "test-model".to_string())]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_tool_streaming_fallback_preserves_request_context()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let request_id = "stable-request-id".to_string();
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+            MockResponse::Stream(vec![StreamPart::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ])),
+        |builder| {
+            builder
+                .route_hook(EmitRouteHook)
+                .execution_hook(ContextCheckingExecutionHook {
+                    expected_request_id: request_id.clone(),
+                    seen: seen.clone(),
+                })
+                .server_tool_loop(empty_server_tool_loop());
+        },
+    );
+    let mut request = stream_request();
+    request.request_id = request_id;
+    request.headers.insert(
+        "x-test-context",
+        http::HeaderValue::from_static("preserved"),
+    );
+
+    let stream = pipeline.execute_stream(request).await?;
+    let parts = collect_stream(stream).await;
+    assert!(parts.into_iter().all(|part| part.is_ok()));
+    let seen = match seen.lock() {
+        Ok(seen) => seen.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    assert_eq!(seen.as_slice(), &[true]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_tool_streaming_settles_the_final_turn_winner()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Stream(vec![
+                StreamPart::ToolCallDelta {
+                    id: "c1".into(),
+                    name: Some("search".into()),
+                    arguments: "{}".into(),
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::ToolCalls,
+                },
+            ]),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            }),
+            MockResponse::Stream(vec![StreamPart::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ])),
+        |builder| {
+            builder
+                .server_tool_loop(search_server_tool_loop())
+                .settlement_recorder(ProviderCapturingRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline.execute_stream(stream_request()).await?;
+    let parts = collect_stream(stream).await;
+    assert!(parts.into_iter().all(|part| part.is_ok()));
+    let captured = match captured.lock() {
+        Ok(captured) => captured.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    assert_eq!(
+        captured.as_slice(),
+        &[("b-provider".to_string(), "test-model".to_string())]
+    );
+    Ok(())
+}
 
 fn router_tool_call() -> Content {
     Content::ToolCall {
@@ -1693,8 +2528,10 @@ async fn server_tool_loop_streams_router_tool_activity() {
         }
     }
 
-    // Iteration 1 streams a router tool call; iteration 2 streams the answer.
+    // Each iteration fails over from `first` to `second`. Nested streaming
+    // turns must retain hop observability and final target attribution.
     let executor = Arc::new(MockExecutor::new(vec![
+        MockResponse::Error(BitrouterError::UpstreamUnavailable),
         MockResponse::Stream(vec![
             StreamPart::TextDelta {
                 text: "searching ".to_string(),
@@ -1708,6 +2545,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
                 reason: FinishReason::ToolCalls,
             },
         ]),
+        MockResponse::Error(BitrouterError::UpstreamUnavailable),
         MockResponse::Stream(vec![
             StreamPart::TextDelta {
                 text: "answer".to_string(),
@@ -1722,8 +2560,12 @@ async fn server_tool_loop_streams_router_tool_activity() {
         ServerToolLoopConfig::default(),
         Arc::new(AllowAll),
     ));
-    let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
-        b.server_tool_loop(server_loop);
+    let timings = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hops = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(routing_table(&["first", "second"]), executor, |b| {
+        b.server_tool_loop(server_loop)
+            .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
+            .observe_hook(HopEventRecorder(hops.clone()));
     });
 
     let mut stream = pipeline
@@ -1761,4 +2603,81 @@ async fn server_tool_loop_streams_router_tool_activity() {
         })
         .collect();
     assert_eq!(text, "searching answer");
+
+    let snapshots = timings.lock().unwrap();
+    let snapshot = snapshots.first().expect("server-tool settlement timing");
+    assert_eq!(snapshot.provider_id, "second");
+    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.generation_time_ms >= 1);
+    assert!(
+        snapshot
+            .first_token_latency_ms
+            .is_some_and(|value| value >= 1)
+    );
+
+    assert_eq!(
+        *hops.lock().unwrap(),
+        vec![
+            "start:first",
+            "end:first:failed",
+            "start:second",
+            "end:second:stream_started",
+            "start:first",
+            "end:first:failed",
+            "start:second",
+            "end:second:stream_started",
+            "request:completed",
+        ],
+        "every nested upstream attempt is observable"
+    );
+}
+
+#[tokio::test]
+async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
+    use crate::language_model::server_tools::approval::AllowAll;
+    use crate::language_model::server_tools::config::ServerToolLoopConfig;
+    use crate::language_model::server_tools::loop_controller::ServerToolLoop;
+    use crate::language_model::server_tools::toolset::ToolsetRegistry;
+
+    let server_loop = Arc::new(ServerToolLoop::new(
+        ToolsetRegistry::new(Vec::new()),
+        ServerToolLoopConfig::default(),
+        Arc::new(AllowAll),
+    ));
+    let timings = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hops = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["first", "second"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamUnavailable),
+            MockResponse::Error(BitrouterError::UpstreamUnavailable),
+        ])),
+        |builder| {
+            builder
+                .server_tool_loop(server_loop)
+                .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
+                .observe_hook(HopEventRecorder(hops.clone()));
+        },
+    );
+
+    let error = match pipeline.execute_stream(stream_request()).await {
+        Ok(_) => panic!("all nested upstream handshakes should fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, BitrouterError::UpstreamUnavailable));
+
+    let snapshots = timings.lock().unwrap();
+    let snapshot = snapshots.first().expect("failed stream still settles");
+    assert!(snapshot.has_error);
+    assert!(snapshot.latency_ms >= 1);
+    assert_eq!(
+        *hops.lock().unwrap(),
+        vec![
+            "start:first",
+            "end:first:failed",
+            "start:second",
+            "end:second:failed",
+            "request:failed",
+        ]
+    );
 }

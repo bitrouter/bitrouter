@@ -7,8 +7,8 @@
 //! refreshed account token without a daemon restart, which a static header
 //! ([`crate::otel::config::OtelConfig::bearer_token`]) cannot do.
 //!
-//! `opentelemetry-http` 0.27 trait:
-//! <https://docs.rs/opentelemetry-http/0.27/opentelemetry_http/trait.HttpClient.html>
+//! `opentelemetry-http` 0.32 trait:
+//! <https://docs.rs/opentelemetry-http/0.32/opentelemetry_http/trait.HttpClient.html>
 //!
 //! Best-effort: a bearer-resolution failure (mapped to `None`) leaves the
 //! request unauthenticated rather than dropping the export — telemetry must
@@ -43,7 +43,7 @@ impl AuthRefreshClient {
 /// or an unrepresentable header value, leaves the request unchanged (anonymous).
 ///
 /// Pure (no I/O) so the header policy is unit-testable without a live server.
-fn inject_bearer(req: &mut http::Request<Vec<u8>>, token: Option<&str>) {
+fn inject_bearer<T>(req: &mut http::Request<T>, token: Option<&str>) {
     let Some(token) = token else {
         return;
     };
@@ -60,16 +60,16 @@ fn inject_bearer(req: &mut http::Request<Vec<u8>>, token: Option<&str>) {
 
 #[async_trait::async_trait]
 impl HttpClient for AuthRefreshClient {
-    async fn send(
+    async fn send_bytes(
         &self,
-        mut request: http::Request<Vec<u8>>,
+        mut request: http::Request<Bytes>,
     ) -> Result<http::Response<Bytes>, HttpError> {
         // Best-effort: a resolution failure inside `bearer()` is mapped to
         // `None` by the implementor, so a `None` here simply means "export
         // anonymously" — never a dropped export.
         let token = self.bearer.bearer().await;
         inject_bearer(&mut request, token.as_deref());
-        <reqwest::Client as HttpClient>::send(&self.inner, request).await
+        <reqwest::Client as HttpClient>::send_bytes(&self.inner, request).await
     }
 }
 
@@ -124,7 +124,7 @@ mod tests {
     }
 
     /// Stub `TelemetryBearer` returning a fixed token (or `None`) so the
-    /// `HttpClient::send` path can be exercised without a live server.
+    /// `HttpClient::send_bytes` path can be exercised without a live server.
     #[derive(Debug)]
     struct StubBearer(Option<String>);
 
@@ -137,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn stub_bearer_drives_injection_helper() {
-        // Exercise the same resolve-then-inject sequence `send` uses, proving
+        // Exercise the same resolve-then-inject sequence `send_bytes` uses, proving
         // the trait + helper compose: Some(token) injects, None stays anonymous.
         let some = StubBearer(Some("tok".into()));
         let mut req = empty_request();

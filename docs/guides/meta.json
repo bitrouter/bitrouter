@@ -1,0 +1,15 @@
+{
+  "title": "Guides",
+  "icon": "Map",
+  "defaultOpen": false,
+  "pages": [
+    "---Development---",
+    "build-a-plugin",
+    "self-host",
+    "register-as-a-provider",
+    "---Migration---",
+    "migrate-from-litellm",
+    "migrate-from-openrouter",
+    "migrate-from-tensorzero"
+  ]
+}

@@ -1,13 +1,15 @@
 //! Import the OpenAI Codex CLI's ChatGPT OAuth credential.
 //!
-//! Codex persists its OAuth token as JSON under a `tokens` key — in the macOS
+//! Codex persists its OAuth token as JSON under a `tokens` key in
+//! `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) and/or the macOS
 //! login Keychain (generic password, service `Codex Auth`, account
-//! `cli|<first-16-hex-of-sha256(codexHome)>`) and/or `$CODEX_HOME/auth.json`
-//! (default `~/.codex/auth.json`). The access token is a JWT; its `exp` claim
-//! gives the expiry (the file carries no explicit one), falling back to a
-//! one-hour TTL that the refresh path renews before it lapses.
+//! `cli|<first-16-hex-of-sha256(codexHome)>`). The access token is a JWT; its
+//! `exp` claim gives the expiry (the file carries no explicit one), falling
+//! back to a one-hour TTL that the refresh path renews before it lapses.
 //!
-//! Reference: OpenClaw `src/agents/cli-credentials.ts`
+//! References: OpenAI Codex `login/src/auth/storage.rs`
+//! (`AuthDotJson`, `CODEX_AUTH_KEYRING_SERVICE`, `get_auth_file`);
+//! OpenClaw `src/agents/cli-credentials.ts`
 //! (`computeCodexKeychainAccount`, `readCodexCliCredentials`).
 
 use std::path::{Path, PathBuf};
@@ -44,18 +46,29 @@ struct Tokens {
     refresh_token: Option<String>,
 }
 
-/// Import the Codex credential from its default locations: the macOS Keychain
-/// (`Codex Auth`) first, then `$CODEX_HOME/auth.json` (default
-/// `~/.codex/auth.json`). Returns `Ok(None)` when neither carries one.
+/// Import the Codex credential from its default locations:
+/// `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS
+/// Keychain (`Codex Auth`). Returns `Ok(None)` when neither carries one.
 pub fn import() -> Result<Option<Imported>, ImportError> {
     let home = codex_home().ok_or(ImportError::NoHome)?;
-    // Keychain first (macOS). A malformed or absent item falls through to the
-    // file, which is the authoritative error surface. The Keychain account is
-    // derived from the realpath'd home (matching OpenClaw's `realpathSync`), so
-    // a symlinked $CODEX_HOME still resolves to the same item.
-    let resolved = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
-    let account = keychain_account(&resolved);
-    if let Some(blob) = keychain::read_generic_password(KEYCHAIN_SERVICE, Some(&account))
+    import_from_home(&home, || {
+        // The Keychain account is derived from the realpath'd home (matching
+        // the official Codex auth storage key), so a symlinked $CODEX_HOME
+        // still resolves to the same item.
+        let resolved = std::fs::canonicalize(&home).unwrap_or_else(|_| home.clone());
+        let account = keychain_account(&resolved);
+        keychain::read_generic_password(KEYCHAIN_SERVICE, Some(&account))
+    })
+}
+
+fn import_from_home(
+    home: &Path,
+    read_keychain: impl FnOnce() -> Option<String>,
+) -> Result<Option<Imported>, ImportError> {
+    if let Some(imported) = from_file(&home.join(AUTH_FILENAME))? {
+        return Ok(Some(imported));
+    }
+    if let Some(blob) = read_keychain()
         && let Ok(Some(token)) = parse_blob(&blob, "keychain")
     {
         return Ok(Some(Imported {
@@ -63,7 +76,7 @@ pub fn import() -> Result<Option<Imported>, ImportError> {
             source: ImportSource::Keychain(KEYCHAIN_SERVICE),
         }));
     }
-    from_file(&home.join(AUTH_FILENAME))
+    Ok(None)
 }
 
 /// Import from a specific `auth.json`. `Ok(None)` when the file is absent or
@@ -98,8 +111,7 @@ fn codex_home() -> Option<PathBuf> {
 }
 
 /// `cli|<first 16 hex chars of sha256(codex_home_path)>` — the account name
-/// Codex uses for its Keychain item. Reference: OpenClaw
-/// `computeCodexKeychainAccount`.
+/// Codex uses for its Keychain item.
 fn keychain_account(codex_home: &Path) -> String {
     let digest = Sha256::digest(codex_home.to_string_lossy().as_bytes());
     let hex = hex_encode(&digest);
@@ -177,6 +189,23 @@ mod tests {
         path
     }
 
+    fn tmp_home() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "bitrouter-import-codex-home-{}-{id}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn auth_json(access: &str, refresh: &str) -> String {
+        format!(r#"{{"tokens":{{"access_token":"{access}","refresh_token":"{refresh}"}}}}"#)
+    }
+
     #[test]
     fn parses_tokens_and_reads_jwt_exp() {
         let jwt = make_jwt_exp(1_700_000_000);
@@ -206,6 +235,57 @@ mod tests {
         let path = tmp_file(r#"{"tokens":{"refresh_token":"r1"}}"#);
         let err = from_file(&path).unwrap_err();
         assert!(matches!(err, ImportError::MissingAccessToken { .. }));
+    }
+
+    #[test]
+    fn import_from_home_prefers_auth_json_without_touching_keychain() {
+        let home = tmp_home();
+        let file_jwt = make_jwt_exp(1_700_000_000);
+        std::fs::write(
+            home.join(AUTH_FILENAME),
+            auth_json(&file_jwt, "file-refresh"),
+        )
+        .unwrap();
+
+        let imported = import_from_home(&home, || {
+            panic!("auth.json should win before Keychain is read")
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(imported.token.access_token, file_jwt);
+        assert_eq!(
+            imported.token.refresh_token.as_deref(),
+            Some("file-refresh")
+        );
+        assert!(
+            matches!(imported.source, ImportSource::File(path) if path == home.join(AUTH_FILENAME))
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn import_from_home_uses_keychain_when_auth_json_absent() {
+        let home = tmp_home();
+        let keychain_jwt = make_jwt_exp(1_800_000_000);
+
+        let imported =
+            import_from_home(&home, || Some(auth_json(&keychain_jwt, "keychain-refresh")))
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(imported.token.access_token, keychain_jwt);
+        assert_eq!(
+            imported.token.refresh_token.as_deref(),
+            Some("keychain-refresh")
+        );
+        assert!(matches!(
+            imported.source,
+            ImportSource::Keychain(KEYCHAIN_SERVICE)
+        ));
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

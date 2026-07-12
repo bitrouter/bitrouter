@@ -1,0 +1,47 @@
+name: stepfun_cn
+metadata:
+  headquarters: CN
+  datacenters:
+    - CN
+  name: StepFun
+  privacy_policy_url: https://platform.stepfun.com/docs/zh/agreement/userprivacy
+  slug: stepfun
+  terms_of_service_url: https://platform.stepfun.com/docs/zh/agreement/userservice
+api_base: https://api.stepfun.com/v1
+api_protocol:
+  - "*": [openai, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+# Catalog source: GET https://api.stepfun.ai/v1/models (authenticated) — confirms
+# step-3.7-flash is served first-party. models.dev does not list 3.7 yet, so the
+# price mirrors OpenRouter's published rates.
+# Pricing is per 1M tokens.
+models:
+  - id: stepfun/step-3.7-flash
+    provider_model_id: step-3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.2
+        cache_read: 0.04
+      output_tokens:
+        text: 1.15
+    capabilities:
+      - structured_outputs
+  - id: stepfun/step-3.5-flash
+    provider_model_id: step-3.5-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.096
+        cache_read: 0.019
+      output_tokens:
+        text: 0.288
+    capabilities:
+      - reasoning
+      - tools
+status: active
+weight: 1
+submitted_at: 2026-06-01
+auto_sync:
+  feed: models_dev
+  key: stepfun

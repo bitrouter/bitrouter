@@ -124,6 +124,11 @@ fn build_targets(
         .find(|m| m.id == model_id)
         .and_then(|m| m.provider_model_id.as_deref())
         .unwrap_or(model_id);
+    let chat_token_limit_field = provider
+        .models
+        .iter()
+        .find(|m| m.id == model_id)
+        .and_then(|m| m.compatibility.chat_completions.token_limit_field);
 
     if provider.accounts.is_empty() {
         let api_base = protocol_base
@@ -135,6 +140,7 @@ fn build_targets(
             api_base,
             api_key: provider.api_key.clone(),
             api_protocol: protocol,
+            chat_token_limit_field,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -172,6 +178,7 @@ fn build_targets(
                 api_base,
                 api_key: account.api_key.clone(),
                 api_protocol: protocol.clone(),
+                chat_token_limit_field,
                 account_label: Some(label),
                 api_key_override: None,
                 api_base_override: None,
@@ -1502,6 +1509,34 @@ providers:
         assert_eq!(chain[0].provider_name, "anthropic");
         // Dispatched against the upstream id, not the canonical match key.
         assert_eq!(chain[0].service_id, "claude-sonnet-4-6");
+    }
+
+    #[tokio::test]
+    async fn model_chat_token_compatibility_reaches_routing_target() {
+        let yaml = r#"
+providers:
+  openai:
+    api_base: https://api.openai.com/v1
+    api_key: k
+    models:
+      - id: openai/gpt-5.5
+        provider_model_id: gpt-5.5
+        compatibility:
+          chat_completions:
+            token_limit_field: max_completion_tokens
+"#;
+        let chain = table(yaml)
+            .route_chain(
+                "openai/gpt-5.5",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            chain[0].chat_token_limit_field,
+            Some(crate::language_model::types::ChatTokenLimitField::MaxCompletionTokens)
+        );
     }
 
     #[tokio::test]

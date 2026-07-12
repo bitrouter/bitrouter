@@ -1,0 +1,282 @@
+name: opencode-zen
+display_name: opencode zen
+metadata:
+  headquarters: US
+  name: OpenCode
+  privacy_policy_url: https://opencode.ai/legal/privacy-policy
+  slug: opencode
+  terms_of_service_url: https://opencode.ai/legal/terms-of-service
+kind: gateway
+api_base: https://opencode.ai/zen/v1
+doc_url: https://opencode.ai/docs/zen/
+api_protocol:
+  - opencode/gpt-*: responses
+  - opencode/claude-*: anthropic
+  - opencode/gemini-*: google
+  - "*": openai
+rate_limits: []
+models:
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  - id: google/gemini-3.5-flash
+    provider_model_id: gemini-3.5-flash
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.15
+      output_tokens:
+        text: 9
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.74
+        cache_read: 0.145
+      output_tokens:
+        text: 3.84
+  - id: anthropic/claude-sonnet-4.5
+    provider_model_id: claude-sonnet-4-5
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+  - id: anthropic/claude-opus-4.7
+    provider_model_id: claude-opus-4-7
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: anthropic/claude-opus-4.8
+    provider_model_id: claude-opus-4-8
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: minimax/minimax-m2.7
+    provider_model_id: minimax-m2.7
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.08
+      output_tokens:
+        text: 3
+  - id: anthropic/claude-fable-5
+    provider_model_id: claude-fable-5
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: anthropic/claude-haiku-4.5
+    provider_model_id: claude-haiku-4-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 5
+  - id: openai/gpt-5.4
+    provider_model_id: gpt-5.4
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15
+  - id: openai/gpt-5.4-mini
+    provider_model_id: gpt-5.4-mini
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 4.5
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.16
+      output_tokens:
+        text: 4
+  - id: anthropic/claude-opus-4.6
+    provider_model_id: claude-opus-4-6
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: anthropic/claude-sonnet-4.6
+    provider_model_id: claude-sonnet-4-6
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 3.2
+  - id: qwen/qwen3.6-plus
+    provider_model_id: qwen3.6-plus
+    pricing:
+      input_tokens:
+        no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
+      output_tokens:
+        text: 3
+  - id: openai/gpt-5.5
+    provider_model_id: gpt-5.5
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+      output_tokens:
+        text: 30
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: moonshotai/kimi-k2.7-code
+    provider_model_id: kimi-k2.7-code
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.19
+      output_tokens:
+        text: 4
+  - id: minimax/minimax-m3
+    provider_model_id: minimax-m3
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  - id: x-ai/grok-build-0.1
+    provider_model_id: grok-build-0.1
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 2
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: z-ai/glm-4.7
+    provider_model_id: glm-4.7
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.1
+      output_tokens:
+        text: 2.2
+  - id: x-ai/grok-4.5
+    provider_model_id: grok-4.5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
+  - id: openai/gpt-5.6-luna
+    provider_model_id: gpt-5.6-luna
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+        cache_write: 1.25
+      output_tokens:
+        text: 6
+  - id: openai/gpt-5.6-sol
+    provider_model_id: gpt-5.6-sol
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 30
+  - id: openai/gpt-5.6-terra
+    provider_model_id: gpt-5.6-terra
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+        cache_write: 3.125
+      output_tokens:
+        text: 15
+status: active
+weight: 1
+community: false
+access: api_key
+billing: usage_token
+auth_scheme: x-api-key
+auth:
+  kind: bearer
+  env: OPENCODE_ZEN_API_KEY
+auto_sync:
+  feed: models_dev
+  key: opencode

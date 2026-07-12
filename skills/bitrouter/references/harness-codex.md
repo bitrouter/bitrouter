@@ -1,48 +1,70 @@
 # Harness: Codex CLI
 
-Wire OpenAI's Codex CLI to route its model calls through BitRouter at `http://localhost:4356`.
+Wire OpenAI's Codex CLI to route its model calls through BitRouter.
 
-> **Cloud users:** swap `http://localhost:4356/v1` → `https://api.bitrouter.ai/v1` and use a `brk_*` key instead of `"unused"`. No daemon to install. See `references/cloud-setup.md`.
+> **Cloud users:** swap `http://localhost:4356/v1` -> `https://api.bitrouter.ai/v1` and export `BITROUTER_API_KEY=brk_*`. No daemon to install. See `references/cloud-setup.md`.
 
 ## Prerequisites
 
-- BitRouter installed and running (`bitrouter status` shows green).
-- The `openai` provider active in BitRouter, or whichever provider hosts the gpt-5.x-codex family you want (`github-copilot` and `opencode-zen` both serve Codex-family models via the Responses API).
-- Codex CLI installed.
+- BitRouter installed and running (`bitrouter status` shows green), unless using Cloud.
+- Codex CLI installed (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`).
+- A BitRouter model id to use, such as `openai/gpt-5-codex`, `openai/gpt-5.1`, or any configured alias.
 
-## Configuration
+## Preferred launch path
 
-> **TODO:** fill in the exact env var or config file path that points Codex at a custom OpenAI-shaped base URL. Confirmed knobs to capture:
-> - The env var Codex reads for `OPENAI_BASE_URL` / `OPENAI_API_KEY` override (one of `OPENAI_BASE_URL`, `OPENAI_API_BASE`, or a Codex-specific name).
-> - Whether `~/.codex/config.toml` or similar carries the override and the exact field path.
-> - Whether Codex pins itself to the Responses API or also uses Chat Completions — BitRouter routes per-model, so the harness can stay protocol-agnostic.
-> - The auth header expectation when BitRouter's `skip_auth: true` is on.
+Use `bitrouter spawn` when you want a reversible, per-process setup:
 
 ```bash
-# placeholder — replace with the verified one-liner
-export OPENAI_BASE_URL="http://localhost:4356/v1"
-export OPENAI_API_KEY="unused"
+bitrouter spawn --agent codex
+bitrouter spawn --agent codex -- --model openai/gpt-5-codex
 ```
+
+The wrapper does not edit `~/.codex/config.toml`. It injects one-shot Codex `-c` overrides:
+
+```text
+model_provider="bitrouter"
+model_providers.bitrouter.name="BitRouter"
+model_providers.bitrouter.base_url="http://localhost:4356/v1"
+model_providers.bitrouter.wire_api="responses"
+```
+
+If `BITROUTER_API_KEY` is set, `spawn` forwards it with `env_key="BITROUTER_API_KEY"`. Otherwise it injects a local placeholder bearer token, which works with the `skip_auth: true` default from `bitrouter init`.
+
+## Permanent Codex config
+
+For a durable setup, add a user-level provider to `~/.codex/config.toml`:
+
+```toml
+model_provider = "bitrouter"
+
+[model_providers.bitrouter]
+name = "BitRouter"
+base_url = "http://localhost:4356/v1"
+wire_api = "responses"
+# env_key = "BITROUTER_API_KEY"  # Cloud or authenticated local daemon
+```
+
+Codex appends `/responses` to the provider base URL. Do not use `wire_api = "chat"` with current Codex builds.
 
 ## Model selection
 
-> **TODO:** confirm Codex's model identifier convention. BitRouter accepts `openai/gpt-5.5-codex`, `github-copilot/gpt-5.5-codex`, and `opencode-zen/opencode/gpt-5.5-codex` — the harness probably wants a bare name (`gpt-5.5-codex`). Add an alias:
+Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bitrouter spawn --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
 
-```yaml
-models:
-  gpt-5.5-codex:
-    upstream_id: "openai/gpt-5.5-codex"   # or github-copilot / opencode-zen, your call
+```bash
+codex --model openai/gpt-5-codex
+bitrouter spawn --agent codex -- --model anthropic/claude-sonnet-4-6
 ```
 
 ## Verify
 
 ```bash
-# in the shell with the overrides exported
 codex --version
-echo "fix the bug in main.py" | codex
+bitrouter spawn --agent codex -- --version
 tail -n 20 ~/.bitrouter/bitrouter.log
 ```
 
-## Notes & gotchas
+For live requests, check the BitRouter request logs — the `request finished` line records the `provider`, `model`, and `account` that answered — to confirm which upstream served the request.
 
-> **TODO:** capture anything specific to Codex that surprised you — e.g., whether the diff/apply tool calls round-trip cleanly, whether reasoning tokens are preserved, how Codex handles 401s from the upstream when BitRouter falls through accounts.
+## Agent plugin
+
+The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: the `/bitrouter` skill and the origin MCP server for in-session model arbitrage (bundled MCP servers must be enabled manually on Codex after install). A session spend summary is printed by `bitrouter spawn` on exit (a spawn feature, independent of the plugin). See `references/agent-plugin.md`.

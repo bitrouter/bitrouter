@@ -1,0 +1,11 @@
+- id: tencent/hy3
+  name: 'Hunyuan 3'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 256000
+  max_output_tokens: 64000
+  release_date: 2026-07-06
+  open_weights: true
+  family: hunyuan

@@ -43,8 +43,8 @@ pub fn zero_config() -> Config {
     config.inherit_defaults = true;
     for entry in builtin::all() {
         // Only env-var-credentialed compiled-in built-ins (today: the cloud
-        // gateway). Its catalog is filled from the canonical list by the merge,
-        // so no `auto_discover` here.
+        // gateway). The public registry merge supplies metadata and explicit
+        // model entries from the resolved dist artifacts.
         let Some(env_var) = entry.auth.env_var() else {
             continue;
         };
@@ -151,7 +151,7 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         // it just narrows the routable surface to providers the user
         // actually has credentials for. `github-copilot` uses OAuth
         // (no `env_var`), so this guard doesn't touch it.
-        if provider.api_key.is_empty() && builtin.auth.env_var().is_some() {
+        if id != "bitrouter" && provider.api_key.is_empty() && builtin.auth.env_var().is_some() {
             provider.active = false;
         }
     }
@@ -337,13 +337,14 @@ mod tests {
     }
 
     #[test]
-    fn marks_provider_inactive_when_env_key_missing() {
-        // A built-in entry with no usable credential drops out of routing
-        // instead of generating broken upstream requests.
+    fn keeps_cloud_provider_active_when_env_key_missing() {
+        // BitRouter Cloud can authenticate with the OAuth credential store via
+        // its AuthApplier, so absence of BITROUTER_API_KEY must not disable a
+        // provider that is already configured.
         with_env("BITROUTER_API_KEY", None, || {
             let mut config = config_with("bitrouter", ProviderConfig::default());
             apply_builtin_defaults(&mut config);
-            assert!(!config.providers["bitrouter"].active);
+            assert!(config.providers["bitrouter"].active);
         });
     }
 

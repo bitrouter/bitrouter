@@ -1,0 +1,39 @@
+name: zai_coding_plan
+metadata:
+  headquarters: CN
+  name: Z.ai
+  privacy_policy_url: https://docs.z.ai/legal-agreement/privacy-policy
+  slug: zai
+  terms_of_service_url: https://docs.z.ai/legal-agreement/terms-of-use
+billing: subscription
+api_protocol:
+  - "*": [openai, anthropic]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+models:
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+    capabilities:
+      - reasoning
+      - tools
+  - id: z-ai/glm-4.7
+    provider_model_id: glm-4.7
+status: active
+weight: 1
+submitted_at: 2026-06-05
+api_base: https://api.z.ai/api/coding/paas/v4
+auth_scheme: x-api-key
+auto_sync:
+  feed: models_dev
+  key: zai-coding-plan

@@ -1,0 +1,147 @@
+name: aws-bedrock
+display_name: Amazon Bedrock
+metadata:
+  headquarters: US
+  name: Amazon Web Services
+  privacy_policy_url: https://aws.amazon.com/privacy/
+  slug: amazon-bedrock
+  status_page_url: https://health.aws.amazon.com/health/status
+  terms_of_service_url: https://aws.amazon.com/service-terms/
+kind: first_party
+# Amazon Bedrock via its OpenAI-compatible `bedrock-mantle` endpoints (Chat
+# Completions + Responses) over SSE, authenticated with a Bedrock API key
+# (bearer, `AWS_BEARER_TOKEN_BEDROCK`). The region defaults to us-east-1;
+# override with AWS_REGION. This replaces the removed `bitrouter-bedrock` crate:
+# Bedrock's native Converse API frames streams as a binary event-stream (needs
+# the AWS SDK), but the mantle endpoints are plain HTTP+JSON+SSE, so Bedrock is
+# an ordinary registry provider now. Capabilities that only exist on the native
+# `bedrock-runtime` API — cross-region inference profiles, Guardrails,
+# structured outputs, and any model not yet on mantle — are not served here.
+api_protocol:
+  - "*": [openai, responses]
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+api_base: https://bedrock-mantle.${AWS_REGION:-us-east-1}.api.aws/v1
+doc_url: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+auth:
+  kind: bearer
+  env: AWS_BEARER_TOKEN_BEDROCK
+status: active
+weight: 1
+submitted_at: 2026-07-06
+models:
+  - id: anthropic/claude-fable-5
+    provider_model_id: anthropic.claude-fable-5
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: anthropic/claude-opus-4.7
+    provider_model_id: anthropic.claude-opus-4-7
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: anthropic/claude-opus-4.8
+    provider_model_id: anthropic.claude-opus-4-8
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
+  - id: anthropic/claude-sonnet-4.6
+    provider_model_id: anthropic.claude-sonnet-4-6
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+        cache_write: 3.75
+      output_tokens:
+        text: 15
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek.v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.62
+      output_tokens:
+        text: 1.85
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax.minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 1.2
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: moonshotai.kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 3
+  - id: openai/gpt-5.4
+    provider_model_id: openai.gpt-5.4
+    pricing:
+      input_tokens:
+        no_cache: 2.75
+        cache_read: 0.275
+      output_tokens:
+        text: 16.5
+  - id: openai/gpt-5.5
+    provider_model_id: openai.gpt-5.5
+    pricing:
+      input_tokens:
+        no_cache: 5.5
+        cache_read: 0.55
+      output_tokens:
+        text: 33
+  - id: openai/gpt-oss-120b
+    provider_model_id: openai.gpt-oss-120b
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+      output_tokens:
+        text: 0.6
+  - id: x-ai/grok-4.3
+    provider_model_id: xai.grok-4.3
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+  - id: z-ai/glm-5
+    provider_model_id: zai.glm-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+      output_tokens:
+        text: 3.2
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: anthropic.claude-sonnet-5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: z-ai/glm-4.7
+    provider_model_id: zai.glm-4.7
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+      output_tokens:
+        text: 2.2
+auto_sync:
+  feed: models_dev
+  key: amazon-bedrock

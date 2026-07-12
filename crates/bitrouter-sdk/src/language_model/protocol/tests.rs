@@ -81,11 +81,18 @@ fn sample_prompt() -> Prompt {
 /// A canonical result with reasoning + text + a tool call, in that order — the
 /// order must survive every conversion (v0 #416, #454-1).
 fn sample_result() -> GenerateResult {
+    let mut reasoning_metadata = ProviderMetadata::new();
+    set_provider_metadata(
+        &mut reasoning_metadata,
+        "anthropic",
+        "signature",
+        "SIG-sample-reasoning".into(),
+    );
     GenerateResult {
         content: vec![
             Content::Reasoning {
                 text: "thinking...".to_string(),
-                provider_metadata: Default::default(),
+                provider_metadata: reasoning_metadata,
             },
             Content::Text {
                 text: "the answer is 4".to_string(),
@@ -181,10 +188,11 @@ fn conversion_matrix_4x4_non_streaming() {
     }
 }
 
-/// The streaming 4×4 matrix: for every (inbound, outbound) pair, encode a
-/// canonical part stream in the outbound protocol, decode it back, and assert
-/// the text/reasoning/tool-call parts survive — then re-encode in the inbound
-/// protocol.
+/// The streaming matrix: for every outbound protocol, encode a canonical part
+/// stream, decode it back, and assert visible text/tool-call parts survive.
+/// Unsigned reasoning survives on protocols that can carry provider-agnostic
+/// reasoning; Messages intentionally drops it because Claude Code replays
+/// Anthropic `thinking` blocks into follow-up requests.
 #[test]
 fn conversion_matrix_4x4_streaming() {
     let canonical_parts = vec![
@@ -250,12 +258,20 @@ fn conversion_matrix_4x4_streaming() {
             text, "the answer",
             "{outbound_proto:?}: streaming text survived encode→decode"
         );
-        assert!(
-            decoded
-                .iter()
-                .any(|p| matches!(p, StreamPart::ReasoningDelta { .. })),
-            "{outbound_proto:?}: reasoning delta survived"
-        );
+        let reasoning_survived = decoded
+            .iter()
+            .any(|p| matches!(p, StreamPart::ReasoningDelta { .. }));
+        if outbound_proto == ApiProtocol::Messages {
+            assert!(
+                !reasoning_survived,
+                "{outbound_proto:?}: unsigned reasoning must not become Anthropic thinking"
+            );
+        } else {
+            assert!(
+                reasoning_survived,
+                "{outbound_proto:?}: reasoning delta survived"
+            );
+        }
         assert!(
             decoded
                 .iter()
@@ -277,6 +293,61 @@ fn conversion_matrix_4x4_streaming() {
                 });
             }
         }
+    }
+}
+
+#[test]
+fn upstream_rate_limit_has_typed_terminal_frames_in_every_protocol() {
+    let error = crate::error::BitrouterError::UpstreamRateLimited {
+        retry_after: Some(9),
+    };
+    for protocol in all_protocols() {
+        let mut encoder = adapter_for(protocol.clone()).stream_encoder("resp_429", "m");
+        let frames = encoder.encode_bitrouter_error(&error);
+        let wire = frames
+            .iter()
+            .map(SseFrame::to_wire)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            wire.contains("upstream_rate_limited"),
+            "{protocol:?} frame lacked stable code: {wire}"
+        );
+        match protocol {
+            ApiProtocol::ChatCompletions | ApiProtocol::Messages => {
+                assert!(wire.contains("rate_limit_error"), "{protocol:?}: {wire}");
+            }
+            ApiProtocol::Responses => {
+                assert!(wire.contains("response.failed"), "{wire}");
+            }
+            ApiProtocol::GenerateContent => {
+                assert!(wire.contains("RESOURCE_EXHAUSTED"), "{wire}");
+                assert!(wire.contains("429"), "{wire}");
+            }
+            ApiProtocol::Custom(_) => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn upstream_diagnostics_are_not_exposed_in_terminal_frames() {
+    let error = crate::error::BitrouterError::Upstream {
+        status: 500,
+        message: "provider secret stack trace".to_string(),
+    };
+    for protocol in all_protocols() {
+        let mut encoder = adapter_for(protocol.clone()).stream_encoder("resp_502", "m");
+        let wire = encoder
+            .encode_bitrouter_error(&error)
+            .iter()
+            .map(SseFrame::to_wire)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(!wire.contains("secret"), "{protocol:?}: {wire}");
+        assert!(
+            wire.contains("upstream request failed"),
+            "{protocol:?}: {wire}"
+        );
     }
 }
 
@@ -379,6 +450,209 @@ fn chat_completions_request_roundtrip() {
     let parsed = adapter.parse_request(json).unwrap();
     assert_eq!(parsed.system.as_deref(), Some("be brief"));
     assert_eq!(parsed.tools.len(), 1);
+}
+
+#[test]
+fn chat_token_limit_fields_roundtrip_without_alias_drift() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    for (field, expected_hint) in [
+        ("max_tokens", ChatTokenLimitField::MaxTokens),
+        (
+            "max_completion_tokens",
+            ChatTokenLimitField::MaxCompletionTokens,
+        ),
+    ] {
+        let mut body = minimal_request(ApiProtocol::ChatCompletions);
+        body[field] = 321.into();
+        let prompt = adapter.parse_request(body).unwrap();
+        assert_eq!(prompt.params.max_tokens, Some(321));
+        assert_eq!(prompt.params.chat_token_limit_field, Some(expected_hint));
+        let rendered = adapter.render_request(&prompt).unwrap();
+        assert_eq!(rendered[field], 321);
+        let other = if field == "max_tokens" {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        assert!(rendered.get(other).is_none());
+    }
+}
+
+#[test]
+fn chat_token_limit_alias_conflicts_are_rejected() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let equal = serde_json::json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 64,
+        "max_completion_tokens": 64
+    });
+    let prompt = adapter.parse_request(equal).unwrap();
+    assert_eq!(
+        prompt.params.chat_token_limit_field,
+        Some(ChatTokenLimitField::MaxCompletionTokens)
+    );
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["max_completion_tokens"], 64);
+    assert!(rendered.get("max_tokens").is_none());
+
+    let conflicting = serde_json::json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 64,
+        "max_completion_tokens": 65
+    });
+    let error = adapter.parse_request(conflicting).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::error::BitrouterError::BadRequest { .. }
+    ));
+}
+
+#[test]
+fn token_limit_translates_across_every_protocol_pair() {
+    for inbound_protocol in all_protocols() {
+        let mut body = minimal_request(inbound_protocol.clone());
+        match inbound_protocol {
+            ApiProtocol::ChatCompletions => body["max_completion_tokens"] = 777.into(),
+            ApiProtocol::Messages => body["max_tokens"] = 777.into(),
+            ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
+            ApiProtocol::GenerateContent => {
+                body["generationConfig"] = serde_json::json!({"maxOutputTokens": 777});
+            }
+            ApiProtocol::Custom(_) => unreachable!(),
+        }
+        let prompt = adapter_for(inbound_protocol.clone())
+            .parse_request(body)
+            .unwrap();
+        assert_eq!(prompt.params.max_tokens, Some(777));
+
+        for outbound_protocol in all_protocols() {
+            let rendered = adapter_for(outbound_protocol.clone())
+                .render_request(&prompt)
+                .unwrap();
+            match outbound_protocol {
+                ApiProtocol::ChatCompletions => {
+                    let expected = if inbound_protocol == ApiProtocol::ChatCompletions {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    };
+                    assert_eq!(rendered[expected], 777, "{inbound_protocol:?} -> chat");
+                    let absent = if expected == "max_tokens" {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    };
+                    assert!(rendered.get(absent).is_none());
+                }
+                ApiProtocol::Messages => assert_eq!(rendered["max_tokens"], 777),
+                ApiProtocol::Responses => assert_eq!(rendered["max_output_tokens"], 777),
+                ApiProtocol::GenerateContent => {
+                    assert_eq!(rendered["generationConfig"]["maxOutputTokens"], 777)
+                }
+                ApiProtocol::Custom(_) => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
+fn target_token_limit_override_wins_over_inbound_spelling() {
+    let adapter = adapter_for(ApiProtocol::ChatCompletions);
+    let cases = [
+        (
+            "max_tokens",
+            ChatTokenLimitField::MaxCompletionTokens,
+            "max_completion_tokens",
+        ),
+        (
+            "max_completion_tokens",
+            ChatTokenLimitField::MaxTokens,
+            "max_tokens",
+        ),
+    ];
+    for (inbound_field, override_field, outbound_field) in cases {
+        let mut body = minimal_request(ApiProtocol::ChatCompletions);
+        body[inbound_field] = 99.into();
+        let prompt = adapter.parse_request(body).unwrap();
+        let target = RoutingTarget {
+            provider_name: "provider".into(),
+            service_id: "m".into(),
+            api_base: "https://example.invalid/v1".into(),
+            api_key: "secret".into(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: Some(override_field),
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        };
+        let rendered = adapter.render_request_for_target(&prompt, &target).unwrap();
+        assert_eq!(rendered[outbound_field], 99);
+        assert!(rendered.get(inbound_field).is_none());
+    }
+}
+
+#[test]
+fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
+    for inbound_protocol in [
+        ApiProtocol::Messages,
+        ApiProtocol::Responses,
+        ApiProtocol::GenerateContent,
+    ] {
+        let mut body = minimal_request(inbound_protocol.clone());
+        match inbound_protocol {
+            ApiProtocol::Messages => body["max_tokens"] = 777.into(),
+            ApiProtocol::Responses => body["max_output_tokens"] = 777.into(),
+            ApiProtocol::GenerateContent => {
+                body["generationConfig"] = serde_json::json!({"maxOutputTokens": 777});
+            }
+            _ => unreachable!(),
+        }
+        let mut prompt = adapter_for(inbound_protocol.clone())
+            .parse_request(body)
+            .unwrap();
+        prompt
+            .params
+            .extra
+            .insert("max_tokens".to_string(), 111.into());
+        prompt
+            .params
+            .extra
+            .insert("max_completion_tokens".to_string(), 222.into());
+
+        for (override_field, expected, absent) in [
+            (
+                ChatTokenLimitField::MaxTokens,
+                "max_tokens",
+                "max_completion_tokens",
+            ),
+            (
+                ChatTokenLimitField::MaxCompletionTokens,
+                "max_completion_tokens",
+                "max_tokens",
+            ),
+        ] {
+            let target = RoutingTarget {
+                provider_name: "provider".into(),
+                service_id: "m".into(),
+                api_base: "https://example.invalid/v1".into(),
+                api_key: "secret".into(),
+                api_protocol: ApiProtocol::ChatCompletions,
+                chat_token_limit_field: Some(override_field),
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: Default::default(),
+            };
+            let rendered = adapter_for(ApiProtocol::ChatCompletions)
+                .render_request_for_target(&prompt, &target)
+                .unwrap();
+            assert_eq!(rendered[expected], 777, "{inbound_protocol:?}");
+            assert!(rendered.get(absent).is_none(), "{inbound_protocol:?}");
+        }
+    }
 }
 
 #[test]
@@ -1255,6 +1529,7 @@ fn messages_no_beta_header_is_emitted() {
         api_base: "http://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Messages,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1282,6 +1557,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
         api_base: "http://example.invalid".into(),
         api_key: "secret".into(),
         api_protocol: ApiProtocol::Messages,
+        chat_token_limit_field: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1635,8 +1911,13 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
     let adapter = adapter_for(ApiProtocol::Messages);
     let mut encoder = adapter.stream_encoder("msg_x", "claude-3-7-sonnet");
     let parts = [
+        StreamPart::ReasoningStart { id: "r1".into() },
         StreamPart::ReasoningDelta {
             text: "think ".into(),
+        },
+        StreamPart::ReasoningEnd {
+            id: "r1".into(),
+            signature: Some("SIG-transition".into()),
         },
         StreamPart::TextDelta {
             text: "answer ".into(),
@@ -1668,6 +1949,47 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
     assert!(
         thinking_open < first_stop && first_stop < text_open,
         "block_stop must fall *between* thinking_start and text_start; got:\n{joined}"
+    );
+}
+
+#[test]
+fn messages_stream_encoder_drops_unsigned_reasoning() {
+    // Non-Anthropic reasoning has no Anthropic continuity signature. If it is
+    // exposed to Claude Code as a `thinking` block, the next Claude request
+    // replays that block and Anthropic rejects it as an invalid signature.
+    let events = encode_stream_events(
+        ApiProtocol::Messages,
+        &[
+            StreamPart::ReasoningStart { id: "r1".into() },
+            StreamPart::ReasoningDelta {
+                text: "provider-private reasoning".into(),
+            },
+            StreamPart::ReasoningEnd {
+                id: "r1".into(),
+                signature: None,
+            },
+            StreamPart::TextDelta {
+                text: "visible answer".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ],
+    );
+    let joined = events
+        .iter()
+        .map(|(name, data)| format!("{name} {data}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !joined.contains("\"type\":\"thinking\"")
+            && !joined.contains("\"type\": \"thinking\"")
+            && !joined.contains("signature_delta"),
+        "unsigned reasoning must not become Anthropic thinking: {joined}"
+    );
+    assert!(
+        joined.contains("visible answer"),
+        "dropping unsigned reasoning must not drop visible text: {joined}"
     );
 }
 
@@ -1851,7 +2173,7 @@ fn text_reasoning_text_reencodes_with_three_distinct_blocks() {
         },
         StreamPart::ReasoningEnd {
             id: "b".into(),
-            signature: None,
+            signature: Some("SIG-blocks".into()),
         },
         StreamPart::TextStart { id: "c".into() },
         StreamPart::TextDelta {
@@ -2624,6 +2946,39 @@ fn messages_response_roundtrip() {
     assert_eq!(json["content"][2]["type"], "tool_use");
     let parsed = adapter.parse_response(json).unwrap();
     assert_eq!(parsed.content.len(), 3);
+}
+
+#[test]
+fn messages_response_drops_unsigned_reasoning() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let prompt = sample_prompt();
+    let result = GenerateResult {
+        content: vec![
+            Content::Reasoning {
+                text: "provider-private reasoning".to_string(),
+                provider_metadata: Default::default(),
+            },
+            Content::Text {
+                text: "visible answer".to_string(),
+                provider_metadata: Default::default(),
+            },
+        ],
+        usage: None,
+        finish_reason: Some(FinishReason::Stop),
+        response_id: None,
+        stop_details: None,
+        provider_metadata: Default::default(),
+    };
+    let json = adapter
+        .render_response(&result, &prompt, "msg_unsigned")
+        .unwrap();
+    let blocks = json["content"].as_array().unwrap();
+    assert!(
+        blocks.iter().all(|b| b["type"] != "thinking"),
+        "unsigned reasoning must not render as Anthropic thinking: {json}"
+    );
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[0]["text"], "visible answer");
 }
 
 #[test]

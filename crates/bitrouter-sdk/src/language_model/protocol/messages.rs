@@ -164,8 +164,10 @@ fn is_replayable_reasoning_block(block: &serde_json::Value, block_type: &str) ->
 /// Render a canonical reasoning part back into its Anthropic block, inverting
 /// [`parse_reasoning_metadata`]. A `redactedThinking` flag re-emits a
 /// `redacted_thinking` block whose `data` is the preserved encrypted payload
-/// (falling back to `text` when absent); otherwise a `thinking` block, carrying
-/// its `signature` when one round-tripped.
+/// (falling back to `text` when absent); a signed Anthropic reasoning block
+/// re-emits as `thinking`. Unsigned reasoning is intentionally dropped on this
+/// wire because Claude Code replays `thinking` blocks into follow-up requests,
+/// and Anthropic rejects blocks without a valid Anthropic signature.
 ///
 /// A `cache_control` breakpoint is intentionally **not** re-applied here:
 /// Anthropic rejects `cache_control` on `thinking` / `redacted_thinking` blocks
@@ -175,7 +177,7 @@ fn is_replayable_reasoning_block(block: &serde_json::Value, block_type: &str) ->
 /// dropped on render rather than producing a request the API would reject.
 /// <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
 /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/anthropic/src/convert-to-anthropic-messages-prompt.ts>
-fn render_reasoning_block(text: &str, meta: &ProviderMetadata) -> serde_json::Value {
+fn render_reasoning_block(text: &str, meta: &ProviderMetadata) -> Option<serde_json::Value> {
     let ns = provider_namespace(meta, PROVIDER_ID_ANTHROPIC);
     let is_redacted = ns
         .and_then(|o| o.get(ANTHROPIC_REDACTED))
@@ -188,13 +190,13 @@ fn render_reasoning_block(text: &str, meta: &ProviderMetadata) -> serde_json::Va
             .and_then(|o| o.get(ANTHROPIC_REDACTED_DATA))
             .cloned()
             .unwrap_or_else(|| serde_json::Value::String(text.to_string()));
-        serde_json::json!({ "type": "redacted_thinking", "data": data })
-    } else {
+        Some(serde_json::json!({ "type": "redacted_thinking", "data": data }))
+    } else if let Some(sig) = ns.and_then(|o| o.get(ANTHROPIC_SIGNATURE)) {
         let mut obj = serde_json::json!({ "type": "thinking", "thinking": text });
-        if let Some(sig) = ns.and_then(|o| o.get(ANTHROPIC_SIGNATURE)) {
-            obj["signature"] = sig.clone();
-        }
-        obj
+        obj["signature"] = sig.clone();
+        Some(obj)
+    } else {
+        None
     }
 }
 
@@ -1039,6 +1041,7 @@ impl InboundAdapter for MessagesAdapter {
                 temperature: req.temperature,
                 top_p: req.top_p,
                 max_tokens: req.max_tokens,
+                chat_token_limit_field: None,
                 reasoning_effort,
                 response_modalities: Vec::new(),
                 top_k: req.top_k,
@@ -1107,6 +1110,7 @@ impl InboundAdapter for MessagesAdapter {
             block_kind: None,
             block_index: 0,
             pending_sources: Vec::new(),
+            pending_reasoning: None,
         })
     }
 }
@@ -1759,7 +1763,7 @@ fn render_content_block(c: &Content) -> Option<serde_json::Value> {
         Content::Reasoning {
             text,
             provider_metadata,
-        } => Some(render_reasoning_block(text, provider_metadata)),
+        } => render_reasoning_block(text, provider_metadata),
         Content::ToolCall {
             id,
             name,
@@ -2370,16 +2374,14 @@ impl StreamDecoder for MessagesStreamDecoder {
 /// per-block `content_block_start` / `_delta` / `_stop`, `message_delta`,
 /// `message_stop`.
 ///
-/// Block transitions: Anthropic's `content_block_*` events are typed
-/// (`text` / `thinking` / `tool_use`). Strict clients (e.g. Claude Code)
-/// reject a `text_delta` inside a still-open `thinking` block. The encoder
-/// therefore tracks the **kind** of the currently open block and closes it
-/// before opening a new block of a different kind (text → thinking, etc.).
-/// Same-kind consecutive deltas reuse the open block.
+/// Block transitions: Anthropic's `content_block_*` events are typed. The
+/// encoder tracks the **kind** of the currently open emitted block and closes it
+/// before opening a new block of a different kind. Same-kind consecutive deltas
+/// reuse the open block. Reasoning is buffered separately until an Anthropic
+/// signature proves it is safe to emit as a sealed `thinking` block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EncoderBlockKind {
     Text,
-    Thinking,
     ToolUse,
 }
 
@@ -2443,6 +2445,12 @@ struct MessagesStreamEncoder {
     /// rather than emitted per-source so the streamed wire matches the
     /// non-streaming render (one block) and stays a valid pair.
     pending_sources: Vec<serde_json::Value>,
+    /// Reasoning text is buffered until its terminal signature arrives. Claude
+    /// Code replays `thinking` blocks into follow-up requests, and Anthropic
+    /// rejects any block that is not signed by Anthropic. Non-Anthropic
+    /// reasoning has no valid signature, so it must not be exposed as a
+    /// `thinking` block on this wire.
+    pending_reasoning: Option<String>,
 }
 
 impl MessagesStreamEncoder {
@@ -2540,6 +2548,60 @@ impl MessagesStreamEncoder {
         self.block_index += 1;
     }
 
+    fn begin_reasoning_buffer(&mut self, frames: &mut Vec<SseFrame>) {
+        self.close_block(frames);
+        self.pending_reasoning = Some(String::new());
+    }
+
+    fn push_reasoning_delta(&mut self, frames: &mut Vec<SseFrame>, text: &str) {
+        if self.pending_reasoning.is_none() {
+            self.begin_reasoning_buffer(frames);
+        }
+        if let Some(buffer) = &mut self.pending_reasoning {
+            buffer.push_str(text);
+        }
+    }
+
+    fn flush_reasoning_buffer(&mut self, frames: &mut Vec<SseFrame>, signature: Option<&str>) {
+        let Some(text) = self.pending_reasoning.take() else {
+            return;
+        };
+        let Some(signature) = signature else {
+            return;
+        };
+        frames.push(Self::ev(
+            "content_block_start",
+            serde_json::json!({
+                "type": "content_block_start",
+                "index": self.block_index,
+                "content_block": { "type": "thinking", "thinking": "" },
+            }),
+        ));
+        if !text.is_empty() {
+            frames.push(Self::ev(
+                "content_block_delta",
+                serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": self.block_index,
+                    "delta": { "type": "thinking_delta", "thinking": text },
+                }),
+            ));
+        }
+        frames.push(Self::ev(
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta",
+                "index": self.block_index,
+                "delta": { "type": "signature_delta", "signature": signature },
+            }),
+        ));
+        frames.push(Self::ev(
+            "content_block_stop",
+            serde_json::json!({ "type": "content_block_stop", "index": self.block_index }),
+        ));
+        self.block_index += 1;
+    }
+
     /// If a block of a different kind is currently open, close it; then ensure
     /// a block of `wanted` is open. Returns whether a *new* block was opened
     /// this call so the caller can append the right `content_block_start`.
@@ -2556,14 +2618,12 @@ impl MessagesStreamEncoder {
         }
     }
 
-    /// Force-open a *fresh* text / thinking block, emitting its
+    /// Force-open a *fresh* text block, emitting its
     /// `content_block_start`. Unlike [`Self::ensure_block_open`] this always
     /// closes any currently-open block first, so an explicit canonical
-    /// [`StreamPart::TextStart`] / [`StreamPart::ReasoningStart`] starts a new
-    /// content block at the next index even when one of the same kind was
-    /// already open — this is the merged-block fix on this wire. A `text` block
-    /// opens with an empty `text`, a `thinking` block with empty `thinking`,
-    /// matching `content_block_start` on each kind.
+    /// [`StreamPart::TextStart`] starts a new content block at the next index
+    /// even when one of the same kind was already open — this is the
+    /// merged-block fix on this wire.
     /// <https://docs.anthropic.com/en/api/messages-streaming>
     fn open_fresh_block(&mut self, frames: &mut Vec<SseFrame>, kind: EncoderBlockKind) {
         self.close_block(frames);
@@ -2571,7 +2631,6 @@ impl MessagesStreamEncoder {
         self.block_open = true;
         let content_block = match kind {
             EncoderBlockKind::Text => serde_json::json!({ "type": "text", "text": "" }),
-            EncoderBlockKind::Thinking => serde_json::json!({ "type": "thinking", "thinking": "" }),
             // Tool blocks frame themselves via the `name`-bearing `ToolCallDelta`
             // arm, never through a start marker; keep the payload self-consistent
             // if a future caller routes one here.
@@ -2602,6 +2661,7 @@ impl MessagesStreamEncoder {
     ) {
         // Collapse all buffered citations into one pair just before the
         // terminal frames, matching the non-streaming render's tail placement.
+        self.pending_reasoning = None;
         self.flush_pending_sources(frames);
         self.close_block(frames);
         let u = usage.unwrap_or_default();
@@ -2665,43 +2725,31 @@ impl StreamEncoder for MessagesStreamEncoder {
                 // a generated file is surfaced only on the non-streaming path.
             }
             StreamPart::TextStart { .. } => {
+                self.pending_reasoning = None;
                 // Explicit block boundary from a block-framed upstream — open a
                 // *fresh* text content block so two distinct upstream text blocks
                 // re-encode as two `content_block_start`s, not one merged block.
                 self.open_fresh_block(&mut frames, EncoderBlockKind::Text);
             }
             StreamPart::ReasoningStart { .. } => {
-                self.open_fresh_block(&mut frames, EncoderBlockKind::Thinking);
+                self.begin_reasoning_buffer(&mut frames);
             }
             StreamPart::TextEnd { .. } => {
+                self.pending_reasoning = None;
                 // Close the block the matching start opened; `close_block` is a
                 // no-op if nothing is open, so a stray end is harmless.
                 self.close_block(&mut frames);
             }
             StreamPart::ReasoningEnd { signature, .. } => {
-                // Re-emit the thinking block's continuity signature as a
-                // `signature_delta` (Anthropic's wire shape) just before its
-                // `content_block_stop`, so a streamed thinking block re-encodes
-                // signed and a follow-up turn replays it without an
-                // "Invalid `signature`" rejection. Only when a thinking block is
-                // actually open — a stray/empty reasoning-end stays a no-op.
+                // Only signed Anthropic thinking may be emitted on the Messages
+                // wire. Unsigned reasoning from non-Anthropic upstreams would be
+                // replayed by Claude Code as an invalid `thinking` block on the
+                // next turn.
                 // <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
-                if let Some(sig) = signature
-                    && self.block_open
-                    && self.block_kind == Some(EncoderBlockKind::Thinking)
-                {
-                    frames.push(Self::ev(
-                        "content_block_delta",
-                        serde_json::json!({
-                            "type": "content_block_delta",
-                            "index": self.block_index,
-                            "delta": { "type": "signature_delta", "signature": sig },
-                        }),
-                    ));
-                }
-                self.close_block(&mut frames);
+                self.flush_reasoning_buffer(&mut frames, signature.as_deref());
             }
             StreamPart::TextDelta { text } => {
+                self.pending_reasoning = None;
                 if self.ensure_block_open(&mut frames, EncoderBlockKind::Text) {
                     frames.push(Self::ev(
                         "content_block_start",
@@ -2722,30 +2770,14 @@ impl StreamEncoder for MessagesStreamEncoder {
                 ));
             }
             StreamPart::ReasoningDelta { text } => {
-                if self.ensure_block_open(&mut frames, EncoderBlockKind::Thinking) {
-                    frames.push(Self::ev(
-                        "content_block_start",
-                        serde_json::json!({
-                            "type": "content_block_start",
-                            "index": self.block_index,
-                            "content_block": { "type": "thinking", "thinking": "" },
-                        }),
-                    ));
-                }
-                frames.push(Self::ev(
-                    "content_block_delta",
-                    serde_json::json!({
-                        "type": "content_block_delta",
-                        "index": self.block_index,
-                        "delta": { "type": "thinking_delta", "thinking": text },
-                    }),
-                ));
+                self.push_reasoning_delta(&mut frames, text);
             }
             StreamPart::ToolCallDelta {
                 id,
                 name,
                 arguments,
             } => {
+                self.pending_reasoning = None;
                 if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {
                     // A new tool call always opens its own block, even if a
                     // tool_use block was already open (consecutive tool calls
@@ -2851,6 +2883,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                 self.block_index += 1;
             }
             StreamPart::Source { source } => {
+                self.pending_reasoning = None;
                 // Buffer a streamed citation as a `web_search_result` entry; all
                 // entries flush together as one collapsed `server_tool_use` ↔
                 // `web_search_tool_result` pair at terminal
@@ -2899,6 +2932,20 @@ impl StreamEncoder for MessagesStreamEncoder {
             serde_json::json!({
                 "type": "error",
                 "error": { "type": "api_error", "message": message },
+            }),
+        )]
+    }
+
+    fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        vec![Self::ev(
+            "error",
+            serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": error.error_type(),
+                    "message": error.public_message(),
+                    "code": error.error_code(),
+                },
             }),
         )]
     }

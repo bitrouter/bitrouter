@@ -50,7 +50,7 @@ For larger changes, opening an issue before writing code is the fastest way to a
    - `cargo test --workspace --all-features`
 6. Open a pull request with a clear summary and note any follow-up work.
 
-The workspace MSRV is **Rust 1.88**; the `msrv` CI job pins that exact toolchain. Don't rely on a feature stabilised after it.
+The workspace MSRV is **Rust 1.93**; the `msrv` CI job pins that exact toolchain. Don't rely on a feature stabilised after it.
 
 ## Review Guidelines
 
@@ -76,13 +76,13 @@ Built-in providers are defined as TOML files under [`crates/bitrouter-providers/
 
 If the provider uses an already-supported wire protocol (Chat Completions, Responses, Messages, Generate Content):
 
-1. Add a new TOML file under `crates/bitrouter-providers/providers/`. The filename stem **must** equal the `id` field inside.
-2. Register it in the `EMBEDDED` array in [`crates/bitrouter-providers/src/builtin.rs`](crates/bitrouter-providers/src/builtin.rs) and bump the count assertion in that file's tests.
-3. If the provider should auto-enable in zero-config mode, confirm its `auth` scheme advertises an env var (`bearer` / `header`); OAuth-only providers stay opt-in.
-4. Add or update tests covering the new entry.
-5. Update user-facing docs that mention supported providers.
+1. Add a provider definition under [`registry/providers/`](registry/providers/) as `<id>.yaml` (the `name` field must match the stem). Providers are fetched from the registry at runtime, not compiled into the binary — only the `bitrouter` cloud gateway is compiled in.
+2. `bearer` / `header` auth needs no Rust. For a regional or per-account base URL, use `${VAR}` in `api_base` (resolved from the environment at merge time, e.g. `${AWS_REGION}`); an unset var with no `:-default` drops the provider from routing.
+3. For a model catalog, add `auto_sync: { feed: models_dev, key: <models.dev slug> }` and leave `models: []` — the sync fills pricing. Then regenerate the dist and docs tables: `cargo run -p dist-helper -- registry sync --write && cargo run -p dist-helper -- registry build && cargo run -p dist-helper -- registry docs`.
+4. For stateful auth (OAuth, token-exchange), add an `AuthApplier` in `crates/bitrouter-providers/` keyed by the `auth.handler` name and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`).
+5. Add or update tests, and update user-facing docs + the `/bitrouter` skill when the provider list or env vars change.
 
-If the provider needs a **new** wire protocol or transport, the work is broader — plan to add a protocol adapter under `crates/bitrouter-sdk/src/language_model/protocol/` (or an outbound-only provider crate like [`crates/bitrouter-bedrock`](crates/bitrouter-bedrock)), wire it into the dispatch executor, and cover it in the protocol-conversion test matrix. See [`DEVELOPMENT.md`](DEVELOPMENT.md) for where each layer lives.
+If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no built-in provider needs it — see the `ApiProtocol::Custom` escape hatch in [`crates/bitrouter-sdk/src/language_model/protocol/mod.rs`](crates/bitrouter-sdk/src/language_model/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`DEVELOPMENT.md`](DEVELOPMENT.md) for where each layer lives.
 
 ## Questions and Discussion
 

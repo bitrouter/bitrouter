@@ -9,8 +9,7 @@ BitRouter is a Cargo workspace with three tiers — `crates/` (the SDK and provi
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, config loading, and the axum HTTP server |
-| `crates/bitrouter-providers`     | crate   | Compiled-in provider catalog — one TOML per built-in provider (auth scheme + protocol mapping + `api_base`)               |
-| `crates/bitrouter-bedrock`       | crate   | Amazon Bedrock outbound provider, using the official AWS SDK — kept separate so its dependency weight is opt-in           |
+| `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
 | `plugins/bitrouter-guardrails`   | plugin  | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `plugins/bitrouter-observe`      | plugin  | `ObserveHook` implementations — a Prometheus accumulator and an optional OTLP/HTTP JSON span exporter                     |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI/TUI binary — turns a `Config` into a running `App` and owns the management commands |
@@ -28,10 +27,9 @@ The layering is strictly one-directional — **`plugins → sdk`**, **`apps → 
    - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — the extension points every plugin and the binary's builtin hooks implement.
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
-2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. The compile-time provider catalog. Each `providers/*.toml` is embedded via `include_str!`; `builtin::all()` parses them. Also owns `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
-3. **`bitrouter-bedrock`** — depends on `bitrouter-sdk`. An outbound provider adapter for Amazon Bedrock. Separate crate because the AWS SDK is a heavy dependency tree that SDK consumers should not pay for unless they use Bedrock.
-4. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and nothing else. They must **not** pull the axum HTTP stack — the `feature-isolation` CI job enforces this.
-5. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI/TUI shell over that library.
+2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in built-in is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
+3. **`bitrouter-guardrails`** / **`bitrouter-observe`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and nothing else. They must **not** pull the axum HTTP stack — the `feature-isolation` CI job enforces this.
+4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI/TUI shell over that library.
 
 ### SDK feature flags
 
@@ -42,7 +40,7 @@ The SDK keeps its default dependency tree minimal — capabilities that pull wei
 | `server`       | axum, tower, tower-http               | The HTTP server, SSE handlers, admin endpoints                |
 | `config_file`  | serde-saphyr, `tokio::fs`             | YAML `bitrouter.yaml` loading                                 |
 | `mcp`          | rmcp                                  | The bundled `RmcpExecutor` for the `mcp` pipeline             |
-| `acp`          | `tokio` process / io-util             | The bundled `AcpStdioExecutor` for the `acp` pipeline         |
+| `acp`          | `tokio` process / io-util             | `ConfigAcpRoutingTable` for the pure-routing `acp` pipeline    |
 
 Without `mcp` / `acp`, the SDK still exposes those pipelines, hook traits, and transport enums — a consumer can plug in a custom `Executor` without pulling rmcp or the stdio bridge.
 
@@ -101,21 +99,21 @@ Daemon control (`stop` / `restart` / `reload` / `status` / `route`) runs over a 
 
 ## CLI Surface
 
-`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `key` / `models` / `tools` / `policy` / `providers` / `agents` / `agent-proxy`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
+`bitrouter <subcommand>` — `serve` / `start` / `stop` / `restart` / `reload` / `status` / `route` / `init` / `config` / `key` / `models` / `verify` / `tools` / `observe` / `policy` / `providers` / `agents` / `acp` / `spawn` / `cloud` / `skills` / `mcp` / `update`. `start` spawns `serve` detached and the client subcommands talk to it over the control socket. See `apps/bitrouter/src/main.rs`.
 
 ## Where To Extend The System
 
 ### Add or update a built-in provider
 
-TOML catalog under `crates/bitrouter-providers/providers/`, registered in `crates/bitrouter-providers/src/builtin.rs`. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the step-by-step.
+Add a provider definition under `registry/providers/*.yaml` (the registry source; `dist/` is regenerated by `helpers/dist-helper`). `bearer` / `header` auth needs no Rust. For a regional or per-account base URL, use `${VAR}` in `api_base` — it is resolved from the environment at merge time (e.g. Bedrock `https://bedrock-mantle.${AWS_REGION}.api.aws/v1`). For stateful auth (OAuth, token-exchange), add an `AuthApplier` impl in `crates/bitrouter-providers/` keyed by the registry `auth.handler` and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`). See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the step-by-step.
 
 ### Add a new wire protocol
 
 Protocol adapters live in `crates/bitrouter-sdk/src/language_model/protocol/`. A new protocol needs an inbound adapter (parse request / encode response + SSE), an outbound adapter (render request / decode response + SSE), a variant on `ApiProtocol`, dispatch wiring, and coverage in the protocol-conversion test matrix.
 
-### Add an outbound-only provider with a heavy SDK
+### Add a provider whose wire isn't HTTP+JSON+SSE
 
-Follow `crates/bitrouter-bedrock` — a standalone crate that implements an outbound transport and is registered on the dispatch executor at binary startup, so its dependency tree is opt-in.
+Rare — no built-in provider needs this. The big clouds (Bedrock, Azure) speak a built-in protocol over SSE and are ordinary Bearer registry providers. Only if an upstream uses a wire an existing outbound adapter can't decode (e.g. a vendor SDK's binary event-stream) do you add an `ApiProtocol::Custom` outbound adapter + `Transport` in a standalone crate, registered on the dispatch executor at startup. See the `Custom` escape-hatch docs in `crates/bitrouter-sdk/src/language_model/protocol/mod.rs`.
 
 ### Add a hook (auth, policy, metering, guardrail, observability)
 
@@ -135,4 +133,4 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (plugins must not pull axum), and `msrv` (pinned to Rust 1.88). AI agents should also read [`CLAUDE.md`](CLAUDE.md).
+CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (plugins must not pull axum), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](CLAUDE.md).

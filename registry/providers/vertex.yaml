@@ -1,0 +1,84 @@
+name: vertex
+display_name: Vertex AI
+metadata:
+  headquarters: US
+  name: Google Cloud
+  privacy_policy_url: https://cloud.google.com/terms/cloud-privacy-notice
+  slug: google-vertex
+  status_page_url: https://status.cloud.google.com
+  terms_of_service_url: https://cloud.google.com/terms
+kind: first_party
+# ─────────────────────────────────────────────────────────────────────────────
+# SCOPE — Vertex AI, but only the models reachable with a static API key today.
+#
+# Right now this provider runs in Vertex **Express Mode**: the static-API-key
+# path (key in the `x-goog-api-key` header, like the `google` provider), which
+# needs no custom auth code. Express Mode serves **Gemini models only**, on the
+# global endpoint (region is ignored). Set `VERTEX_EXPRESS_API_KEY`.
+#
+# The rest of the Vertex catalog — Anthropic Claude, Llama, Mistral on Vertex —
+# is intentionally **commented out below**. Those partner models live on Vertex's
+# regional endpoints and require a short-lived Google service-account OAuth token
+# (a per-hour JWT exchange), which BitRouter does not implement yet. Uncomment
+# them (and wire a service-account `AuthApplier`) once that lands.
+#
+# ROADMAP NOTE (2026-07): Google's static-key path is Gemini-scoped
+# (`publishers/google`); there is no announced plan to extend static keys to
+# partner models or to ship a catalog-wide OpenAI-compatible key endpoint (unlike
+# AWS Bedrock's `bedrock-mantle`). Track that before enabling the entries below.
+#
+# CATALOG NOTE: the active Gemini models come from `auto_sync` (models.dev
+# `google-vertex`, Gemini-only). The commented partner entries are NOT synced —
+# they are documentation of the intended full catalog, kept out of the synced
+# `models:` list so a re-sync can't touch them.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# NOT YET SUPPORTED — needs service-account OAuth (uncomment when implemented):
+#   - { id: anthropic/claude-opus-4.8 }     # Claude on Vertex (publishers/anthropic)
+#   - { id: anthropic/claude-sonnet-4.6 }   # Claude on Vertex
+#   - { id: anthropic/claude-haiku-4.5 }    # Claude on Vertex
+#   - { id: meta/llama-4-maverick }         # Llama on Vertex (publishers/meta)
+#   - { id: mistralai/mistral-large }       # Mistral on Vertex (publishers/mistralai)
+#
+api_protocol:
+  - "*": google
+rate_limits:
+  - "*":
+      requests_per_minute: 60
+api_base: https://aiplatform.googleapis.com/v1/publishers/google
+doc_url: https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview
+auth:
+  kind: header
+  header: x-goog-api-key
+  env: VERTEX_EXPRESS_API_KEY
+status: active
+weight: 1
+submitted_at: 2026-07-06
+models:
+  - id: google/gemini-3.1-flash-lite-preview
+    provider_model_id: gemini-3.1-flash-lite-preview
+    pricing:
+      input_tokens:
+        no_cache: 0.25
+        cache_read: 0.025
+      output_tokens:
+        text: 1.5
+  - id: google/gemini-3.1-pro-preview
+    provider_model_id: gemini-3.1-pro-preview
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+      output_tokens:
+        text: 12
+  - id: google/gemini-3.5-flash
+    provider_model_id: gemini-3.5-flash
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.15
+      output_tokens:
+        text: 9
+auto_sync:
+  feed: models_dev
+  key: google-vertex

@@ -13,7 +13,6 @@ bitrouter-sdk.workspace = true
 bitrouter-attestation.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

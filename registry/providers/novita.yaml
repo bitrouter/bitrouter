@@ -1,0 +1,161 @@
+name: novita
+display_name: Novita AI
+metadata:
+  headquarters: US
+  name: Novita AI
+  slug: novita
+api_base: https://api.novita.ai/openai
+api_protocol:
+  - "*": openai
+kind: gateway
+# Catalog source: https://models.dev/api.json (provider key `novita-ai`,
+# api=https://api.novita.ai/openai). OpenAI-compatible inference cloud; USD
+# pricing per 1M tokens. Refreshed by the daily models_dev auto_sync.
+models:
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek/deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.6
+        cache_read: 0.135
+      output_tokens:
+        text: 3.2
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek/deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek/deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.269
+        cache_read: 0.1345
+      output_tokens:
+        text: 0.4
+  - id: qwen/qwen3.7-max
+    provider_model_id: qwen/qwen3.7-max
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.25
+      output_tokens:
+        text: 3.75
+  - id: qwen/qwen3.5-122b-a10b
+    provider_model_id: qwen/qwen3.5-122b-a10b
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+      output_tokens:
+        text: 3.2
+  - id: qwen/qwen3.5-27b
+    provider_model_id: qwen/qwen3.5-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+      output_tokens:
+        text: 2.4
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: moonshotai/kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.1
+      output_tokens:
+        text: 3
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: moonshotai/kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.8
+        cache_read: 0.16
+      output_tokens:
+        text: 3.4
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax/minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.03
+      output_tokens:
+        text: 1.2
+  - id: minimax/minimax-m2.7
+    provider_model_id: minimax/minimax-m2.7
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  - id: inclusionai/ling-2.6-1t
+    provider_model_id: inclusionai/ling-2.6-1t
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 2.5
+  - id: inclusionai/ling-2.6-flash
+    provider_model_id: inclusionai/ling-2.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.02
+      output_tokens:
+        text: 0.3
+  - id: inclusionai/ring-2.6-1t
+    provider_model_id: inclusionai/ring-2.6-1t
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 2.5
+  - id: z-ai/glm-5
+    provider_model_id: zai-org/glm-5
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.2
+      output_tokens:
+        text: 3.2
+  - id: z-ai/glm-5.1
+    provider_model_id: zai-org/glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.38
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: z-ai/glm-5.2
+    provider_model_id: zai-org/glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: z-ai/glm-4.7
+    provider_model_id: zai-org/glm-4.7
+    pricing:
+      input_tokens:
+        no_cache: 0.6
+        cache_read: 0.11
+      output_tokens:
+        text: 2.2
+  - id: openai/gpt-oss-120b
+    provider_model_id: openai/gpt-oss-120b
+    pricing:
+      input_tokens:
+        no_cache: 0.05
+      output_tokens:
+        text: 0.25
+status: active
+weight: 1
+submitted_at: 2026-07-07
+auto_sync:
+  feed: models_dev
+  key: novita-ai

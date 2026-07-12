@@ -1,0 +1,28 @@
+{
+  "title": "Integrations",
+  "icon": "Blocks",
+  "defaultOpen": false,
+  "pages": [
+    "---Models---",
+    "models",
+    "claude-subscription",
+    "codex-subscription",
+    "openrouter",
+    "ollama",
+    "vllm",
+    "---Tools---",
+    "tools",
+    "exa",
+    "parallel",
+    "firecrawl",
+    "tavily",
+    "---Harnesses---",
+    "harnesses",
+    "claude-code",
+    "codex",
+    "opencode",
+    "hermes",
+    "openclaw",
+    "pi"
+  ]
+}

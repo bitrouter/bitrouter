@@ -1,0 +1,149 @@
+# Verified 2026-07-08 against the public
+# `GET https://api.atlascloud.ai/v1/models` catalog and Atlas Cloud docs.
+# Atlas exposes an OpenAI-compatible LLM endpoint; catalog pricing is per token,
+# converted below to USD per 1M tokens. `openai/gpt-oss-120b` was removed because
+# it is no longer present in the live `/models` response.
+name: atlascloud
+display_name: Atlas Cloud
+metadata:
+  headquarters: US
+  datacenters:
+    - US
+  name: Atlas Cloud
+  privacy_policy_url: https://www.atlascloud.ai/privacy
+  slug: atlascloud
+  terms_of_service_url: https://www.atlascloud.ai/acceptable-use
+api_base: https://api.atlascloud.ai/v1
+api_protocol:
+  - "*": openai
+auth_scheme: bearer
+kind: gateway
+models:
+  - id: qwen/qwen3.7-max
+    provider_model_id: qwen/qwen3.7-max
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.5
+      output_tokens:
+        text: 7.5
+  - id: qwen/qwen3.7-plus
+    provider_model_id: qwen/qwen3.7-plus
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.08
+      output_tokens:
+        text: 1.6
+      context_tiers:
+        - above_input_tokens: 262144
+          input_tokens:
+            no_cache: 1.2
+            cache_read: 0.24
+          output_tokens:
+            text: 4.8
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-ai/deepseek-v4-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.68
+        cache_read: 0.13
+      output_tokens:
+        text: 3.38
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-ai/deepseek-v4-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
+  - id: deepseek/deepseek-v3.2
+    provider_model_id: deepseek-ai/deepseek-v3.2
+    pricing:
+      input_tokens:
+        no_cache: 0.26
+        cache_read: 0.13
+      output_tokens:
+        text: 0.38
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: moonshotai/kimi-k2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.49
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: moonshotai/kimi-k2.6
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.16
+      output_tokens:
+        text: 4
+  - id: moonshotai/kimi-k2.7-code
+    provider_model_id: moonshotai/kimi-k2.7-code
+    pricing:
+      input_tokens:
+        no_cache: 0.95
+        cache_read: 0.16
+      output_tokens:
+        text: 4
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimaxai/minimax-m2.5
+    pricing:
+      input_tokens:
+        no_cache: 0.295
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+  - id: minimax/minimax-m3
+    provider_model_id: minimaxai/minimax-m3
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.06
+      output_tokens:
+        text: 1.2
+      context_tiers:
+        - above_input_tokens: 512000
+          input_tokens:
+            no_cache: 0.6
+            cache_read: 0.12
+          output_tokens:
+            text: 2.4
+  - id: z-ai/glm-5.1
+    provider_model_id: zai-org/glm-5.1
+    pricing:
+      input_tokens:
+        no_cache: 1.26
+        cache_read: 0.234
+      output_tokens:
+        text: 3.96
+  - id: z-ai/glm-5.2
+    provider_model_id: zai-org/glm-5.2
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: x-ai/grok-4.3
+    provider_model_id: xai/grok-4.3
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+      context_tiers:
+        - above_input_tokens: 200000
+          input_tokens:
+            no_cache: 2.5
+            cache_read: 0.4
+          output_tokens:
+            text: 5
+status: active
+weight: 1
+submitted_at: 2026-07-07

@@ -265,13 +265,18 @@ pub(crate) fn classify_failure(error: &BitrouterError) -> InadequacyCause {
             _ => InadequacyCause::ProviderPermanent,
         },
         BitrouterError::UpstreamTimeout
+        | BitrouterError::UpstreamRateLimited { .. }
+        | BitrouterError::UpstreamUnavailable
         | BitrouterError::RateLimited { .. }
         | BitrouterError::Internal(_) => InadequacyCause::ProviderTransient,
-        BitrouterError::UpstreamAuth { .. }
+        BitrouterError::UpstreamPaymentRequired
+        | BitrouterError::UpstreamAuth { .. }
         | BitrouterError::Unauthorized(_)
         | BitrouterError::Forbidden(_)
         | BitrouterError::PaymentRequired(_) => InadequacyCause::Auth,
-        BitrouterError::BadRequest { .. } => InadequacyCause::Protocol,
+        BitrouterError::UpstreamInvalidResponse { .. } | BitrouterError::BadRequest { .. } => {
+            InadequacyCause::Protocol
+        }
         BitrouterError::NotFound(_) => InadequacyCause::Client,
     }
 }
@@ -762,6 +767,34 @@ mod tests {
         assert!(
             ledger.should_trial("after_bash"),
             "capable stream disconnect should still advance exploration cadence"
+        );
+    }
+
+    #[test]
+    fn classifies_route_availability_errors_as_transient() {
+        assert_eq!(
+            classify_failure(&BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+            }),
+            InadequacyCause::ProviderTransient
+        );
+        assert_eq!(
+            classify_failure(&BitrouterError::UpstreamUnavailable),
+            InadequacyCause::ProviderTransient
+        );
+    }
+
+    #[test]
+    fn classifies_upstream_billing_and_protocol_errors() {
+        assert_eq!(
+            classify_failure(&BitrouterError::UpstreamPaymentRequired),
+            InadequacyCause::Auth
+        );
+        assert_eq!(
+            classify_failure(&BitrouterError::UpstreamInvalidResponse {
+                message: "invalid response".to_string(),
+            }),
+            InadequacyCause::Protocol
         );
     }
 }

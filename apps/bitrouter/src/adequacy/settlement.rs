@@ -216,6 +216,8 @@ mod tests {
             streamed: true,
             latency_ms: 1,
             generation_time_ms: 1,
+            first_token_latency_ms: None,
+            first_token_kind: None,
             error: None,
             events: EventBus::default(),
         }

@@ -31,40 +31,41 @@ client.messages.create(
 
 The built-in `anthropic` provider auto-enabled when the env var was set.
 
-## B) Amazon Bedrock (Anthropic surface)
+## B) Amazon Bedrock
 
-Bedrock exposes Anthropic models behind AWS SigV4 auth, not bearer tokens — different enough that the v1 BitRouter has a dedicated `bitrouter-bedrock` crate. To check what the v1 surface accepts in your build:
+`aws-bedrock` is a **built-in** provider. It reaches Bedrock's OpenAI-compatible
+`bedrock-mantle` endpoints (not the SigV4 Converse API), so all it needs is a
+Bedrock API key:
 
 ```bash
-bitrouter providers list
-# look for `bedrock` or similar
+export AWS_BEARER_TOKEN_BEDROCK=...    # generate a Bedrock API key in the AWS console
+export AWS_REGION=us-west-2            # optional; defaults to us-east-1
+bitrouter reload                       # or restart
+bitrouter providers list               # aws-bedrock → ACTIVE
 ```
 
-> **TODO** — confirm the exact v1 provider id and config shape for Bedrock. Check `crates/bitrouter-bedrock` in the bitrouter repo, or <https://bitrouter.ai>. The general pattern is:
+Claude models on Bedrock route as e.g. `anthropic/claude-opus-4.8`
+(`bitrouter models --provider aws-bedrock` is authoritative). Native-Converse-only
+features (cross-region inference profiles, Bedrock Guardrails, structured outputs)
+are not served through this surface.
 
-```yaml
-providers:
-  bedrock:
-    # placeholder — verify in v1 docs
-    api_base: "https://bedrock-runtime.us-east-1.amazonaws.com"
-    api_protocol: { "*": anthropic }
-    # AWS credentials come from the standard provider chain
-    # (env vars, ~/.aws/credentials, IAM role)
-```
+## C) Google Vertex AI
 
-## C) Google Vertex AI (Anthropic surface)
+**Claude-on-Vertex is not covered.** The built-in `vertex` provider runs in
+Vertex AI **Express Mode** (`VERTEX_EXPRESS_API_KEY`), which serves **Gemini
+models only** — it does not serve Anthropic Claude (or Llama/Mistral) on Vertex.
+Those partner models are present but **commented out** in the `vertex` registry
+entry, pending service-account OAuth support. Those partner models live on Vertex's regional
+endpoints and require a short-lived Google OAuth access token (minted per hour
+from a service-account key), which needs provider-specific code BitRouter does
+not ship today.
 
-Vertex serves Claude models with Google IAM auth. Same caveat as Bedrock — confirm the v1 provider id:
-
-```yaml
-providers:
-  vertex:
-    # placeholder — verify in v1 docs
-    api_base: "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/publishers/anthropic/models"
-    api_protocol: { "*": anthropic }
-```
-
-> **TODO** — fill in once verified against the codebase.
+So for this Anthropic-shaped migration: if your Claude traffic runs through
+Vertex, there's no drop-in built-in yet — use Anthropic's own API (`anthropic`)
+or Bedrock (`aws-bedrock`) instead, or run Claude-on-Vertex behind your own
+proxy and add it as a custom `anthropic`-protocol provider (see section D).
+Full native Vertex support (partner models + service-account auth) is a possible
+future addition.
 
 ## D) Any other Anthropic-Messages-shaped endpoint
 

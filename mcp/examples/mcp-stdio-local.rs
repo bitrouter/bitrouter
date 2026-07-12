@@ -10,5 +10,5 @@ use bitrouter_mcp::backend::local::LocalBackend;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let backend = Arc::new(LocalBackend::new("http://127.0.0.1:4356"));
-    bitrouter_mcp::server::serve_stdio(backend).await
+    bitrouter_mcp::server::serve_stdio(backend, None).await
 }

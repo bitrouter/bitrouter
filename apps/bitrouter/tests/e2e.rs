@@ -1127,6 +1127,7 @@ async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
             api_base: "http://unused.invalid".to_string(),
             api_key: "unused".to_string(),
             api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

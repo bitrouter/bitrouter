@@ -3,7 +3,7 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{future::Future, mem};
 
 use async_trait::async_trait;
@@ -11,13 +11,12 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
-use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
-    RequestOutcome, RouteHook, StreamHook,
+    RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
@@ -31,6 +30,73 @@ use crate::language_model::types::{
 
 /// The default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
+
+struct StreamingExecution {
+    stream: StreamPartStream,
+    target: RoutingTarget,
+    provider_started_at: Instant,
+}
+
+struct ObservedUpstreamStream {
+    inner: StreamPartStream,
+    hooks: Vec<Arc<dyn ObserveHook>>,
+    request_id: String,
+    target: RoutingTarget,
+    provider_started_at: Instant,
+    terminal: bool,
+}
+
+impl ObservedUpstreamStream {
+    fn notify(&mut self, outcome: StreamHopOutcome<'_>) {
+        if self.terminal {
+            return;
+        }
+        self.terminal = true;
+        let duration_ms = crate::language_model::timing::elapsed_millis(self.provider_started_at);
+        for hook in &self.hooks {
+            let callback = std::panic::AssertUnwindSafe(|| {
+                hook.on_stream_hop_end(&self.request_id, &self.target, outcome, duration_ms)
+            });
+            if std::panic::catch_unwind(callback).is_err() {
+                tracing::warn!("ObserveHook::on_stream_hop_end panicked; swallowed");
+            }
+        }
+    }
+}
+
+impl Stream for ObservedUpstreamStream {
+    type Item = Result<StreamPart>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let item = self.inner.as_mut().poll_next(cx);
+        match &item {
+            std::task::Poll::Ready(None) => self.notify(StreamHopOutcome::Completed),
+            std::task::Poll::Ready(Some(Err(error))) => {
+                self.notify(StreamHopOutcome::Failed(error));
+            }
+            std::task::Poll::Ready(Some(Ok(part))) if part.is_terminal() => {
+                self.notify(StreamHopOutcome::Completed);
+            }
+            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
+        }
+        item
+    }
+}
+
+impl Drop for ObservedUpstreamStream {
+    fn drop(&mut self) {
+        self.notify(StreamHopOutcome::Dropped);
+    }
+}
+
+#[derive(Clone)]
+struct StreamAttempt {
+    target: RoutingTarget,
+    provider_started_at: Instant,
+}
 
 /// The `language_model` flight pipeline. Holds the registered hooks for every
 /// stage plus the routing table, fallback policy and executor. Built via
@@ -84,31 +150,62 @@ impl UpstreamTurn for PipelineUpstream<'_> {
 }
 
 /// Drives one upstream **streaming** turn for the server-side tool loop. Each
-/// iteration tries the routing `chain` in order until one stream starts
-/// (commit-on-start failover, mirroring the single-shot path), and uses a fresh
-/// throwaway [`PipelineContext`] (the executor reads it only for outbound trace
-/// headers), so the real request context stays owned by the settlement guard.
+/// iteration uses the pipeline's standard fallback policy over the routing
+/// `chain` until one stream starts. A fresh throwaway [`PipelineContext`] keeps
+/// per-turn fallback/observation state separate while the real request context
+/// stays owned by the settlement guard.
 struct PipelineStreamUpstream {
-    executor: Arc<dyn Executor>,
+    pipeline: Arc<Pipeline>,
     chain: Vec<RoutingTarget>,
-    caller: CallerContext,
+    context: PipelineContext,
+    latest_attempt: SharedStreamAttempt,
 }
 
 #[async_trait]
 impl UpstreamStream for PipelineStreamUpstream {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
-        let req = PipelineRequest::new(prompt.model.clone(), self.caller.clone(), prompt.clone());
-        let ctx = PipelineContext::new(req);
-        let mut last_error: Option<BitrouterError> = None;
-        for target in &self.chain {
-            match self.executor.execute_stream(target, prompt, &ctx).await {
-                Ok(stream) => return Ok(stream),
-                Err(e) => last_error = Some(e),
-            }
-        }
-        Err(last_error
-            .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string())))
+        let ctx = self.context.fork_for_prompt(prompt.clone());
+        let execution = self
+            .pipeline
+            .execute_stream_with_fallback(&self.chain, &ctx)
+            .await?;
+        store_stream_attempt(
+            &self.latest_attempt,
+            StreamAttempt {
+                target: execution.target,
+                provider_started_at: execution.provider_started_at,
+            },
+        );
+        Ok(execution.stream)
     }
+}
+
+type SharedStreamAttempt = Arc<std::sync::Mutex<Option<StreamAttempt>>>;
+
+fn store_stream_attempt(slot: &SharedStreamAttempt, attempt: StreamAttempt) {
+    match slot.lock() {
+        Ok(mut current) => *current = Some(attempt),
+        Err(poisoned) => *poisoned.into_inner() = Some(attempt),
+    }
+}
+
+fn load_stream_attempt(slot: &SharedStreamAttempt) -> Option<StreamAttempt> {
+    match slot.lock() {
+        Ok(current) => current.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+fn sync_execution_target(ctx: &mut PipelineContext, slot: &SharedStreamAttempt) {
+    let Some(attempt) = load_stream_attempt(slot) else {
+        return;
+    };
+    let Some(execution) = ctx.execution_result.as_mut() else {
+        return;
+    };
+    execution.provider_id = attempt.target.provider_name;
+    execution.model_id = attempt.target.service_id;
+    execution.account_label = attempt.target.account_label;
 }
 
 impl Pipeline {
@@ -219,6 +316,7 @@ impl Pipeline {
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
         let mut ctx = PipelineContext::new(req);
+        self.observe_start(&ctx).await;
 
         // ---- Stage 1: pre-request checks ----
         if let Err(e) = self.run_pre_request(&mut ctx).await {
@@ -243,6 +341,7 @@ impl Pipeline {
         log_request_received(&ctx, chain.first(), false);
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
+        let execution_started_at = Instant::now();
         let exec_outcome = match &self.server_tool_loop {
             Some(server_loop) => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
@@ -256,7 +355,11 @@ impl Pipeline {
             None => self.execute_with_fallback(&chain, ctx.prompt(), &ctx).await,
         };
         match exec_outcome {
-            Ok(result) => {
+            Ok(mut result) => {
+                if self.server_tool_loop.is_some() {
+                    result.generation_time_ms =
+                        crate::language_model::timing::elapsed_millis(execution_started_at);
+                }
                 ctx.execution_result = Some(result);
                 self.observe_after(Phase::Execution, &ctx).await;
             }
@@ -286,9 +389,12 @@ impl Pipeline {
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
         let mut ctx = PipelineContext::new(req);
+        self.observe_start(&ctx).await;
 
         if let Err(e) = self.run_pre_request(&mut ctx).await {
             log_request_resolve_failed(&ctx, &e);
+            self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
+                .await;
             return Err(e);
         }
         self.observe_after(Phase::PreRequest, &ctx).await;
@@ -297,51 +403,90 @@ impl Pipeline {
             Ok(chain) => chain,
             Err(e) => {
                 log_request_resolve_failed(&ctx, &e);
+                self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
+                    .await;
                 return Err(e);
             }
         };
         self.observe_after(Phase::Route, &ctx).await;
         log_request_received(&ctx, chain.first(), true);
+        let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
 
         // Route Stage 3 through the server-side tool loop when configured: the
         // merged stream becomes the "upstream" the settlement guard drains, so
         // settlement is unchanged. Otherwise the pipeline stays single-shot.
-        let upstream = match &self.server_tool_loop {
+        let upstream_result = match &self.server_tool_loop {
             Some(server_loop) => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
-                    executor: self.executor.clone(),
+                    pipeline: self.clone(),
                     chain: chain.clone(),
-                    caller: ctx.caller().clone(),
+                    context: ctx.fork_for_prompt(ctx.prompt().clone()),
+                    latest_attempt: latest_attempt.clone(),
                 });
-                server_loop
+                match server_loop
                     .clone()
                     .run_stream(ctx.prompt(), &tool_ctx, upstream_impl)
-                    .await?
+                    .await
+                {
+                    Ok(stream) => load_stream_attempt(&latest_attempt)
+                        .map(|attempt| StreamingExecution {
+                            stream,
+                            target: attempt.target,
+                            provider_started_at: attempt.provider_started_at,
+                        })
+                        .ok_or_else(|| {
+                            BitrouterError::internal(
+                                "server-tool stream opened without a successful upstream attempt",
+                            )
+                        }),
+                    Err(error) => Err(error),
+                }
             }
-            None => self.execute_stream_with_fallback(&chain, &ctx).await?,
+            None => match self.execute_stream_with_fallback(&chain, &ctx).await {
+                Ok(execution) => {
+                    store_stream_attempt(
+                        &latest_attempt,
+                        StreamAttempt {
+                            target: execution.target.clone(),
+                            provider_started_at: execution.provider_started_at,
+                        },
+                    );
+                    Ok(execution)
+                }
+                Err(error) => Err(error),
+            },
+        };
+        let upstream = match upstream_result {
+            Ok(upstream) => upstream,
+            Err(error) => {
+                self.run_settlement(&mut ctx, false, Some(error.clone()))
+                    .await;
+                self.observe_after(Phase::Settlement, &ctx).await;
+                self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                    .await;
+                return Err(error);
+            }
         };
         // A placeholder execution result so Settlement has provider/model ids;
         // usage is folded in from the StreamContext at stream end.
-        let head = chain.first().cloned();
-        if let Some(target) = &head {
-            ctx.execution_result = Some(ExecutionResult {
-                provider_id: target.provider_name.clone(),
-                model_id: target.service_id.clone(),
-                account_label: target.account_label.clone(),
-                result: crate::language_model::types::GenerateResult {
-                    content: Vec::new(),
-                    usage: None,
-                    finish_reason: None,
-                    response_id: None,
-                    stop_details: None,
-                    provider_metadata: Default::default(),
-                },
-                latency_ms: 0,
-                generation_time_ms: 0,
-                server_tool_calls: Vec::new(),
-            });
-        }
+        ctx.set_stream_provider_started_at(upstream.provider_started_at);
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: upstream.target.provider_name.clone(),
+            model_id: upstream.target.service_id.clone(),
+            account_label: upstream.target.account_label.clone(),
+            result: crate::language_model::types::GenerateResult {
+                content: Vec::new(),
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: 0,
+            generation_time_ms: 0,
+            server_tool_calls: Vec::new(),
+        });
         self.observe_after(Phase::Execution, &ctx).await;
 
         let processor = StreamProcessor::new(
@@ -356,10 +501,11 @@ impl Pipeline {
         // so streaming settlement is never lost.
         let guard = StreamSettlementGuard {
             pipeline: self.clone(),
+            latest_attempt,
             state: Some((processor, ctx)),
         };
 
-        Ok(Box::pin(self.drive_stream(upstream, guard)))
+        Ok(Box::pin(self.drive_stream(upstream.stream, guard)))
     }
 
     /// The streaming driver: feeds upstream parts through the guard's
@@ -373,43 +519,45 @@ impl Pipeline {
         mut guard: StreamSettlementGuard,
     ) -> impl Stream<Item = Result<StreamPart>> + Send {
         async_stream::stream! {
-            // Set on every break path below; the loop only exits via `break`.
-            let outcome: StreamOutcome;
             'pump: loop {
-                let processor = guard.processor();
                 match upstream.next().await {
                     Some(Ok(part)) => {
                         let is_finish = part.is_terminal();
-                        match processor.process_part(part).await {
+                        let processed = guard.processor().process_part(part).await;
+                        match processed {
                             Ok(parts) => {
+                                if is_finish {
+                                    guard.finalize(StreamOutcome::Completed).await;
+                                }
                                 for p in parts {
                                     yield Ok(p);
                                 }
                             }
                             Err(abort_err) => {
-                                outcome = StreamOutcome::Aborted(abort_err.clone());
+                                guard
+                                    .finalize(StreamOutcome::Aborted(abort_err.clone()))
+                                    .await;
                                 yield Err(abort_err);
                                 break 'pump;
                             }
                         }
                         if is_finish {
-                            outcome = StreamOutcome::Completed;
                             break 'pump;
                         }
                     }
                     Some(Err(e)) => {
-                        outcome = StreamOutcome::UpstreamError(e.clone());
+                        guard
+                            .finalize(StreamOutcome::UpstreamError(e.clone()))
+                            .await;
                         yield Err(e);
                         break 'pump;
                     }
                     None => {
-                        outcome = StreamOutcome::Completed;
+                        guard.finalize(StreamOutcome::Completed).await;
                         break 'pump;
                     }
                 }
             }
-            // Normal/errored/aborted termination — finalise inline.
-            guard.finalize(outcome).await;
         }
     }
 
@@ -465,7 +613,7 @@ impl Pipeline {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        let mut last_error: Option<BitrouterError> = None;
+        let mut errors = Vec::new();
         for target in chain {
             self.observe_hop_start(ctx, target).await;
             let outcome = self.executor.execute(target, prompt, ctx).await;
@@ -488,24 +636,24 @@ impl Pipeline {
                 }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
                     FallbackDecision::TryNext => {
-                        last_error = Some(e);
+                        errors.push(e);
                         continue;
                     }
                     FallbackDecision::Fail(e) => return Err(e),
                 },
             }
         }
-        Err(last_error
-            .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string())))
+        Err(aggregate_fallback_errors(errors))
     }
 
     async fn execute_stream_with_fallback(
         &self,
         chain: &[RoutingTarget],
         ctx: &PipelineContext,
-    ) -> Result<StreamPartStream> {
-        let mut last_error: Option<BitrouterError> = None;
+    ) -> Result<StreamingExecution> {
+        let mut errors = Vec::new();
         for target in chain {
+            let provider_started_at = Instant::now();
             self.observe_hop_start(ctx, target).await;
             let outcome = self
                 .executor
@@ -524,18 +672,31 @@ impl Pipeline {
             match outcome {
                 // Once the stream starts, the SSE response is committed — no
                 // more fallback.
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => {
+                    let stream = Box::pin(ObservedUpstreamStream {
+                        inner: stream,
+                        hooks: self.observe_hooks.clone(),
+                        request_id: ctx.request_id().to_string(),
+                        target: target.clone(),
+                        provider_started_at,
+                        terminal: false,
+                    });
+                    return Ok(StreamingExecution {
+                        stream,
+                        target: target.clone(),
+                        provider_started_at,
+                    });
+                }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
                     FallbackDecision::TryNext => {
-                        last_error = Some(e);
+                        errors.push(e);
                         continue;
                     }
                     FallbackDecision::Fail(e) => return Err(e),
                 },
             }
         }
-        Err(last_error
-            .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string())))
+        Err(aggregate_fallback_errors(errors))
     }
 
     /// Decide fallback after an upstream failure. Any registered execution hook
@@ -568,6 +729,7 @@ impl Pipeline {
         streamed: bool,
         error: Option<BitrouterError>,
     ) {
+        ctx.finalize_request_latency();
         let mut settle = ctx.settlement_context();
         settle.streamed = streamed;
         settle.error = error;
@@ -589,6 +751,15 @@ impl Pipeline {
 
     // ===== observe helpers (read-only, swallow errors AND panics) =====
 
+    async fn observe_start(&self, ctx: &PipelineContext) {
+        for hook in &self.observe_hooks {
+            let fut = std::panic::AssertUnwindSafe(hook.on_request_start(ctx));
+            if fut.catch_unwind().await.is_err() {
+                tracing::warn!("ObserveHook::on_request_start panicked; swallowed");
+            }
+        }
+    }
+
     async fn observe_after(&self, phase: Phase, ctx: &PipelineContext) {
         for hook in &self.observe_hooks {
             let fut = std::panic::AssertUnwindSafe(hook.after_phase(phase, ctx));
@@ -599,12 +770,7 @@ impl Pipeline {
     }
 
     async fn observe_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) {
-        for hook in &self.observe_hooks {
-            let fut = std::panic::AssertUnwindSafe(hook.on_hop_start(ctx, target));
-            if fut.catch_unwind().await.is_err() {
-                tracing::warn!("ObserveHook::on_hop_start panicked; swallowed");
-            }
-        }
+        observe_hop_start_with(&self.observe_hooks, ctx, target).await;
     }
 
     async fn observe_hop_end(
@@ -613,12 +779,7 @@ impl Pipeline {
         target: &RoutingTarget,
         outcome: HopOutcome<'_>,
     ) {
-        for hook in &self.observe_hooks {
-            let fut = std::panic::AssertUnwindSafe(hook.on_hop_end(ctx, target, outcome));
-            if fut.catch_unwind().await.is_err() {
-                tracing::warn!("ObserveHook::on_hop_end panicked; swallowed");
-            }
-        }
+        observe_hop_end_with(&self.observe_hooks, ctx, target, outcome).await;
     }
 
     async fn observe_end(&self, ctx: &PipelineContext, outcome: RequestOutcome) {
@@ -631,12 +792,109 @@ impl Pipeline {
     }
 }
 
+async fn observe_hop_start_with(
+    hooks: &[Arc<dyn ObserveHook>],
+    ctx: &PipelineContext,
+    target: &RoutingTarget,
+) {
+    for hook in hooks {
+        let fut = std::panic::AssertUnwindSafe(hook.on_hop_start(ctx, target));
+        if fut.catch_unwind().await.is_err() {
+            tracing::warn!("ObserveHook::on_hop_start panicked; swallowed");
+        }
+    }
+}
+
+async fn observe_hop_end_with(
+    hooks: &[Arc<dyn ObserveHook>],
+    ctx: &PipelineContext,
+    target: &RoutingTarget,
+    outcome: HopOutcome<'_>,
+) {
+    for hook in hooks {
+        let fut = std::panic::AssertUnwindSafe(hook.on_hop_end(ctx, target, outcome));
+        if fut.catch_unwind().await.is_err() {
+            tracing::warn!("ObserveHook::on_hop_end panicked; swallowed");
+        }
+    }
+}
+
+/// Produce a deterministic terminal error from a fully exhausted fallback
+/// chain. The result describes the route set rather than whichever provider
+/// happened to sort last.
+fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
+    if errors.is_empty() {
+        return BitrouterError::NotFound("empty routing chain".to_string());
+    }
+
+    if errors.iter().all(|error| {
+        matches!(
+            error,
+            BitrouterError::UpstreamRateLimited { .. }
+                | BitrouterError::Upstream { status: 429, .. }
+        )
+    }) {
+        let retry_after = errors
+            .iter()
+            .filter_map(|error| match error {
+                BitrouterError::UpstreamRateLimited { retry_after } => *retry_after,
+                _ => None,
+            })
+            .min();
+        return BitrouterError::UpstreamRateLimited { retry_after };
+    }
+
+    if errors
+        .iter()
+        .all(|error| matches!(error, BitrouterError::UpstreamTimeout))
+    {
+        return BitrouterError::UpstreamTimeout;
+    }
+
+    if errors
+        .iter()
+        .all(|error| matches!(error, BitrouterError::UpstreamPaymentRequired))
+    {
+        return BitrouterError::UpstreamPaymentRequired;
+    }
+
+    if let Some(error) = errors
+        .iter()
+        .find(|error| matches!(error, BitrouterError::UpstreamInvalidResponse { .. }))
+    {
+        return error.clone();
+    }
+
+    let is_availability_failure = |error: &BitrouterError| {
+        matches!(
+            error,
+            BitrouterError::UpstreamRateLimited { .. }
+                | BitrouterError::UpstreamTimeout
+                | BitrouterError::UpstreamUnavailable
+                | BitrouterError::Upstream { status: 408, .. }
+                | BitrouterError::Upstream {
+                    status: 500..=599,
+                    ..
+                }
+        )
+    };
+    if errors.iter().all(is_availability_failure) {
+        return BitrouterError::UpstreamUnavailable;
+    }
+
+    errors
+        .into_iter()
+        .last()
+        .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string()))
+}
+
 /// Owns the streaming `StreamProcessor` + `PipelineContext` for the lifetime of
 /// a streaming response, and guarantees the StreamHook stage's `on_stream_end`
 /// plus Stage-4 Settlement run **exactly once** — whether the stream completes
 /// normally or the client drops it early.
 struct StreamSettlementGuard {
     pipeline: Arc<Pipeline>,
+    latest_attempt: SharedStreamAttempt,
     /// `Some` until finalised; `take`n by `finalize` or `drop`, whichever fires
     /// first, so finalisation is exactly-once.
     state: Option<(StreamProcessor, PipelineContext)>,
@@ -662,12 +920,23 @@ impl StreamSettlementGuard {
             // the terminal frame; cancellation of this waiter must not cancel a
             // recorder midway through its database write.
             let pipeline = self.pipeline.clone();
+            let latest_attempt = self.latest_attempt.clone();
             let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
             self.pipeline.spawn_stream_finalization(async move {
-                finalize_stream(pipeline, processor, ctx, outcome).await;
+                finalize_stream(pipeline, processor, ctx, latest_attempt, outcome).await;
                 let _ = finished_tx.send(());
             });
             let _ = finished_rx.await;
+        }
+    }
+}
+
+fn stream_terminal_metadata(outcome: &StreamOutcome) -> (Option<BitrouterError>, RequestOutcome) {
+    match outcome {
+        StreamOutcome::Completed => (None, RequestOutcome::Completed),
+        StreamOutcome::ClientDisconnected => (None, RequestOutcome::ClientDisconnected),
+        StreamOutcome::Aborted(err) | StreamOutcome::UpstreamError(err) => {
+            (Some(err.clone()), RequestOutcome::Failed(err.clone()))
         }
     }
 }
@@ -676,26 +945,19 @@ async fn finalize_stream(
     pipeline: Arc<Pipeline>,
     mut processor: StreamProcessor,
     mut ctx: PipelineContext,
+    latest_attempt: SharedStreamAttempt,
     outcome: StreamOutcome,
 ) {
-    let request_outcome = request_outcome_for(&outcome);
+    let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
     processor.finish(outcome).await;
+    sync_execution_target(&mut ctx, &latest_attempt);
     ctx.absorb_stream(processor.into_context());
-    pipeline.run_settlement(&mut ctx, true, None).await;
+    ctx.finalize_stream_generation_time();
+    pipeline
+        .run_settlement(&mut ctx, true, settlement_error)
+        .await;
     pipeline.observe_after(Phase::Settlement, &ctx).await;
     pipeline.observe_end(&ctx, request_outcome).await;
-}
-
-/// Map a terminal [`StreamOutcome`] to the [`RequestOutcome`] observers see at
-/// request end. A mid-stream upstream error is a failure; a `StreamHook` abort
-/// is a deliberate policy stop (e.g. a guardrail), not an upstream failure, so
-/// it reads as completed.
-fn request_outcome_for(outcome: &StreamOutcome) -> RequestOutcome {
-    match outcome {
-        StreamOutcome::UpstreamError(err) => RequestOutcome::Failed(err.clone()),
-        StreamOutcome::ClientDisconnected => RequestOutcome::ClientDisconnected,
-        StreamOutcome::Completed | StreamOutcome::Aborted(_) => RequestOutcome::Completed,
-    }
 }
 
 impl Drop for StreamSettlementGuard {
@@ -710,8 +972,16 @@ impl Drop for StreamSettlementGuard {
         // could cut a settlement task mid-await and the receipt would be lost.
         if let Some((processor, ctx)) = self.state.take() {
             let pipeline = self.pipeline.clone();
+            let latest_attempt = self.latest_attempt.clone();
             self.pipeline.spawn_stream_finalization(async move {
-                finalize_stream(pipeline, processor, ctx, StreamOutcome::ClientDisconnected).await;
+                finalize_stream(
+                    pipeline,
+                    processor,
+                    ctx,
+                    latest_attempt,
+                    StreamOutcome::ClientDisconnected,
+                )
+                .await;
             });
         }
     }
@@ -805,7 +1075,7 @@ fn log_request_finished(settle: &SettlementContext) {
 
 #[cfg(test)]
 mod stream_outcome_tests {
-    use super::{RequestOutcome, StreamOutcome, request_outcome_for};
+    use super::{RequestOutcome, StreamOutcome, stream_terminal_metadata};
     use crate::error::BitrouterError;
 
     #[test]
@@ -813,32 +1083,32 @@ mod stream_outcome_tests {
         // The fix for the streaming-error blind spot: a mid-stream upstream error
         // must reach `on_request_end` as `Failed`, not a silent `Completed`.
         let outcome = StreamOutcome::UpstreamError(BitrouterError::internal("mid-stream boom"));
-        assert!(matches!(
-            request_outcome_for(&outcome),
-            RequestOutcome::Failed(_)
-        ));
+        let (error, request_outcome) = stream_terminal_metadata(&outcome);
+        assert!(error.is_some());
+        assert!(matches!(request_outcome, RequestOutcome::Failed(_)));
     }
 
     #[test]
-    fn abort_and_completion_map_to_completed() {
-        // A StreamHook abort is a deliberate stop (e.g. a guardrail), not an
-        // upstream failure.
-        assert!(matches!(
-            request_outcome_for(&StreamOutcome::Aborted(BitrouterError::bad_request(
-                "blocked"
-            ))),
-            RequestOutcome::Completed
-        ));
-        assert!(matches!(
-            request_outcome_for(&StreamOutcome::Completed),
-            RequestOutcome::Completed
-        ));
+    fn abort_maps_to_failed_settlement() {
+        let outcome = StreamOutcome::Aborted(BitrouterError::bad_request("blocked"));
+        let (error, request_outcome) = stream_terminal_metadata(&outcome);
+        assert!(error.is_some());
+        assert!(matches!(request_outcome, RequestOutcome::Failed(_)));
+    }
+
+    #[test]
+    fn completion_maps_to_completed_without_error() {
+        let (error, request_outcome) = stream_terminal_metadata(&StreamOutcome::Completed);
+        assert!(error.is_none());
+        assert!(matches!(request_outcome, RequestOutcome::Completed));
     }
 
     #[test]
     fn disconnect_maps_to_disconnect() {
+        let (error, request_outcome) = stream_terminal_metadata(&StreamOutcome::ClientDisconnected);
+        assert!(error.is_none());
         assert!(matches!(
-            request_outcome_for(&StreamOutcome::ClientDisconnected),
+            request_outcome,
             RequestOutcome::ClientDisconnected
         ));
     }

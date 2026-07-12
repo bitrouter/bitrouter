@@ -27,4 +27,5 @@ pub mod nested;
 pub mod stream;
 pub mod sub_agent;
 pub mod toolset;
+pub mod web_fetch;
 pub mod web_search;

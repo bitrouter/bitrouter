@@ -1,0 +1,70 @@
+# opencode-go — flat-rate subscription tier from the opencode.ai team. Sister
+# gateway to opencode-zen with a different base URL and catalog; both
+# authenticate with the same `OPENCODE_ZEN_API_KEY` (one opencode account).
+#
+# Official docs:
+# - https://opencode.ai/docs/go/ (catalog, subscription tiers)
+#   Base URL `https://opencode.ai/zen/go/v1/`; per-protocol endpoints appended
+#   by the consumer (openai→/chat/completions default, anthropic→/messages for
+#   MiniMax).
+#
+# The catalog is the gateway's `/models`, pulled at runtime via `auto_sync:
+# v1_models`; protocol globs apply to whatever is discovered.
+name: opencode-go
+display_name: opencode go
+metadata:
+  headquarters: US
+  name: OpenCode
+  privacy_policy_url: https://opencode.ai/legal/privacy-policy
+  slug: opencode
+  terms_of_service_url: https://opencode.ai/legal/terms-of-service
+kind: gateway
+billing: subscription
+api_base: https://opencode.ai/zen/go/v1
+doc_url: https://opencode.ai/docs/go/
+api_protocol:
+  - "opencode-go/minimax-*": anthropic
+  - "*": openai
+auth:
+  kind: bearer
+  env: OPENCODE_ZEN_API_KEY
+models:
+  - id: deepseek/deepseek-v4-flash
+    provider_model_id: deepseek-v4-flash
+  - id: minimax/minimax-m2.5
+    provider_model_id: minimax-m2.5
+  - id: qwen/qwen3.7-plus
+    provider_model_id: qwen3.7-plus
+  - id: qwen/qwen3.7-max
+    provider_model_id: qwen3.7-max
+  - id: moonshotai/kimi-k2.7-code
+    provider_model_id: kimi-k2.7-code
+  - id: z-ai/glm-5.1
+    provider_model_id: glm-5.1
+  - id: deepseek/deepseek-v4-pro
+    provider_model_id: deepseek-v4-pro
+  - id: z-ai/glm-5.2
+    provider_model_id: glm-5.2
+  - id: minimax/minimax-m3
+    provider_model_id: minimax-m3
+  - id: minimax/minimax-m2.7
+    provider_model_id: minimax-m2.7
+  - id: moonshotai/kimi-k2.5
+    provider_model_id: kimi-k2.5
+  - id: xiaomi/mimo-v2.5
+    provider_model_id: mimo-v2.5
+  - id: xiaomi/mimo-v2-omni
+    provider_model_id: mimo-v2-omni
+  - id: moonshotai/kimi-k2.6
+    provider_model_id: kimi-k2.6
+  - id: xiaomi/mimo-v2-pro
+    provider_model_id: mimo-v2-pro
+  - id: xiaomi/mimo-v2.5-pro
+    provider_model_id: mimo-v2.5-pro
+  - id: z-ai/glm-5
+    provider_model_id: glm-5
+  - id: qwen/qwen3.6-plus
+    provider_model_id: qwen3.6-plus
+status: active
+auto_sync:
+  feed: models_dev

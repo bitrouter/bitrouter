@@ -2,7 +2,7 @@
 //!
 //! Distinct from the `openai` provider: this targets
 //! `chatgpt.com/backend-api/codex` (Responses-only) using an OAuth access
-//! token minted by the `bitrouter login openai-codex` flow against
+//! token minted by the `bitrouter providers login openai-codex` flow against
 //! `auth.openai.com`. The ChatGPT subscription credential does **not**
 //! authenticate to `api.openai.com`, so a separate provider id is the
 //! cleanest model.
@@ -21,9 +21,13 @@
 //!
 //! The ChatGPT/Codex backend requires `store: false` and
 //! `include: ["reasoning.encrypted_content"]` on the Responses body.
-//! [`OpenAiCodexAuthApplier::prepare_body`] sets both at render time. The
-//! system prompt already rides in the Responses `instructions` field (set by
-//! the Responses adapter), so it is left as-is. Mirrors OpenClaw
+//! [`OpenAiCodexAuthApplier::prepare_body`] sets both at render time. It also
+//! folds any `system` / `developer` message items into `instructions`, because
+//! Codex CLI custom-provider traffic can carry those in `input[]` and the
+//! ChatGPT Codex backend rejects them there. It also gives `custom` tool
+//! declarations a `name` when the generic Responses renderer emitted only
+//! `{type:"custom", ...}`; the Codex backend validates `name` for custom tools
+//! while rejecting it on some hosted tools. Mirrors OpenClaw
 //! `src/llm/providers/openai-chatgpt-responses.ts`.
 
 pub mod headers;
@@ -154,7 +158,7 @@ impl OpenAiCodexAuthApplier {
                 status: 401,
                 message: format!(
                     "no openai-codex credential for label '{label}' — \
-                     run `bitrouter login openai-codex`"
+                     run `bitrouter providers login openai-codex`"
                 ),
             })?;
         let token = stored
@@ -276,7 +280,7 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
         AuthCodeError::OAuthError { error, description } => BitrouterError::Upstream {
             status: 401,
             message: format!(
-                "openai-codex OAuth refresh failed ({error}{}). Re-run `bitrouter login openai-codex`.",
+                "openai-codex OAuth refresh failed ({error}{}). Re-run `bitrouter providers login openai-codex`.",
                 description.map(|d| format!(": {d}")).unwrap_or_default()
             ),
         },
@@ -386,11 +390,9 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     obj.remove("context_management");
     obj.remove("output_config");
     obj.remove("cache_control");
-    let hoisted_instructions = hoist_system_like_input_messages(obj);
     for value in obj.values_mut() {
         strip_codex_unsupported_fields(value);
     }
-    retain_codex_supported_tools(obj);
     obj.insert("store".to_string(), Value::Bool(false));
     match obj.get_mut("include") {
         Some(Value::Array(items)) => {
@@ -405,78 +407,35 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
             );
         }
     }
+    let lifted_instructions = lift_instruction_messages(obj);
     // Ensure `instructions` is present even when the caller sent no system
     // prompt — the Codex backend expects it. If the caller supplied
     // system/developer messages in `input`, hoist those into instructions
     // because the backend rejects system/developer items inside `input`.
-    let existing_instructions = obj
+    let has_instructions = obj
         .get("instructions")
         .and_then(Value::as_str)
-        .filter(|s| !s.is_empty());
-    let instructions = match (existing_instructions, hoisted_instructions.is_empty()) {
-        (Some(existing), true) => Some(existing.to_string()),
-        (Some(existing), false) => {
-            let mut parts = Vec::with_capacity(1 + hoisted_instructions.len());
-            parts.push(existing.to_string());
-            parts.extend(hoisted_instructions);
-            Some(parts.join("\n\n"))
-        }
-        (None, false) => Some(hoisted_instructions.join("\n\n")),
-        (None, true) => Some(DEFAULT_INSTRUCTIONS.to_string()),
-    };
-    if let Some(instructions) = instructions {
-        obj.insert("instructions".to_string(), Value::String(instructions));
-    }
-}
-
-fn hoist_system_like_input_messages(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-) -> Vec<String> {
-    use serde_json::Value;
-    let mut hoisted = Vec::new();
-    let Some(Value::Array(items)) = obj.get_mut("input") else {
-        return hoisted;
-    };
-    items.retain(|item| {
-        let is_system_like = item
-            .as_object()
-            .and_then(|obj| obj.get("role"))
-            .and_then(Value::as_str)
-            .is_some_and(|role| matches!(role, "system" | "developer"));
-        if is_system_like {
-            if let Some(content) = item.as_object().and_then(|obj| obj.get("content")) {
-                collect_text_content(content, &mut hoisted);
-            }
-            false
+        .is_some_and(|s| !s.is_empty());
+    if !lifted_instructions.is_empty() {
+        let lifted = lifted_instructions.join("\n\n");
+        let instructions = if has_instructions {
+            let existing = obj
+                .get("instructions")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!("{existing}\n\n{lifted}")
         } else {
-            true
-        }
-    });
-    hoisted
-}
-
-fn collect_text_content(value: &serde_json::Value, out: &mut Vec<String>) {
-    use serde_json::Value;
-    match value {
-        Value::String(text) if !text.is_empty() => out.push(text.clone()),
-        Value::Array(items) => {
-            for item in items {
-                collect_text_content(item, out);
-            }
-        }
-        Value::Object(obj) => {
-            if let Some(text) = obj.get("text").and_then(Value::as_str)
-                && !text.is_empty()
-            {
-                out.push(text.to_string());
-                return;
-            }
-            if let Some(content) = obj.get("content") {
-                collect_text_content(content, out);
-            }
-        }
-        _ => {}
+            lifted
+        };
+        obj.insert("instructions".to_string(), Value::String(instructions));
+    } else if !has_instructions {
+        obj.insert(
+            "instructions".to_string(),
+            Value::String(DEFAULT_INSTRUCTIONS.to_string()),
+        );
     }
+    ensure_tool_names(obj);
+    ensure_tool_descriptions(obj);
 }
 
 fn strip_codex_unsupported_fields(value: &mut serde_json::Value) {
@@ -497,21 +456,113 @@ fn strip_codex_unsupported_fields(value: &mut serde_json::Value) {
     }
 }
 
-fn retain_codex_supported_tools(obj: &mut serde_json::Map<String, serde_json::Value>) {
+fn lift_instruction_messages(obj: &mut serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let Some(serde_json::Value::Array(items)) = obj.get_mut("input") else {
+        return Vec::new();
+    };
+    let mut lifted = Vec::new();
+    let mut kept = Vec::with_capacity(items.len());
+    for item in std::mem::take(items) {
+        if is_instruction_message(&item) {
+            if let Some(text) = message_text(&item)
+                && !text.trim().is_empty()
+            {
+                lifted.push(text);
+            }
+        } else {
+            kept.push(item);
+        }
+    }
+    *items = kept;
+    lifted
+}
+
+fn ensure_tool_names(obj: &mut serde_json::Map<String, serde_json::Value>) {
     let Some(serde_json::Value::Array(tools)) = obj.get_mut("tools") else {
         return;
     };
-    tools.retain(|tool| {
-        tool.as_object().is_some_and(|tool| {
-            tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
-                && tool
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|name| !name.is_empty())
-        })
-    });
-    if tools.is_empty() {
-        obj.remove("tools");
+    for tool in tools {
+        let Some(tool_obj) = tool.as_object_mut() else {
+            continue;
+        };
+        let has_name = tool_obj
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        if has_name {
+            continue;
+        }
+        if tool_obj.get("type").and_then(serde_json::Value::as_str) == Some("custom") {
+            tool_obj.insert(
+                "name".to_string(),
+                serde_json::Value::String("custom".to_string()),
+            );
+        }
+    }
+}
+
+fn ensure_tool_descriptions(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(serde_json::Value::Array(tools)) = obj.get_mut("tools") else {
+        return;
+    };
+    for tool in tools {
+        let Some(tool_obj) = tool.as_object_mut() else {
+            continue;
+        };
+        if tool_obj.get("type").and_then(serde_json::Value::as_str) != Some("tool_search") {
+            continue;
+        }
+        let has_description = tool_obj
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+        if !has_description {
+            tool_obj.insert(
+                "description".to_string(),
+                serde_json::Value::String("Search for available tools.".to_string()),
+            );
+        }
+        tool_obj
+            .entry("parameters".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+    }
+}
+
+fn is_instruction_message(item: &serde_json::Value) -> bool {
+    let is_message = item
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|kind| kind == "message");
+    if !is_message {
+        return false;
+    }
+    matches!(
+        item.get("role").and_then(serde_json::Value::as_str),
+        Some("system" | "developer")
+    )
+}
+
+fn message_text(item: &serde_json::Value) -> Option<String> {
+    let content = item.get("content")?;
+    let mut parts = Vec::new();
+    collect_text(content, &mut parts);
+    (!parts.is_empty()).then(|| parts.join(""))
+}
+
+fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_text(item, out);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            if let Some(text) = obj.get("text").and_then(serde_json::Value::as_str) {
+                out.push(text.to_string());
+            }
+        }
+        _ => {}
     }
 }
 
@@ -544,6 +595,7 @@ mod tests {
             api_base: "https://chatgpt.com/backend-api/codex".to_string(),
             api_key: String::new(),
             api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,
@@ -626,7 +678,7 @@ mod tests {
         let err = applier.apply(req, &codex_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter login openai-codex"),
+            msg.contains("bitrouter providers login openai-codex"),
             "expected helpful hint, got: {msg}"
         );
     }
@@ -913,46 +965,24 @@ mod tests {
         assert!(instructions.contains("system guidance"));
 
         let mut body5 = serde_json::json!({
-            "input": "hi",
+            "input": [],
             "tools": [
-                {
-                    "type": "function",
-                    "name": "exec_command",
-                    "description": "run commands",
-                    "parameters": {"type": "object"}
-                },
-                {
-                    "type": "namespace",
-                    "name": "multi_agent_v1",
-                    "tools": [],
-                    "description": "nested tools"
-                },
-                {
-                    "type": "web_search",
-                    "external_web_access": false
-                }
+                { "type": "custom" },
+                { "type": "tool_search" },
+                { "type": "function", "name": "read_file", "parameters": {} }
             ]
         });
         applier
             .prepare_body(&mut body5, &codex_target(None))
             .await
             .unwrap();
-        let tools = body5["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["type"], serde_json::json!("function"));
-        assert_eq!(tools[0]["name"], serde_json::json!("exec_command"));
-
-        let mut body6 = serde_json::json!({
-            "input": "hi",
-            "tools": [
-                {"type": "web_search", "external_web_access": true},
-                {"type": "namespace", "name": "multi_agent_v1", "tools": []}
-            ]
-        });
-        applier
-            .prepare_body(&mut body6, &codex_target(None))
-            .await
-            .unwrap();
-        assert!(body6.get("tools").is_none());
+        assert_eq!(body5["tools"][0]["name"], serde_json::json!("custom"));
+        assert_eq!(
+            body5["tools"][1]["description"],
+            serde_json::json!("Search for available tools.")
+        );
+        assert_eq!(body5["tools"][1]["parameters"], serde_json::json!({}));
+        assert!(body5["tools"][1].get("name").is_none());
+        assert_eq!(body5["tools"][2]["name"], serde_json::json!("read_file"));
     }
 }
