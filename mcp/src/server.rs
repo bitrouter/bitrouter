@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
@@ -78,9 +78,9 @@ impl BitrouterMcp {
 
     /// The extra content item for a successful result, when a footer is
     /// attached and has something to say.
-    async fn footer_content(&self) -> Option<Content> {
+    async fn footer_content(&self) -> Option<ContentBlock> {
         let footer = self.cost_footer.as_ref()?;
-        footer.line().await.map(Content::text)
+        footer.line().await.map(ContentBlock::text)
     }
 
     #[tool(description = "Route a completion through BitRouter and return the full result.")]
@@ -100,17 +100,19 @@ impl BitrouterMcp {
         match self.backend.complete(&caller, req).await {
             Ok(r) => match serde_json::to_string(&r) {
                 Ok(json) => {
-                    let mut contents = vec![Content::text(json)];
+                    let mut contents = vec![ContentBlock::text(json)];
                     if let Some(footer) = self.footer_content().await {
                         contents.push(footer);
                     }
                     Ok(CallToolResult::success(contents))
                 }
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "serialization error: {e}"
                 ))])),
             },
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                e.to_string(),
+            )])),
         }
     }
 
@@ -122,12 +124,14 @@ impl BitrouterMcp {
         let caller = caller_from_extensions(&ctx.extensions);
         match self.backend.list_models(&caller).await {
             Ok(m) => match serde_json::to_string(&m) {
-                Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "serialization error: {e}"
                 ))])),
             },
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                e.to_string(),
+            )])),
         }
     }
 
@@ -139,17 +143,19 @@ impl BitrouterMcp {
         match self.backend.status(&caller).await {
             Ok(s) => match serde_json::to_string(&s) {
                 Ok(json) => {
-                    let mut contents = vec![Content::text(json)];
+                    let mut contents = vec![ContentBlock::text(json)];
                     if let Some(footer) = self.footer_content().await {
                         contents.push(footer);
                     }
                     Ok(CallToolResult::success(contents))
                 }
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "serialization error: {e}"
                 ))])),
             },
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                e.to_string(),
+            )])),
         }
     }
 }

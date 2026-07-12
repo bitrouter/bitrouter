@@ -180,10 +180,10 @@ mod tests {
     use std::sync::Arc;
 
     use opentelemetry::Context;
-    use opentelemetry::trace::{TraceResult, TracerProvider as _};
-    use opentelemetry_sdk::export::trace::SpanData;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::{
-        Span as SdkSpan, SpanProcessor, Tracer as SdkTracer, TracerProvider,
+        SdkTracerProvider, Span as SdkSpan, SpanData, SpanProcessor, Tracer as SdkTracer,
     };
 
     use super::*;
@@ -202,17 +202,17 @@ mod tests {
             };
             guard.push(span);
         }
-        fn force_flush(&self) -> TraceResult<()> {
+        fn force_flush(&self) -> OTelSdkResult {
             Ok(())
         }
-        fn shutdown(&self) -> TraceResult<()> {
+        fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
             Ok(())
         }
     }
 
     fn capturing_tracer() -> (SdkTracer, Arc<std::sync::Mutex<Vec<SpanData>>>) {
         let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let provider = TracerProvider::builder()
+        let provider = SdkTracerProvider::builder()
             .with_span_processor(CapturingProcessor {
                 captured: Arc::clone(&captured),
             })

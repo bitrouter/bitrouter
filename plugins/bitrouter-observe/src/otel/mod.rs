@@ -22,6 +22,7 @@ mod config;
 mod exporter;
 pub mod http_layer;
 mod metrics;
+mod processor_runtime;
 mod span_attributes;
 mod transport;
 

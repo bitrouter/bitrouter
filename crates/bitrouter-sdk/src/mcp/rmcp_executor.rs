@@ -22,11 +22,15 @@ use rmcp::ServiceExt;
 use rmcp::handler::client::ClientHandler;
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest,
-    CreateElicitationRequestParams, CreateElicitationResult, CreateMessageRequestParams,
-    CreateMessageResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams, Implementation,
-    ListRootsResult, ProgressNotificationParam, ReadResourceRequestParams, ServerResult,
+    CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, ElicitRequestParams,
+    ElicitResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams, Implementation,
+    ProgressNotificationParam, ReadResourceRequestParams, ServerResult,
 };
+#[expect(
+    deprecated,
+    reason = "rmcp ClientHandler still requires the SEP-2577-deprecated request types"
+)]
+use rmcp::model::{CreateMessageRequestParams, CreateMessageResult, ListRootsResult};
 use rmcp::service::{
     NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient, RunningService,
 };
@@ -121,6 +125,10 @@ impl ClientHandler for BitrouterMcpClient {
     // defaults (the spec's #1 silent-breakage complaint of MCP-through-gateway
     // in 2026), we surface an explicit, spec-shaped `-32601` so the upstream
     // server's tool-call logic sees the rejection and can branch on it.
+    #[expect(
+        deprecated,
+        reason = "rmcp ClientHandler still requires the SEP-2577-deprecated sampling types"
+    )]
     fn create_message(
         &self,
         _params: CreateMessageRequestParams,
@@ -140,11 +148,10 @@ impl ClientHandler for BitrouterMcpClient {
 
     fn create_elicitation(
         &self,
-        _request: CreateElicitationRequestParams,
+        _request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
-    ) -> impl std::future::Future<Output = std::result::Result<CreateElicitationResult, McpError>>
-    + Send
-    + '_ {
+    ) -> impl std::future::Future<Output = std::result::Result<ElicitResult, McpError>> + Send + '_
+    {
         let server = self.server_name.clone();
         async move {
             tracing::warn!(
@@ -156,6 +163,10 @@ impl ClientHandler for BitrouterMcpClient {
         }
     }
 
+    #[expect(
+        deprecated,
+        reason = "rmcp ClientHandler still requires the SEP-2577-deprecated roots type"
+    )]
     fn list_roots(
         &self,
         _context: RequestContext<RoleClient>,
@@ -298,9 +309,8 @@ async fn connect(
             // <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http>.
             //
             // We construct the transport via `from_config`, which uses rmcp's
-            // internally-bundled reqwest client. That keeps rmcp's reqwest
-            // version independent of the workspace reqwest used by the
-            // language_model executor.
+            // reqwest client. rmcp and the workspace intentionally resolve to
+            // the same reqwest line so transport errors can be downcast below.
             use http::{HeaderName, HeaderValue};
             let mut header_map: std::collections::HashMap<HeaderName, HeaderValue> =
                 std::collections::HashMap::new();
@@ -357,7 +367,7 @@ fn bad_params(server: &str, method: &str, msg: impl std::fmt::Display) -> Bitrou
     BitrouterError::bad_request(format!("mcp '{server}' {method}: {msg}"))
 }
 
-/// Inspect a transport error for an upstream auth challenge (rmcp 1.7
+/// Inspect a transport error for an upstream auth challenge (rmcp
 /// classifies these as typed variants). Returns a status-bearing
 /// [`BitrouterError::UpstreamAuth`] for `401`/`403` so the cloud can drive
 /// token refresh / OAuth step-up; `None` for any other transport error
@@ -366,13 +376,11 @@ fn classify_transport_auth_error(
     dte: &rmcp::transport::DynamicTransportError,
 ) -> Option<BitrouterError> {
     use rmcp::transport::streamable_http_client::StreamableHttpError;
-    // regression: rmcp uses reqwest 0.13; downcast must name that type
-    // (rmcp_reqwest = reqwest 0.13). Our own client is reqwest 0.12 — a
-    // distinct, separately-compiled crate with a different TypeId, so naming
-    // bare `reqwest::Error` here would make this downcast silently never match.
+    // rmcp and the SDK intentionally share reqwest 0.13, so the concrete
+    // transport error can be downcast through the SDK's direct dependency.
     let err = dte
         .error
-        .downcast_ref::<StreamableHttpError<rmcp_reqwest::Error>>()?;
+        .downcast_ref::<StreamableHttpError<reqwest::Error>>()?;
     match err {
         StreamableHttpError::AuthRequired(e) => Some(BitrouterError::UpstreamAuth {
             status: 401,
@@ -759,7 +767,7 @@ mod tests {
             InsufficientScopeError, StreamableHttpError,
         };
 
-        let inner: StreamableHttpError<rmcp_reqwest::Error> =
+        let inner: StreamableHttpError<reqwest::Error> =
             StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
                 "Bearer error=\"insufficient_scope\", scope=\"read:files\"".to_string(),
                 Some("read:files".to_string()),
@@ -789,7 +797,7 @@ mod tests {
         use rmcp::transport::DynamicTransportError;
         use rmcp::transport::streamable_http_client::{AuthRequiredError, StreamableHttpError};
 
-        let inner: StreamableHttpError<rmcp_reqwest::Error> =
+        let inner: StreamableHttpError<reqwest::Error> =
             StreamableHttpError::AuthRequired(AuthRequiredError::new("Bearer".to_string()));
         let dte = DynamicTransportError::from_parts(
             "test",
@@ -807,8 +815,7 @@ mod tests {
     fn non_auth_transport_error_is_not_classified() {
         use rmcp::transport::DynamicTransportError;
         use rmcp::transport::streamable_http_client::StreamableHttpError;
-        let inner: StreamableHttpError<rmcp_reqwest::Error> =
-            StreamableHttpError::UnexpectedEndOfStream;
+        let inner: StreamableHttpError<reqwest::Error> = StreamableHttpError::UnexpectedEndOfStream;
         let dte = DynamicTransportError::from_parts(
             "test",
             std::any::TypeId::of::<()>(),
@@ -825,7 +832,7 @@ mod tests {
             InsufficientScopeError, StreamableHttpError,
         };
 
-        let inner: StreamableHttpError<rmcp_reqwest::Error> =
+        let inner: StreamableHttpError<reqwest::Error> =
             StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
                 "Bearer error=\"insufficient_scope\", scope=\"x\"".into(),
                 Some("x".into()),
@@ -854,7 +861,7 @@ mod tests {
             InsufficientScopeError, StreamableHttpError,
         };
 
-        let inner: StreamableHttpError<rmcp_reqwest::Error> =
+        let inner: StreamableHttpError<reqwest::Error> =
             StreamableHttpError::InsufficientScope(InsufficientScopeError::new(
                 "Bearer error=\"insufficient_scope\", scope=\"a\"".into(),
                 Some("a".into()),

@@ -50,7 +50,7 @@ fn eip191_digest(message: &[u8]) -> [u8; 32] {
 /// The 0x-prefixed, lowercase Ethereum address for a recovered public key:
 /// `"0x" ‖ keccak256(uncompressed_pubkey[1..])[12..]`.
 fn address_from_verifying_key(vk: &VerifyingKey) -> String {
-    let encoded = vk.to_encoded_point(false); // 0x04 ‖ X ‖ Y
+    let encoded = vk.to_sec1_point(false); // 0x04 ‖ X ‖ Y
     let hash = Keccak256::digest(&encoded.as_bytes()[1..]);
     format!("0x{}", hex::encode(&hash[12..]))
 }
@@ -100,7 +100,7 @@ mod tests {
 
     fn sign_eip191(key: &SigningKey, message: &[u8]) -> String {
         let digest = eip191_digest(message);
-        let (sig, rec_id) = key.sign_prehash_recoverable(&digest).unwrap();
+        let (sig, rec_id) = key.sign_prehash_recoverable(&digest);
         let mut out = sig.to_bytes().to_vec(); // 64 bytes r ‖ s
         out.push(27 + rec_id.to_byte()); // EIP-191 v
         hex::encode(out)

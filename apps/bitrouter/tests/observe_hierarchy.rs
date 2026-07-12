@@ -158,6 +158,9 @@ plugins:
   bitrouter-observe:
     otel:
       endpoint: {otlp}
+      traces:
+        batch:
+          flush_ms: 100
       metrics:
         enabled: false
 "#,

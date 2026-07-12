@@ -16,43 +16,50 @@ serde_json.workspace = true
 tracing.workspace = true
 
 # OpenTelemetry stack for OTLP export (traces + metrics).
-# Pinned to 0.27.x — the API churns minor-to-minor in this stack.
-opentelemetry = { version = "0.27", optional = true }
-opentelemetry_sdk = { version = "0.27", optional = true, features = ["rt-tokio", "trace", "metrics"] }
+# Pinned to 0.32.x — the API churns minor-to-minor in this stack.
+opentelemetry = { version = "0.32", optional = true }
+opentelemetry_sdk = { version = "0.32", optional = true, features = [
+    "rt-tokio-current-thread",
+    "trace",
+    "metrics",
+    "experimental_trace_batch_span_processor_with_async_runtime",
+    "experimental_metrics_periodicreader_with_async_runtime",
+] }
 # Transport features (`http-proto`, `grpc-tonic`, the reqwest/tonic TLS
 # variants) are NOT enabled here — they are layered on by the `otel-http` /
 # `otel-grpc` sub-features below. `default-features = false` drops the upstream
 # defaults (`grpc-tonic`, `logs`, `internal-logs`) so a build only ever pulls
 # in the transport stack it actually selected. `trace` + `metrics` are the
 # signal kinds this plugin emits and are transport-independent.
-opentelemetry-otlp = { version = "0.27", optional = true, default-features = false, features = ["trace", "metrics"] }
-opentelemetry-semantic-conventions = { version = "0.27", optional = true }
-# tracing ↔ OpenTelemetry bridge. Pinned to the 0.28.x line, which targets
-# opentelemetry 0.27. https://crates.io/crates/tracing-opentelemetry
-tracing-opentelemetry = { version = "0.28", optional = true }
+opentelemetry-otlp = { version = "0.32", optional = true, default-features = false, features = ["trace", "metrics"] }
+opentelemetry-semantic-conventions = { version = "0.32", optional = true }
+# tracing ↔ OpenTelemetry bridge. Pinned to the 0.33.x line, which targets
+# opentelemetry 0.32. https://crates.io/crates/tracing-opentelemetry
+tracing-opentelemetry = { version = "0.33", optional = true }
 # Inbound HTTP TraceLayer for the SERVER span. Inherits the workspace
-# pin (0.6) with the `trace` feature.
+# pin (0.7) with the `trace` feature.
 # https://docs.rs/tower-http/latest/tower_http/trace/index.html
 tower-http = { workspace = true, optional = true }
 # axum is the host's HTTP framework; we wrap its Router with the TraceLayer.
 axum = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+futures-core = { version = "0.3", optional = true }
 http = { workspace = true, optional = true }
 dashmap = { version = "6", optional = true }
 # OTLP/gRPC transport (tonic). Only compiled under `otel-grpc`; the bulk of the
 # gRPC stack arrives through `opentelemetry-otlp/grpc-tonic`. We depend on tonic
 # directly solely for `tonic::metadata::MetadataMap`, used to forward the
 # configured headers as gRPC request metadata.
-tonic = { version = "0.12", optional = true, default-features = false }
+tonic = { version = "0.14", optional = true, default-features = false }
 # Custom OTLP/HTTP client that injects a freshly-resolved bearer per export
 # (`otel::auth_client`). Only compiled under `otel-http`. We implement
 # `opentelemetry_http::HttpClient` over a `reqwest::Client`, so we depend on
 # `opentelemetry-http` (with its `reqwest` impl), `reqwest` itself (matching the
 # rustls TLS the `otel-http` otlp stack pins, NOT default-tls), and `bytes` for
 # the trait's `Response<Bytes>` body type.
-# https://docs.rs/opentelemetry-http/0.27/opentelemetry_http/trait.HttpClient.html
-opentelemetry-http = { version = "0.27", optional = true, features = ["reqwest"] }
+# https://docs.rs/opentelemetry-http/0.32/opentelemetry_http/trait.HttpClient.html
+opentelemetry-http = { version = "0.32", optional = true, features = ["reqwest"] }
 reqwest = { workspace = true, optional = true }
 bytes = { version = "1", optional = true }
 
@@ -74,6 +81,7 @@ otel-base = [
     "dep:axum",
     "dep:tracing-subscriber",
     "dep:tokio",
+    "dep:futures-core",
     "dep:http",
     "dep:dashmap",
 ]
@@ -105,9 +113,9 @@ otel-grpc = [
 ]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 futures.workspace = true
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 
 [[bench]]
 name = "observe_overhead"

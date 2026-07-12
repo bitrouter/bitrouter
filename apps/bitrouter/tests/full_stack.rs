@@ -73,9 +73,8 @@ impl Drop for PolicyDir {
 
 /// Build the full assembled stack: every plugin + binary module wired into
 /// the router, a brvk_ key minted, the upstream + OTLP collector stood up.
-/// OTLP **metric** export is on (the legacy `otlp_endpoint` shim), so this
-/// path exercises trace + metric export together — the canonical
-/// "did anyone break assembly?" smoke gate.
+/// OTLP **metric** export is on, so this path exercises trace + metric export
+/// together — the canonical "did anyone break assembly?" smoke gate.
 async fn assemble_full_stack() -> FullStack {
     assemble_full_stack_inner(true).await
 }
@@ -84,9 +83,7 @@ async fn assemble_full_stack() -> FullStack {
 /// span-shape decode tests use this so the OTLP collector receives only
 /// trace bodies: trace and metric OTLP messages share the same top-level
 /// proto framing, so a metric body would otherwise decode as a degenerate
-/// trace request and muddy the assertions. Metrics-off needs the nested
-/// `otel:` config block — the only form that carries the `metrics.enabled`
-/// knob (the flat `otlp_endpoint` shim always defaults metrics on).
+/// trace request and muddy the assertions.
 async fn assemble_full_stack_traces_only() -> FullStack {
     assemble_full_stack_inner(false).await
 }
@@ -138,18 +135,13 @@ async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
         .mount(&otlp_collector)
         .await;
 
-    // The observe block: metrics-on uses the flat `otlp_endpoint` shim;
-    // metrics-off needs the nested `otel:` block (the only form carrying
-    // the `metrics.enabled` knob). Indentation matches the 4-space depth
-    // under `bitrouter-observe:`.
-    let observe_block = if metrics_enabled {
-        format!("    otlp_endpoint: \"{otlp}\"", otlp = otlp_collector.uri())
-    } else {
-        format!(
-            "    otel:\n      endpoint: \"{otlp}\"\n      metrics:\n        enabled: false",
-            otlp = otlp_collector.uri()
-        )
-    };
+    // Use a short explicit trace interval so this test checks export behavior
+    // without racing the production default. Indentation matches the 4-space
+    // depth under `bitrouter-observe:`.
+    let observe_block = format!(
+        "    otel:\n      endpoint: \"{otlp}\"\n      traces:\n        batch:\n          flush_ms: 100\n      metrics:\n        enabled: {metrics_enabled}",
+        otlp = otlp_collector.uri()
+    );
 
     // ── config wiring every plugin + module ──
     let yaml = format!(

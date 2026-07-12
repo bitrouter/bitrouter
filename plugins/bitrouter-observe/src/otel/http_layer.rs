@@ -82,7 +82,9 @@ fn make_http_server_span<B>(request: &http::Request<B>) -> Span {
     let parent = global::get_text_map_propagator(|propagator| {
         propagator.extract(&HeaderExtractor(request.headers()))
     });
-    span.set_parent(parent);
+    if let Err(error) = span.set_parent(parent) {
+        tracing::debug!(?error, "could not attach inbound trace context");
+    }
     span
 }
 

@@ -48,9 +48,8 @@ anyhow = "1"
 futures.workspace = true
 agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
-axoupdater = { version = "0.9", default-features = false, features = ["github_releases"] }
+axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
-thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -60,11 +59,11 @@ tempfile.workspace = true
 serde_json.workspace = true
 tower = { workspace = true, features = ["util"] }
 axum.workspace = true
-axum-test = "20"
+axum-test = "21"
 http.workspace = true
 serde-saphyr.workspace = true
 # OTLP/HTTP+protobuf decoding for full-stack tests that inspect the trace
 # bodies the observe plugin pushes to the configured collector.
-# https://docs.rs/opentelemetry-proto/0.27/
-opentelemetry-proto = { version = "0.27", default-features = false, features = ["gen-tonic-messages", "trace"] }
-prost = "0.13"
+# https://docs.rs/opentelemetry-proto/0.32/
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
