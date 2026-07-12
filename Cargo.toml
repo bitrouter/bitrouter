@@ -49,7 +49,7 @@ async-stream = "0.3"
 # http server (sdk `server` feature)
 axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
-tower-http = { version = "0.7", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 
 # http client
 reqwest = { version = "0.13", default-features = false, features = [
