@@ -67,16 +67,21 @@ async fn prompt_ndjson() {
     let orig_dir = std::env::current_dir().expect("cwd");
     std::env::set_current_dir(base.path()).expect("set_current_dir");
 
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
     let mut buf: Vec<u8> = Vec::new();
-    let result = bitrouter::acp_cli::prompt(
-        stub_config(),
-        "stub",
-        bitrouter::acp_cli::launch_options(None, false, false, None),
-        "hello",
-        false,
-        &mut buf,
-    )
-    .await;
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config(),
+        agent_id: "stub",
+        options: bitrouter::acp_cli::launch_options(None, false, false, None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let result = bitrouter::acp_cli::prompt(ctx, "hello", false, &mut buf).await;
 
     let _ = std::env::set_current_dir(&orig_dir);
 
@@ -86,6 +91,27 @@ async fn prompt_ndjson() {
     let lines: Vec<&str> = output.lines().collect();
 
     assert!(!lines.is_empty(), "expected at least one NDJSON line");
+
+    // The first line correlates this session's record for the orchestrator.
+    // Running direct (the stub is not catalog-matched), so `via` is null.
+    let first: serde_json::Value =
+        serde_json::from_str(lines[0]).expect("first line must be valid JSON");
+    assert_eq!(
+        first.get("type").and_then(|t| t.as_str()),
+        Some("session"),
+        "first NDJSON line must be the session line; got: {}",
+        lines[0]
+    );
+    assert!(
+        first.get("record_id").and_then(|r| r.as_str()).is_some(),
+        "session line must carry a record_id: {}",
+        lines[0]
+    );
+    assert!(
+        first.get("via").map(|v| v.is_null()).unwrap_or(false),
+        "direct session must report via=null: {}",
+        lines[0]
+    );
 
     // At least one line should be a message_chunk with the agent's "hi" text.
     // The NDJSON format uses the SessionUpdateKind variant name as the `type`
@@ -124,6 +150,71 @@ async fn prompt_ndjson() {
         stop_reason, "end_turn",
         "expected snake_case end_turn stop_reason, got: {stop_reason}"
     );
+}
+
+// ── Test 1b: routing fail-fast (no session side effects) ─────────────────────
+
+/// `apply_routing` for a catalog harness with an unreachable daemon must fail
+/// fast with `DaemonUnreachable` — before any session is launched. It may
+/// synthesize the catalog invocation into the config (so a later launch is
+/// *possible*), but it creates no worktree / record / transcript itself.
+#[tokio::test]
+async fn routing_fails_fast_on_dead_daemon() {
+    let base = tempfile::tempdir().expect("tempdir");
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut cfg = Config::default();
+    // Isolate the daemon check from the auth check: with skip_auth the
+    // credential resolves to the placeholder regardless of the environment.
+    cfg.server.skip_auth = true;
+
+    let opts = bitrouter::acp_cli::RoutingOptions {
+        direct: false,
+        // Loopback discard port — nothing serves `/health`, so the liveness
+        // probe fails deterministically. `base_url` set means no auto-start.
+        base_url: Some("http://127.0.0.1:9".to_string()),
+        model: None,
+        no_start: true,
+    };
+
+    let res = bitrouter::acp_cli::apply_routing(&source, &mut cfg, "claude-acp", &opts).await;
+    assert!(
+        matches!(
+            res,
+            Err(bitrouter::acp_cli::RoutingError::DaemonUnreachable { .. })
+        ),
+        "expected DaemonUnreachable, got: {res:?}"
+    );
+    // The catalog invocation was synthesized, but no session artifacts exist.
+    assert!(cfg.agents.contains_key("claude-acp"));
+    assert!(
+        !base.path().join(".bitrouter").exists(),
+        "fail-fast must not create session side effects"
+    );
+}
+
+/// `--direct` skips routing entirely: no daemon probe, `via` is `None`, and a
+/// catalog id is still synthesized so the session can launch.
+#[tokio::test]
+async fn routing_direct_skips_daemon_and_reports_no_via() {
+    let base = tempfile::tempdir().expect("tempdir");
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut cfg = Config::default();
+    let opts = bitrouter::acp_cli::RoutingOptions {
+        direct: true,
+        base_url: Some("http://127.0.0.1:9".to_string()),
+        model: None,
+        no_start: true,
+    };
+    let via = bitrouter::acp_cli::apply_routing(&source, &mut cfg, "claude-acp", &opts)
+        .await
+        .expect("direct routing never fails");
+    assert!(via.is_none(), "direct → no via");
+    // The claude-acp invocation is available even though routing was skipped.
+    assert!(cfg.agents.contains_key("claude-acp"));
 }
 
 // ── shared raw JSON-RPC helpers (subprocess / socket e2e) ────────────────────
@@ -659,18 +750,24 @@ async fn prompt_headless_denies_permission_and_completes() {
     let orig_dir = std::env::current_dir().expect("cwd");
     std::env::set_current_dir(base.path()).expect("set_current_dir");
 
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
     let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: cfg,
+        agent_id: "perm-stub",
+        options: bitrouter::acp_cli::launch_options(None, false, false, None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
     // Bound the whole run: before the fix this hung forever.
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        bitrouter::acp_cli::prompt(
-            cfg,
-            "perm-stub",
-            bitrouter::acp_cli::launch_options(None, false, false, None),
-            "write it",
-            false,
-            &mut buf,
-        ),
+        bitrouter::acp_cli::prompt(ctx, "write it", false, &mut buf),
     )
     .await;
 

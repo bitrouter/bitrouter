@@ -40,7 +40,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::acp::ConfigAcpRoutingTable;
+use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport, ConfigAcpRoutingTable};
 use bitrouter_sdk::config::Config;
 use futures::StreamExt;
 use serde::Serialize;
@@ -50,6 +50,248 @@ use bitrouter_substrate::engine::LaunchOptions;
 use bitrouter_substrate::telemetry::RequestCompleted;
 use bitrouter_substrate::translate::SessionUpdateKind;
 use bitrouter_substrate::worktree::WorktreeSpec;
+
+use crate::paths::ConfigSource;
+
+// ── routing (spawn --via-daemon by default) ─────────────────────────────────────
+
+/// Per-invocation routing decision for a spawned sub-agent. Routing is on by
+/// default; `direct` opts out. See `SPAWN_SPEC.md` §5.
+#[derive(Debug, Clone, Default)]
+pub struct RoutingOptions {
+    /// Skip daemon routing entirely — the harness talks to its own provider.
+    pub direct: bool,
+    /// Explicit gateway base URL. When `None` it is derived from the daemon's
+    /// `server.listen`.
+    pub base_url: Option<String>,
+    /// Pin the harness's model (via its model env var / `-c model=`).
+    pub model: Option<String>,
+    /// Never auto-start a local daemon when none is running — fail fast.
+    pub no_start: bool,
+}
+
+/// The inputs shared by the two sub-agent launch paths ([`serve`] and
+/// [`prompt`]): where the config came from, the loaded config, which agent,
+/// the session options, and the routing decision. Bundled so each entry point
+/// keeps a small, readable signature.
+pub struct SpawnContext<'a> {
+    /// Where the config was resolved from (daemon socket / auto-start).
+    pub source: &'a ConfigSource,
+    /// The loaded config (routing overlays its agent entry in place).
+    pub config: Config,
+    /// The agent id to launch (catalog id or configured entry).
+    pub agent_id: &'a str,
+    /// Session options (worktree, transcript, turn timeout).
+    pub options: LaunchOptions,
+    /// The routing decision (via-daemon by default, or `--direct`).
+    pub routing: RoutingOptions,
+}
+
+/// A fail-fast routing failure, surfaced BEFORE any session side effect
+/// (`SPAWN_SPEC.md` §8). Rendered as a structured NDJSON `error` line in
+/// `prompt` mode, or to stderr in `serve` mode.
+#[derive(Debug)]
+pub enum RoutingError {
+    /// The daemon behind `via` did not answer `/health` after auto-start.
+    DaemonUnreachable {
+        /// The gateway base URL that was probed.
+        via: String,
+    },
+    /// The daemon requires auth and no `BITROUTER_API_KEY` is available.
+    AuthRequired {
+        /// The gateway base URL that would have been used.
+        via: String,
+    },
+}
+
+impl RoutingError {
+    /// Machine-readable `code` for the NDJSON `error` line.
+    fn code(&self) -> &'static str {
+        match self {
+            RoutingError::DaemonUnreachable { .. } => "daemon_unreachable",
+            RoutingError::AuthRequired { .. } => "auth_required",
+        }
+    }
+
+    /// The gateway base URL this failure concerns.
+    fn via(&self) -> &str {
+        match self {
+            RoutingError::DaemonUnreachable { via } | RoutingError::AuthRequired { via } => via,
+        }
+    }
+
+    /// One-line remediation hint.
+    fn hint(&self) -> &'static str {
+        match self {
+            RoutingError::DaemonUnreachable { .. } => "run `bitrouter start`, or pass --direct",
+            RoutingError::AuthRequired { .. } => {
+                "export BITROUTER_API_KEY (or create a key), or pass --direct"
+            }
+        }
+    }
+
+    /// Human message for stderr (`serve`) and the NDJSON `message` field.
+    fn message(&self) -> String {
+        match self {
+            RoutingError::DaemonUnreachable { via } => {
+                format!("BitRouter daemon unreachable at {via}")
+            }
+            RoutingError::AuthRequired { via } => {
+                format!("daemon at {via} requires auth but no BITROUTER_API_KEY is set")
+            }
+        }
+    }
+
+    /// The structured NDJSON `error` line for this failure.
+    fn ndjson(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "error",
+            "code": self.code(),
+            "via": self.via(),
+            "hint": self.hint(),
+            "message": self.message(),
+        })
+    }
+}
+
+/// Resolve routing and overlay it onto `config`'s entry for `agent_id`,
+/// inserting the bundled-catalog invocation when the id is catalog-known but
+/// unconfigured (so `bitrouter spawn claude-acp` works with no YAML edit).
+///
+/// Returns the "via" base URL when routing is active, or `None` when the
+/// session runs direct (`--direct`, an unknown/custom agent, or an
+/// unroutable harness — each warned to stderr). Fails fast — before the
+/// caller creates any worktree, record, or transcript — on an unreachable
+/// daemon or a missing required credential.
+pub async fn apply_routing(
+    source: &ConfigSource,
+    config: &mut Config,
+    agent_id: &str,
+    opts: &RoutingOptions,
+) -> std::result::Result<Option<String>, RoutingError> {
+    // A catalog-known id needs no `agents:` entry — synthesize its invocation.
+    if !config.agents.contains_key(agent_id)
+        && let Some(h) = crate::harness::by_id(agent_id)
+    {
+        config.agents.insert(
+            agent_id.to_string(),
+            AcpAgentConfig {
+                name: agent_id.to_string(),
+                transport: AcpTransport::Stdio {
+                    command: h.acp_command.to_string(),
+                    args: h.acp_args.iter().map(|s| s.to_string()).collect(),
+                    env: Default::default(),
+                },
+            },
+        );
+    }
+
+    // `--model` only takes effect when the daemon route is applied; warn
+    // rather than silently drop it on any path that launches direct.
+    let warn_model_dropped = |why: &str| {
+        if let Some(m) = &opts.model {
+            eprintln!("note: --model '{m}' ignored — {why}");
+        }
+    };
+
+    if opts.direct {
+        warn_model_dropped("running --direct");
+        return Ok(None);
+    }
+
+    // Match the (now-present-if-known) invocation back to a catalog harness.
+    let harness = match config.agents.get(agent_id) {
+        Some(entry) => {
+            let AcpTransport::Stdio { command, args, .. } = &entry.transport;
+            crate::harness::match_invocation(command, args)
+        }
+        // Unknown agent — let the caller's `Session::launch` surface the
+        // configured-agents not-found error.
+        None => return Ok(None),
+    };
+    let Some(harness) = harness else {
+        eprintln!(
+            "note: routing unavailable for '{agent_id}' (not catalog-matched); \
+             launching direct — set its `env` to route manually"
+        );
+        warn_model_dropped("the agent is not catalog-matched");
+        return Ok(None);
+    };
+    if let crate::harness::Routing::Unroutable { reason } = &harness.routing {
+        eprintln!(
+            "note: '{}' is not routable: {reason}; launching direct",
+            harness.id
+        );
+        warn_model_dropped("the harness is not routable");
+        return Ok(None);
+    }
+
+    // Base URL, auth mode, and whether the target is a remote we can't vouch for.
+    let base_url = opts
+        .base_url
+        .clone()
+        .unwrap_or_else(|| crate::spawn::derive_base_url(&config.server.listen));
+    let target_authority = opts
+        .base_url
+        .as_deref()
+        .and_then(crate::spawn::listen_from_base_url);
+    let target_is_local = match &target_authority {
+        Some(a) => crate::spawn::listen_is_local(a),
+        None => crate::spawn::listen_is_local(&config.server.listen),
+    };
+    // A remote daemon's `skip_auth` is unknowable here, so require a key.
+    let require_key = !target_is_local || !config.server.skip_auth;
+
+    // A harness whose credential isn't Bearer (gemini's `x-goog-api-key`) is
+    // rejected by the daemon's auth hook under `skip_auth: false` — warn
+    // rather than let the session 401 mid-turn (SPAWN_SPEC §6.3).
+    if require_key && !harness.auth_is_bearer() {
+        eprintln!(
+            "warning: '{}' sends its API key as a non-Bearer header the daemon rejects under \
+             auth mode (`skip_auth: false`) — this session will likely 401. Use `skip_auth: \
+             true`, a `--direct` session, or a different harness.",
+            harness.id
+        );
+    }
+
+    let auth = match crate::harness::resolve_gateway_auth(
+        crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV),
+        require_key,
+    ) {
+        Some(a) => a,
+        None => return Err(RoutingError::AuthRequired { via: base_url }),
+    };
+
+    // Daemon liveness: auto-start a local daemon, then probe. Fail fast if the
+    // daemon is still unreachable (a routed sub-agent without one is
+    // guaranteed-dead) — before any session side effect.
+    if opts.base_url.is_none() && target_is_local {
+        crate::spawn::ensure_local_daemon(source, config, opts.no_start).await;
+    }
+    if !crate::spawn::base_url_reachable(&base_url).await {
+        return Err(RoutingError::DaemonUnreachable { via: base_url });
+    }
+
+    // Compute + apply the overlay. Injection wins over inherited and
+    // config-authored env; a config `env:` collision is warned, not silent.
+    let overlay = harness.routing_overlay(&base_url, &auth, opts.model.as_deref());
+    if let Some(entry) = config.agents.get_mut(agent_id) {
+        let AcpTransport::Stdio { args, env, .. } = &mut entry.transport;
+        for (k, v) in overlay.env {
+            if let Some(existing) = env.get(&k)
+                && existing != &v
+            {
+                eprintln!(
+                    "note: routing overrides your `env.{k}` for '{agent_id}' \
+                     (pass --direct to keep your value)"
+                );
+            }
+            env.insert(k, v);
+        }
+        args.extend(overlay.args);
+    }
+    Ok(Some(base_url))
+}
 
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
 
@@ -80,6 +322,173 @@ where
         .context("writing NDJSON line")
 }
 
+/// `bitrouter spawn <agent> --check` — preflight the harness resolution, the
+/// routing decision, and (when routing) daemon reachability, without launching
+/// anything or auto-starting a daemon. Read-only.
+pub async fn spawn_check(
+    config: Config,
+    agent_id: &str,
+    routing: &RoutingOptions,
+) -> Result<crate::spawn::SpawnCheckReport> {
+    use crate::spawn::{SpawnCheckReport, SpawnCheckRow, SpawnCheckStatus};
+
+    let row = |name: &str, status: SpawnCheckStatus, message: String| SpawnCheckRow {
+        name: name.to_string(),
+        status,
+        message,
+    };
+    let mut checks = Vec::new();
+
+    // 1. The agent resolves — either configured or a bundled-catalog id.
+    let configured = config.agents.get(agent_id);
+    let catalog = crate::harness::by_id(agent_id);
+    let (command, args) = match (configured, catalog) {
+        (Some(entry), _) => {
+            let AcpTransport::Stdio { command, args, .. } = &entry.transport;
+            checks.push(row(
+                "agent",
+                SpawnCheckStatus::Pass,
+                format!("configured in agents: ({command})"),
+            ));
+            (command.clone(), args.clone())
+        }
+        (None, Some(h)) => {
+            checks.push(row(
+                "agent",
+                SpawnCheckStatus::Pass,
+                format!(
+                    "bundled catalog ({} {})",
+                    h.acp_command,
+                    h.acp_args.join(" ")
+                ),
+            ));
+            (
+                h.acp_command.to_string(),
+                h.acp_args.iter().map(|s| s.to_string()).collect(),
+            )
+        }
+        (None, None) => {
+            checks.push(row(
+                "agent",
+                SpawnCheckStatus::Fail,
+                format!("'{agent_id}' is neither a configured agent nor a bundled-catalog id"),
+            ));
+            (String::new(), Vec::new())
+        }
+    };
+
+    // 2. Routing decision.
+    let base_url = routing
+        .base_url
+        .clone()
+        .unwrap_or_else(|| crate::spawn::derive_base_url(&config.server.listen));
+    let harness = crate::harness::match_invocation(&command, &args);
+    let mut routable_harness: Option<&'static crate::harness::Harness> = None;
+    if routing.direct {
+        checks.push(row(
+            "routing",
+            SpawnCheckStatus::Warn,
+            "--direct: the sub-agent uses its own provider auth".to_string(),
+        ));
+    } else {
+        match harness {
+            Some(h) if h.is_routable() => {
+                routable_harness = Some(h);
+                checks.push(row(
+                    "routing",
+                    SpawnCheckStatus::Pass,
+                    format!("via daemon {base_url} [{}]", h.id),
+                ));
+            }
+            Some(h) => {
+                let reason = match &h.routing {
+                    crate::harness::Routing::Unroutable { reason } => *reason,
+                    _ => "no gateway mechanism",
+                };
+                checks.push(row(
+                    "routing",
+                    SpawnCheckStatus::Warn,
+                    format!("'{}' is not routable ({reason}); will run direct", h.id),
+                ));
+            }
+            None => checks.push(row(
+                "routing",
+                SpawnCheckStatus::Warn,
+                "not catalog-matched; will run direct (set its `env` to route manually)"
+                    .to_string(),
+            )),
+        }
+    }
+
+    // 3. Auth preflight — mirror `apply_routing`'s require_key so `--check`
+    //    surfaces the same `auth_required` gate the launch would fail fast on.
+    if let Some(h) = routable_harness {
+        let target_is_local = routing
+            .base_url
+            .as_deref()
+            .and_then(crate::spawn::listen_from_base_url)
+            .map(|a| crate::spawn::listen_is_local(&a))
+            .unwrap_or_else(|| crate::spawn::listen_is_local(&config.server.listen));
+        let require_key = !target_is_local || !config.server.skip_auth;
+        let has_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV).is_some();
+        checks.push(if require_key && !has_key {
+            row(
+                "auth",
+                SpawnCheckStatus::Fail,
+                "daemon requires auth but BITROUTER_API_KEY is not set — export it or pass --direct"
+                    .to_string(),
+            )
+        } else if require_key && !h.auth_is_bearer() {
+            row(
+                "auth",
+                SpawnCheckStatus::Warn,
+                format!(
+                    "'{}' sends a non-Bearer header the daemon rejects under skip_auth:false — \
+                     the session will likely 401",
+                    h.id
+                ),
+            )
+        } else if has_key {
+            row(
+                "auth",
+                SpawnCheckStatus::Pass,
+                "BITROUTER_API_KEY present".to_string(),
+            )
+        } else {
+            row(
+                "auth",
+                SpawnCheckStatus::Pass,
+                "skip_auth: credential-less requests admitted".to_string(),
+            )
+        });
+    }
+
+    // 4. Daemon reachability — only meaningful when routing is active. Read-only
+    //    (no auto-start): `--check` observes, it does not mutate.
+    if routable_harness.is_some() {
+        checks.push(if crate::spawn::base_url_reachable(&base_url).await {
+            row(
+                "daemon",
+                SpawnCheckStatus::Pass,
+                format!("{base_url} is reachable"),
+            )
+        } else {
+            row(
+                "daemon",
+                SpawnCheckStatus::Fail,
+                format!("{base_url} is unreachable — run `bitrouter start` (or pass --direct)"),
+            )
+        });
+    }
+
+    Ok(SpawnCheckReport {
+        agent: agent_id.to_string(),
+        base_url,
+        model: routing.model.clone(),
+        checks,
+    })
+}
+
 // ── serve ─────────────────────────────────────────────────────────────────────
 
 /// Warm-session behavior for [`serve`]: after the stdio manager disconnects,
@@ -105,15 +514,24 @@ pub struct WarmOptions {
 /// ships). A reconnecting manager runs `initialize` → `session/load` (full
 /// transcript replay) → continues. The session shuts down after
 /// `idle_timeout` with no manager attached.
-pub async fn serve(
-    config: Config,
-    agent_id: &str,
-    options: LaunchOptions,
-    warm: Option<WarmOptions>,
-) -> Result<()> {
+pub async fn serve(ctx: SpawnContext<'_>, warm: Option<WarmOptions>) -> Result<()> {
+    let SpawnContext {
+        source,
+        mut config,
+        agent_id,
+        options,
+        routing,
+    } = ctx;
     #[cfg(not(unix))]
     if warm.is_some() {
         anyhow::bail!("--warm requires unix domain sockets (unix-only in v1)");
+    }
+    // Route the sub-agent's LLM traffic through the daemon (default) unless
+    // opted out. Fail fast to stderr — before speaking any ACP — so a manager
+    // handles "child failed to start" rather than a mid-session provider error.
+    if let Err(e) = apply_routing(source, &mut config, agent_id, &routing).await {
+        eprintln!("spawn: {}\n  hint: {}", e.message(), e.hint());
+        std::process::exit(1);
     }
     let catalog = catalog_from_config(&config)?;
     let base_repo = std::env::current_dir().context("resolving current directory")?;
@@ -286,17 +704,28 @@ pub async fn attach(_record_prefix: &str) -> Result<()> {
 /// When `no_wait` is true: shut down the session immediately after emitting
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
 /// persistent session should use `bitrouter acp serve` instead.
-pub async fn prompt<W>(
-    config: Config,
-    agent_id: &str,
-    options: LaunchOptions,
-    text: &str,
-    no_wait: bool,
-    out: &mut W,
-) -> Result<()>
+pub async fn prompt<W>(ctx: SpawnContext<'_>, text: &str, no_wait: bool, out: &mut W) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
 {
+    let SpawnContext {
+        source,
+        mut config,
+        agent_id,
+        options,
+        routing,
+    } = ctx;
+    // Route by default; fail fast with a single structured NDJSON `error`
+    // line BEFORE any session side effect (no worktree/record/transcript).
+    let via = match apply_routing(source, &mut config, agent_id, &routing).await {
+        Ok(via) => via,
+        Err(e) => {
+            write_ndjson_line(out, &e.ndjson()).await?;
+            out.flush().await.ok();
+            std::process::exit(1);
+        }
+    };
+
     let catalog = catalog_from_config(&config)?;
     let base_repo = std::env::current_dir().context("resolving current directory")?;
     let session =
@@ -304,6 +733,19 @@ where
             .await
             .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let exporter = attach_observability(&config, agent_id, &session).await;
+
+    // First line: correlate this session's record with the cost/metering the
+    // orchestrator later queries. `via` is null when running direct.
+    write_ndjson_line(
+        out,
+        &serde_json::json!({
+            "type": "session",
+            "record_id": session.state().record_id,
+            "agent": agent_id,
+            "via": via,
+        }),
+    )
+    .await?;
 
     // Headless: there is no manager to broker permissions. Consume the
     // permission stream and DENY each request (dropping the pending item

@@ -1,5 +1,8 @@
-//! `bitrouter spawn` — launch a coding-agent harness (Claude Code, Codex, …) as a
-//! child process with its API base URL pointed at the local BitRouter daemon.
+//! `bitrouter launch` — launch a coding-agent harness (Claude Code, Codex, …)
+//! as an interactive native-TUI child process with its API base URL pointed at
+//! the local BitRouter daemon. This is the *main orchestrator* surface; headless
+//! ACP sub-agents are `bitrouter spawn` (see [`crate::acp_cli`]). Both draw
+//! their routing knowledge from the shared [`crate::harness`] catalog.
 //!
 //! The agent's traffic then routes through BitRouter without ever touching the
 //! agent's own config files: instead of mutating `~/.claude/config.json` or
@@ -13,7 +16,7 @@
 //! ambiguity about which flags belong to which program:
 //!
 //! ```text
-//!   bitrouter spawn --agent claude [bitrouter opts] -- <args forwarded to claude>
+//!   bitrouter launch --agent claude [bitrouter opts] -- <args forwarded to claude>
 //! ```
 //!
 //! Everything after `--` is handed to the agent binary verbatim.
@@ -47,7 +50,7 @@ use crate::output::CliReport;
 use crate::output::human::Human;
 use crate::style::Palette;
 
-/// The coding-agent harnesses `bitrouter spawn` can launch.
+/// The coding-agent harnesses `bitrouter launch` can launch interactively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SpawnAgent {
     /// Anthropic's Claude Code CLI (`claude`).
@@ -60,33 +63,21 @@ impl SpawnAgent {
     /// Static metadata describing how to find, route, and install this agent.
     pub fn spec(self) -> AgentSpec {
         match self {
+            // The gateway env/args this agent needs (ANTHROPIC_BASE_URL /
+            // ANTHROPIC_AUTH_TOKEN for Claude, `-c` provider overrides for
+            // Codex) live once in the shared `harness` catalog, keyed by the
+            // interactive binary — see `run`.
             SpawnAgent::Claude => AgentSpec {
                 agent: self,
                 // The display id matches the `--agent` value.
                 id: "claude",
                 // The executable name looked up on `PATH`.
                 binary: "claude",
-                // Claude Code reads its gateway endpoint from
-                // `ANTHROPIC_BASE_URL`, and authenticates to that gateway with
-                // `ANTHROPIC_AUTH_TOKEN` (sent as the `Authorization: Bearer`
-                // header) — this is the documented way to route Claude Code
-                // through a custom LLM gateway, and `Authorization: Bearer` is
-                // exactly the inbound credential BitRouter expects (`brk_…`).
-                // `ANTHROPIC_API_KEY` would instead be sent as `x-api-key`, the
-                // first-party Anthropic header, which is not BitRouter's inbound
-                // scheme — so we deliberately set the auth token, not the API key.
-                // https://code.claude.com/docs/en/llm-gateway#authentication-methods
-                base_url_env: "ANTHROPIC_BASE_URL",
-                auth_token_env: "ANTHROPIC_AUTH_TOKEN",
             },
             SpawnAgent::Codex => AgentSpec {
                 agent: self,
                 id: "codex",
                 binary: "codex",
-                // Codex custom providers are configured through `-c` one-shot
-                // overrides rather than fixed endpoint env vars.
-                base_url_env: "",
-                auth_token_env: "",
             },
         }
     }
@@ -99,36 +90,32 @@ pub struct AgentSpec {
     pub agent: SpawnAgent,
     /// Catalog id / `--agent` value.
     pub id: &'static str,
-    /// Executable name searched for on `PATH`.
+    /// Executable name searched for on `PATH`. Also the key into the shared
+    /// [`crate::harness`] catalog for this agent's routing knowledge.
     pub binary: &'static str,
-    /// Env var the agent reads its gateway base URL from.
-    pub base_url_env: &'static str,
-    /// Env var the agent reads its gateway bearer token from (sent as
-    /// `Authorization: Bearer`), which is BitRouter's inbound auth scheme.
-    pub auth_token_env: &'static str,
 }
 
-/// What `bitrouter spawn` injects into the child process.
+/// What `bitrouter launch` injects into the child process. The env/args come
+/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`], so the
+/// interactive and ACP facets of a harness route identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ChildLaunch {
     /// Environment overrides for the child process.
-    env: Vec<(&'static str, String)>,
+    env: Vec<(String, String)>,
     /// Arguments inserted before the user's forwarded args.
     args_prefix: Vec<String>,
 }
 
-/// BitRouter's own API-key env var (`brk_…`). When set, we forward it to the
-/// agent as the gateway bearer token so the agent authenticates to BitRouter
-/// with the user's real credential instead of the placeholder.
-const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
-
-/// A sentinel placeholder credential, injected into the agent's environment
-/// only when the user has neither set the agent's auth-token var nor exported a
-/// `BITROUTER_API_KEY`. It lets the harness start (it refuses to run without
-/// *some* credential); under `skip_auth: true` (the `bitrouter init` default)
-/// BitRouter ignores the value, and under auth the user is expected to export a
-/// real `brk_…` key.
-const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
+/// Resolve the gateway bearer credential for a `bitrouter launch` child by
+/// precedence: a token the user already exported for the harness →
+/// `BITROUTER_API_KEY` → the local placeholder (valid under `skip_auth: true`,
+/// the `bitrouter init` default; the harness merely needs *some* credential to
+/// start).
+fn resolve_launch_token(parent_auth: Option<String>, bitrouter_key: Option<String>) -> String {
+    parent_auth
+        .or(bitrouter_key)
+        .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string())
+}
 
 /// Options gathered from the CLI for one `spawn` invocation.
 pub struct SpawnOptions {
@@ -264,16 +251,30 @@ pub async fn run(
         warn_if_daemon_unreachable(&target);
     }
 
-    // Auth-token precedence (highest first): an auth token the user already
-    // exported for this agent → the BitRouter API key → a local placeholder.
-    // Codex has no fixed endpoint/auth env vars; it gets one-shot config args
-    // from `build_child_launch` below.
-    let parent_auth = match opts.agent {
-        SpawnAgent::Claude => nonempty_env(spec.auth_token_env),
-        SpawnAgent::Codex => None,
+    // Resolve routing from the shared harness catalog so `launch` and `spawn`
+    // inject identical env/args for the same harness (SPAWN_SPEC §4).
+    let harness = crate::harness::by_interactive_binary(spec.binary).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no catalog harness for interactive binary '{}'",
+            spec.binary
+        )
+    })?;
+    // Auth precedence (highest first): a bearer token the user already exported
+    // for this harness → the BitRouter API key → a local placeholder. Only
+    // env-routed harnesses (Claude) have such a var; Codex reads none.
+    let parent_auth = match harness.routing {
+        crate::harness::Routing::Env { auth_env, .. } => nonempty_env(auth_env),
+        _ => None,
     };
-    let bitrouter_key = nonempty_env(BITROUTER_API_KEY_ENV);
-    let launch = build_child_launch(&spec, &base_url, parent_auth, bitrouter_key);
+    let token = resolve_launch_token(
+        parent_auth,
+        nonempty_env(crate::harness::BITROUTER_API_KEY_ENV),
+    );
+    let overlay = harness.routing_overlay(&base_url, &token, None);
+    let launch = ChildLaunch {
+        env: overlay.env,
+        args_prefix: overlay.args,
+    };
 
     let p = Palette::for_stderr();
     eprintln!(
@@ -424,36 +425,57 @@ pub async fn check(
 
 async fn check_base_url(base_url: &str) -> SpawnCheckRow {
     let health = format!("{}/health", bitrouter_root_url(base_url));
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-    {
-        Ok(client) => client,
-        Err(e) => {
-            return SpawnCheckRow {
-                name: "bitrouter base url".to_string(),
-                status: SpawnCheckStatus::Warn,
-                message: format!("could not build HTTP client: {e}"),
-            };
-        }
-    };
-    match client.get(&health).send().await {
-        Ok(resp) if resp.status().is_success() => SpawnCheckRow {
+    match base_url_health(base_url).await {
+        HealthProbe::Ok(status) => SpawnCheckRow {
             name: "bitrouter base url".to_string(),
             status: SpawnCheckStatus::Pass,
-            message: format!("{health} responded {}", resp.status()),
+            message: format!("{health} responded {status}"),
         },
-        Ok(resp) => SpawnCheckRow {
+        HealthProbe::BadStatus(status) => SpawnCheckRow {
             name: "bitrouter base url".to_string(),
             status: SpawnCheckStatus::Fail,
-            message: format!("{health} responded {}", resp.status()),
+            message: format!("{health} responded {status}"),
         },
-        Err(e) => SpawnCheckRow {
+        HealthProbe::Unreachable(e) => SpawnCheckRow {
             name: "bitrouter base url".to_string(),
             status: SpawnCheckStatus::Fail,
             message: format!("could not reach {health}: {e}"),
         },
     }
+}
+
+/// Outcome of a `GET {root}/health` probe.
+enum HealthProbe {
+    /// 2xx — the daemon is up.
+    Ok(reqwest::StatusCode),
+    /// Reached the daemon but it answered non-2xx.
+    BadStatus(reqwest::StatusCode),
+    /// Could not reach the endpoint at all.
+    Unreachable(String),
+}
+
+/// Probe the daemon's `/health` endpoint behind `base_url`. Shared by
+/// `spawn --check` and the ACP spawn path's fail-fast liveness gate.
+async fn base_url_health(base_url: &str) -> HealthProbe {
+    let health = format!("{}/health", bitrouter_root_url(base_url));
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => return HealthProbe::Unreachable(format!("could not build HTTP client: {e}")),
+    };
+    match client.get(&health).send().await {
+        Ok(resp) if resp.status().is_success() => HealthProbe::Ok(resp.status()),
+        Ok(resp) => HealthProbe::BadStatus(resp.status()),
+        Err(e) => HealthProbe::Unreachable(e.to_string()),
+    }
+}
+
+/// True when the daemon behind `base_url` answers `GET /health` with 2xx.
+/// Used by the ACP spawn path to fail fast before any session side effect.
+pub(crate) async fn base_url_reachable(base_url: &str) -> bool {
+    matches!(base_url_health(base_url).await, HealthProbe::Ok(_))
 }
 
 fn bitrouter_root_url(base_url: &str) -> String {
@@ -527,120 +549,8 @@ fn codex_route_check(model: &str, route: Result<Vec<crate::daemon::RouteHop>>) -
     }
 }
 
-/// Build the environment overrides layered on top of the inherited parent
-/// environment: always force the routing base URL, and resolve the gateway
-/// bearer token by precedence.
-///
-/// Returned as an explicit list (rather than mutating the global env) so the
-/// logic is unit-testable. `parent_auth` is any auth token the user already
-/// exported for the agent; `bitrouter_key` is the value of `BITROUTER_API_KEY`.
-/// Precedence: `parent_auth` → `bitrouter_key` → placeholder. We always set the
-/// auth token (never just inherit) so that an inherited `ANTHROPIC_API_KEY`
-/// (which in this repo is the *upstream* Anthropic provider key, not a valid
-/// BitRouter inbound credential) cannot accidentally become the auth Claude
-/// Code sends to the router.
-fn build_child_env(
-    spec: &AgentSpec,
-    base_url: &str,
-    parent_auth: Option<String>,
-    bitrouter_key: Option<String>,
-) -> Vec<(&'static str, String)> {
-    let token = parent_auth
-        .or(bitrouter_key)
-        .unwrap_or_else(|| PLACEHOLDER_API_KEY.to_string());
-    vec![
-        (spec.base_url_env, base_url.to_string()),
-        (spec.auth_token_env, token),
-    ]
-}
-
-/// Build all per-agent child-process overrides. Claude Code uses environment
-/// variables; Codex uses transient `-c` config overrides because custom model
-/// providers are a Codex config concept.
-fn build_child_launch(
-    spec: &AgentSpec,
-    base_url: &str,
-    parent_auth: Option<String>,
-    bitrouter_key: Option<String>,
-) -> ChildLaunch {
-    match spec.agent {
-        SpawnAgent::Claude => ChildLaunch {
-            env: build_child_env(spec, base_url, parent_auth, bitrouter_key),
-            args_prefix: Vec::new(),
-        },
-        SpawnAgent::Codex => build_codex_child_launch(base_url, bitrouter_key),
-    }
-}
-
-fn build_codex_child_launch(base_url: &str, bitrouter_key: Option<String>) -> ChildLaunch {
-    let mut env = Vec::new();
-    let mut args_prefix = vec![
-        "-c".to_string(),
-        codex_config_string("model_provider", "bitrouter"),
-        "-c".to_string(),
-        codex_config_string("model_providers.bitrouter.name", "BitRouter"),
-        "-c".to_string(),
-        codex_config_string(
-            "model_providers.bitrouter.base_url",
-            &codex_api_base_url(base_url),
-        ),
-        "-c".to_string(),
-        codex_config_string("model_providers.bitrouter.wire_api", "responses"),
-    ];
-
-    match bitrouter_key {
-        Some(key) => {
-            env.push((BITROUTER_API_KEY_ENV, key));
-            args_prefix.push("-c".to_string());
-            args_prefix.push(codex_config_string(
-                "model_providers.bitrouter.env_key",
-                BITROUTER_API_KEY_ENV,
-            ));
-        }
-        None => {
-            args_prefix.push("-c".to_string());
-            args_prefix.push(codex_config_string(
-                "model_providers.bitrouter.experimental_bearer_token",
-                PLACEHOLDER_API_KEY,
-            ));
-        }
-    }
-
-    ChildLaunch { env, args_prefix }
-}
-
-fn codex_api_base_url(base_url: &str) -> String {
-    let trimmed = base_url.trim_end_matches('/');
-    if trimmed.ends_with("/v1") {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}/v1")
-    }
-}
-
-fn codex_config_string(key: &str, value: &str) -> String {
-    format!("{key}={}", toml_string(value))
-}
-
-fn toml_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
-}
-
 /// Read an environment variable, treating an unset *or empty* value as absent.
-fn nonempty_env(name: &str) -> Option<String> {
+pub(crate) fn nonempty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
@@ -648,7 +558,7 @@ fn nonempty_env(name: &str) -> Option<String> {
 /// (`host:port`). Wildcard bind addresses are rewritten to loopback because a
 /// client cannot *connect* to `0.0.0.0` / `::` — those mean "bind every
 /// interface", not "reach me here".
-fn derive_base_url(listen: &str) -> String {
+pub(crate) fn derive_base_url(listen: &str) -> String {
     let (host, port) = split_listen(listen);
     format!("http://{}:{}", rewrite_host(host), port)
 }
@@ -690,7 +600,7 @@ fn rewrite_host(host: &str) -> &str {
 /// someone else's daemon, which we can only warn about. Exact-match only:
 /// `127.0.0.0/8` aliases (e.g. `127.0.0.2`) and IPv4-mapped IPv6 fall through to
 /// the warn path — the fail-safe direction (never a wrong auto-start).
-fn listen_is_local(listen: &str) -> bool {
+pub(crate) fn listen_is_local(listen: &str) -> bool {
     let (host, _port) = split_listen(listen);
     matches!(
         host,
@@ -700,7 +610,7 @@ fn listen_is_local(listen: &str) -> bool {
 
 /// Extract the `host[:port]` authority from a base URL for a best-effort
 /// reachability note. Returns `None` when there is no authority to probe.
-fn listen_from_base_url(url: &str) -> Option<String> {
+pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("http://")
         .or_else(|| url.strip_prefix("https://"))
@@ -715,7 +625,7 @@ fn listen_from_base_url(url: &str) -> Option<String> {
 /// readiness. Best-effort throughout: on any failure it warns and returns so
 /// the agent still launches (and surfaces its own connection error) — matching
 /// spawn's "never block the launch" stance.
-async fn ensure_local_daemon(
+pub(crate) async fn ensure_local_daemon(
     source: &crate::paths::ConfigSource,
     cfg: &bitrouter_sdk::config::Config,
     no_start: bool,
@@ -1164,63 +1074,44 @@ mod tests {
     }
 
     #[test]
-    fn child_env_always_sets_base_url() {
-        let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://127.0.0.1:4356", None, None);
-        assert!(
-            env.iter()
-                .any(|(k, v)| *k == "ANTHROPIC_BASE_URL" && v == "http://127.0.0.1:4356")
-        );
-    }
-
-    /// Helper: pull the resolved auth-token value out of a built env.
-    fn auth_token(env: &[(&'static str, String)]) -> Option<String> {
-        env.iter()
-            .find(|(k, _)| *k == "ANTHROPIC_AUTH_TOKEN")
-            .map(|(_, v)| v.clone())
-    }
-
-    #[test]
-    fn child_env_auth_token_precedence() {
-        let spec = SpawnAgent::Claude.spec();
-
-        // User's explicit auth token wins over everything.
-        let explicit = build_child_env(
-            &spec,
-            "http://x:1",
-            Some("user-token".into()),
-            Some("brk_key".into()),
-        );
-        assert_eq!(auth_token(&explicit).as_deref(), Some("user-token"));
-
-        // No explicit token → fall back to the BitRouter API key.
-        let from_key = build_child_env(&spec, "http://x:1", None, Some("brk_key".into()));
-        assert_eq!(auth_token(&from_key).as_deref(), Some("brk_key"));
-
-        // Neither set → the local placeholder so the harness still starts.
-        let placeholder = build_child_env(&spec, "http://x:1", None, None);
+    fn launch_token_precedence() {
+        // User's exported token wins over everything.
         assert_eq!(
-            auth_token(&placeholder).as_deref(),
-            Some(PLACEHOLDER_API_KEY)
+            resolve_launch_token(Some("user-token".into()), Some("brk_key".into())),
+            "user-token"
+        );
+        // No exported token → fall back to the BitRouter API key.
+        assert_eq!(
+            resolve_launch_token(None, Some("brk_key".into())),
+            "brk_key"
+        );
+        // Neither set → the local placeholder so the harness still starts.
+        assert_eq!(
+            resolve_launch_token(None, None),
+            crate::harness::PLACEHOLDER_API_KEY
         );
     }
 
     #[test]
-    fn child_env_never_inherits_api_key_as_auth() {
-        // The auth token is ALWAYS set explicitly, so a stray inherited
-        // ANTHROPIC_API_KEY can never silently become the inbound credential.
-        let spec = SpawnAgent::Claude.spec();
-        let env = build_child_env(&spec, "http://x:1", None, None);
-        assert!(env.iter().any(|(k, _)| *k == "ANTHROPIC_AUTH_TOKEN"));
-        assert!(env.iter().all(|(k, _)| *k != "ANTHROPIC_API_KEY"));
-    }
+    fn launch_agents_map_to_catalog_harnesses() {
+        // The interactive binary is the key into the shared routing catalog;
+        // the overlay content itself is covered by `harness` tests.
+        let claude = crate::harness::by_interactive_binary(SpawnAgent::Claude.spec().binary)
+            .expect("claude maps to a catalog harness");
+        assert_eq!(claude.id, "claude-acp");
+        assert!(matches!(
+            claude.routing,
+            crate::harness::Routing::Env {
+                base_url_env: "ANTHROPIC_BASE_URL",
+                auth_env: "ANTHROPIC_AUTH_TOKEN",
+                ..
+            }
+        ));
 
-    #[test]
-    fn claude_spec_uses_anthropic_env_vars() {
-        let spec = SpawnAgent::Claude.spec();
-        assert_eq!(spec.binary, "claude");
-        assert_eq!(spec.base_url_env, "ANTHROPIC_BASE_URL");
-        assert_eq!(spec.auth_token_env, "ANTHROPIC_AUTH_TOKEN");
+        let codex = crate::harness::by_interactive_binary(SpawnAgent::Codex.spec().binary)
+            .expect("codex maps to a catalog harness");
+        assert_eq!(codex.id, "codex-acp");
+        assert!(matches!(codex.routing, crate::harness::Routing::CodexArgs));
     }
 
     #[test]
@@ -1228,57 +1119,6 @@ mod tests {
         let spec = SpawnAgent::Codex.spec();
         assert_eq!(spec.binary, "codex");
         assert_eq!(spec.id, "codex");
-    }
-
-    #[test]
-    fn codex_launch_args_route_responses_to_bitrouter_v1() {
-        let spec = SpawnAgent::Codex.spec();
-        let launch = build_child_launch(&spec, "http://127.0.0.1:4356", None, None);
-        assert!(launch.args_prefix.contains(&"-c".to_string()));
-        assert!(
-            launch
-                .args_prefix
-                .contains(&"model_provider=\"bitrouter\"".to_string())
-        );
-        assert!(launch.args_prefix.contains(
-            &"model_providers.bitrouter.base_url=\"http://127.0.0.1:4356/v1\"".to_string()
-        ));
-        assert!(
-            launch
-                .args_prefix
-                .contains(&"model_providers.bitrouter.wire_api=\"responses\"".to_string())
-        );
-        assert!(launch.args_prefix.contains(
-            &"model_providers.bitrouter.experimental_bearer_token=\"bitrouter-local\"".to_string()
-        ));
-    }
-
-    #[test]
-    fn codex_launch_uses_env_key_when_bitrouter_key_exists() {
-        let spec = SpawnAgent::Codex.spec();
-        let launch = build_child_launch(
-            &spec,
-            "http://127.0.0.1:4356",
-            None,
-            Some("brk_test".into()),
-        );
-        assert!(
-            launch
-                .env
-                .iter()
-                .any(|(k, v)| *k == BITROUTER_API_KEY_ENV && v == "brk_test")
-        );
-        assert!(
-            launch
-                .args_prefix
-                .contains(&"model_providers.bitrouter.env_key=\"BITROUTER_API_KEY\"".to_string())
-        );
-        assert!(
-            launch
-                .args_prefix
-                .iter()
-                .all(|arg| !arg.contains("experimental_bearer_token"))
-        );
     }
 
     #[test]

@@ -79,7 +79,7 @@ bitrouter observe status   # telemetry exporter endpoint + state
 **4. Launch an interactive Claude Code session pointed at BitRouter:**
 
 ```bash
-bitrouter spawn -a claude  # interactive; run `bitrouter stop` when you're done
+bitrouter launch -a claude  # interactive; run `bitrouter stop` when you're done
 ```
 
 Genuine Claude Code traffic — recognised by its `anthropic-beta: claude-code-*` agent-profile marker — is routed to your subscription; anything else falls through to your other configured providers. Telemetry is attributed to an anonymous install id. *(Optional: run `bitrouter cloud login` first to also serve non-Claude-Code models from your BitRouter Cloud account.)*

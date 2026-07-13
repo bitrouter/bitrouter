@@ -208,18 +208,20 @@ enum Command {
         #[command(subcommand)]
         action: AgentsAction,
     },
-    /// Launch a coding-agent harness (Claude Code or Codex) as a child process
-    /// with its API base URL pointed at the local BitRouter daemon — no agent
-    /// config files are touched. Follows `cargo run`'s separator convention:
-    /// bitrouter options come before `--`, everything after `--` is forwarded
-    /// to the agent verbatim, e.g. `bitrouter spawn -a codex -- --model
-    /// openai/gpt-5-codex`.
+    /// Launch a coding-agent harness (Claude Code or Codex) as an interactive
+    /// native-TUI child, with its API base URL pointed at the local BitRouter
+    /// daemon — no agent config files are touched. The human drives the
+    /// harness's own TUI directly; this is the *main orchestrator* surface (use
+    /// `bitrouter spawn` for headless ACP sub-agents). Follows `cargo run`'s
+    /// separator convention: bitrouter options come before `--`, everything
+    /// after `--` is forwarded to the agent verbatim, e.g.
+    /// `bitrouter launch -a codex -- --model openai/gpt-5-codex`.
     ///
     /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
     /// set; otherwise a local placeholder is used (fine under the `skip_auth`
     /// default written by `bitrouter init`). A missing agent binary is offered
     /// for install via its official native installer.
-    Spawn {
+    Launch {
         /// Which agent harness to launch.
         #[arg(short, long, value_enum)]
         agent: bitrouter::spawn::SpawnAgent,
@@ -249,6 +251,78 @@ enum Command {
         check: bool,
         /// Arguments forwarded verbatim to the agent binary. Everything after
         /// `--` lands here.
+        #[arg(last = true, allow_hyphen_values = true)]
+        agent_args: Vec<String>,
+    },
+    /// Spawn an ACP-compatible harness as a headless *sub-agent*, routed
+    /// through the BitRouter daemon by default. Pick a mode: `-p "<text>"`
+    /// streams one prompt as NDJSON then exits; `--serve` speaks ACP over
+    /// stdio for a GUI/manager; `--check` preflights the route. Pass `--direct`
+    /// to bypass daemon routing. (For an interactive native TUI use
+    /// `bitrouter launch`.)
+    Spawn {
+        /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `gemini-cli`, `pi-acp`) or a configured `agents:` entry. A
+        /// catalog id needs no config entry.
+        agent: Option<String>,
+        /// Send one prompt, stream NDJSON to stdout, then exit.
+        #[arg(short = 'p', long, value_name = "TEXT")]
+        prompt: Option<String>,
+        /// Serve the session as a vanilla ACP Agent over stdio (GUI/manager).
+        #[arg(long, conflicts_with = "prompt")]
+        serve: bool,
+        /// Preflight the harness + route without launching anything.
+        #[arg(long, conflicts_with_all = ["prompt", "serve"])]
+        check: bool,
+        /// Do NOT route through the daemon — let the harness use its own
+        /// provider auth. Routing is on by default.
+        #[arg(long)]
+        direct: bool,
+        /// Pin the harness's model (via its model env var / `-c model=`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Override the gateway base URL (else derived from `server.listen`).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Never auto-start a local daemon when none is running — fail fast.
+        #[arg(long)]
+        no_start: bool,
+        /// Provision (or reuse) a git worktree for the session.
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Remove the worktree when the session ends (only one this session
+        /// created). Off by default — removal discards uncommitted work.
+        #[arg(long, requires = "worktree")]
+        rm_worktree: bool,
+        /// Disable the durable session transcript (on by default).
+        #[arg(long)]
+        no_transcript: bool,
+        /// Per-turn deadline in seconds.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        /// (with `-p`) Return immediately after submitting the prompt.
+        #[arg(long, requires = "prompt")]
+        no_wait: bool,
+        /// (with `--serve`) Keep the session alive for reattach after the
+        /// manager disconnects. Unix-only.
+        #[arg(long, requires = "serve")]
+        warm: bool,
+        /// (with `--serve --warm`) Shut down after this many idle seconds.
+        #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
+        idle_timeout: u64,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Deprecated: the interactive form `spawn --agent <claude|codex>`
+        /// (also `-a`) moved to `bitrouter launch`. Kept as a migration alias.
+        #[arg(long = "agent", short = 'a', hide = true, value_enum)]
+        legacy_agent: Option<bitrouter::spawn::SpawnAgent>,
+        /// Deprecated (`--agent` path only): forwarded to `launch`.
+        #[arg(long, hide = true)]
+        no_install: bool,
+        /// Forwarded verbatim to the interactive agent in the deprecated
+        /// `--agent` path (everything after `--`).
         #[arg(last = true, allow_hyphen_values = true)]
         agent_args: Vec<String>,
     },
@@ -599,6 +673,19 @@ enum AcpCmd {
         /// attached.
         #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
         idle_timeout: u64,
+        /// Do NOT route the sub-agent's LLM traffic through the daemon — let
+        /// the harness use its own provider auth. Routing is on by default.
+        #[arg(long)]
+        direct: bool,
+        /// Override the gateway base URL (else derived from `server.listen`).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Pin the harness's model (via its model env var / `-c model=`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Never auto-start a local daemon when none is running — fail fast.
+        #[arg(long)]
+        no_start: bool,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -635,6 +722,19 @@ enum AcpCmd {
         /// `{"type":"submitted"}`). The session is torn down after ack.
         #[arg(long)]
         no_wait: bool,
+        /// Do NOT route the sub-agent's LLM traffic through the daemon — let
+        /// the harness use its own provider auth. Routing is on by default.
+        #[arg(long)]
+        direct: bool,
+        /// Override the gateway base URL (else derived from `server.listen`).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Pin the harness's model (via its model env var / `-c model=`).
+        #[arg(long)]
+        model: Option<String>,
+        /// Never auto-start a local daemon when none is running — fail fast.
+        #[arg(long)]
+        no_start: bool,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
         /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
@@ -783,7 +883,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         }
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
-        Command::Spawn {
+        Command::Launch {
             agent,
             config,
             base_url,
@@ -792,8 +892,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             check,
             agent_args,
         } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
             let opts = bitrouter::spawn::SpawnOptions {
                 agent,
                 agent_args,
@@ -802,16 +900,123 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 no_start,
                 check,
             };
-            if opts.check {
-                let report = bitrouter::spawn::check(&cfg, &opts).await?;
+            run_launch(config.as_deref(), opts, output).await
+        }
+        Command::Spawn {
+            agent,
+            prompt,
+            serve,
+            check,
+            direct,
+            model,
+            base_url,
+            no_start,
+            worktree,
+            rm_worktree,
+            no_transcript,
+            turn_timeout,
+            no_wait,
+            warm,
+            idle_timeout,
+            config,
+            legacy_agent,
+            no_install,
+            agent_args,
+        } => {
+            // Deprecated interactive alias: `spawn --agent <claude|codex>` (or
+            // `-a`) → `launch`. Kept working for one or two alpha releases.
+            if let Some(legacy) = legacy_agent {
+                // The interactive alias and the ACP sub-agent modes are
+                // mutually exclusive — reject the mix rather than silently
+                // dropping the ACP args and launching an interactive TUI.
+                if agent.is_some() || prompt.is_some() || serve {
+                    anyhow::bail!(
+                        "`--agent` selects the deprecated interactive launcher; it cannot be \
+                         combined with a positional agent id, `-p`, or `--serve`. Use \
+                         `bitrouter launch --agent {}` for the TUI, or drop `--agent` to spawn \
+                         an ACP sub-agent.",
+                        legacy.spec().id
+                    );
+                }
+                eprintln!(
+                    "note: `bitrouter spawn --agent` is deprecated — use \
+                     `bitrouter launch --agent {}` (this alias will be removed).",
+                    legacy.spec().id
+                );
+                let opts = bitrouter::spawn::SpawnOptions {
+                    agent: legacy,
+                    agent_args,
+                    base_url,
+                    no_install,
+                    no_start,
+                    check,
+                };
+                return run_launch(config.as_deref(), opts, output).await;
+            }
+
+            let Some(agent) = agent else {
+                anyhow::bail!(
+                    "spawn: provide an agent id and a mode, e.g. \
+                     `bitrouter spawn claude-acp -p \"summarize README\"`, \
+                     `bitrouter spawn codex-acp --serve`, or `--check`."
+                );
+            };
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let routing = bitrouter::acp_cli::RoutingOptions {
+                direct,
+                base_url,
+                model,
+                no_start,
+            };
+
+            if check {
+                let report = bitrouter::acp_cli::spawn_check(cfg, &agent, &routing).await?;
                 output.emit(&report)?;
                 if report.exit_code() == 0 {
                     Ok(())
                 } else {
                     std::process::exit(report.exit_code());
                 }
+            } else if serve {
+                let options = bitrouter::acp_cli::launch_options(
+                    worktree.as_deref(),
+                    rm_worktree,
+                    no_transcript,
+                    turn_timeout,
+                );
+                let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
+                    idle_timeout: std::time::Duration::from_secs(idle_timeout),
+                });
+                let ctx = bitrouter::acp_cli::SpawnContext {
+                    source: &source,
+                    config: cfg,
+                    agent_id: &agent,
+                    options,
+                    routing,
+                };
+                bitrouter::acp_cli::serve(ctx, warm).await
+            } else if let Some(text) = prompt {
+                let options = bitrouter::acp_cli::launch_options(
+                    worktree.as_deref(),
+                    rm_worktree,
+                    no_transcript,
+                    turn_timeout,
+                );
+                let mut stdout = tokio::io::stdout();
+                let ctx = bitrouter::acp_cli::SpawnContext {
+                    source: &source,
+                    config: cfg,
+                    agent_id: &agent,
+                    options,
+                    routing,
+                };
+                bitrouter::acp_cli::prompt(ctx, &text, no_wait, &mut stdout).await
             } else {
-                bitrouter::spawn::run(&source, &cfg, opts).await
+                anyhow::bail!(
+                    "spawn: choose a mode — `-p \"<prompt>\"` (NDJSON), \
+                     `--serve` (ACP over stdio), or `--check` (preflight)."
+                );
             }
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
@@ -2137,6 +2342,29 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     }
 }
 
+/// Shared body for `bitrouter launch` and the deprecated `spawn --agent`
+/// alias: resolve config, then either preflight (`--check`) or exec the
+/// interactive harness with its traffic routed through the daemon.
+async fn run_launch(
+    config: Option<&std::path::Path>,
+    opts: bitrouter::spawn::SpawnOptions,
+    output: &bitrouter::output::Output,
+) -> Result<()> {
+    let source = bitrouter::paths::resolve_config(config)?;
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    if opts.check {
+        let report = bitrouter::spawn::check(&cfg, &opts).await?;
+        output.emit(&report)?;
+        if report.exit_code() == 0 {
+            Ok(())
+        } else {
+            std::process::exit(report.exit_code());
+        }
+    } else {
+        bitrouter::spawn::run(&source, &cfg, opts).await
+    }
+}
+
 // ===== `bitrouter acp …` (per-session ACP substrate) =====
 
 async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
@@ -2149,6 +2377,10 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             turn_timeout,
             warm,
             idle_timeout,
+            direct,
+            base_url,
+            model,
+            no_start,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -2162,7 +2394,20 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
                 idle_timeout: std::time::Duration::from_secs(idle_timeout),
             });
-            bitrouter::acp_cli::serve(cfg, &agent, options, warm).await
+            let routing = bitrouter::acp_cli::RoutingOptions {
+                direct,
+                base_url,
+                model,
+                no_start,
+            };
+            let ctx = bitrouter::acp_cli::SpawnContext {
+                source: &source,
+                config: cfg,
+                agent_id: &agent,
+                options,
+                routing,
+            };
+            bitrouter::acp_cli::serve(ctx, warm).await
         }
         AcpCmd::Prompt {
             agent,
@@ -2171,6 +2416,10 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             no_transcript,
             turn_timeout,
             no_wait,
+            direct,
+            base_url,
+            model,
+            no_start,
             config,
             text,
         } => {
@@ -2182,8 +2431,21 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 no_transcript,
                 turn_timeout,
             );
+            let routing = bitrouter::acp_cli::RoutingOptions {
+                direct,
+                base_url,
+                model,
+                no_start,
+            };
             let mut stdout = tokio::io::stdout();
-            bitrouter::acp_cli::prompt(cfg, &agent, options, &text, no_wait, &mut stdout).await
+            let ctx = bitrouter::acp_cli::SpawnContext {
+                source: &source,
+                config: cfg,
+                agent_id: &agent,
+                options,
+                routing,
+            };
+            bitrouter::acp_cli::prompt(ctx, &text, no_wait, &mut stdout).await
         }
         AcpCmd::Sessions => {
             let mut stdout = tokio::io::stdout();

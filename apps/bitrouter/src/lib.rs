@@ -21,6 +21,7 @@ pub mod commands;
 pub mod daemon;
 pub mod db;
 pub mod error_report;
+pub mod harness;
 pub mod metering;
 pub mod output;
 pub mod paths;

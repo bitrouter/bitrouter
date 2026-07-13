@@ -26,6 +26,8 @@ bitrouter acp sessions
 bitrouter acp attach <record-id-or-prefix>
 ```
 
+**Routing (default on).** `bitrouter spawn <agent> -p|--serve` is the newer umbrella over `acp prompt|serve` (same code path; `acp` remains a stable alias). Both **route the sub-agent's LLM traffic through the daemon by default**, using per-harness knowledge from the shared catalog (so `bitrouter launch claude` and `bitrouter spawn claude-acp` inject identical gateway env/args). Opt out with `--direct`; pin the model with `--model`; override the gateway with `--base-url`; skip daemon auto-start with `--no-start`. If the daemon is unreachable (after auto-start) or `skip_auth: false` and no `BITROUTER_API_KEY` is set, the launch **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line (`-p`) or a stderr error (`--serve`). The `-p` stream's first line is a `session` correlation line carrying `record_id` + `via` (the daemon base URL, or `null` when direct). Unroutable catalog harnesses (`pi-acp`) and non-catalog agents warn and run direct. See `references/cli.md` → "Harness launch & spawn".
+
 - **`serve`**: runs until the manager disconnects (stdin EOF) — or, with `--warm`, until the idle timeout. Stdout carries ACP JSON-RPC; logs go to stderr. The manager drives standard ACP: `initialize` → `session/new` (cwd + `mcpServers` relayed upstream) → `session/prompt` / `session/cancel` / `session/load`.
 - **`prompt`**: runs the same substrate engine in-process, sends one prompt, streams NDJSON to stdout, exits. Logs go to stderr.
 

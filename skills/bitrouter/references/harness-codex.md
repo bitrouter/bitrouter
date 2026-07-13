@@ -12,11 +12,11 @@ Wire OpenAI's Codex CLI to route its model calls through BitRouter.
 
 ## Preferred launch path
 
-Use `bitrouter spawn` when you want a reversible, per-process setup:
+Use `bitrouter launch` when you want a reversible, per-process setup:
 
 ```bash
-bitrouter spawn --agent codex
-bitrouter spawn --agent codex -- --model openai/gpt-5-codex
+bitrouter launch --agent codex
+bitrouter launch --agent codex -- --model openai/gpt-5-codex
 ```
 
 The wrapper does not edit `~/.codex/config.toml`. It injects one-shot Codex `-c` overrides:
@@ -48,18 +48,18 @@ Codex appends `/responses` to the provider base URL. Do not use `wire_api = "cha
 
 ## Model selection
 
-Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bitrouter spawn --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
+Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bitrouter launch --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
 
 ```bash
 codex --model openai/gpt-5-codex
-bitrouter spawn --agent codex -- --model anthropic/claude-sonnet-4-6
+bitrouter launch --agent codex -- --model anthropic/claude-sonnet-4-6
 ```
 
 ## Verify
 
 ```bash
 codex --version
-bitrouter spawn --agent codex -- --version
+bitrouter launch --agent codex -- --version
 tail -n 20 ~/.bitrouter/bitrouter.log
 ```
 
@@ -67,4 +67,4 @@ For live requests, check the BitRouter request logs — the `request finished` l
 
 ## Agent plugin
 
-The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: the `/bitrouter` skill and the origin MCP server for in-session model arbitrage (bundled MCP servers must be enabled manually on Codex after install). A session spend summary is printed by `bitrouter spawn` on exit (a spawn feature, independent of the plugin). See `references/agent-plugin.md`.
+The BitRouter agent plugin (repo root `.codex-plugin/`) layers onto this wiring for Codex users: the `/bitrouter` skill and the origin MCP server for in-session model arbitrage (bundled MCP servers must be enabled manually on Codex after install). A session spend summary is printed by `bitrouter launch` on exit (a launch feature, independent of the plugin). See `references/agent-plugin.md`.

@@ -21,63 +21,7 @@ use std::time::Duration;
 use bitrouter_sdk::config::Config;
 
 use crate::agent_registry::{InstallSupport, Registry, RegistryAgent};
-
-/// One well-known ACP agent in the bundled catalog.
-#[derive(Debug, Clone, Copy)]
-pub struct KnownAgent {
-    /// The recommended id (also the catalog key).
-    pub id: &'static str,
-    /// One-line human description.
-    pub description: &'static str,
-    /// Upstream project URL — the source of the recommended invocation.
-    pub project_url: &'static str,
-    /// Command to spawn.
-    pub command: &'static str,
-    /// Args to pass.
-    pub args: &'static [&'static str],
-}
-
-/// The bundled v1.0 catalog. Limited to publicly-available, actively
-/// maintained agents. Update by submitting a PR to bitrouter.
-pub const CATALOG: &[KnownAgent] = &[
-    KnownAgent {
-        id: "claude-acp",
-        description: "Anthropic Claude via Zed's `claude-code-acp`",
-        project_url: "https://github.com/zed-industries/claude-code-acp",
-        command: "npx",
-        args: &["-y", "@zed-industries/claude-code-acp@latest"],
-    },
-    KnownAgent {
-        id: "codex-acp",
-        description: "OpenAI Codex via Zed's `codex-acp`",
-        project_url: "https://github.com/zed-industries/codex-acp",
-        command: "npx",
-        args: &["-y", "@zed-industries/codex-acp@latest"],
-    },
-    KnownAgent {
-        id: "gemini-cli",
-        description: "Google's Gemini CLI with `--experimental-acp`",
-        project_url: "https://github.com/google-gemini/gemini-cli",
-        command: "npx",
-        args: &[
-            "-y",
-            "--",
-            "@google/gemini-cli@latest",
-            "--experimental-acp",
-        ],
-    },
-    KnownAgent {
-        id: "pi-acp",
-        description: "pi coding agent via `pi-acp` (needs `pi` on PATH)",
-        project_url: "https://github.com/svkozak/pi-acp",
-        command: "npx",
-        args: &["-y", "pi-acp@latest"],
-    },
-];
-
-fn lookup_catalog(id: &str) -> Option<&'static KnownAgent> {
-    CATALOG.iter().find(|a| a.id == id)
-}
+use crate::harness::{self, Harness};
 
 /// One row in `bitrouter agents list`.
 #[derive(Debug, Clone)]
@@ -108,14 +52,14 @@ pub struct CheckRow {
 pub fn list(config: &Config) -> Vec<ListRow> {
     let mut ids: std::collections::BTreeMap<String, ListRow> = Default::default();
     // Catalog entries first.
-    for a in CATALOG {
+    for h in harness::CATALOG {
         ids.insert(
-            a.id.to_string(),
+            h.id.to_string(),
             ListRow {
-                id: a.id.to_string(),
+                id: h.id.to_string(),
                 configured: false,
                 in_catalog: true,
-                description: a.description.to_string(),
+                description: h.description.to_string(),
             },
         );
     }
@@ -216,14 +160,14 @@ pub fn registry_rows(registry: &Registry) -> Vec<RemoteRow> {
 /// in `bitrouter.yaml`. Returns an error if `id` is not a catalog entry (the
 /// CLI then falls back to the registry tier).
 pub fn install(id: &str) -> Result<String, String> {
-    let agent = lookup_catalog(id)
+    let agent: &Harness = harness::by_id(id)
         .ok_or_else(|| format!("'{id}' is not in the bundled catalog. Run `bitrouter agents list` (or `--remote` for the ACP registry) to see the available ids."))?;
     Ok(render_stub(&StubSpec {
         id: agent.id,
         comment: agent.description,
         source: agent.project_url,
-        command: agent.command,
-        args: agent.args.iter().map(|a| a.to_string()).collect(),
+        command: agent.acp_command,
+        args: agent.acp_args.iter().map(|a| a.to_string()).collect(),
         env: Vec::new(),
     }))
 }
@@ -538,9 +482,9 @@ mod tests {
 
     #[test]
     fn catalog_includes_pi_acp() {
-        let a = lookup_catalog("pi-acp").expect("pi-acp is in the bundled catalog");
-        assert_eq!(a.command, "npx");
-        assert_eq!(a.args, &["-y", "pi-acp@latest"]);
+        let a = harness::by_id("pi-acp").expect("pi-acp is in the bundled catalog");
+        assert_eq!(a.acp_command, "npx");
+        assert_eq!(a.acp_args, &["-y", "pi-acp@latest"]);
         let out = install("pi-acp").unwrap();
         assert!(out.contains("pi-acp:"));
         assert!(out.contains("pi-acp@latest"));
