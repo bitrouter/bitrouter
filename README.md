@@ -5,83 +5,69 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Twitter](https://img.shields.io/badge/Twitter-black?logo=x&logoColor=white)](https://x.com/BitRouterAI)
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/G3zVrZDa5C)
-[![Telegram](https://img.shields.io/badge/Telegram-26A5E4?logo=telegram&logoColor=white)](https://t.me/bitrouterai)
+[![Hugging Face](https://img.shields.io/badge/Hugging_Face-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/BitRouterAI)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
+[![Benchmarks](https://img.shields.io/badge/Benchmarks-reports-orange)](benchmarks/)
 
-**Cost-optimize your production agentic loops.**
-An open-source agentic LLM gateway & router that cost-optimizes your production agentic loops by making models, tools, and agents all routable primitives. Zero harness changes.
+**A context-aware router that optimizes your agentic loops — every run.**
+An open-source agentic LLM gateway & router that makes models, tools, and agents all routable primitives, then re-optimizes that routing every run. **Today it optimizes for cost**; the same act → observe → evaluate → learn loop generalizes to latency- and accuracy-driven objectives. Zero harness changes.
 
 > **You're tokenmaxxing in production.**
 > Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most of them don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
 
-## Before & After
-
-Without BitRouter, your agent routes every call — file reads, summaries, tool calls, scaffolding — through the same frontier model. With BitRouter, routine work goes to open models automatically; frontier models get invoked only when they're justified.
-
-| | Without BitRouter | With BitRouter |
-| --- | --- | --- |
-| **Routing** | All calls → one frontier model | Routine calls → open models; complex calls → frontier |
-| **Cost** | Frontier pricing on every request | Frontier prices only where they're earned |
-| **Setup change** | — | One env var |
-| **Code change** | — | None |
-
-<!-- Screenshots coming — will be added here -->
-
 ## Three primitives, one gateway
 
-An agentic loop consumes three things. Other routers govern only the first. BitRouter makes all three routable, observable, and cost-governed:
+An agentic loop consumes three things. Other routers govern only the first. BitRouter makes all three routable, observable, and governed:
 
-- **Models** — route LLM calls across providers, protocols, and accounts. *(the classic router, cross-protocol)*
-- **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints.
-- **Agents** — an **ACP gateway**: sub-agents are first-class, so you hand a task to a cheaper agent the same way you route a call to a cheaper model.
+- **Models** — route LLM calls across providers, accounts, and wire protocols: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini. *(the classic router, cross-protocol — any request format to any upstream, and back)*
+- **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints. *(The skills gateway folds into the MCP gateway once the [MCP skills extension](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) reaches production.)*
+- **Agents** — an **ACP gateway**: sub-agents become first-class routable primitives, so a task can go to the sub-agent that best fits the loop's objective — just as a call routes to the best-fit model. *(Local sub-agents over stdio today; remote gateways arrive with [ACP v2](https://agentclientprotocol.com/rfds/v2/overview).)*
 
-Cost optimization isn't just model selection — it's the cheapest model, the cheapest tool, and the cheapest sub-agent that still gets the loop to its goal.
+Optimizing a loop isn't just model selection — it's choosing the model, the tool, and the sub-agent that best serve the loop's objective at every step that gets it to its goal.
 
 ## The self-improving loop
 
-BitRouter wraps your agentic loop in a second loop. Each loop gets its own **policy spec** — a config file that declares how its calls, tools, and agents should route. BitRouter runs a continuous **observe → evaluate → act** cycle against it:
+BitRouter wraps your agentic loop in a second loop. Each loop gets its own **policy spec** — a config file that declares how its calls, tools, and agents should route. Against that spec BitRouter runs a continuous **act → observe → evaluate → learn** cycle, and every step is a component it already ships:
 
-- **Observe** — every model, tool, and agent call, with cost and outcome attributed to the hop.
-- **Evaluate** — score each run against the loop's goal.
-- **Act** — update the policy spec. Let an agent self-tune the spec from the eval signal, or edit it yourself.
+- **Act — the router.** Each model, tool, and agent call is rewritten to a chosen route: policy-table routing, cross-protocol translation, multi-account failover.
+- **Observe — telemetry.** Every hop is attributed with cost, tokens, latency, and outcome, and exported to Prometheus or any OTLP backend.
+- **Evaluate — the eval engine.** Each run and routing decision is scored against your chosen objective — did the route it picked still reach the goal?
+- **Learn — the policy engine.** The eval signal folds back into the policy spec: an agent self-tunes it, or you edit it by hand. The next turn of the loop acts on the improved spec.
 
-The result is a loop that gets cheaper the longer it runs in production — without re-paying frontier prices for work that never needed them.
-
-## Features
-
-Purpose-built for autonomous agents — concrete capabilities for unattended, multi-step execution:
-
-- **Cross-protocol routing** — an OpenAI-format request to an Anthropic or Google upstream, and back
-- **Multi-account failover + load-balancing** — reroute mid-run; a rate-limit at file 140 never re-pays for files 1–139
-- **MCP gateway** — auth, access control, and identity forwarding in front of any MCP server
-- **AgentSkills gateway** — install and serve skills as governed resources
-- **ACP gateway** — route work to sub-agents as a first-class primitive
-- **Per-request cost + latency** attributed to every agent, model, and hop
-- **Telemetry export** to Prometheus or any OTLP backend
-- **Per-loop policy spec** — declare routing; tune by hand or let an agent self-tune from the eval signal
-- **Virtual keys (`brvk_`)** scoped per agent or user — no agent holds an upstream key
-- **Per-agent spend caps + loop guards** to contain runaway cost
-- **Injection + output guardrails** at the router, before requests leave your network
-- **Zero-config auto-detection** + custom OpenAI-/Anthropic-compatible providers
-
-## Comparison
-
-|  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Best for** | Cost-optimizing agent loops | Model marketplace | Unifying provider SDKs | Model optimization | Fast unified gateway | Fast unified gateway |
-| **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
-| **Optimizes** | The **loop**, by cost | Static routing | Static routing | The model | Static routing | Static routing |
-| **Model catalog** | Curated + bring any provider | **1,600+ marketplace** | Any provider | Curated | **1,600+** | 23+ providers |
-
-_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust. TensorZero is no longer maintained._
-
-**TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM (Python), Portkey (TypeScript), and Bifrost (Go) are unified gateways — fast, OpenAI-compatible, guardrails included — but they route models. TensorZero (Rust) adds a production feedback loop, but optimizes the model itself, not the loop. BitRouter is the only one that treats models, tools, and agents as a single routable surface — a Rust-native gateway that cost-optimizes the whole production loop, with cross-protocol routing, MCP and ACP gateways, and guardrails out of the box.
+You choose what the loop optimizes for — cost, latency, or accuracy — and it improves the longer it runs in production.
 
 ## Benchmarks
 
-Benchmark reports live in [`benchmarks/`](benchmarks/). In the first published run (Terminal-Bench 2.1, Codex + Kimi), adaptive routing replaced strong-model calls with a cheaper model: round r2 cut imputed cost **32.8%** versus a strong-only control at near-parity score, and the best round scored **82.95%** at 8.2% lower cost.
+Today **cost** is the validated objective: on Terminal-Bench 2.1, `gpt-5.5` with BitRouter cut cost **32.8%** at near-parity accuracy (−1.1 pp), by offloading routine steps to a cheaper model. Latency and accuracy objectives — and more base models — are landing next.
 
-The complete traces, messages, tool calls, usage, policy decisions, configs, and checksums are published in the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset. This is a mechanism study under a modified protocol, not a Terminal-Bench leaderboard submission; read the [experiment limitations](benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md#limitations) before citing the numbers.
+| Base model | Cost vs baseline | Latency vs baseline | Accuracy vs baseline |
+| --- | --- | --- | --- |
+| `gpt-5.5` | **−32.8%**¹ | coming soon | coming soon |
+| `gpt-5.6` | coming soon | coming soon | coming soon |
+| `claude-opus-4.8` | coming soon | coming soon | coming soon |
+| `claude-sonnet-5` | coming soon | coming soon | coming soon |
+| `claude-fable-5` | coming soon | coming soon | coming soon |
+
+¹ Cost-optimization run on Terminal-Bench 2.1: −32.8% zero-cache imputed cost (audited range 28.6–32.8% by cache share) at near-parity accuracy, −1.1 pp (76.1% vs 77.3%, within single-attempt noise).
+
+This is a mechanism study under a modified protocol, not a Terminal-Bench leaderboard submission — read the [experiment limitations](benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md#limitations) before citing the numbers. Full reports live in [`benchmarks/`](benchmarks/); complete traces, tool calls, usage, policy decisions, configs, and checksums are in the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset.
+
+## Comparison
+
+Every gateway below routes model calls. BitRouter is the only one that also makes **tools and agents** routable, and optimizes the whole **loop** rather than a single call.
+
+|  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
+| **Optimizes** | The **loop**, multi-objective (cost today) | Static routing | Static routing | The model | Static routing | Static routing |
+
+_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust._
+
+## What BitRouter is not
+
+- **Not an inference provider** — it serves no weights and hosts no GPUs; it sits in front of the providers you already use.
+- **Not an agent framework or harness** — it runs *under* Claude Code, Codex, and the rest, not instead of them.
+- **Not a hard dependency** — it's a local proxy behind one env var; unset the var and your stack is untouched.
 
 ## Install
 
@@ -166,9 +152,9 @@ bitrouter mcp install --client claude  # print the Claude/Cursor mcpServers conf
 
 Add `--transport http` to target the multi-tenant cloud backend.
 
-### GUI
+### API
 
-Native desktop app for driving multi-agent loops — coming soon.
+BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localhost:4356`, so any SDK or client works unchanged. The full endpoint reference and OpenAPI spec live in [`bitrouter/bitrouter-docs`](https://github.com/bitrouter/bitrouter-docs) (rendered at [bitrouter.ai](https://bitrouter.ai)).
 
 ## Models & providers
 
@@ -205,11 +191,19 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 
 The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
-## Documentation
+## Features
 
-- [`CLI.md`](CLI.md) — full CLI reference with flags and examples
+Beyond the gateways above, the production controls for running agents unattended:
+
+- **Multi-account failover + load-balancing** — reroute mid-run; a rate-limit at file 140 never re-pays for files 1–139
+- **Virtual keys (`brvk_`)** scoped per agent or user — no agent holds an upstream key
+- **Per-agent spend caps + loop guards** to contain runaway cost
+- **Injection + output guardrails** at the router, before requests leave your network
+- **Zero-config auto-detection** + custom OpenAI-/Anthropic-compatible providers
+
+## Development
+
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
-- [`docs/`](docs/) — guides and recipes (e.g. [Claude Code on your subscription](docs/integrations/claude-subscription.md))
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
