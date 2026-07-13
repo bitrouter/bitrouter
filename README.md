@@ -172,17 +172,17 @@ Native desktop app for driving multi-agent loops — coming soon.
 
 ## Models & providers
 
-BitRouter routes to a *model*, not a provider. Each open-weight family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
+BitRouter routes to a *model*, not a provider. Each family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
 
-| Open model            | Lab      |
-| --------------------- | -------- |
-| DeepSeek V3.2 / V4    | DeepSeek |
-| Qwen3 / Qwen3-Coder   | Alibaba  |
-| Kimi K2               | Moonshot |
-| GLM-5 / 5.1           | Z.ai     |
-| MiniMax M2–M3         | MiniMax  |
-| MiMo V2               | Xiaomi   |
-| Step 3.5              | StepFun  |
+| Lab      | Latest models                    |
+| -------- | -------------------------------- |
+| DeepSeek | DeepSeek V4 Pro / Flash          |
+| Alibaba  | Qwen3.7 Max / Plus               |
+| Moonshot | Kimi K2.7 Code / K2.6            |
+| Z.ai     | GLM-5.2 / 5.1                    |
+| MiniMax  | MiniMax M3 / M2.7                |
+| Xiaomi   | MiMo V2.5 Pro / V2.5             |
+| StepFun  | Step 3.7 Flash / 3.5 Flash       |
 
 Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
 
