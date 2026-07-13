@@ -204,74 +204,8 @@ impl OpenAiCodexAuthApplier {
         Ok(())
     }
 
-    async fn refresh_token_after_unauthorized(
-        &self,
-        label: &str,
-        rejected_access_token: Option<&str>,
-    ) -> Result<bool> {
-        let gate = self.refresh_gate(label);
-        let _guard = gate.lock().await;
-        let store = CredentialStore::load(&self.store_path).map_err(|e| {
-            BitrouterError::internal(format!(
-                "reading credential store at {} before Codex auth recovery: {e}",
-                self.store_path.display()
-            ))
-        })?;
-        let stored = store
-            .get_any(PROVIDER_ID, label)
-            .ok_or_else(|| BitrouterError::Upstream {
-                status: 401,
-                message: format!(
-                    "no openai-codex credential for label '{label}' — \
-                     run `bitrouter login openai-codex`"
-                ),
-            })?;
-        let token = stored
-            .as_oauth()
-            .cloned()
-            .ok_or_else(|| BitrouterError::Upstream {
-                status: 401,
-                message: format!(
-                    "openai-codex credential for '{label}' is an API key — \
-                     this provider only accepts subscription OAuth tokens"
-                ),
-            })?;
-
-        // Match Codex CLI's recovery shape: after a 401, first re-read the
-        // on-disk session in case another process already refreshed it.
-        if rejected_access_token.is_some_and(|rejected| token.access_token != rejected)
-            && !needs_refresh(&token)
-        {
-            self.store_in_cache(label, &token);
-            return Ok(true);
-        }
-
-        let refreshed = refresh(
-            &self.refresh_client,
-            &self.token_endpoint,
-            &self.client_id,
-            &token,
-        )
-        .await
-        .map_err(refresh_to_bitrouter_error)?;
-        self.persist_refreshed(label, refreshed.clone())?;
-        self.store_in_cache(label, &refreshed);
-        Ok(true)
-    }
-
     fn label_for<'a>(&self, target: &'a RoutingTarget) -> &'a str {
         target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
-    }
-}
-
-fn bearer_access_token(value: Option<&HeaderValue>) -> Option<&str> {
-    let value = value?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    if scheme.eq_ignore_ascii_case("bearer") {
-        let token = token.trim();
-        (!token.is_empty()).then_some(token)
-    } else {
-        None
     }
 }
 
@@ -346,16 +280,6 @@ impl AuthApplier for OpenAiCodexAuthApplier {
         shape_codex_responses_body(body);
         Ok(())
     }
-
-    async fn refresh_after_unauthorized(
-        &self,
-        target: &RoutingTarget,
-        rejected_authorization: Option<&HeaderValue>,
-    ) -> Result<bool> {
-        let label = self.label_for(target);
-        self.refresh_token_after_unauthorized(label, bearer_access_token(rejected_authorization))
-            .await
-    }
 }
 
 /// Shape a Responses request body for the ChatGPT/Codex backend.
@@ -375,24 +299,6 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     let Some(obj) = body.as_object_mut() else {
         return;
     };
-    // The ChatGPT/Codex backend rejects this public Responses parameter even
-    // when it came from an OpenAI Chat Completions `max_tokens` request.
-    obj.remove("max_output_tokens");
-    // Hermes asks Chat Completions streams to include a final usage chunk, but
-    // the ChatGPT/Codex backend rejects `stream_options.include_usage`.
-    obj.remove("stream_options");
-    // Real agent harnesses attach local/session metadata (Codex
-    // `client_metadata`, Claude `metadata`) that the ChatGPT/Codex backend does
-    // not accept.
-    obj.remove("client_metadata");
-    obj.remove("metadata");
-    obj.remove("thinking");
-    obj.remove("context_management");
-    obj.remove("output_config");
-    obj.remove("cache_control");
-    for value in obj.values_mut() {
-        strip_codex_unsupported_fields(value);
-    }
     obj.insert("store".to_string(), Value::Bool(false));
     match obj.get_mut("include") {
         Some(Value::Array(items)) => {
@@ -409,9 +315,7 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     }
     let lifted_instructions = lift_instruction_messages(obj);
     // Ensure `instructions` is present even when the caller sent no system
-    // prompt — the Codex backend expects it. If the caller supplied
-    // system/developer messages in `input`, hoist those into instructions
-    // because the backend rejects system/developer items inside `input`.
+    // prompt — the Codex backend expects it.
     let has_instructions = obj
         .get("instructions")
         .and_then(Value::as_str)
@@ -436,24 +340,6 @@ fn shape_codex_responses_body(body: &mut serde_json::Value) {
     }
     ensure_tool_names(obj);
     ensure_tool_descriptions(obj);
-}
-
-fn strip_codex_unsupported_fields(value: &mut serde_json::Value) {
-    use serde_json::Value;
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                strip_codex_unsupported_fields(item);
-            }
-        }
-        Value::Object(obj) => {
-            obj.remove("cache_control");
-            for item in obj.values_mut() {
-                strip_codex_unsupported_fields(item);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn lift_instruction_messages(obj: &mut serde_json::Map<String, serde_json::Value>) -> Vec<String> {
@@ -740,144 +626,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unauthorized_recovery_rereads_rotated_disk_token_before_refresh() {
-        let path = tmp_store_path();
-        {
-            let mut store = CredentialStore::load(&path).unwrap();
-            store
-                .set(
-                    PROVIDER_ID,
-                    DEFAULT_LABEL,
-                    Credential::from_oauth_token(OAuthToken {
-                        access_token: "old-access".into(),
-                        expires_at: 0,
-                        refresh_token: Some("RT-old".into()),
-                    }),
-                )
-                .unwrap();
-        }
-        let applier = OpenAiCodexAuthApplier::with_client_and_endpoint(
-            &path,
-            reqwest::Client::new(),
-            "client-1",
-            "http://insecure.example.com/oauth/token",
-        );
-
-        let first = applier
-            .apply(
-                reqwest::Client::new()
-                    .post("https://chatgpt.com/backend-api/codex/responses")
-                    .build()
-                    .unwrap(),
-                &codex_target(None),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            first
-                .headers()
-                .get(reqwest::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok()),
-            Some("Bearer old-access")
-        );
-
-        {
-            let mut store = CredentialStore::load(&path).unwrap();
-            store
-                .set(
-                    PROVIDER_ID,
-                    DEFAULT_LABEL,
-                    Credential::from_oauth_token(OAuthToken {
-                        access_token: "new-access".into(),
-                        expires_at: 0,
-                        refresh_token: Some("RT-new".into()),
-                    }),
-                )
-                .unwrap();
-        }
-
-        assert!(
-            applier
-                .refresh_after_unauthorized(
-                    &codex_target(None),
-                    Some(&HeaderValue::from_static("Bearer old-access")),
-                )
-                .await
-                .unwrap()
-        );
-        let second = applier
-            .apply(
-                reqwest::Client::new()
-                    .post("https://chatgpt.com/backend-api/codex/responses")
-                    .build()
-                    .unwrap(),
-                &codex_target(None),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            second
-                .headers()
-                .get(reqwest::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok()),
-            Some("Bearer new-access")
-        );
-    }
-
-    #[tokio::test]
-    async fn unauthorized_recovery_refreshes_when_disk_token_matches_rejected_token() {
-        let path = tmp_store_path();
-        {
-            let mut store = CredentialStore::load(&path).unwrap();
-            store
-                .set(
-                    PROVIDER_ID,
-                    DEFAULT_LABEL,
-                    Credential::from_oauth_token(OAuthToken {
-                        access_token: "old-access".into(),
-                        expires_at: 0,
-                        refresh_token: Some("RT-old".into()),
-                    }),
-                )
-                .unwrap();
-        }
-        let applier = OpenAiCodexAuthApplier::with_client_and_endpoint(
-            &path,
-            reqwest::Client::new(),
-            "client-1",
-            "http://insecure.example.com/oauth/token",
-        );
-        let err = applier
-            .refresh_after_unauthorized(
-                &codex_target(None),
-                Some(&HeaderValue::from_static("Bearer old-access")),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("OAuth refresh"),
-            "expected a refresh error proving the refresh path ran, got: {err}"
-        );
-    }
-
-    #[tokio::test]
     async fn prepare_body_forces_store_false_and_reasoning_include() {
         let path = tmp_store_path();
         let applier = OpenAiCodexAuthApplier::new(&path).unwrap();
         // include absent → created with the reasoning item; store forced false.
-        // `max_output_tokens` is stripped because ChatGPT/Codex rejects it.
-        let mut body = serde_json::json!({
-            "model": "gpt-5-codex",
-            "input": [],
-            "max_output_tokens": 16,
-            "stream_options": {"include_usage": true}
-        });
+        let mut body = serde_json::json!({ "model": "gpt-5-codex", "input": [] });
         applier
             .prepare_body(&mut body, &codex_target(None))
             .await
             .unwrap();
-        assert!(body.get("max_output_tokens").is_none());
-        assert!(body.get("stream_options").is_none());
         assert_eq!(body["store"], serde_json::json!(false));
         assert_eq!(
             body["include"],
@@ -916,27 +673,21 @@ mod tests {
         assert_eq!(body3["instructions"], serde_json::json!("be a pirate"));
 
         let mut body4 = serde_json::json!({
-            "instructions": "base instructions",
-            "metadata": {"session_id": "claude-session"},
-            "client_metadata": {"thread_id": "codex-thread"},
-            "thinking": {"type": "adaptive"},
-            "context_management": {"edits": []},
-            "output_config": {"effort": "high"},
             "input": [
                 {
                     "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": "developer guidance"}]
+                    "role": "system",
+                    "content": [{ "type": "input_text", "text": "base rules" }]
                 },
                 {
                     "type": "message",
-                    "role": "system",
-                    "content": "system guidance"
+                    "role": "developer",
+                    "content": "developer rules"
                 },
                 {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "hello"}]
+                    "content": [{ "type": "input_text", "text": "hello" }]
                 }
             ]
         });
@@ -944,25 +695,12 @@ mod tests {
             .prepare_body(&mut body4, &codex_target(None))
             .await
             .unwrap();
-        assert!(body4.get("metadata").is_none());
-        assert!(body4.get("client_metadata").is_none());
-        assert!(body4.get("thinking").is_none());
-        assert!(body4.get("context_management").is_none());
-        assert!(body4.get("output_config").is_none());
         assert_eq!(
-            body4["input"],
-            serde_json::json!([
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hello"}]
-                }
-            ])
+            body4["instructions"],
+            serde_json::json!("base rules\n\ndeveloper rules")
         );
-        let instructions = body4["instructions"].as_str().unwrap();
-        assert!(instructions.contains("base instructions"));
-        assert!(instructions.contains("developer guidance"));
-        assert!(instructions.contains("system guidance"));
+        assert_eq!(body4["input"].as_array().unwrap().len(), 1);
+        assert_eq!(body4["input"][0]["role"], serde_json::json!("user"));
 
         let mut body5 = serde_json::json!({
             "input": [],

@@ -219,21 +219,8 @@ pub(crate) fn provider_defined_native(
             );
             serde_json::json!({ tool: value })
         }
-        PROVIDER_ID_OPENAI => {
-            // Most Responses server tools are identified by `type` alone, but
-            // Codex namespace tools carry a distinct, required `name`. The
-            // canonical parser defaults an absent name to `type`, so inequality
-            // tells us the source supplied meaningful name information.
-            let mut obj = serde_json::Map::new();
-            obj.insert("type".into(), tool.into());
-            if name != tool {
-                obj.insert("name".into(), name.into());
-            }
-            obj.extend(arg_fields);
-            serde_json::Value::Object(obj)
-        }
-        // Any other provider id — a flat `{type, …args}` object, which is the
-        // most faithful generic verbatim form available here.
+        // OpenAI / Responses (and any other provider id) — a flat `{type, …args}`
+        // object, which is also the most faithful generic verbatim form.
         _ => {
             let mut obj = serde_json::Map::new();
             obj.insert("type".into(), tool.into());

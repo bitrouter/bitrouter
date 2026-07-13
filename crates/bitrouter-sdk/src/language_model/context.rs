@@ -363,11 +363,12 @@ impl PipelineContext {
         &self.events
     }
 
-    /// Rough `char` count of model-visible prompt payloads — system instruction
-    /// plus message text, reasoning, tool call args, and tool results. Used to
-    /// seed the [`UsageAccumulator`] so a stream without an upstream usage frame
-    /// can still estimate prompt tokens. The estimate is deliberately rough but
-    /// should not collapse tool-heavy agent follow-up turns to `0`.
+    /// Rough `char` count of the request prompt's text — system instruction
+    /// plus every message's text / reasoning content. Used to seed the
+    /// [`UsageAccumulator`] so a client disconnect *before* the upstream usage
+    /// frame can still estimate prompt tokens. Non-text parts (tool calls,
+    /// tool results) are skipped; they carry no user-visible prose and the
+    /// estimate only needs to beat `0` until the authoritative frame arrives.
     fn prompt_text_chars(&self) -> u64 {
         let prompt = self.prompt();
         let mut chars = prompt
@@ -376,7 +377,9 @@ impl PipelineContext {
             .map_or(0u64, |s| s.chars().count() as u64);
         for message in &prompt.messages {
             for content in &message.content {
-                chars = chars.saturating_add(prompt_content_chars(content));
+                if let Content::Text { text, .. } | Content::Reasoning { text, .. } = content {
+                    chars = chars.saturating_add(text.chars().count() as u64);
+                }
             }
         }
         chars
@@ -477,27 +480,6 @@ impl PipelineContext {
             request_id: self.request_id,
             result,
         }
-    }
-}
-
-fn prompt_content_chars(content: &Content) -> u64 {
-    match content {
-        Content::Text { text, .. } | Content::Reasoning { text, .. } => text.chars().count() as u64,
-        Content::ToolCall {
-            name, arguments, ..
-        } => name
-            .chars()
-            .count()
-            .saturating_add(arguments.chars().count()) as u64,
-        Content::ToolResult {
-            tool_name, output, ..
-        } => tool_name
-            .as_deref()
-            .map_or(0u64, |name| name.chars().count() as u64)
-            .saturating_add(output.to_provider_string().chars().count() as u64),
-        other => serde_json::to_string(other)
-            .map(|value| value.chars().count() as u64)
-            .unwrap_or(0),
     }
 }
 
@@ -721,12 +703,10 @@ mod tests {
     }
 
     #[test]
-    fn prompt_token_estimate_counts_tool_call_payloads() {
-        // Tool-call names and arguments are part of the model-visible prompt on
-        // follow-up turns, so estimated usage should not collapse them to zero.
+    fn prompt_token_estimate_ignores_non_text_content() {
+        // Only the system instruction is prose; the message's tool-call JSON
+        // args must not inflate the prompt-token estimate.
         let system = "sys";
-        let tool_name = "get_weather";
-        let arguments = "{\"city\":\"London\"}";
         let prompt = Prompt {
             model: "gpt-5".into(),
             system: Some(system.into()),
@@ -735,8 +715,8 @@ mod tests {
                 role: Role::Assistant,
                 content: vec![Content::ToolCall {
                     id: "call_1".into(),
-                    name: tool_name.into(),
-                    arguments: arguments.into(),
+                    name: "get_weather".into(),
+                    arguments: "{\"city\":\"a deliberately long value to be ignored\"}".into(),
                     provider_executed: false,
                     dynamic: false,
                     provider_metadata: Default::default(),
@@ -750,46 +730,9 @@ mod tests {
         };
         let ctx = ctx_from_prompt(prompt);
         let sc = ctx.stream_context();
-        let expected_chars =
-            system.chars().count() + tool_name.chars().count() + arguments.chars().count();
         assert_eq!(
             sc.accumulated_usage.estimated_prompt_tokens(),
-            (expected_chars as u64).div_ceil(CHARS_PER_TOKEN),
-        );
-    }
-
-    #[test]
-    fn prompt_token_estimate_counts_tool_result_output() {
-        let tool_name = "exec_command";
-        let output = "12345678";
-        let prompt = Prompt {
-            model: "gpt-5".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message {
-                role: Role::Tool,
-                content: vec![Content::ToolResult {
-                    call_id: "call_1".into(),
-                    tool_name: Some(tool_name.into()),
-                    output: crate::language_model::types::ToolResultOutput::Text {
-                        value: output.into(),
-                    },
-                    dynamic: false,
-                    provider_metadata: Default::default(),
-                }],
-            }],
-            tools: vec![],
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: true,
-        };
-        let ctx = ctx_from_prompt(prompt);
-        let sc = ctx.stream_context();
-        let expected_chars = tool_name.chars().count() + output.chars().count();
-        assert_eq!(
-            sc.accumulated_usage.estimated_prompt_tokens(),
-            (expected_chars as u64).div_ceil(CHARS_PER_TOKEN),
+            (system.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
         );
     }
 
@@ -833,53 +776,6 @@ mod tests {
             usage.completion_tokens,
             (delta.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
         );
-    }
-
-    #[tokio::test]
-    async fn completed_stream_without_usage_bills_prompt_and_estimated_output() {
-        let user = "12345678";
-        let ctx = ctx_from_prompt(prompt_with_text(None, user));
-        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
-
-        proc.process_part(StreamPart::TextDelta {
-            text: "abcdefgh".into(),
-        })
-        .await
-        .expect("text delta passes through with no hooks");
-        proc.finish(StreamOutcome::Completed).await;
-
-        let usage = proc
-            .context()
-            .final_usage
-            .expect("completed stream without upstream usage should fall back to estimates");
-        assert_eq!(usage.prompt_tokens, 2);
-        assert_eq!(usage.completion_tokens, 2);
-    }
-
-    #[tokio::test]
-    async fn completed_stream_with_zero_usage_bills_estimated_usage() {
-        let user = "12345678";
-        let ctx = ctx_from_prompt(prompt_with_text(None, user));
-        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
-
-        proc.process_part(StreamPart::TextDelta {
-            text: "abcdefgh".into(),
-        })
-        .await
-        .expect("text delta passes through with no hooks");
-        proc.process_part(StreamPart::Usage {
-            usage: Usage::default(),
-        })
-        .await
-        .expect("zero usage frame passes through with no hooks");
-        proc.finish(StreamOutcome::Completed).await;
-
-        let usage = proc
-            .context()
-            .final_usage
-            .expect("completed stream should have usage");
-        assert_eq!(usage.prompt_tokens, 2);
-        assert_eq!(usage.completion_tokens, 2);
     }
 
     #[tokio::test]

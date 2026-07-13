@@ -65,12 +65,6 @@ impl MeteringRecorder {
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
-        tracing::debug!(
-            request_id = %ctx.request_id,
-            provider = %ctx.provider_id,
-            model = %ctx.model_id,
-            "metering settlement started"
-        );
         let (estimated_charge_micro_usd, missing_pricing) = self.estimate_charge(ctx);
         if missing_pricing {
             // Demoted from `warn` to `debug` — the per-request "finished"
@@ -102,11 +96,6 @@ impl SettlementRecorder for MeteringRecorder {
             streamed: ctx.streamed,
             error: ctx.error.as_ref().map(|e| e.to_string()),
         };
-        self.store.record_request(metric).await?;
-        tracing::debug!(
-            request_id = %ctx.request_id,
-            "metering settlement recorded"
-        );
-        Ok(())
+        self.store.record_request(metric).await
     }
 }

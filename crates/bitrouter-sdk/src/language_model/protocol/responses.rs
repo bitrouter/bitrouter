@@ -1366,20 +1366,10 @@ fn parse_responses_tool(t: ResponsesTool) -> Option<Tool> {
     // config keys live in `extra`. A few server tools (`file_search`) accept a
     // distinct `name`; default to the kind when absent.
     let kind = t.kind?;
-    let mut args: serde_json::Map<String, serde_json::Value> = t.extra.into_iter().collect();
-    if let Some(description) = t.description {
-        args.insert("description".into(), description.into());
-    }
-    if !t.parameters.is_null() {
-        args.insert("parameters".into(), t.parameters);
-    }
-    if let Some(strict) = t.strict {
-        args.insert("strict".into(), strict.into());
-    }
     Some(Tool::ProviderDefined {
         id: format!("{PROVIDER_ID_OPENAI}.{kind}"),
         name: t.name.unwrap_or_else(|| kind.clone()),
-        args: serde_json::Value::Object(args),
+        args: serde_json::Value::Object(t.extra.into_iter().collect()),
         provider_metadata: ProviderMetadata::new(),
     })
 }

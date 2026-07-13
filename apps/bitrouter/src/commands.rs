@@ -43,11 +43,6 @@ database:
   # startup, so `./bitrouter.db` always lands alongside the config.
   url: "sqlite://./bitrouter.db"
 
-# Routing policies are opt-in and live in a sibling policy-lock.yaml.
-# `bitrouter policy init <name> --preset <preset> --strong <model>
-# --economy <model>` creates the lock and preset binding. With no binding,
-# model routing behaves exactly as it does in zero-config mode.
-
 # Built-in providers auto-enable when their env var is set. An entry
 # with `inherit_defaults: true` (the workspace default) plus an empty
 # body is enough — `api_base`, `api_protocol`, `api_key`, and the

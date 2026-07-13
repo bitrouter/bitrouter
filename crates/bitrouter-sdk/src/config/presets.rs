@@ -35,9 +35,6 @@ pub struct PresetResolution {
     pub prefs: RoutingPrefs,
     /// Prompt body overrides from the preset.
     pub overrides: PromptOverrides,
-    /// App-owned policy bound to the selected preset. Bare models and presets
-    /// without a binding return `None`.
-    pub policy: Option<String>,
 }
 
 fn apply_routing(prefs: &mut RoutingPrefs, routing: &RoutingConfig) {
@@ -125,7 +122,6 @@ pub fn resolve_presets(
         clean_model,
         prefs,
         overrides,
-        policy: preset.and_then(|p| p.policy.clone()),
     })
 }
 
@@ -141,7 +137,6 @@ mod tests {
             "careful".to_string(),
             PresetConfig {
                 model: Some("gpt-5".to_string()),
-                policy: None,
                 system_prompt: Some("Reason carefully.".to_string()),
                 params: serde_json::Map::new(),
                 routing: RoutingConfig {

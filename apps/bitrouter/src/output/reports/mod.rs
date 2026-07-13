@@ -9,7 +9,6 @@ pub mod agents;
 pub mod config;
 pub mod daemon;
 pub mod observe;
-pub mod policy;
 pub mod routing;
 pub mod skills;
 pub mod tools;

@@ -4,7 +4,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{future::Future, mem};
 
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt};
@@ -18,7 +17,7 @@ use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
-use crate::language_model::routing::{FallbackPolicy, RoutingTable};
+use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::server_tools::toolset::ToolContext;
@@ -104,7 +103,6 @@ struct StreamAttempt {
 pub struct Pipeline {
     pub(crate) pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     pub(crate) route_hooks: Vec<Arc<dyn RouteHook>>,
-    pub(crate) model_selectors: Vec<Arc<dyn crate::language_model::routing::ModelSelector>>,
     pub(crate) execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     pub(crate) stream_hooks: Vec<Arc<dyn StreamHook>>,
     pub(crate) settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
@@ -119,10 +117,10 @@ pub struct Pipeline {
     /// pipeline strictly single-shot.
     pub(crate) server_tool_loop: Option<Arc<ServerToolLoop>>,
     pub(crate) keepalive_interval: Duration,
-    /// Detached stream-finalization tasks. Every terminal stream moves its
-    /// settlement here before awaiting it, so a client disconnect cannot cancel
-    /// recorders after the terminal SSE frame has already been delivered.
-    /// [`Pipeline::drain_pending_settlements`] awaits them on graceful shutdown.
+    /// Detached settlement tasks spawned when a streaming client disconnects
+    /// (`StreamSettlementGuard::drop` —.5: no lost streaming
+    /// settlement). [`Pipeline::drain_pending_settlements`] awaits them all
+    /// on graceful shutdown so the process doesn't exit mid-settlement.
     pub(crate) pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
     /// Detached **non-streaming** executions ([`Pipeline::execute_detached`]).
     /// A `TaskTracker` (not the `JoinSet` above) because *every* non-streaming
@@ -240,7 +238,7 @@ impl Pipeline {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            mem::take(&mut *guard)
+            std::mem::take(&mut *guard)
         };
         let mut drained = 0;
         while taken.join_next().await.is_some() {
@@ -257,22 +255,6 @@ impl Pipeline {
         self.detached_executions.wait().await;
 
         drained
-    }
-
-    fn spawn_stream_finalization<F>(&self, future: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let future = future.instrument(tracing::Span::current());
-        match self.pending_settlements.lock() {
-            Ok(mut set) => {
-                while set.try_join_next().is_some() {}
-                set.spawn(future);
-            }
-            Err(_poisoned) => {
-                tokio::spawn(future);
-            }
-        }
     }
 
     /// Execute a non-streaming request that **always runs to completion**, even
@@ -575,29 +557,25 @@ impl Pipeline {
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
-        // Stage 0 resolves `@preset` / `:variant` exactly once. App-owned model
-        // selectors then choose an effective model without losing the preset's
-        // prompt defaults or routing preferences.
-        let resolution = self.routing_table.resolve_model(ctx.model()).await?;
-        ctx.apply_preset_overrides(&resolution.overrides);
-        ctx.set_model(resolution.clean_model);
-        if let Some(policy) = resolution.policy.as_deref() {
-            for selector in &self.model_selectors {
-                selector.select(policy, ctx)?;
-            }
-        }
+        // Stage-0 preset overrides — `@careful` etc. inject a
+        // system prompt / sampling defaults that the request can still
+        // override. Done before the cascade so the upstream call sees them.
+        let overrides = self.routing_table.preset_overrides(ctx.model()).await?;
+        ctx.apply_preset_overrides(&overrides);
 
         // Restrict the chain to providers that advertise every capability this
         // request actually uses (e.g. structured outputs). Empty for plain
         // requests, so those route unchanged.
-        let mut prefs = resolution.prefs;
-        prefs.require_capabilities = ctx.prompt().required_capabilities();
-        // Carry the inbound protocol so the table can prefer a native,
-        // same-protocol upstream for each chosen target.
-        prefs.inbound_protocol = ctx.inbound_protocol();
+        let prefs = RoutingPrefs {
+            require_capabilities: ctx.prompt().required_capabilities(),
+            // Carry the inbound protocol so the table can prefer a native,
+            // same-protocol upstream for each chosen target.
+            inbound_protocol: ctx.inbound_protocol(),
+            ..RoutingPrefs::default()
+        };
         let mut chain = self
             .routing_table
-            .route_resolved(ctx.model(), &prefs, ctx.caller())
+            .route_chain(ctx.model(), &prefs, ctx.caller())
             .await?;
         for hook in &self.route_hooks {
             hook.resolve(&mut chain, ctx).await?;
@@ -919,19 +897,17 @@ impl StreamSettlementGuard {
 
     /// Finalise inline on a normal/errored/aborted termination.
     async fn finalize(&mut self, outcome: StreamOutcome) {
-        if let Some((processor, ctx)) = self.state.take() {
-            // Move finalization out of the response-body future before awaiting
-            // it. A client commonly closes the SSE connection immediately after
-            // the terminal frame; cancellation of this waiter must not cancel a
-            // recorder midway through its database write.
-            let pipeline = self.pipeline.clone();
-            let latest_attempt = self.latest_attempt.clone();
-            let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
-            self.pipeline.spawn_stream_finalization(async move {
-                finalize_stream(pipeline, processor, ctx, latest_attempt, outcome).await;
-                let _ = finished_tx.send(());
-            });
-            let _ = finished_rx.await;
+        if let Some((mut processor, mut ctx)) = self.state.take() {
+            let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
+            processor.finish(outcome).await;
+            sync_execution_target(&mut ctx, &self.latest_attempt);
+            ctx.absorb_stream(processor.into_context());
+            ctx.finalize_stream_generation_time();
+            self.pipeline
+                .run_settlement(&mut ctx, true, settlement_error)
+                .await;
+            self.pipeline.observe_after(Phase::Settlement, &ctx).await;
+            self.pipeline.observe_end(&ctx, request_outcome).await;
         }
     }
 }
@@ -946,25 +922,6 @@ fn stream_terminal_metadata(outcome: &StreamOutcome) -> (Option<BitrouterError>,
     }
 }
 
-async fn finalize_stream(
-    pipeline: Arc<Pipeline>,
-    mut processor: StreamProcessor,
-    mut ctx: PipelineContext,
-    latest_attempt: SharedStreamAttempt,
-    outcome: StreamOutcome,
-) {
-    let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
-    processor.finish(outcome).await;
-    sync_execution_target(&mut ctx, &latest_attempt);
-    ctx.absorb_stream(processor.into_context());
-    ctx.finalize_stream_generation_time();
-    pipeline
-        .run_settlement(&mut ctx, true, settlement_error)
-        .await;
-    pipeline.observe_after(Phase::Settlement, &ctx).await;
-    pipeline.observe_end(&ctx, request_outcome).await;
-}
-
 impl Drop for StreamSettlementGuard {
     fn drop(&mut self) {
         // If `state` is still `Some`, the consumer dropped the stream before it
@@ -975,19 +932,31 @@ impl Drop for StreamSettlementGuard {
         // `Pipeline::drain_pending_settlements` can await every in-flight
         // detached settlement during graceful shutdown — otherwise SIGTERM
         // could cut a settlement task mid-await and the receipt would be lost.
-        if let Some((processor, ctx)) = self.state.take() {
+        if let Some((mut processor, mut ctx)) = self.state.take() {
             let pipeline = self.pipeline.clone();
             let latest_attempt = self.latest_attempt.clone();
-            self.pipeline.spawn_stream_finalization(async move {
-                finalize_stream(
-                    pipeline,
-                    processor,
-                    ctx,
-                    latest_attempt,
-                    StreamOutcome::ClientDisconnected,
-                )
-                .await;
-            });
+            let fut = async move {
+                processor.finish(StreamOutcome::ClientDisconnected).await;
+                sync_execution_target(&mut ctx, &latest_attempt);
+                ctx.absorb_stream(processor.into_context());
+                ctx.finalize_stream_generation_time();
+                pipeline.run_settlement(&mut ctx, true, None).await;
+                pipeline
+                    .observe_end(&ctx, RequestOutcome::ClientDisconnected)
+                    .await;
+            };
+            // The mutex is held only long enough to call `spawn` (which is
+            // synchronous); no `.await` is held across the lock. If the lock
+            // is poisoned we fall through to a bare `tokio::spawn` so the
+            // settlement still runs (the unhappy case beats losing it).
+            match self.pipeline.pending_settlements.lock() {
+                Ok(mut set) => {
+                    set.spawn(fut);
+                }
+                Err(_poisoned) => {
+                    tokio::spawn(fut);
+                }
+            }
         }
     }
 }
@@ -1075,46 +1044,5 @@ fn log_request_finished(settle: &SettlementContext) {
             error = %err,
             "request finished"
         ),
-    }
-}
-
-#[cfg(test)]
-mod stream_outcome_tests {
-    use super::{RequestOutcome, StreamOutcome, stream_terminal_metadata};
-    use crate::error::BitrouterError;
-
-    #[test]
-    fn upstream_error_maps_to_failed() {
-        // The fix for the streaming-error blind spot: a mid-stream upstream error
-        // must reach `on_request_end` as `Failed`, not a silent `Completed`.
-        let outcome = StreamOutcome::UpstreamError(BitrouterError::internal("mid-stream boom"));
-        let (error, request_outcome) = stream_terminal_metadata(&outcome);
-        assert!(error.is_some());
-        assert!(matches!(request_outcome, RequestOutcome::Failed(_)));
-    }
-
-    #[test]
-    fn abort_maps_to_failed_settlement() {
-        let outcome = StreamOutcome::Aborted(BitrouterError::bad_request("blocked"));
-        let (error, request_outcome) = stream_terminal_metadata(&outcome);
-        assert!(error.is_some());
-        assert!(matches!(request_outcome, RequestOutcome::Failed(_)));
-    }
-
-    #[test]
-    fn completion_maps_to_completed_without_error() {
-        let (error, request_outcome) = stream_terminal_metadata(&StreamOutcome::Completed);
-        assert!(error.is_none());
-        assert!(matches!(request_outcome, RequestOutcome::Completed));
-    }
-
-    #[test]
-    fn disconnect_maps_to_disconnect() {
-        let (error, request_outcome) = stream_terminal_metadata(&StreamOutcome::ClientDisconnected);
-        assert!(error.is_none());
-        assert!(matches!(
-            request_outcome,
-            RequestOutcome::ClientDisconnected
-        ));
     }
 }

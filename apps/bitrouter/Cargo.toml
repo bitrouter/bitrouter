@@ -44,9 +44,6 @@ erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true
 anyhow = "1"
-thiserror.workspace = true
-http.workspace = true
-axum.workspace = true
 futures.workspace = true
 agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }

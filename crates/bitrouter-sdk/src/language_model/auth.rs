@@ -56,22 +56,6 @@ pub trait AuthApplier: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
-
-    /// Give stateful auth providers one chance to recover from an upstream
-    /// `401 Unauthorized`.
-    ///
-    /// The executor calls this only after the upstream rejects an already
-    /// authenticated request. Implementations should refresh or reload their
-    /// credential state, then return `true` when the request should be rebuilt
-    /// and retried once. Static-credential providers keep the default `false`
-    /// and preserve the original upstream error.
-    async fn refresh_after_unauthorized(
-        &self,
-        _target: &RoutingTarget,
-        _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-    ) -> Result<bool> {
-        Ok(false)
-    }
 }
 
 /// Registry of per-provider [`AuthApplier`]s, keyed by `provider_name`.
