@@ -61,11 +61,11 @@ Rules:
   interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.
 - **Credential-gated.** An `api_key` provider becomes routable only when its key
   is present, read from the convention `${NAME}_API_KEY` (uppercased, hyphens →
-  underscores — e.g. `DEEPSEEK_API_KEY`, `ZAI_CODING_PLAN_API_KEY`), or from the
-  built-in's env var when the provider also has a built-in entry. No key ⇒ not
-  enabled. Declare the provider explicitly with `api_key: ${MY_VAR}` to override
-  the env-var name. A `local_oauth` / `local_pkce` provider is not env-gated —
-  it activates after `bitrouter providers login <provider>`.
+  underscores — e.g. `DEEPSEEK_API_KEY`, `ZAI_CODING_PLAN_API_KEY`) or from the
+  provider's declared env var. No key ⇒ not enabled. Declare the provider
+  explicitly with `api_key: ${MY_VAR}` to override the env-var name. A
+  `local_oauth` / `local_pkce` provider is not env-gated — it activates after
+  `bitrouter providers login <provider>`.
 - **Full catalog via the sync channel.** A provider may declare an `auto_sync`
   feed (the channel the registry itself syncs from). BitRouter reads the same
   channel to pull the provider's **full** catalog beyond the registry seed
@@ -90,7 +90,7 @@ registry:
 
 When several active providers serve the same canonical model, the auto-cascade
 orders them by this `provider_priority` ladder (a provider's class comes from
-the registry / built-in). Override per provider with `class:` or a numeric
+the registry or explicit provider config). Override per provider with `class:` or a numeric
 `priority:` (lower = preferred) under `providers.<id>`.
 
 ## Minimal config
@@ -109,11 +109,11 @@ providers:
 inherit_defaults: true
 ```
 
-`inherit_defaults: true` (the workspace default) is what makes `openai: {}` work — it fills `api_base`, `api_protocol`, the model catalog, and the env-resolved `api_key` from the built-in entry. Set it to `false` only when you want to override everything explicitly.
+`inherit_defaults: true` (the workspace default) is what makes `openai: {}` work — it fills `api_base`, `api_protocol`, the model catalog, and the env-resolved `api_key` from the registry entry. Set it to `false` only when you want to override everything explicitly.
 
 ## Custom OpenAI-compatible providers
 
-Anything that speaks OpenAI Chat Completions on a known base URL fits here. No built-in needed.
+Anything that speaks OpenAI Chat Completions on a known base URL fits here. No registry entry needed.
 
 ```yaml
 providers:
@@ -136,10 +136,10 @@ providers:
       - { id: "my-org/mixtral-8x22b" }
 ```
 
-> Azure OpenAI and Amazon Bedrock are **built-in** registry providers now (see
+> Azure OpenAI and Amazon Bedrock are registry providers now (see
 > *Known providers*) — you do not hand-write them here. Set their env vars (and
 > `AZURE_OPENAI_RESOURCE` / `AWS_REGION`) and they self-enable. Google `vertex`
-> is built-in **in Express Mode only** (Gemini-only, static `VERTEX_EXPRESS_API_KEY`);
+> is registry-backed **in Express Mode only** (Gemini-only, static `VERTEX_EXPRESS_API_KEY`);
 > the full Vertex catalog (Claude/Llama on regional endpoints) is commented out in
 > the registry entry, pending service-account OAuth support.
 
@@ -210,7 +210,8 @@ Notes:
   first byte; once bytes are streaming the request can't fall back).
 - `total_secs` is unset by default on purpose: an overall cap would kill
   legitimately long agentic/reasoning streams.
-- Timeouts are **not** inherited via a provider's `derives:` chain.
+- Timeouts are **not** inherited via a provider's `derives:` chain, only from
+  the built-in global default.
 
 ## Tags & routing
 
@@ -398,5 +399,5 @@ Older versions of this skill mentioned features that **do not exist** in the v1 
 - `strategy: conditional` with `prompt_tokens` rules — not parsed.
 - `strategy: least_cost` — not parsed.
 - `safety_settings`, `features.computer_use`, `features.json_mode` provider blocks — not parsed.
-- `bitrouter providers add/remove/test/stats/export/import` subcommands — only `list` and `use` (no-op) exist.
-- `bitrouter config validate/reload/show` — config validation happens on load; use `bitrouter reload` for the daemon.
+- `bitrouter providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers login`, and `providers logout`.
+- `bitrouter config reload/show` — `config validate` exists for CI-safe validation; use `bitrouter reload` for the daemon.

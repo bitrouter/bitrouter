@@ -24,13 +24,13 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `agent-proxy` is a stdio JSON-RPC bridge, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
 ## Config resolution
 
-All subcommands accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
+Local router subcommands that load a config accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
 
 1. `./bitrouter.yaml` in the current directory
 2. `$BITROUTER_HOME/bitrouter.yaml` — if the env var is set, the file must exist
@@ -192,6 +192,17 @@ bitrouter agents install claude-code
 ```
 
 Prints a YAML stub for the named catalog agent. Paste the output under `agents:` in `bitrouter.yaml`.
+
+### `bitrouter acp`
+
+```
+bitrouter acp serve --agent <id> [--worktree <name>] [--warm] [-c <path>]
+bitrouter acp prompt --agent <id> [--worktree <name>] [-c <path>] <text>
+bitrouter acp sessions
+bitrouter acp attach <record>
+```
+
+Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; with `--warm`, the session can be reattached with `acp attach`. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, route the agent's model calls through the daemon by default (`--direct` opts out).
 
 ### `bitrouter launch`
 

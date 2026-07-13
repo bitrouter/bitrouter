@@ -4,7 +4,7 @@ description: 把你的 OpenRouter 密钥接入 BitRouter——一把聚合器密
 sourceHash: 177d9a2dbc0eff17580a51b6a4fa1440253c8a787a604e413b84a60c32a659dd
 ---
 
-[OpenRouter](https://openrouter.ai) 是一个 OpenAI 兼容的聚合器，用一把密钥就能访问数百个模型。BitRouter 内置了 `openrouter` 供应商，因此接入你的密钥只需在 `bitrouter.yaml` 中加一个区块——此后 OpenRouter 的模型目录就会并入你其余的[注册表](/docs/concepts/models)，并叠加供应商选择与回退能力。
+[OpenRouter](https://openrouter.ai) 是一个 OpenAI 兼容的聚合器，用一把密钥就能访问数百个模型。BitRouter 的注册表包含 `openrouter` 供应商，因此接入你的密钥只需在 `bitrouter.yaml` 中加一个区块——此后 OpenRouter 的模型目录就会并入你其余的[注册表](/docs/concepts/models)，并叠加供应商选择与回退能力。
 
 <Callout type="info">
 **想完全迁移出 OpenRouter？** 如果你想*替换*而非通过它来路由，请参见[从 OpenRouter 迁移](/docs/guides/migrate-from-openrouter)——只是换一下 base URL 和密钥。
@@ -17,7 +17,7 @@ sourceHash: 177d9a2dbc0eff17580a51b6a4fa1440253c8a787a604e413b84a60c32a659dd
 
 ## 把 OpenRouter 接入 BitRouter
 
-`openrouter` 供应商内置了正确的 `api_base` 和 Bearer 鉴权——你只需提供密钥和想要的模型：
+`openrouter` 注册表条目带有正确的 `api_base` 和 Bearer 鉴权默认值——你只需提供密钥和想要的模型：
 
 ```yaml
 # bitrouter.yaml

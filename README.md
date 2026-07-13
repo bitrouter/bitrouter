@@ -77,6 +77,12 @@ _All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero 
 
 **TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM (Python), Portkey (TypeScript), and Bifrost (Go) are unified gateways — fast, OpenAI-compatible, guardrails included — but they route models. TensorZero (Rust) adds a production feedback loop, but optimizes the model itself, not the loop. BitRouter is the only one that treats models, tools, and agents as a single routable surface — a Rust-native gateway that cost-optimizes the whole production loop, with cross-protocol routing, MCP and ACP gateways, and guardrails out of the box.
 
+## Benchmarks
+
+Benchmark reports live in [`benchmarks/`](benchmarks/). In the first published run (Terminal-Bench 2.1, Codex + Kimi), adaptive routing replaced strong-model calls with a cheaper model: round r2 cut imputed cost **32.8%** versus a strong-only control at near-parity score, and the best round scored **82.95%** at 8.2% lower cost.
+
+The complete traces, messages, tool calls, usage, policy decisions, configs, and checksums are published in the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset. This is a mechanism study under a modified protocol, not a Terminal-Bench leaderboard submission; read the [experiment limitations](benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md#limitations) before citing the numbers.
+
 ## Install
 
 ```bash

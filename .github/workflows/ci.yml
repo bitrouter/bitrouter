@@ -59,19 +59,20 @@ jobs:
     name: feature-isolation
     runs-on: ubuntu-latest
     # Verifies the SDK builds without its `server` feature, and that the
-    # hook plugins do not pull the axum HTTP stack into their dep tree —
-    # plugins are hook libraries, not servers.
+    # default builds of the hook crates stay lean — guardrails never carries
+    # the axum HTTP stack, and observe only pulls it in under its opt-in
+    # `otel-*` features.
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo check -p bitrouter-sdk --no-default-features
       - run: cargo check -p bitrouter-guardrails
       - run: cargo check -p bitrouter-observe
-      - name: assert axum not in plugin dep trees
+      - name: assert axum not in default hook-crate dep trees
         run: |
           for crate in bitrouter-guardrails bitrouter-observe; do
             if cargo tree -p "$crate" -i axum 2>/dev/null | grep -q '^axum'; then
-              echo "::error::$crate must not depend on axum"
+              echo "::error::$crate must not depend on axum by default"
               exit 1
             fi
           done

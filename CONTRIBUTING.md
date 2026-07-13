@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to BitRouter.
 
-This guide covers how to report bugs, request features, submit pull requests, and update the built-in provider catalog under [`crates/bitrouter-providers/providers`](crates/bitrouter-providers/providers).
+This guide covers how to report bugs, request features, submit pull requests, and update the provider registry under [`registry/providers`](registry/providers).
 
 ## Before You Start
 
@@ -61,18 +61,18 @@ We prefer contributions that are:
 - validated with the existing Rust tooling
 - accompanied by docs updates when public behavior changes
 
-## Updating Built-In Provider Support
+## Updating Provider Support
 
-Built-in providers are defined as TOML files under [`crates/bitrouter-providers/providers`](crates/bitrouter-providers/providers) — one file per provider — and embedded into the binary at compile time. Each file declares how to talk to that upstream: its `api_base`, `api_protocol` (a single protocol or a glob → protocol map for mixed-protocol gateways), and `auth` scheme (bearer / header / oauth / native). Model metadata (pricing, context length) is **not** in these files; it comes from `models.dev` at runtime.
+Public providers are defined as YAML files under [`registry/providers`](registry/providers) and generated into `dist/registry/`; BitRouter fetches that registry at runtime and caches it locally. The only compiled-in provider entry under `crates/bitrouter-providers/providers/` is the official hosted gateway, which carries the local zero-config auth/transport defaults. Each registry provider declares how to talk to that upstream: its `api_base`, `api_protocol` data, `auth` scheme (bearer / header / oauth / native), billing class, and served models.
 
-### Updating an existing built-in provider
+### Updating an existing provider
 
-1. Edit the matching TOML file under `crates/bitrouter-providers/providers/` (e.g. `openai.toml`, `anthropic.toml`).
-2. Update fields such as `api_base`, `api_protocol`, or `auth`.
-3. Run `cargo test -p bitrouter-providers` — the catalog tests parse every embedded file and check the declared `id` matches the filename.
+1. Edit the matching YAML file under [`registry/providers/`](registry/providers/) (for example, `openai.yaml` or `anthropic.yaml`).
+2. Update fields such as `api_base`, `api_protocol`, `auth`, billing, pricing, or served model mappings.
+3. Regenerate and verify the generated registry artifacts: `cargo run -p dist-helper -- registry build && cargo run -p dist-helper -- registry docs && cargo run -p dist-helper -- check`.
 4. Update docs if the public provider list or onboarding guidance changes.
 
-### Adding a new built-in provider
+### Adding a new provider
 
 If the provider uses an already-supported wire protocol (Chat Completions, Responses, Messages, Generate Content):
 
@@ -82,7 +82,7 @@ If the provider uses an already-supported wire protocol (Chat Completions, Respo
 4. For stateful auth (OAuth, token-exchange), add an `AuthApplier` in `crates/bitrouter-providers/` keyed by the `auth.handler` name and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`).
 5. Add or update tests, and update user-facing docs + the `/bitrouter` skill when the provider list or env vars change.
 
-If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no built-in provider needs it — see the `ApiProtocol::Custom` escape hatch in [`crates/bitrouter-sdk/src/language_model/protocol/mod.rs`](crates/bitrouter-sdk/src/language_model/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`DEVELOPMENT.md`](DEVELOPMENT.md) for where each layer lives.
+If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no current registry provider needs it — see the `ApiProtocol::Custom` escape hatch in [`crates/bitrouter-sdk/src/language_model/protocol/mod.rs`](crates/bitrouter-sdk/src/language_model/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`DEVELOPMENT.md`](DEVELOPMENT.md) for where each layer lives.
 
 ## Questions and Discussion
 

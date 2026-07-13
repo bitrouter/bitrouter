@@ -19,7 +19,6 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 |---|---|
 | `bitrouter route <model> [--config PATH]` | Resolve a model name through the routing table. Tries the running daemon first (live table), falls back to standalone config resolution. Prints the provider/service chain. |
 | `bitrouter models [--config PATH] [--provider ID]` | List every routable model the config exposes. Filter by provider. |
-| `bitrouter verify <model>` | L1 TEE-attestation check for a confidential model (NEAR AI): prints a per-check breakdown (GPU NRAS, Intel TDX DCAP quote, report_data binding, compose, event-log RTMR3 anchor, base measurements MRTD/RTMR0-2, policy pin, debug-disabled, TCB level) and a VERIFIED / UNVERIFIED verdict. Reads `NEAR_BASE`, `NEAR_KMS_ROOTS`, `NEAR_IMAGE_DIGESTS`/`NEAR_WORKLOAD_IDS` (≥1 pin required), `NEAR_BASE_MEASUREMENTS` (≥1 required — comma-separated hex of `MRTD‖RTMR0‖RTMR1‖RTMR2`, 192 bytes each; pins the firmware base registers the guest-extended RTMR3 sits above), and `NVIDIA_EAT_KEY_PEM` from the environment — the verifier refuses to run unpinned. The TCB floor requires an up-to-date platform by default; set `NEAR_TCB_ALLOWED_ADVISORIES` (comma-separated Intel advisory IDs, e.g. `INTEL-SA-00615`) to accept specific out-of-date microcode. |
 | `bitrouter providers list [--config PATH]` | Tab-aligned: `ID  MODELS  ACTIVE  API_BASE`. |
 | `bitrouter tools list [--config PATH]` | Enumerate tools advertised by every configured MCP server (one `tools/list` round-trip per server). |
 | `bitrouter tools status [--config PATH]` | Health-check each MCP server. Latency or error per row. |
@@ -62,9 +61,8 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 
 | Command | Effect |
 |---|---|
-| `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, all built-in providers stubbed as `{}` so they auto-enable when their env var is set. |
+| `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, and common registry providers stubbed as `{}` so they can inherit registry defaults and auto-enable when their credential is available. |
 | `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, and the upstream-URL (SSRF) gate. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. |
-| `bitrouter providers use <id>` | **No-op** in v1 (kept for v0 compatibility). Prints a hint to edit `bitrouter.yaml` instead. |
 | `bitrouter policy create <id> [--dir DIR]` | Write a starter policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |
 
