@@ -29,7 +29,7 @@ Subscriptions skip `bitrouter.yaml` entirely: `bitrouter providers login claude-
 ```yaml
 # bitrouter.yaml
 providers:
-  openrouter:                          # an id you pick (or a built-in id)
+  openrouter:                          # an id you pick (or a registry provider id)
     api_base: https://openrouter.ai/api/v1
     api_key: ${OPENROUTER_API_KEY}     # resolved from the environment at load
     api_protocol:
