@@ -29,11 +29,11 @@ client.messages.create(
 )
 ```
 
-The built-in `anthropic` provider auto-enabled when the env var was set.
+The registry-backed `anthropic` provider auto-enabled when the env var was set.
 
 ## B) Amazon Bedrock
 
-`aws-bedrock` is a **built-in** provider. It reaches Bedrock's OpenAI-compatible
+`aws-bedrock` is a registry-backed provider. It reaches Bedrock's OpenAI-compatible
 `bedrock-mantle` endpoints (not the SigV4 Converse API), so all it needs is a
 Bedrock API key:
 
@@ -51,7 +51,7 @@ are not served through this surface.
 
 ## C) Google Vertex AI
 
-**Claude-on-Vertex is not covered.** The built-in `vertex` provider runs in
+**Claude-on-Vertex is not covered.** The registry-backed `vertex` provider runs in
 Vertex AI **Express Mode** (`VERTEX_EXPRESS_API_KEY`), which serves **Gemini
 models only** — it does not serve Anthropic Claude (or Llama/Mistral) on Vertex.
 Those partner models are present but **commented out** in the `vertex` registry
@@ -61,7 +61,7 @@ from a service-account key), which needs provider-specific code BitRouter does
 not ship today.
 
 So for this Anthropic-shaped migration: if your Claude traffic runs through
-Vertex, there's no drop-in built-in yet — use Anthropic's own API (`anthropic`)
+Vertex, there's no drop-in registry provider yet — use Anthropic's own API (`anthropic`)
 or Bedrock (`aws-bedrock`) instead, or run Claude-on-Vertex behind your own
 proxy and add it as a custom `anthropic`-protocol provider (see section D).
 Full native Vertex support (partner models + service-account auth) is a possible

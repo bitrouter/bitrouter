@@ -10,7 +10,7 @@ LiteLLM's `model_list` maps cleanly to BitRouter's `providers:` (credentials + b
 |---|---|
 | `model_list[].model_name` | `models.<alias>` |
 | `model_list[].litellm_params.model` (e.g. `openai/gpt-4o`) | `models.<alias>.upstream_id` (same `provider/model` form) |
-| `model_list[].litellm_params.api_key` | `providers.<id>.api_key` (or omit — built-ins auto-resolve from env) |
+| `model_list[].litellm_params.api_key` | `providers.<id>.api_key` (or omit — registry providers auto-resolve from env) |
 | `model_list[].litellm_params.api_base` | `providers.<id>.api_base` (only needed for custom endpoints) |
 | Default port `:8000` | `:4356` |
 

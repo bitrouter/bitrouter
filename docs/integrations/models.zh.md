@@ -29,7 +29,7 @@ sourceHash: 7be29fb8987333cd00928957202cd1263655a3e44205aef251f6c3d22aebfc2b
 ```yaml
 # bitrouter.yaml
 providers:
-  openrouter:                          # an id you pick (or a built-in id)
+  openrouter:                          # an id you pick (or a registry provider id)
     api_base: https://openrouter.ai/api/v1
     api_key: ${OPENROUTER_API_KEY}     # resolved from the environment at load
     api_protocol:

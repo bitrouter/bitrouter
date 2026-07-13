@@ -16,7 +16,17 @@ sourceHash: ebdaa5b67dcae3c46e127d28467be57ed8f2624e8058c61fe9bc748695cde34d
 bitrouter providers login openai-codex
 ```
 
-默认菜单会先提供**「从该厂商 CLI 导入现有会话」**。BitRouter 会优先读取 Codex CLI 已保存到 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）中的凭据，然后再检查 macOS 钥匙串；导入时无需重新打开浏览器。如果没有本地 Codex 会话，请选择浏览器订阅登录流程；它会打开 OpenAI 的授权页面（PKCE 流程，使用一个固定的回环端口），授权后会把凭据保存到 `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`。该 token 会自动刷新——只需登录一次。如需移除：
+默认菜单会先提供**「从该厂商 CLI 导入现有会话」**。BitRouter 会优先读取 Codex CLI 已保存到 `$CODEX_HOME/auth.json`（默认 `~/.codex/auth.json`）中的凭据，然后再检查 macOS 钥匙串；导入时无需重新打开浏览器。如果没有本地 Codex 会话，请选择浏览器订阅登录流程；它会打开 OpenAI 的授权页面（PKCE 流程，使用一个固定的回环端口），授权后会把凭据保存到 `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`。该 token 会自动刷新——只需登录一次。
+
+对于脚本和 E2E 检查，可以跳过菜单并要求使用已有的本地 Codex 会话：
+
+```bash
+bitrouter providers login openai-codex --import-existing --no-browser
+```
+
+如果没有可用的本地 Codex 凭据，此命令会直接失败，而不会打开浏览器。
+
+如需移除已保存的凭据：
 
 ```bash
 bitrouter providers logout openai-codex
@@ -24,6 +34,10 @@ bitrouter providers logout openai-codex
 
 <Callout type="info">
 **已经登录过 Codex 了？** 在默认导入选项上直接回车即可。文件凭据优先于钥匙串，因此 BitRouter 会跟随你当前正在使用的本地 Codex home。
+</Callout>
+
+<Callout type="info">
+供应商凭据与 BitRouter Cloud 凭据彼此独立。`bitrouter cloud login` 会让 CLI 登录你的 BitRouter 账户；`bitrouter providers login openai-codex` 保存的是用于上游 `openai-codex` 供应商的 ChatGPT/Codex 订阅凭据。
 </Callout>
 
 ### 多账号
@@ -36,7 +50,7 @@ bitrouter providers login openai-codex --label work
 
 ## 路由到它
 
-无需任何 `bitrouter.yaml` 配置块——`openai-codex` 是内置的，已保存的凭据会在请求时被自动发现。用注册表 id 指定你的套餐所暴露的模型：
+无需任何 `bitrouter.yaml` 配置块——`openai-codex` 是注册表支持的本地登录供应商，已保存的凭据会在请求时被自动发现。用注册表 id 指定你的套餐所暴露的模型：
 
 ```bash
 bitrouter route openai-codex:gpt-5-codex

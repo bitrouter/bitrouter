@@ -16,7 +16,7 @@ Have a ChatGPT Plus or Pro plan? Use it as a model source through the **Codex** 
 bitrouter providers login openai-codex
 ```
 
-By default, the menu offers **"Import an existing session from the vendor CLI"** first. BitRouter reads the credential the Codex CLI already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. If no local Codex session exists, choose the browser subscription flow; it opens OpenAI's authorize page (PKCE, on a pinned loopback port), then stores the credential under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The token auto-refreshes — log in once. To remove it:
+By default, the menu offers **"Import an existing session from the vendor CLI"** first. BitRouter reads the credential the Codex CLI already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. If no local Codex session exists, choose the browser subscription flow; it opens OpenAI's authorize page (PKCE, on a pinned loopback port), then stores the credential under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The token auto-refreshes — log in once.
 
 For scripts and E2E checks, skip the menu and require the existing local Codex session:
 
@@ -25,6 +25,8 @@ bitrouter providers login openai-codex --import-existing --no-browser
 ```
 
 This command fails instead of opening a browser when no local Codex credential is available.
+
+To remove the stored credential:
 
 ```bash
 bitrouter providers logout openai-codex
@@ -48,7 +50,7 @@ bitrouter providers login openai-codex --label work
 
 ## Route to it
 
-No `bitrouter.yaml` block is required — `openai-codex` is built in, and the stored credential is found at request time. Address a model your plan exposes by its registry id:
+No `bitrouter.yaml` block is required — `openai-codex` is a registry-backed local-login provider, and the stored credential is found at request time. Address a model your plan exposes by its registry id:
 
 ```bash
 bitrouter route openai-codex:gpt-5-codex
