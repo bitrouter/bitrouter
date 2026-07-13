@@ -1,6 +1,6 @@
 # Migrate from OpenRouter
 
-OpenRouter is a cloud aggregator; BitRouter is a local proxy. You don't have to choose — BitRouter has a built-in `openrouter` provider, so the cleanest migration runs both side-by-side and lets you decide later whether to keep OpenRouter for the long tail or rip it out.
+OpenRouter is a cloud aggregator; BitRouter is a local proxy. You don't have to choose — BitRouter has a registry-backed `openrouter` provider, so the cleanest migration runs both side-by-side and lets you decide later whether to keep OpenRouter for the long tail or rip it out.
 
 > **Cloud-for-cloud alternative:** if the user wants to swap one managed service for another (skip local hosting entirely), point them at `https://api.bitrouter.ai/v1` with a `brk_*` key — see `references/cloud-setup.md`. The rest of this file covers self-hosted (local daemon) migration.
 
@@ -17,7 +17,7 @@ providers:
   openai: {}         # uses OPENAI_API_KEY
   anthropic: {}      # uses ANTHROPIC_API_KEY
   google: {}         # uses GEMINI_API_KEY
-  openrouter: {}     # uses OPENROUTER_API_KEY — built-in
+  openrouter: {}     # uses OPENROUTER_API_KEY — registry-backed
 
 models:
   # alias OpenRouter-only models so client code stays clean
