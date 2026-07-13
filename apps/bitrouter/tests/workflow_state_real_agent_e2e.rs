@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::Stdio;

@@ -793,14 +793,19 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()))
 }
 
+#[cfg(unix)]
 fn sync_parent(path: &Path) -> Result<()> {
-    #[cfg(unix)]
     if let Some(parent) = path.parent() {
         std::fs::File::open(parent)
             .with_context(|| format!("opening parent directory {}", parent.display()))?
             .sync_all()
             .with_context(|| format!("syncing parent directory {}", parent.display()))?;
     }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_path: &Path) -> Result<()> {
     Ok(())
 }
 
