@@ -26,6 +26,7 @@ pub mod metering;
 pub mod output;
 pub mod paths;
 pub mod policy;
+pub mod policy_lock;
 pub mod policy_table_router;
 pub mod reload;
 pub mod skills;

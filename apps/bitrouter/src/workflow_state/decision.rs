@@ -19,6 +19,10 @@ pub struct PolicyDecisionRecord {
     pub input_model: String,
     pub key_strategy: String,
     pub request_key: String,
+    /// Database key for adequacy state. Named policies namespace this while
+    /// keeping `request_key` human-readable. Old records omit it.
+    #[serde(default)]
+    pub ledger_key: Option<String>,
     pub legacy_fingerprint: String,
     pub workflow_state: String,
     #[serde(default)]
@@ -70,6 +74,7 @@ impl PolicyDecisionRecord {
         input_model: impl Into<String>,
         key_strategy: impl Into<String>,
         request_key: impl Into<String>,
+        ledger_key: Option<String>,
         legacy_fingerprint: impl Into<String>,
         workflow_state: impl Into<String>,
         static_tier: Option<String>,
@@ -90,6 +95,7 @@ impl PolicyDecisionRecord {
             input_model: input_model.into(),
             key_strategy: key_strategy.into(),
             request_key: request_key.into(),
+            ledger_key,
             legacy_fingerprint: legacy_fingerprint.into(),
             workflow_state: workflow_state.into(),
             static_tier,

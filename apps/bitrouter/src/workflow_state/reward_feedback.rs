@@ -23,7 +23,11 @@ pub async fn apply_semantic_reward_feedback(
     let mut failed_keys = BTreeSet::new();
     let mut successful_evidence = BTreeSet::new();
     for candidate in candidates {
-        let key = candidate.request_key.trim();
+        let key = candidate
+            .ledger_key
+            .as_deref()
+            .unwrap_or(&candidate.request_key)
+            .trim();
         if key.is_empty() {
             continue;
         }
@@ -99,6 +103,7 @@ mod tests {
             reward,
             failed_reason: (reward < 1.0).then(|| "verifier_failed".to_string()),
             request_key: request_key.to_string(),
+            ledger_key: None,
             workflow_state: "tool_followup".to_string(),
             static_tier: Some("capable".to_string()),
             selected_tier: Some("cheap".to_string()),
@@ -178,6 +183,24 @@ mod tests {
         assert_eq!(
             store.load_semantic_success_counts().await.unwrap(),
             [(request_key.to_string(), 2)].into_iter().collect()
+        );
+    }
+
+    #[tokio::test]
+    async fn semantic_feedback_uses_the_named_policy_ledger_key() {
+        let store = store().await;
+        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let ledger_key = format!("coding\0{request_key}");
+        let mut named = candidate(request_key, "terminal-bench/regex-log", 1.0);
+        named.ledger_key = Some(ledger_key.clone());
+
+        apply_semantic_reward_feedback(&store, &[named])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.load_semantic_success_counts().await.unwrap(),
+            [(ledger_key, 1)].into_iter().collect()
         );
     }
 

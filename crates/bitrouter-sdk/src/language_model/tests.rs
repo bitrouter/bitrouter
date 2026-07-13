@@ -11,6 +11,7 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
 use crate::language_model::executor::MockResponse;
+use crate::language_model::routing::PromptOverrides;
 use crate::language_model::*;
 
 // ===== test fixtures =====
@@ -49,6 +50,13 @@ fn request() -> PipelineRequest {
         stream: false,
     };
     PipelineRequest::new("test-model", CallerContext::new("k1", "u1"), prompt)
+}
+
+fn request_for_model(model: &str) -> PipelineRequest {
+    let mut request = request();
+    request.model = model.to_string();
+    request.prompt.model = model.to_string();
+    request
 }
 
 #[derive(Serialize)]
@@ -165,6 +173,66 @@ impl SettlementRecorder for ProviderCapturingRecorder {
             Ok(mut captured) => captured.push(value),
             Err(poisoned) => poisoned.into_inner().push(value),
         }
+        Ok(())
+    }
+}
+
+struct PresetAwareRoutingTable;
+
+#[async_trait]
+impl RoutingTable for PresetAwareRoutingTable {
+    async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
+        if model == "@adaptive:preferred" {
+            Ok(ModelResolution {
+                clean_model: "strong-model".into(),
+                prefs: RoutingPrefs {
+                    only: vec!["preferred-provider".into()],
+                    ..RoutingPrefs::default()
+                },
+                overrides: PromptOverrides::default(),
+                policy: Some("coding".into()),
+            })
+        } else {
+            Ok(ModelResolution::passthrough(model))
+        }
+    }
+
+    async fn route_chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        _caller: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        let provider = prefs
+            .only
+            .first()
+            .map(String::as_str)
+            .unwrap_or("default-provider");
+        let mut selected = target(provider);
+        selected.service_id = model.to_string();
+        Ok(vec![selected])
+    }
+
+    fn list_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    fn model_info(&self, _model: &str) -> Option<ModelInfo> {
+        None
+    }
+
+    async fn reload(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct CountingModelSelector(Arc<AtomicUsize>);
+
+impl ModelSelector for CountingModelSelector {
+    fn select(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()> {
+        assert_eq!(policy, "coding");
+        self.0.fetch_add(1, Ordering::SeqCst);
+        ctx.set_model("economy-model");
         Ok(())
     }
 }
@@ -419,6 +487,40 @@ async fn full_pipeline_runs_all_four_stages() {
     let resp = pipeline.execute(request()).await.expect("request succeeds");
     assert_eq!(resp.result.content.len(), 1);
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
+}
+
+#[tokio::test]
+async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
+    let selected = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .executor(Arc::new(MockExecutor::new(vec![
+            MockResponse::Generate(gen_result(Vec::new())),
+            MockResponse::Generate(gen_result(Vec::new())),
+        ])))
+        .model_selector(Arc::new(CountingModelSelector(selected.clone())))
+        .settlement_recorder(ProviderCapturingRecorder(captured.clone()));
+    let pipeline = builder.build().unwrap();
+
+    pipeline
+        .execute(request_for_model("@adaptive:preferred"))
+        .await
+        .unwrap();
+    pipeline
+        .execute(request_for_model("strong-model"))
+        .await
+        .unwrap();
+
+    assert_eq!(selected.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        captured.lock().unwrap().as_slice(),
+        &[
+            ("preferred-provider".into(), "economy-model".into()),
+            ("default-provider".into(), "strong-model".into()),
+        ]
+    );
 }
 
 #[tokio::test]

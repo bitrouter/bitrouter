@@ -83,9 +83,38 @@
       "description": "Public registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade.",
       "$ref": "#/$defs/RegistryConfig"
     },
+    "policy": {
+      "description": "Adaptive model-policy settings. A file-backed config resolves the\noptional path relative to its own directory; when omitted the app looks\nfor `policy-lock.yaml` next to `bitrouter.yaml`. The SDK only carries\nthis declaration -- loading and evolving policy locks belongs to the\nBitRouter app layer.",
+      "$ref": "#/$defs/PolicyConfig",
+      "default": {
+        "path": null,
+        "writeback": "locked"
+      }
+    },
     "policy_table": {
       "description": "Config-driven per-request model routing: a fingerprint → tier → model\npolicy table an ingress transform applies, with a hard tool-use\nguardrail. Empty by default — when no tiers are defined the transform is\nnot registered and traffic routes exactly as it would without it.",
-      "$ref": "#/$defs/PolicyTableConfig"
+      "$ref": "#/$defs/PolicyTableConfig",
+      "default": {
+        "key_strategy": "legacy_fingerprint",
+        "tiers": {},
+        "fingerprints": {},
+        "default_tier": null,
+        "tool_use_tier": null,
+        "tool_safe_tiers": [],
+        "adequacy": {
+          "enabled": false,
+          "escalation_tier": null,
+          "escalation_threshold": 1,
+          "pin_cooldown_secs": 1800,
+          "explore_enabled": false,
+          "explore_tier": null,
+          "explore_interval": 5,
+          "explore_threshold": 3,
+          "min_semantic_successes_for_lock": 0,
+          "explore_opening": false,
+          "min_semantic_successes_for_opening": 1
+        }
+      }
     }
   },
   "$defs": {
@@ -660,6 +689,14 @@
       "properties": {
         "model": {
           "description": "Substitute the request's model with this one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "policy": {
+          "description": "Name of a policy in `policy-lock.yaml`. Only requests that explicitly\nselect this preset opt into adaptive model selection.",
           "type": [
             "string",
             "null"
@@ -1418,13 +1455,48 @@
         }
       }
     },
+    "PolicyConfig": {
+      "description": "Current routing-policy artifact configuration.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Override for the policy lock. Relative paths are resolved against the\ndirectory containing the parsed `bitrouter.yaml`. `None` means the\nsibling `policy-lock.yaml` default.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "writeback": {
+          "description": "Whether the optimizer may publish an evolved policy lock. Loading an\noperator or Git-authored update is allowed in both modes.",
+          "$ref": "#/$defs/PolicyWriteback",
+          "default": "locked"
+        }
+      }
+    },
+    "PolicyWriteback": {
+      "description": "Permission for programmatic policy-lock publication.",
+      "oneOf": [
+        {
+          "description": "Observe and propose, but never write `policy-lock.yaml`.",
+          "type": "string",
+          "const": "locked"
+        },
+        {
+          "description": "Permit validated evolution output to atomically replace the lock file.",
+          "type": "string",
+          "const": "evolve"
+        }
+      ]
+    },
     "PolicyTableConfig": {
       "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform fingerprints each request by its agent-loop step (the\nmost recent tool the model called, or the opening turn) and looks the\nfingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;\n[`tiers`](Self::tiers) then maps that tier to the model id the request is\nrewritten to. A hard tool-use guardrail keeps tool-carrying requests on a\ntier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
       "type": "object",
       "properties": {
         "key_strategy": {
           "description": "Which request key the policy table uses for `fingerprints`. The default\npreserves the original coarse key (`opening`, `after_<tool>`,\n`midstream`). `workflow_state` switches lookup and adequacy learning to\nthe cross-harness Workflow State IR routing key.",
-          "$ref": "#/$defs/PolicyKeyStrategy"
+          "$ref": "#/$defs/PolicyKeyStrategy",
+          "default": "legacy_fingerprint"
         },
         "tiers": {
           "description": "Tier name → the model id every request on that tier is routed to. The\nvalue is fed straight into the routing table, so it may be a bare\ncanonical id (resolved via the cascade/registry) or an explicit\n`provider:model` id (a Strategy-1 direct route). The section is inert\nwhile this map is empty.",
@@ -1468,7 +1540,20 @@
         },
         "adequacy": {
           "description": "Online adequacy learning. When enabled, the daemon observes each\ndowngraded request's outcome and, after repeated failures, escalates the\noffending fingerprint to a more capable tier — so an operator's downgrade\nthat proves inadequate is self-correcting. Off by default.",
-          "$ref": "#/$defs/AdequacyConfig"
+          "$ref": "#/$defs/AdequacyConfig",
+          "default": {
+            "enabled": false,
+            "escalation_tier": null,
+            "escalation_threshold": 1,
+            "pin_cooldown_secs": 1800,
+            "explore_enabled": false,
+            "explore_tier": null,
+            "explore_interval": 5,
+            "explore_threshold": 3,
+            "min_semantic_successes_for_lock": 0,
+            "explore_opening": false,
+            "min_semantic_successes_for_opening": 1
+          }
         }
       }
     },

@@ -19,9 +19,10 @@
 //! ```
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HttpTimeouts;
@@ -80,6 +81,12 @@ pub struct Config {
     /// BYOK providers, where to fetch it from, and the provider-class priority
     /// ladder used to order the auto-cascade.
     pub registry: RegistryConfig,
+    /// Adaptive model-policy settings. A file-backed config resolves the
+    /// optional path relative to its own directory; when omitted the app looks
+    /// for `policy-lock.yaml` next to `bitrouter.yaml`. The SDK only carries
+    /// this declaration -- loading and evolving policy locks belongs to the
+    /// BitRouter app layer.
+    pub policy: PolicyConfig,
     /// Config-driven per-request model routing: a fingerprint → tier → model
     /// policy table an ingress transform applies, with a hard tool-use
     /// guardrail. Empty by default — when no tiers are defined the transform is
@@ -104,9 +111,36 @@ impl Default for Config {
             agents: HashMap::new(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
+            policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
         }
     }
+}
+
+/// Current routing-policy artifact configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct PolicyConfig {
+    /// Override for the policy lock. Relative paths are resolved against the
+    /// directory containing the parsed `bitrouter.yaml`. `None` means the
+    /// sibling `policy-lock.yaml` default.
+    pub path: Option<PathBuf>,
+    /// Whether the optimizer may publish an evolved policy lock. Loading an
+    /// operator or Git-authored update is allowed in both modes.
+    pub writeback: PolicyWriteback,
+}
+
+/// Permission for programmatic policy-lock publication.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyWriteback {
+    /// Observe and propose, but never write `policy-lock.yaml`.
+    #[default]
+    Locked,
+    /// Permit validated evolution output to atomically replace the lock file.
+    Evolve,
 }
 
 /// Default base URL for the public registry distribution artifacts — the raw
@@ -160,7 +194,7 @@ impl Default for RegistryConfig {
 /// absent or tier-less block leaves routing untouched. The whole spec is static
 /// and operator-owned: it is versionable in `bitrouter.yaml` and never mutated
 /// at runtime.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PolicyTableConfig {
     /// Which request key the policy table uses for `fingerprints`. The default
@@ -200,7 +234,9 @@ pub struct PolicyTableConfig {
 }
 
 /// Request-key family used by `policy_table.fingerprints`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyKeyStrategy {
     /// The original coarse prompt fingerprint: `opening`, `midstream`, or
@@ -223,7 +259,7 @@ pub enum PolicyKeyStrategy {
 /// [`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried
 /// later. This is a safety net layered on the static table — it never downgrades
 /// on its own, only escalates a downgrade that is failing.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AdequacyConfig {
     /// Whether online adequacy learning is active. Off by default, so a
@@ -901,6 +937,9 @@ pub struct RoutingConfig {
 pub struct PresetConfig {
     /// Substitute the request's model with this one.
     pub model: Option<String>,
+    /// Name of a policy in `policy-lock.yaml`. Only requests that explicitly
+    /// select this preset opt into adaptive model selection.
+    pub policy: Option<String>,
     /// Prepend / replace the system prompt.
     pub system_prompt: Option<String>,
     /// Generation-parameter overrides, merged shallowly into the request.
@@ -1139,7 +1178,13 @@ where
 /// a configuration error rather than a silent fall-through to the caller's
 /// model. A section with no tiers is inert and validates trivially.
 fn validate_policy_table(config: &Config) -> Result<()> {
-    let policy = &config.policy_table;
+    validate_policy_table_config(&config.policy_table)
+}
+
+/// Validate one policy-table definition independently of the top-level config.
+/// Policy lock loading reuses this so inline legacy tables and named lock
+/// policies enforce identical tier/guardrail/adequacy invariants.
+pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     if policy.tiers.is_empty() {
         return Ok(());
     }

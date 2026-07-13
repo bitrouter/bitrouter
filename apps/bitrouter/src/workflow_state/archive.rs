@@ -84,6 +84,8 @@ pub struct SemanticPolicyTransitionCandidate {
     pub reward: f64,
     pub failed_reason: Option<String>,
     pub request_key: String,
+    #[serde(default)]
+    pub ledger_key: Option<String>,
     pub workflow_state: String,
     pub static_tier: Option<String>,
     pub selected_tier: Option<String>,
@@ -515,6 +517,7 @@ fn semantic_policy_transition_candidates(
                 reward: candidate.reward,
                 failed_reason: candidate.failed_reason.clone(),
                 request_key: decision.request_key.clone(),
+                ledger_key: decision.ledger_key.clone(),
                 workflow_state: decision.workflow_state.clone(),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),

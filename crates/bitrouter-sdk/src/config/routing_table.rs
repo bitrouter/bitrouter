@@ -333,6 +333,15 @@ pub fn resolve_route_chain(
     let mut prefs = resolution.prefs;
     merge_prefs(&mut prefs, caller_prefs);
 
+    resolve_clean_route_chain(config, &clean, &prefs)
+}
+
+/// Resolve an effective model after Stage 0 has already run.
+fn resolve_clean_route_chain(
+    config: &Config,
+    clean: &str,
+    prefs: &RoutingPrefs,
+) -> Result<Vec<RoutingTarget>> {
     // ---- Strategy 1: provider:model_id direct route ----
     if let Some((provider_id, model_id)) = clean.split_once(':')
         && let Some(provider) = config.providers.get(provider_id)
@@ -347,8 +356,8 @@ pub fn resolve_route_chain(
     }
 
     // ---- Strategy 2: explicit virtual model ----
-    if let Some(virtual_model) = config.models.get(&clean) {
-        return resolve_virtual_model(&clean, virtual_model, config, &prefs);
+    if let Some(virtual_model) = config.models.get(clean) {
+        return resolve_virtual_model(clean, virtual_model, config, prefs);
     }
 
     // ---- Strategy 3: auto-cascade across every provider declaring it ----
@@ -396,7 +405,7 @@ pub fn resolve_route_chain(
                 build_targets(
                     provider_id,
                     provider,
-                    &clean,
+                    clean,
                     prefs.inbound_protocol.as_ref(),
                 ),
             ));
@@ -501,6 +510,20 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
 
 #[async_trait]
 impl RoutingTable for ConfigRoutingTable {
+    async fn resolve_model(
+        &self,
+        model: &str,
+    ) -> Result<crate::language_model::routing::ModelResolution> {
+        let config = self.config.read().expect("config lock poisoned");
+        let resolution = crate::config::resolve_presets(model, &config.presets, &config.variants)?;
+        Ok(crate::language_model::routing::ModelResolution {
+            clean_model: resolution.clean_model,
+            prefs: resolution.prefs,
+            overrides: resolution.overrides,
+            policy: resolution.policy,
+        })
+    }
+
     async fn route_chain(
         &self,
         model: &str,
@@ -511,6 +534,16 @@ impl RoutingTable for ConfigRoutingTable {
         // return (no `.await` is held across it).
         let config = self.config.read().expect("config lock poisoned");
         resolve_route_chain(&config, model, prefs)
+    }
+
+    async fn route_resolved(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        _caller: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        let config = self.config.read().expect("config lock poisoned");
+        resolve_clean_route_chain(&config, model, prefs)
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
@@ -612,6 +645,34 @@ providers:
         assert_eq!(chain.len(), 1, "provider:model is a length-1 chain");
         assert_eq!(chain[0].provider_name, "openai");
         assert_eq!(chain[0].service_id, "gpt-5");
+    }
+
+    #[tokio::test]
+    async fn resolved_provider_model_is_not_reinterpreted_as_a_variant() {
+        let t = table(
+            r#"providers:
+  vendor:
+    api_base: https://vendor.example/v1
+    api_key: k
+    models: [{ id: free }]
+variants:
+  free:
+    routing: { only: [other] }
+"#,
+        );
+
+        let chain = t
+            .route_resolved(
+                "vendor:free",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "vendor");
+        assert_eq!(chain[0].service_id, "free");
     }
 
     #[tokio::test]

@@ -10,13 +10,16 @@ use crate::adequacy::observer::classify_failure;
 use crate::adequacy::{AdequacyLedger, InadequacyCause, Outcome};
 use crate::policy_table_router::PolicyTable;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct PendingAdequacyDecision {
     pub request_id: String,
     pub request_key: String,
+    pub ledger_key: String,
     pub static_tier: Option<String>,
     pub selected_tier: Option<String>,
     pub exploration_allowed: bool,
+    pub table: Arc<PolicyTable>,
+    pub ledger: Arc<AdequacyLedger>,
 }
 
 #[derive(Default)]
@@ -37,29 +40,20 @@ impl PendingAdequacyStore {
 }
 
 pub(crate) struct AdequacySettlementRecorder {
-    table: Arc<PolicyTable>,
-    ledger: Arc<AdequacyLedger>,
     pending: Arc<PendingAdequacyStore>,
 }
 
 impl AdequacySettlementRecorder {
-    pub(crate) fn new(
-        table: Arc<PolicyTable>,
-        ledger: Arc<AdequacyLedger>,
-        pending: Arc<PendingAdequacyStore>,
-    ) -> Self {
-        Self {
-            table,
-            ledger,
-            pending,
-        }
+    pub(crate) fn new(pending: Arc<PendingAdequacyStore>) -> Self {
+        Self { pending }
     }
 
-    fn served_tier(&self, ctx: &SettlementContext) -> Option<String> {
+    fn served_tier(pending: &PendingAdequacyDecision, ctx: &SettlementContext) -> Option<String> {
         let explicit = format!("{}:{}", ctx.provider_id, ctx.model_id);
-        self.table
+        pending
+            .table
             .tier_of_model(&explicit)
-            .or_else(|| self.table.tier_of_model(&ctx.model_id))
+            .or_else(|| pending.table.tier_of_model(&ctx.model_id))
             .map(ToString::to_string)
     }
 
@@ -71,19 +65,18 @@ impl AdequacySettlementRecorder {
     }
 
     fn outcome_for(
-        &self,
         pending: &PendingAdequacyDecision,
         served_tier: &str,
         cause: InadequacyCause,
     ) -> Option<Outcome> {
         let static_tier = pending.static_tier.as_deref();
-        let escalation_tier = self.table.escalation_tier();
+        let escalation_tier = pending.table.escalation_tier();
 
         if static_tier == Some(served_tier) && Some(served_tier) != escalation_tier {
             return Some(Outcome::StaticDowngrade { cause });
         }
 
-        if !self.table.exploration_enabled() {
+        if !pending.table.exploration_enabled() {
             return None;
         }
         let escalation_tier = escalation_tier?;
@@ -91,7 +84,7 @@ impl AdequacySettlementRecorder {
             return None;
         }
 
-        let trialed = self.table.explore_tier() == Some(served_tier);
+        let trialed = pending.table.explore_tier() == Some(served_tier);
         let served_escalation = served_tier == escalation_tier;
         if !trialed && !served_escalation {
             return None;
@@ -107,7 +100,7 @@ impl SettlementRecorder for AdequacySettlementRecorder {
         let Some(pending) = self.pending.take(&ctx.request_id) else {
             return Ok(());
         };
-        let Some(served_tier) = self.served_tier(ctx) else {
+        let Some(served_tier) = Self::served_tier(&pending, ctx) else {
             tracing::debug!(
                 request_id = %ctx.request_id,
                 provider = %ctx.provider_id,
@@ -118,7 +111,7 @@ impl SettlementRecorder for AdequacySettlementRecorder {
             return Ok(());
         };
         let cause = Self::cause(ctx);
-        let Some(outcome) = self.outcome_for(&pending, &served_tier, cause) else {
+        let Some(outcome) = Self::outcome_for(&pending, &served_tier, cause) else {
             tracing::debug!(
                 request_id = %ctx.request_id,
                 request_key = %pending.request_key,
@@ -140,7 +133,7 @@ impl SettlementRecorder for AdequacySettlementRecorder {
             observation = ?outcome,
             "adequacy settlement recorded"
         );
-        self.ledger.observe(&pending.request_key, outcome).await;
+        pending.ledger.observe(&pending.ledger_key, outcome).await;
         tracing::debug!(
             request_id = %ctx.request_id,
             request_key = %pending.request_key,
@@ -228,15 +221,18 @@ mod tests {
         let table = policy_table();
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(2, 900, 2, 3));
         let pending = Arc::new(PendingAdequacyStore::default());
-        let recorder = AdequacySettlementRecorder::new(table, ledger.clone(), pending.clone());
+        let recorder = AdequacySettlementRecorder::new(pending.clone());
         let request_key = "codex|responses|tool_followup|-|-|exec_command|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools";
 
         pending.insert(PendingAdequacyDecision {
             request_id: "req-1".to_string(),
             request_key: request_key.to_string(),
+            ledger_key: request_key.to_string(),
             static_tier: Some("capable".to_string()),
             selected_tier: Some("capable".to_string()),
             exploration_allowed: true,
+            table: table.clone(),
+            ledger: ledger.clone(),
         });
         recorder
             .record(&mut settlement("req-1", "openai-codex", "gpt-5.5"))
@@ -246,9 +242,12 @@ mod tests {
         pending.insert(PendingAdequacyDecision {
             request_id: "req-2".to_string(),
             request_key: request_key.to_string(),
+            ledger_key: request_key.to_string(),
             static_tier: Some("capable".to_string()),
             selected_tier: Some("capable".to_string()),
             exploration_allowed: true,
+            table,
+            ledger: ledger.clone(),
         });
         recorder
             .record(&mut settlement("req-2", "openai-codex", "gpt-5.5"))

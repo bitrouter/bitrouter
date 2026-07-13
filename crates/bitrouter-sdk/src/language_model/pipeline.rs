@@ -18,7 +18,7 @@ use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
-use crate::language_model::routing::{FallbackPolicy, RoutingPrefs, RoutingTable};
+use crate::language_model::routing::{FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::server_tools::toolset::ToolContext;
@@ -104,6 +104,7 @@ struct StreamAttempt {
 pub struct Pipeline {
     pub(crate) pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     pub(crate) route_hooks: Vec<Arc<dyn RouteHook>>,
+    pub(crate) model_selectors: Vec<Arc<dyn crate::language_model::routing::ModelSelector>>,
     pub(crate) execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     pub(crate) stream_hooks: Vec<Arc<dyn StreamHook>>,
     pub(crate) settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
@@ -574,25 +575,29 @@ impl Pipeline {
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
-        // Stage-0 preset overrides — `@careful` etc. inject a
-        // system prompt / sampling defaults that the request can still
-        // override. Done before the cascade so the upstream call sees them.
-        let overrides = self.routing_table.preset_overrides(ctx.model()).await?;
-        ctx.apply_preset_overrides(&overrides);
+        // Stage 0 resolves `@preset` / `:variant` exactly once. App-owned model
+        // selectors then choose an effective model without losing the preset's
+        // prompt defaults or routing preferences.
+        let resolution = self.routing_table.resolve_model(ctx.model()).await?;
+        ctx.apply_preset_overrides(&resolution.overrides);
+        ctx.set_model(resolution.clean_model);
+        if let Some(policy) = resolution.policy.as_deref() {
+            for selector in &self.model_selectors {
+                selector.select(policy, ctx)?;
+            }
+        }
 
         // Restrict the chain to providers that advertise every capability this
         // request actually uses (e.g. structured outputs). Empty for plain
         // requests, so those route unchanged.
-        let prefs = RoutingPrefs {
-            require_capabilities: ctx.prompt().required_capabilities(),
-            // Carry the inbound protocol so the table can prefer a native,
-            // same-protocol upstream for each chosen target.
-            inbound_protocol: ctx.inbound_protocol(),
-            ..RoutingPrefs::default()
-        };
+        let mut prefs = resolution.prefs;
+        prefs.require_capabilities = ctx.prompt().required_capabilities();
+        // Carry the inbound protocol so the table can prefer a native,
+        // same-protocol upstream for each chosen target.
+        prefs.inbound_protocol = ctx.inbound_protocol();
         let mut chain = self
             .routing_table
-            .route_chain(ctx.model(), &prefs, ctx.caller())
+            .route_resolved(ctx.model(), &prefs, ctx.caller())
             .await?;
         for hook in &self.route_hooks {
             hook.resolve(&mut chain, ctx).await?;

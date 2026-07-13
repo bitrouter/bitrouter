@@ -342,6 +342,7 @@ pub struct PolicyTableRouter {
     ledger: Option<Arc<AdequacyLedger>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     pending_adequacy: Option<Arc<PendingAdequacyStore>>,
+    state_namespace: Option<String>,
 }
 
 impl PolicyTableRouter {
@@ -355,6 +356,7 @@ impl PolicyTableRouter {
             ledger: None,
             decision_recorder: None,
             pending_adequacy: None,
+            state_namespace: None,
         })
     }
 
@@ -366,6 +368,7 @@ impl PolicyTableRouter {
             ledger,
             decision_recorder: None,
             pending_adequacy: None,
+            state_namespace: None,
         }
     }
 
@@ -382,6 +385,28 @@ impl PolicyTableRouter {
         self
     }
 
+    /// Namespace learned database state for a named policy. Decision records
+    /// keep the human-facing request key; only ledger persistence is prefixed.
+    pub(crate) fn with_state_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.state_namespace = Some(namespace.into());
+        self
+    }
+
+    pub(crate) fn with_shared_decision_recorder(
+        mut self,
+        recorder: Arc<PolicyDecisionJsonlRecorder>,
+    ) -> Self {
+        self.decision_recorder = Some(recorder);
+        self
+    }
+
+    fn ledger_key(&self, request_key: &str) -> String {
+        self.state_namespace.as_ref().map_or_else(
+            || request_key.to_string(),
+            |ns| format!("{ns}\0{request_key}"),
+        )
+    }
+
     /// Apply the policy table to a prompt, returning whether the model was
     /// rewritten. A no-op (returns `false`) when the model is already explicitly
     /// routed, when the request carries a bitrouter server-tool declaration,
@@ -392,6 +417,15 @@ impl PolicyTableRouter {
     }
 
     pub fn decision_for(&self, prompt: &Prompt, headers: &HeaderMap) -> PolicyDecision {
+        self.decision_for_inner(prompt, headers, true)
+    }
+
+    fn decision_for_inner(
+        &self,
+        prompt: &Prompt,
+        headers: &HeaderMap,
+        respect_explicit_route: bool,
+    ) -> PolicyDecision {
         let online = OnlineWorkflowState::from_headers(headers, prompt);
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let request_key = match self.table.key_strategy() {
@@ -416,7 +450,9 @@ impl PolicyTableRouter {
             trialed: false,
         };
 
-        if is_explicitly_routed(&prompt.model) || carries_bitrouter_server_tool(prompt) {
+        if (respect_explicit_route && is_explicitly_routed(&prompt.model))
+            || carries_bitrouter_server_tool(prompt)
+        {
             return decision;
         }
 
@@ -437,14 +473,15 @@ impl PolicyTableRouter {
         };
 
         if let Some(ledger) = &self.ledger {
+            let ledger_key = self.ledger_key(&decision.request_key);
             let state_semantic_minimum = self.table.minimum_semantic_successes_for(&decision);
-            decision.pinned = ledger.is_pinned(&decision.request_key);
-            decision.request_qualified = ledger.is_request_qualified(&decision.request_key);
-            decision.semantic_successes = ledger.semantic_successes(&decision.request_key);
+            decision.pinned = ledger.is_pinned(&ledger_key);
+            decision.request_qualified = ledger.is_request_qualified(&ledger_key);
+            decision.semantic_successes = ledger.semantic_successes(&ledger_key);
             decision.semantic_success_threshold =
                 ledger.semantic_success_threshold(state_semantic_minimum);
-            decision.locked = ledger
-                .is_locked_with_semantic_threshold(&decision.request_key, state_semantic_minimum);
+            decision.locked =
+                ledger.is_locked_with_semantic_threshold(&ledger_key, state_semantic_minimum);
             if decision.pinned {
                 if let Some(escalation) = self.table.escalation_tier() {
                     (selected_tier, _) = self.table.guardrail_with_status(escalation, prompt);
@@ -455,7 +492,7 @@ impl PolicyTableRouter {
                 && self.exploration_allowed_for(&decision)
                 && let Some(explore) = self.table.explore_tier()
             {
-                let should_trial = ledger.should_trial(&decision.request_key);
+                let should_trial = ledger.should_trial(&ledger_key);
                 if decision.locked || should_trial {
                     let (guarded_explore, explore_clamped) =
                         self.table.guardrail_with_status(explore, prompt);
@@ -493,6 +530,36 @@ impl PolicyTableRouter {
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
         let input_model = prompt.model.clone();
         let decision = self.decision_for(prompt, headers);
+        let selected = self.record_decision(input_model, decision, headers);
+        let Some(model) = selected else {
+            return false;
+        };
+        if prompt.model == model {
+            return false;
+        }
+        prompt.model = model;
+        true
+    }
+
+    /// Select a model for a preset that explicitly owns this policy. Unlike the
+    /// legacy global transform, a provider-qualified preset base does not opt
+    /// out: the preset binding itself is the caller's explicit routing intent.
+    pub(crate) fn select_for_bound_policy(
+        &self,
+        input_model: &str,
+        prompt: &Prompt,
+        headers: &HeaderMap,
+    ) -> Option<String> {
+        let decision = self.decision_for_inner(prompt, headers, false);
+        self.record_decision(input_model.to_string(), decision, headers)
+    }
+
+    fn record_decision(
+        &self,
+        input_model: String,
+        decision: PolicyDecision,
+        headers: &HeaderMap,
+    ) -> Option<String> {
         let request_id = headers
             .get("x-bitrouter-request-id")
             .and_then(|value| value.to_str().ok())
@@ -524,6 +591,9 @@ impl PolicyTableRouter {
                 input_model,
                 key_strategy_name(decision.key_strategy),
                 decision.request_key.clone(),
+                self.state_namespace
+                    .as_ref()
+                    .map(|_| self.ledger_key(&decision.request_key)),
                 decision.legacy_fingerprint.clone(),
                 decision.workflow_state_kind.clone(),
                 decision.static_tier.clone(),
@@ -542,23 +612,21 @@ impl PolicyTableRouter {
                 tracing::warn!(%error, "policy decision recorder failed");
             }
         }
-        if let (Some(request_id), Some(pending)) = (request_id, &self.pending_adequacy) {
+        if let (Some(request_id), Some(pending), Some(ledger)) =
+            (request_id, &self.pending_adequacy, &self.ledger)
+        {
             pending.insert(PendingAdequacyDecision {
                 request_id: request_id.to_string(),
                 request_key: decision.request_key.clone(),
+                ledger_key: self.ledger_key(&decision.request_key),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 exploration_allowed: self.exploration_allowed_for(&decision),
+                table: self.table.clone(),
+                ledger: ledger.clone(),
             });
         }
-        let Some(model) = decision.selected_model else {
-            return false;
-        };
-        if prompt.model == model {
-            return false;
-        }
-        prompt.model = model;
-        true
+        decision.selected_model
     }
 }
 
@@ -579,11 +647,11 @@ impl PromptTransform for PolicyTableRouter {
     }
 }
 
-/// Whether `model` already names an explicit upstream route. A `provider:model`
-/// id triggers the routing table's Strategy-1 direct route (the same form the
-/// `claude-code:` subscription route uses); the policy table defers to it.
+/// Whether `model` already names an explicit upstream route or preset. A
+/// `provider:model` id triggers Strategy 1; `@preset` must survive until Stage
+/// 0 can resolve its prompt defaults, provider preferences, and named policy.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.contains(':')
+    model.starts_with('@') || model.contains(':')
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -826,6 +894,15 @@ mod tests {
     }
 
     #[test]
+    fn preset_routes_are_left_for_stage_zero_resolution() {
+        assert_eq!(route("@coding", vec![user("hi")], vec![]), "@coding");
+        assert_eq!(
+            route("@coding:free", vec![user("hi")], vec![]),
+            "@coding:free"
+        );
+    }
+
+    #[test]
     fn idempotent_on_second_application() {
         // Applying twice must not double-route: the second pass is already on
         // the tier's model and no-ops.
@@ -862,7 +939,9 @@ mod tests {
         let path = temp_path("decisions.jsonl");
         let table = PolicyTable::from_config(&config()).expect("configured");
         let recorder = PolicyDecisionJsonlRecorder::new(path.clone()).unwrap();
-        let r = PolicyTableRouter::new(table, None).with_decision_recorder(recorder);
+        let r = PolicyTableRouter::new(table, None)
+            .with_state_namespace("coding")
+            .with_decision_recorder(recorder);
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -880,6 +959,10 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].request_id.as_deref(), Some("req-001"));
         assert_eq!(records[0].input_model, "inbound");
+        assert_eq!(
+            records[0].ledger_key.as_deref(),
+            Some("coding\0after_read_file")
+        );
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].reason, "static_table");

@@ -826,6 +826,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "codex|responses|tool_followup|-|-|bash|low|small|none|high|low|low|low|medium|medium|requires_structured_tools".to_string(),
+        ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         static_tier: Some("capable".to_string()),
@@ -950,6 +951,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "codex|responses|tool_followup".to_string(),
+        ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         static_tier: Some("capable".to_string()),
@@ -1044,6 +1046,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
         request_key: "codex|responses|tool_followup".to_string(),
+        ledger_key: Some("coding\0codex|responses|tool_followup".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
         workflow_state: "tool_followup".to_string(),
         static_tier: Some("capable".to_string()),
@@ -1073,6 +1076,10 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
     assert_eq!(candidate.task_id, "terminal-bench/regex-log");
     assert_eq!(candidate.reward, 1.0);
     assert_eq!(candidate.request_key, "codex|responses|tool_followup");
+    assert_eq!(
+        candidate.ledger_key.as_deref(),
+        Some("coding\0codex|responses|tool_followup")
+    );
     assert_eq!(
         candidate.tier_transition.as_deref(),
         Some("capable -> cheap")
