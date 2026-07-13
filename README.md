@@ -15,6 +15,8 @@ An open-source LLM gateway that makes models, tools, and agents all routable pri
 > **You're tokenmaxxing in production.**
 > Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
 
+Cost is live today — latency and accuracy are next.
+
 ## Three primitives, one gateway
 
 An agentic loop consumes three things. Other routers govern only the first. BitRouter makes all three routable, observable, and governed:
