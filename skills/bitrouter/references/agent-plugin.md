@@ -24,7 +24,7 @@ which is harness-agnostic by construction. See [[agent-plugins-design]] §5.4.
 Two cost signals ride alongside but are **not plugin components** — they're
 `bitrouter` CLI behaviors that exist independent of the plugin: the MCP
 tool-result **cost footer** (part of `mcp serve`), and the **`spawn` exit
-spend summary** (printed by `bitrouter spawn` on any harness it wraps).
+spend summary** (printed by `bitrouter launch` on any harness it wraps).
 
 ## Install
 
@@ -48,7 +48,7 @@ directly; `/reload-plugins` picks up edits.
 
 Installing the plugin or wiring env vars **cannot reroute the session that is
 already running** — harnesses read their base URL at startup. After setup,
-end with: "run `bitrouter spawn -a claude` (or `-a codex`), or restart the
+end with: "run `bitrouter launch -a claude` (or `-a codex`), or restart the
 harness with the env override, to route this session." The one thing that
 works immediately without a restart is the origin MCP server: `complete` can
 offload subtasks to cheap models right away.

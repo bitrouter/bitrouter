@@ -4,7 +4,7 @@ description: Route OpenAI's Codex CLI through BitRouter by registering it as a c
 sourceHash: c6042bc984b397d5a4214b910fabd2a09a71e8f1afb02672a747d1db8939a399
 ---
 
-Codex CLI can run through BitRouter without taking over your Codex config. The quickest path is `bitrouter spawn --agent codex`, which injects one-shot Codex config overrides for that child process only; if you prefer a permanent setup, register BitRouter as a custom provider in `~/.codex/config.toml`.
+Codex CLI can run through BitRouter without taking over your Codex config. The quickest path is `bitrouter launch --agent codex`, which injects one-shot Codex config overrides for that child process only; if you prefer a permanent setup, register BitRouter as a custom provider in `~/.codex/config.toml`.
 
 ## Prerequisites
 
@@ -15,22 +15,22 @@ Codex CLI can run through BitRouter without taking over your Codex config. The q
   curl -fsSL https://chatgpt.com/codex/install.sh | sh
   ```
 
-## Launch with spawn
+## Launch through BitRouter
 
 ```bash
-bitrouter spawn --agent codex
+bitrouter launch --agent codex
 ```
 
 Everything after `--` is forwarded to Codex:
 
 ```bash
-bitrouter spawn --agent codex -- --model openai/gpt-5-codex
+bitrouter launch --agent codex -- --model openai/gpt-5-codex
 ```
 
 Before launching a long run, ask BitRouter to check the route it will use:
 
 ```bash
-bitrouter spawn --agent codex --check -- --model openai/gpt-5-codex
+bitrouter launch --agent codex --check -- --model openai/gpt-5-codex
 ```
 
 The check verifies that `codex` is installed, the BitRouter base URL is reachable, and the forwarded model has at least one Responses-compatible endpoint. It does **not** require the provider to be `openai-codex`; any model source that routes over the Responses protocol can be used by the Codex harness.
@@ -38,7 +38,7 @@ The check verifies that `codex` is installed, the BitRouter base URL is reachabl
 `spawn` does not edit `~/.codex/config.toml`. It starts from your existing Codex model selection, then points Codex at a transient `bitrouter` provider with `base_url = "<BitRouter>/v1"` and `wire_api = "responses"`. If `BITROUTER_API_KEY` is exported, Codex uses it through `env_key`; otherwise BitRouter injects a local placeholder that works with the `skip_auth: true` default written by `bitrouter init`.
 
 <Callout type="warn">
-Avoid forwarding Codex `-c` / `--config` flags through `bitrouter spawn --agent codex`. Current Codex releases can let those forwarded config flags override the transient provider injection, which means the run may silently stop using BitRouter. `spawn` rejects that shape and asks you to move the option into Codex config or inspect the route with `--check`.
+Avoid forwarding Codex `-c` / `--config` flags through `bitrouter launch --agent codex`. Current Codex releases can let those forwarded config flags override the transient provider injection, which means the run may silently stop using BitRouter. `launch` rejects that shape and asks you to move the option into Codex config or inspect the route with `--check`.
 </Callout>
 
 ## Permanent config
