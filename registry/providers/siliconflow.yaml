@@ -143,15 +143,6 @@ models:
         no_cache: 0.75
       output_tokens:
         text: 2.95
-  # SiliconFlow lists this case-sensitive upstream ID and USD prices at
-  # https://www.siliconflow.com/.
-  - id: nex-agi/nex-n2-pro
-    provider_model_id: nex-agi/Nex-N2-Pro
-    pricing:
-      input_tokens:
-        no_cache: 0.5
-      output_tokens:
-        text: 2.5
 status: active
 weight: 1
 submitted_at: 2026-07-07

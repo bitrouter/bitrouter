@@ -2057,48 +2057,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "inclusionai/ling-2.6-1t",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "inclusionai/ling-2.6-1t"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "inclusionai/ling-2.6-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "inclusionai/ling-2.6-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "inclusionai/ring-2.6-1t",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "inclusionai/ring-2.6-1t"
-        },
-        {
-          "api_protocol": "openai",
           "id": "minimax/minimax-m2.5",
           "pricing": {
             "input_tokens": {
@@ -2500,62 +2458,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "nex-agi/nex-n2-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.025,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.0
-            }
-          },
-          "provider_model_id": "nex-agi/nex-n2-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "nvidia/nemotron-3-ultra-550b-a55b",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 2.2
-            }
-          },
-          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "bytedance/doubao-seed-2.0-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "no_cache": 0.83
-            },
-            "output_tokens": {
-              "text": 4.17
-            }
-          },
-          "provider_model_id": "bytedance/doubao-seed-2.0-pro"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "meta/muse-spark-1.1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 4.25
-            }
-          },
-          "provider_model_id": "meta/muse-spark-1.1"
-        },
-        {
-          "api_protocol": "openai",
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "input_tokens": {
@@ -2612,34 +2514,6 @@
             }
           },
           "provider_model_id": "x-ai/grok-4.5"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "baidu/ernie-5.1",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 5.6
-            }
-          },
-          "provider_model_id": "baidu/ernie-5.1"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "kuaishou/kat-coder-pro-v2",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "cache_write": 0.0,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider_model_id": "kuaishou/kat-coder-pro-v2"
         },
         {
           "api_protocol": "openai",
@@ -3276,36 +3150,6 @@
       "models": [
         {
           "api_protocol": "openai",
-          "id": "kuaishou/kat-coder-pro-v2",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "cache_write": 0.0,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider_model_id": "kwaipilot/kat-coder-pro-v2"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "nvidia/nemotron-3-ultra-550b-a55b",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 0.0,
-              "no_cache": 0.8
-            },
-            "output_tokens": {
-              "text": 2.6
-            }
-          },
-          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
-        },
-        {
-          "api_protocol": "openai",
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
@@ -3697,69 +3541,6 @@
         "local_oauth"
       ],
       "status": "active",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://api.meta.ai/v1",
-      "auth": {
-        "env": "META_API_KEY",
-        "kind": "bearer"
-      },
-      "auth_scheme": "x-api-key",
-      "billing": "usage_token",
-      "byok": true,
-      "community": false,
-      "display_name": "Meta Model API",
-      "doc_url": "https://dev.meta.ai/docs/getting-started/overview",
-      "id": "meta-ai",
-      "kind": "first_party",
-      "metadata": {
-        "headquarters": "US",
-        "name": "Meta",
-        "privacy_policy_url": "https://www.facebook.com/about/privacy/",
-        "slug": "meta",
-        "terms_of_service_url": "https://www.facebook.com/policies/"
-      },
-      "models": [
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools",
-            "structured_outputs",
-            "image_input",
-            "video_input",
-            "file_input",
-            "web_search"
-          ],
-          "id": "meta/muse-spark-1.1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 4.25
-            }
-          },
-          "provider_model_id": "muse-spark-1.1",
-          "rate_limits": {
-            "requests_per_minute": 60,
-            "tokens_per_minute": 2000000
-          }
-        }
-      ],
-      "name": "meta-ai",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "active",
-      "submitted_at": "2026-07-09",
       "weight": 1.0
     },
     {
@@ -4260,48 +4041,6 @@
             }
           },
           "provider_model_id": "minimax/minimax-m2.7"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "inclusionai/ling-2.6-1t",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "inclusionai/ling-2.6-1t"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "inclusionai/ling-2.6-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.3
-            }
-          },
-          "provider_model_id": "inclusionai/ling-2.6-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "inclusionai/ring-2.6-1t",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "inclusionai/ring-2.6-1t"
         },
         {
           "api_protocol": "openai",
@@ -6074,96 +5813,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "inclusionai/ling-2.6-1t",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.015,
-              "no_cache": 0.075
-            },
-            "output_tokens": {
-              "text": 0.625
-            }
-          },
-          "provider_model_id": "inclusionai/ling-2.6-1t"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "inclusionai/ling-2.6-flash",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.002,
-              "no_cache": 0.01
-            },
-            "output_tokens": {
-              "text": 0.03
-            }
-          },
-          "provider_model_id": "inclusionai/ling-2.6-flash"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "inclusionai/ring-2.6-1t",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.015,
-              "no_cache": 0.075
-            },
-            "output_tokens": {
-              "text": 0.625
-            }
-          },
-          "provider_model_id": "inclusionai/ring-2.6-1t"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "nex-agi/nex-n2-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.025,
-              "no_cache": 0.25
-            },
-            "output_tokens": {
-              "text": 1.0
-            }
-          },
-          "provider_model_id": "nex-agi/nex-n2-pro"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "nvidia/nemotron-3-ultra-550b-a55b",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 2.2
-            }
-          },
-          "provider_model_id": "nvidia/nemotron-3-ultra-550b-a55b"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "qwen/qwen3.5-122b-a10b",
           "pricing": {
             "input_tokens": {
@@ -6262,23 +5911,6 @@
             }
           },
           "provider_model_id": "z-ai/glm-4.7"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "mistralai/mistral-medium-3-5",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            }
-          },
-          "provider_model_id": "mistralai/mistral-medium-3-5"
         },
         {
           "api_protocol": [
@@ -6500,19 +6132,6 @@
         "terms_of_service_url": "https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en"
       },
       "models": [
-        {
-          "api_protocol": "openai",
-          "id": "baidu/ernie-5.1",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 5.6
-            }
-          },
-          "provider_model_id": "ernie-5.1"
-        },
         {
           "api_protocol": "openai",
           "id": "deepseek/deepseek-v3.2",
@@ -6755,56 +6374,6 @@
             }
           },
           "provider_model_id": "glm-5.1"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "baidu/ernie-5.0",
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 32000,
-                "input_tokens": {
-                  "no_cache": 1.39
-                },
-                "output_tokens": {
-                  "text": 5.56
-                }
-              }
-            ],
-            "input_tokens": {
-              "no_cache": 0.83
-            },
-            "output_tokens": {
-              "text": 3.33
-            }
-          },
-          "provider_model_id": "ernie-5.0"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "baidu/ernie-4.5-turbo-128k",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.11
-            },
-            "output_tokens": {
-              "text": 0.44
-            }
-          },
-          "provider_model_id": "ernie-4.5-turbo-128k"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "baidu/ernie-x1-turbo-32k",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.56
-            }
-          },
-          "provider_model_id": "ernie-x1-turbo-32k"
         }
       ],
       "name": "qianfan_cn",
@@ -7184,19 +6753,6 @@
             }
           },
           "provider_model_id": "meituan-longcat/LongCat-2.0"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "nex-agi/nex-n2-pro",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "nex-agi/Nex-N2-Pro"
         }
       ],
       "name": "siliconflow",
@@ -7671,79 +7227,6 @@
       ],
       "status": "active",
       "submitted_at": "2026-07-06",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
-      "auth_scheme": "bearer",
-      "billing": "usage_token",
-      "byok": true,
-      "community": false,
-      "display_name": "StreamLake (Kuaishou Vanchin)",
-      "id": "streamlake",
-      "kind": "cloud",
-      "metadata": {
-        "datacenters": [
-          "CN"
-        ],
-        "headquarters": "CN",
-        "name": "StreamLake",
-        "privacy_policy_url": "https://www.streamlake.ai/document/DOC/mgkci47q13qr66h9i54",
-        "slug": "streamlake",
-        "terms_of_service_url": "https://www.streamlake.ai/document/DOC/mgkchnd89grpt1961fw"
-      },
-      "models": [
-        {
-          "api_protocol": "openai",
-          "id": "kuaishou/kat-coder-pro-v2",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "cache_write": 0.0,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            }
-          },
-          "provider_model_id": "kat-coder-pro-v2"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "kwaipilot/kat-coder-pro-v2.5",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.15,
-              "no_cache": 0.74
-            },
-            "output_tokens": {
-              "text": 2.96
-            }
-          },
-          "provider_model_id": "kat-coder-pro-v2.5"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "kwaipilot/kat-coder-air-v2.5",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.03,
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 0.6
-            }
-          },
-          "provider_model_id": "kat-coder-air-v2.5"
-        }
-      ],
-      "name": "streamlake",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "active",
-      "submitted_at": "2026-07-07",
       "weight": 1.0
     },
     {
@@ -8686,63 +8169,6 @@
       ],
       "status": "active",
       "submitted_at": "2026-07-06",
-      "weight": 1.0
-    },
-    {
-      "access": "api_key",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "auth_scheme": "bearer",
-      "billing": "usage_token",
-      "byok": true,
-      "community": false,
-      "display_name": "Volcengine Ark (火山方舟)",
-      "id": "volcengine",
-      "kind": "cloud",
-      "metadata": {
-        "datacenters": [
-          "CN"
-        ],
-        "headquarters": "CN",
-        "name": "Volcengine",
-        "privacy_policy_url": "https://corplink.volcengine.cn/p/privacy/default_en.html",
-        "slug": "volcengine",
-        "terms_of_service_url": "https://www.volcengine.com/docs/82379/1104498"
-      },
-      "models": [
-        {
-          "api_protocol": "openai",
-          "id": "bytedance/doubao-seed-2.0-pro",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "no_cache": 0.83
-            },
-            "output_tokens": {
-              "text": 4.17
-            }
-          },
-          "provider_model_id": "doubao-seed-2-0-pro-260215"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "bytedance/doubao-seed-1.6",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.11
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider_model_id": "doubao-seed-1-6-251015"
-        }
-      ],
-      "name": "volcengine",
-      "required_config": [
-        "api_key"
-      ],
-      "status": "staging",
-      "submitted_at": "2026-07-07",
       "weight": 1.0
     },
     {

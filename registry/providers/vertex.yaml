@@ -37,8 +37,6 @@ kind: first_party
 #   - { id: anthropic/claude-opus-4.8 }     # Claude on Vertex (publishers/anthropic)
 #   - { id: anthropic/claude-sonnet-4.6 }   # Claude on Vertex
 #   - { id: anthropic/claude-haiku-4.5 }    # Claude on Vertex
-#   - { id: meta/llama-4-maverick }         # Llama on Vertex (publishers/meta)
-#   - { id: mistralai/mistral-large }       # Mistral on Vertex (publishers/mistralai)
 #
 api_protocol:
   - "*": google

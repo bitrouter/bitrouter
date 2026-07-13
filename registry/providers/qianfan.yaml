@@ -2,8 +2,6 @@
 # `GET https://api.baiduqianfan.ai/v1/models` catalog. The endpoint is
 # OpenAI-compatible and uses Bearer API keys (`bce-v3/ALTAK-...`). Prices below
 # are the live catalog's per-token prices converted to USD per 1M tokens.
-# ERNIE 5.1 accepts requests despite not yet being listed by the catalog; its
-# temporary price matches ERNIE 5.0 until a public ERNIE 5.1 price is available.
 name: qianfan
 display_name: Baidu Qianfan (International)
 metadata:
@@ -18,13 +16,6 @@ api_protocol:
 auth_scheme: bearer
 kind: cloud
 models:
-  - id: baidu/ernie-5.1
-    provider_model_id: ernie-5.1
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-      output_tokens:
-        text: 5.6
   - id: deepseek/deepseek-v3.2
     provider_model_id: deepseek-v3.2
     pricing:
