@@ -156,6 +156,10 @@ Add `--transport http` to target the multi-tenant cloud backend.
 
 BitRouter exposes an OpenAI- and Anthropic-compatible HTTP API on `http://localhost:4356`, so any SDK or client works unchanged. The full endpoint reference and OpenAPI spec live in [`bitrouter/bitrouter-docs`](https://github.com/bitrouter/bitrouter-docs) (rendered at [bitrouter.ai](https://bitrouter.ai)).
 
+## Workflow templates
+
+Ready-made **policy specs** for common agentic workflows — a starting point that routes well out of the box, before you tune it for your own loop. **Coming soon** in [`templates/`](templates/).
+
 ## Models & providers
 
 BitRouter routes to a *model*, not a provider. Each open-weight family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
