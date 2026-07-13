@@ -586,28 +586,31 @@ impl PolicyTableRouter {
             "policy routing decision"
         );
         if let Some(recorder) = &self.decision_recorder {
-            let record = PolicyDecisionRecord::now(
-                request_id.map(ToString::to_string),
+            let record = PolicyDecisionRecord {
+                captured_at: None,
+                request_id: request_id.map(ToString::to_string),
                 input_model,
-                key_strategy_name(decision.key_strategy),
-                decision.request_key.clone(),
-                self.state_namespace
+                key_strategy: key_strategy_name(decision.key_strategy).to_string(),
+                request_key: decision.request_key.clone(),
+                ledger_key: self
+                    .state_namespace
                     .as_ref()
                     .map(|_| self.ledger_key(&decision.request_key)),
-                decision.legacy_fingerprint.clone(),
-                decision.workflow_state_kind.clone(),
-                decision.static_tier.clone(),
-                decision.static_model.clone(),
-                decision.selected_tier.clone(),
-                decision.selected_model.clone(),
-                decision.reason.to_string(),
-                decision.pinned,
-                decision.request_qualified,
-                decision.semantic_successes,
-                decision.semantic_success_threshold,
-                decision.locked,
-                decision.trialed,
-            );
+                legacy_fingerprint: decision.legacy_fingerprint.clone(),
+                workflow_state: decision.workflow_state_kind.clone(),
+                static_tier: decision.static_tier.clone(),
+                static_model: decision.static_model.clone(),
+                selected_tier: decision.selected_tier.clone(),
+                selected_model: decision.selected_model.clone(),
+                reason: decision.reason.to_string(),
+                pinned: decision.pinned,
+                request_qualified: decision.request_qualified,
+                semantic_successes: decision.semantic_successes,
+                semantic_success_threshold: decision.semantic_success_threshold,
+                locked: decision.locked,
+                trialed: decision.trialed,
+            }
+            .captured_now();
             if let Err(error) = recorder.record(&record) {
                 tracing::warn!(%error, "policy decision recorder failed");
             }

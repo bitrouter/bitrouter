@@ -24,7 +24,7 @@ fn fixture_path(name: &str) -> PathBuf {
 
 #[test]
 fn loads_workflow_trace_fixture() {
-    let fixture = WorkflowTraceFixture::load_file(&fixture_path("opening.json")).unwrap();
+    let fixture = WorkflowTraceFixture::load_file(fixture_path("opening.json")).unwrap();
     assert_eq!(fixture.id, "hermes-opening-001");
     assert_eq!(fixture.expected.state_kind.to_string(), "opening");
     assert_eq!(fixture.prompt.model, "bitrouter-mvp-alias");
@@ -32,7 +32,7 @@ fn loads_workflow_trace_fixture() {
 
 #[test]
 fn fixture_exposes_policy_table_baseline_fingerprint() {
-    let fixture = WorkflowTraceFixture::load_file(&fixture_path("tool_followup.json")).unwrap();
+    let fixture = WorkflowTraceFixture::load_file(fixture_path("tool_followup.json")).unwrap();
     assert_eq!(fixture.baseline_fingerprint(), "after_bash");
     assert_eq!(fixture.expected.baseline_fingerprint, "after_bash");
 }
@@ -40,7 +40,7 @@ fn fixture_exposes_policy_table_baseline_fingerprint() {
 #[test]
 fn loads_runtime_fixture_with_canonical_prompt_fallback() {
     let fixture = WorkflowTraceFixture::load_file(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/workflow_state/openclaw/runtime_stub.json"),
     )
     .unwrap();
@@ -65,16 +65,16 @@ fn temp_path(name: &str) -> PathBuf {
 
 #[test]
 fn replay_reports_coverage() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.total >= 6);
     assert!(summary.coverage >= 0.80, "{summary:#?}");
 }
 
 #[test]
 fn replay_reports_baseline_vs_ir_collision_count() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.baseline_bucket_count > 0);
     assert!(summary.ir_bucket_count >= summary.baseline_bucket_count);
     assert!(summary.collision_count <= summary.total);
@@ -82,16 +82,16 @@ fn replay_reports_baseline_vs_ir_collision_count() {
 
 #[test]
 fn replay_reports_visibility_gaps_by_harness() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.visibility_gap_count >= 1, "{summary:#?}");
     assert_eq!(summary.visibility_gaps_by_harness.get("codex"), Some(&1));
 }
 
 #[test]
 fn ir_has_fewer_unknown_or_midstream_buckets_than_baseline_on_fixture_set() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.baseline_midstream_count >= 1, "{summary:#?}");
     assert!(
         summary.ir_unknown_count < summary.baseline_midstream_count,
@@ -101,8 +101,8 @@ fn ir_has_fewer_unknown_or_midstream_buckets_than_baseline_on_fixture_set() {
 
 #[test]
 fn workflow_constraints_report_model_ladder_compatibility() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ReplayEvaluator.run(&fixtures);
     assert_eq!(summary.model_ladder.flagship, summary.total);
     assert!(summary.model_ladder.standard > 0, "{summary:#?}");
     assert!(summary.model_ladder.cheap_tool_safe > 0, "{summary:#?}");
@@ -111,8 +111,8 @@ fn workflow_constraints_report_model_ladder_compatibility() {
 
 #[test]
 fn replay_summary_matches_current_experiment_fixture_set() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ReplayEvaluator.run(&fixtures);
     assert_eq!(summary.total, 7, "{summary:#?}");
     assert_eq!(summary.covered, 7, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
@@ -181,7 +181,7 @@ fn captured_real_agent_trace_serializes_to_replayable_fixture_and_redacts_secret
     );
 
     let fixture = WorkflowTraceFixture::from_value(fixture_json).unwrap();
-    let summary = ReplayEvaluator::default().run(&[fixture]);
+    let summary = ReplayEvaluator.run(&[fixture]);
     assert_eq!(summary.total, 1, "{summary:#?}");
     assert_eq!(summary.covered, 1, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 0, "{summary:#?}");
@@ -237,7 +237,7 @@ fn trace_archive_round_trips_sanitized_jsonl_and_replay_fixtures() {
     );
 
     let fixtures = TraceArchive::to_replay_fixtures(&archived).unwrap();
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let summary = ReplayEvaluator.run(&fixtures);
     assert_eq!(summary.total, 1, "{summary:#?}");
     assert_eq!(summary.covered, 1, "{summary:#?}");
 }
@@ -1150,8 +1150,8 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
 
 #[test]
 fn shadow_policy_compares_baseline_fingerprints_to_ir_model_ladder() {
-    let fixtures = WorkflowTraceFixture::load_tree(&fixture_root()).unwrap();
-    let summary = ShadowPolicyEvaluator::default().run(&fixtures);
+    let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    let summary = ShadowPolicyEvaluator.run(&fixtures);
     assert_eq!(summary.total, fixtures.len());
     assert!(summary.changed_count > 0, "{summary:#?}");
     assert_eq!(summary.unsafe_cheap_fast_violations, 0, "{summary:#?}");

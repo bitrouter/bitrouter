@@ -1468,7 +1468,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     }
     let workflow_trace_capture =
         bitrouter::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
-    if let Some(_) = &workflow_trace_capture {
+    if workflow_trace_capture.is_some() {
         tracing::info!(
             env = bitrouter::workflow_state::real_trace::WORKFLOW_TRACE_JSONL_ENV,
             "workflow trace capture enabled"

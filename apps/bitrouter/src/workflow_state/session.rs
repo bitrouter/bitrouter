@@ -46,33 +46,32 @@ pub fn resolve_session_signal(input: &ExtractorInput<'_>) -> ResolvedSessionSign
         }
     }
 
-    if matches!(input.harness_hint, Some(HarnessId::Hermes)) {
-        if let Some(job_id) = metadata_str(input.raw_body, "job_id") {
-            return resolved(
-                job_id,
-                SessionConfidence::Medium,
-                "raw_body.metadata.job_id",
-                EvidenceLevel::Observed,
-                0.8,
-            );
-        }
+    if matches!(input.harness_hint, Some(HarnessId::Hermes))
+        && let Some(job_id) = metadata_str(input.raw_body, "job_id")
+    {
+        return resolved(
+            job_id,
+            SessionConfidence::Medium,
+            "raw_body.metadata.job_id",
+            EvidenceLevel::Observed,
+            0.8,
+        );
     }
 
-    if matches!(input.harness_hint, Some(HarnessId::Codex)) {
-        if let Some(previous_response_id) = input
+    if matches!(input.harness_hint, Some(HarnessId::Codex))
+        && let Some(previous_response_id) = input
             .raw_body
             .get("previous_response_id")
             .and_then(|v| v.as_str())
             .filter(|v| !v.trim().is_empty())
-        {
-            return resolved(
-                previous_response_id.to_string(),
-                SessionConfidence::Medium,
-                "raw_body.previous_response_id",
-                EvidenceLevel::Observed,
-                0.75,
-            );
-        }
+    {
+        return resolved(
+            previous_response_id.to_string(),
+            SessionConfidence::Medium,
+            "raw_body.previous_response_id",
+            EvidenceLevel::Observed,
+            0.75,
+        );
     }
 
     if let Some(hash) = first_user_message_hash(input.prompt.messages.as_slice()) {

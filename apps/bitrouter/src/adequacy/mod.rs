@@ -307,20 +307,18 @@ impl AdequacyLedger {
         }
         if let (Some((fingerprint, observed, adequate_trials, locked)), Some(store)) =
             (exploration_snapshot, &self.store)
-        {
-            if let Err(error) = store
+            && let Err(error) = store
                 .upsert_exploration(&fingerprint, observed, adequate_trials, locked)
                 .await
-            {
-                tracing::warn!(
-                    %error,
-                    fingerprint,
-                    observed,
-                    adequate_trials,
-                    locked,
-                    "adequacy exploration persistence failed"
-                );
-            }
+        {
+            tracing::warn!(
+                %error,
+                fingerprint,
+                observed,
+                adequate_trials,
+                locked,
+                "adequacy exploration persistence failed"
+            );
         }
     }
 

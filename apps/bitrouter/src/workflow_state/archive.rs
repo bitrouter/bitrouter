@@ -298,8 +298,8 @@ impl WorkflowRunArtifact {
         decisions: &[PolicyDecisionRecord],
     ) -> Result<Self> {
         let fixtures = TraceArchive::to_replay_fixtures(traces)?;
-        let replay = ReplayEvaluator::default().run(&fixtures);
-        let shadow_policy = ShadowPolicyEvaluator::default().run(&fixtures);
+        let replay = ReplayEvaluator.run(&fixtures);
+        let shadow_policy = ShadowPolicyEvaluator.run(&fixtures);
         let policy_decisions = PolicyDecisionSummary::from_records(decisions);
         let cost = CloudUsageSummary::from_records(usage);
         let cost_join = CostJoinSummary::from_traces_and_usage(traces, usage);

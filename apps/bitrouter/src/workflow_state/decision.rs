@@ -69,47 +69,9 @@ pub struct PolicyDecisionJsonlRecorder {
 }
 
 impl PolicyDecisionRecord {
-    pub fn now(
-        request_id: Option<String>,
-        input_model: impl Into<String>,
-        key_strategy: impl Into<String>,
-        request_key: impl Into<String>,
-        ledger_key: Option<String>,
-        legacy_fingerprint: impl Into<String>,
-        workflow_state: impl Into<String>,
-        static_tier: Option<String>,
-        static_model: Option<String>,
-        selected_tier: Option<String>,
-        selected_model: Option<String>,
-        reason: impl Into<String>,
-        pinned: bool,
-        request_qualified: bool,
-        semantic_successes: u32,
-        semantic_success_threshold: u32,
-        locked: bool,
-        trialed: bool,
-    ) -> Self {
-        Self {
-            captured_at: Some(Utc::now().to_rfc3339()),
-            request_id,
-            input_model: input_model.into(),
-            key_strategy: key_strategy.into(),
-            request_key: request_key.into(),
-            ledger_key,
-            legacy_fingerprint: legacy_fingerprint.into(),
-            workflow_state: workflow_state.into(),
-            static_tier,
-            static_model,
-            selected_tier,
-            selected_model,
-            reason: reason.into(),
-            pinned,
-            request_qualified,
-            semantic_successes,
-            semantic_success_threshold,
-            locked,
-            trialed,
-        }
+    pub fn captured_now(mut self) -> Self {
+        self.captured_at = Some(Utc::now().to_rfc3339());
+        self
     }
 
     pub fn load_jsonl(path: impl AsRef<Path>) -> Result<Vec<Self>> {

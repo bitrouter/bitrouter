@@ -325,6 +325,19 @@ struct HttpClientSet {
     provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
 }
 
+/// Immutable inputs reused each time an authenticated upstream request is
+/// rebuilt, including after a provider refreshes an expired credential.
+struct RequestBuildInput<'a> {
+    client: &'a reqwest::Client,
+    timeouts: &'a HttpTimeouts,
+    url: &'a str,
+    body: &'a serde_json::Value,
+    target: &'a RoutingTarget,
+    transport: &'a Arc<dyn crate::language_model::protocol::Transport>,
+    ctx: &'a PipelineContext,
+    trace_headers: Option<&'a http::HeaderMap>,
+}
+
 /// Build a reqwest client from the connection-level timeout knobs. `total` is
 /// deliberately not applied here — it is a per-request deadline set via
 /// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
@@ -478,25 +491,20 @@ impl HttpExecutor {
 
     async fn build_authenticated_request(
         &self,
-        client: &reqwest::Client,
-        timeouts: &HttpTimeouts,
-        url: &str,
-        body: &serde_json::Value,
-        target: &RoutingTarget,
-        transport: &Arc<dyn crate::language_model::protocol::Transport>,
-        ctx: &PipelineContext,
-        trace_headers: Option<&http::HeaderMap>,
+        input: &RequestBuildInput<'_>,
     ) -> Result<reqwest::Request> {
-        let mut builder = client.post(url).json(body);
-        if let Some(total) = timeouts.total {
+        let mut builder = input.client.post(input.url).json(input.body);
+        if let Some(total) = input.timeouts.total {
             builder = builder.timeout(total);
         }
         let mut request = builder
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
-        forward_inbound_anthropic_beta(&mut request, target, ctx);
-        let mut request = self.apply_auth(request, target, transport).await?;
-        merge_outbound_trace_headers(&mut request, trace_headers);
+        forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
+        let mut request = self
+            .apply_auth(request, input.target, input.transport)
+            .await?;
+        merge_outbound_trace_headers(&mut request, input.trace_headers);
         Ok(request)
     }
 
@@ -614,21 +622,20 @@ impl Executor for HttpExecutor {
         let trace_headers = ctx.take_outbound_trace_headers();
 
         let (client, timeouts) = self.client_for(target);
+        let request_input = RequestBuildInput {
+            client: &client,
+            timeouts: &timeouts,
+            url: &url,
+            body: &body,
+            target,
+            transport,
+            ctx,
+            trace_headers: trace_headers.as_ref(),
+        };
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
         let text = loop {
-            let request = self
-                .build_authenticated_request(
-                    &client,
-                    &timeouts,
-                    &url,
-                    &body,
-                    target,
-                    transport,
-                    ctx,
-                    trace_headers.as_ref(),
-                )
-                .await?;
+            let request = self.build_authenticated_request(&request_input).await?;
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
@@ -708,20 +715,19 @@ impl Executor for HttpExecutor {
         let trace_headers = ctx.take_outbound_trace_headers();
 
         let (client, timeouts) = self.client_for(target);
+        let request_input = RequestBuildInput {
+            client: &client,
+            timeouts: &timeouts,
+            url: &url,
+            body: &body,
+            target,
+            transport,
+            ctx,
+            trace_headers: trace_headers.as_ref(),
+        };
         let mut attempted_auth_refresh = false;
         let response = loop {
-            let request = self
-                .build_authenticated_request(
-                    &client,
-                    &timeouts,
-                    &url,
-                    &body,
-                    target,
-                    transport,
-                    ctx,
-                    trace_headers.as_ref(),
-                )
-                .await?;
+            let request = self.build_authenticated_request(&request_input).await?;
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)

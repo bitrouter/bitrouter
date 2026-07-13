@@ -130,9 +130,7 @@ async fn e2e_real_codex_agent_traffic_is_captured_and_shadow_replayed() {
             .arg("-c")
             .arg("model_provider=\"bitrouter_local\"")
             .arg("-c")
-            .arg(format!(
-                "model_providers.bitrouter_local.name=\"BitRouter Local\""
-            ))
+            .arg("model_providers.bitrouter_local.name=\"BitRouter Local\"")
             .arg("-c")
             .arg(format!(
                 "model_providers.bitrouter_local.base_url=\"{bitrouter_v1_base_url}\""
@@ -743,7 +741,7 @@ fn assert_real_agent_replay(
         fixture_summary(&fixtures)
     );
 
-    let summary = ReplayEvaluator::default().run(&fixtures);
+    let summary = ReplayEvaluator.run(&fixtures);
     eprintln!("shadow_replay_summary={summary:#?}");
     assert_eq!(summary.total, fixtures.len(), "{summary:#?}");
     assert_eq!(summary.covered, fixtures.len(), "{summary:#?}");
