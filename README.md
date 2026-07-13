@@ -97,7 +97,7 @@ BitRouter is a local proxy between your agent and every LLM provider. One env-va
 
 ```diff
 - OPENAI_BASE_URL=https://api.openai.com/v1   # hardwired to one provider, no fallback
-+ OPENAI_BASE_URL=http://localhost:4356        # all providers, automatic failover
++ OPENAI_BASE_URL=http://localhost:4356/v1    # all providers, automatic failover
 ```
 
 ### CLI
@@ -133,7 +133,7 @@ See [`CLI.md`](CLI.md) for the full command reference, flags, and config resolut
 
 BitRouter ships an [Agent Skill](https://agentskills.io) — `/bitrouter` — so AI
 coding agents can install, configure, migrate to, and troubleshoot BitRouter on
-their own. It lives in this repo at [`skills/bitrouter/`](skills/), kept in sync
+their own. It lives in this repo at [`skills/bitrouter/`](skills/bitrouter/), kept in sync
 with the code.
 
 ```bash
@@ -167,11 +167,11 @@ BitRouter routes to a *model*, not a provider. Each open-weight family below is 
 | Open model            | Lab      |
 | --------------------- | -------- |
 | DeepSeek V3.2 / V4    | DeepSeek |
-| Qwen3 / Qwen3-Coder   | Alibaba  |
+| Qwen3                 | Alibaba  |
 | Kimi K2               | Moonshot |
 | GLM-5 / 5.1           | Z.ai     |
 | MiniMax M2–M3         | MiniMax  |
-| MiMo V2               | Xiaomi   |
+| MiMo V2.5             | Xiaomi   |
 | Step 3.5              | StepFun  |
 
 Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
@@ -180,15 +180,15 @@ Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your 
 
 ## Harness integrations
 
-Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356` and you're done. The following harnesses are tested and supported:
+Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. The following harnesses are tested and supported:
 
 | Harness        | Status | Notes                                                                                       |
 | -------------- | ------ | ------------------------------------------------------------------------------------------- |
 | Claude Code    | ✅     | [LLM gateway guide](https://code.claude.com/docs/en/llm-gateway)                           |
-| OpenAI Codex   | ✅     | `bitrouter spawn --agent codex` or [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
+| OpenAI Codex   | ✅     | `bitrouter launch --agent codex` or [custom model providers](https://developers.openai.com/codex/config-advanced#custom-model-providers) |
 | OpenCode       | ✅     | Via [models.dev](https://github.com/anomalyco/models.dev)                                  |
 | Hermes Agent   | ✅     | Native plugin — [hermes-bitrouter-plugin](https://github.com/bitrouter/hermes-bitrouter-plugin) |
-| Openclaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
+| OpenClaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
 | Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
 
 **Building an open-source agent?** Reach out at [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu) — we offer **up to 50% off** for you and your community.
