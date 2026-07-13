@@ -1,0 +1,52 @@
+{
+  "run_id": "codex-full-a4ce879-c3-20260710T123558Z",
+  "bitrouter": {
+    "branch": "feat/adaptive-policy-routing",
+    "commit": "a4ce879172df56d4230d0904e7285f4f29d80469"
+  },
+  "benchmark": {
+    "name": "terminal-bench",
+    "version": "2.1",
+    "canonical_tasks": 89,
+    "comparable_tasks": 88,
+    "harness": "Harbor built-in Codex adapter"
+  },
+  "protocol": {
+    "groups": ["control", "r1", "r2", "r3"],
+    "attempts_per_task": 1,
+    "concurrency": 3,
+    "harbor_retries": 0,
+    "timeout_multiplier": 1.5,
+    "sandbox": "Harbor EC2 provider, m7i-flex.large, ephemeral/delete enabled",
+    "four_vcpu_recovery_sandbox": "m7i-flex.xlarge",
+    "reward_supervision": "same-task; control never receives benchmark reward"
+  },
+  "conformance": {
+    "terminal_bench_leaderboard_conformant": false,
+    "reasons": [
+      "1 attempt per task (leaderboard requires >= 5 trials per task)",
+      "timeout_multiplier 1.5 (leaderboard requires unset or 1.0)",
+      "custom sandbox sizing / resource configuration"
+    ],
+    "note": "This is a mechanism/evolution study, not a Terminal-Bench 2.1 leaderboard submission. See the benchmarks README 'Protocol and limitations' section."
+  },
+  "exclusions": [
+    {
+      "task": "terminal-bench/model-extraction-relu-logits",
+      "reason": "Reproducible upstream Codex 502 in the original run and 12 independent recovery sandboxes; treated as N/A across all four groups (not a score of zero)."
+    }
+  ],
+  "raw_data": {
+    "published_scope": "derived-evidence only, committed in-repo under data/",
+    "withheld": "traces.jsonl (raw HTTP capture; request bodies carried provider account identifiers and auth tokens) and the support archive's operational configs/recovery-configs/runner-log",
+    "rationale": "credential and subscription-identifier hygiene; derived files reproduce every value in results.json (verified: 88 tasks and pass counts 68/70/67/73 per group)"
+  },
+  "artifacts": {
+    "report": "report.md",
+    "results": "results.json",
+    "comparable_task_set": "config/comparable-tasks.json",
+    "frozen_config": "config/",
+    "config_redactions": "config/REDACTIONS.md",
+    "derived_evidence": "data/"
+  }
+}

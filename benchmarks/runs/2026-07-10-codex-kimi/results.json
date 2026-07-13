@@ -1,0 +1,83 @@
+{
+  "run_id": "codex-full-a4ce879-c3-20260710T123558Z",
+  "benchmark": "terminal-bench",
+  "benchmark_version": "2.1",
+  "date": "2026-07-10",
+  "comparable_task_count": 88,
+  "attempts_per_task": 1,
+  "strong_route": "openai-codex:gpt-5.5",
+  "weak_route": "bitrouter:moonshotai/kimi-k2.7-code",
+  "cost_basis": "normalized API-equivalent imputed cost computed from measured token usage at list per-token prices; a modeled figure for reproducible route comparison, not a billing statement",
+  "imputed_prices_usd_per_mtok": {
+    "strong": { "input": 5.0, "output": 30.0 },
+    "weak": { "input": 0.7125, "output": 3.0 }
+  },
+  "groups": [
+    {
+      "group": "control",
+      "passed": 68,
+      "total": 88,
+      "score_pct": 77.27,
+      "total_requests": 1666,
+      "strong_calls": 1666,
+      "weak_calls": 0,
+      "weak_share_pct": 0.0,
+      "cost_usd": 330.70,
+      "cost_per_success_usd": 4.86,
+      "cost_vs_control_pct": 0.0,
+      "score_vs_control_pp": 0.0
+    },
+    {
+      "group": "r1",
+      "passed": 70,
+      "total": 88,
+      "score_pct": 79.55,
+      "total_requests": 1678,
+      "strong_calls": 1647,
+      "weak_calls": 31,
+      "weak_share_pct": 1.85,
+      "cost_usd": 350.92,
+      "cost_per_success_usd": 5.01,
+      "cost_vs_control_pct": 6.11,
+      "score_vs_control_pp": 2.27
+    },
+    {
+      "group": "r2",
+      "passed": 67,
+      "total": 88,
+      "score_pct": 76.14,
+      "total_requests": 1512,
+      "strong_calls": 1293,
+      "weak_calls": 219,
+      "weak_share_pct": 14.48,
+      "cost_usd": 222.22,
+      "cost_per_success_usd": 3.32,
+      "cost_vs_control_pct": -32.80,
+      "score_vs_control_pp": -1.14
+    },
+    {
+      "group": "r3",
+      "passed": 73,
+      "total": 88,
+      "score_pct": 82.95,
+      "total_requests": 1571,
+      "strong_calls": 1537,
+      "weak_calls": 34,
+      "weak_share_pct": 2.16,
+      "cost_usd": 303.60,
+      "cost_per_success_usd": 4.16,
+      "cost_vs_control_pct": -8.19,
+      "score_vs_control_pp": 5.68
+    }
+  ],
+  "lifecycle": {
+    "policy_rounds": ["r1", "r2", "r3"],
+    "policy_total_cost_usd": 876.74,
+    "three_control_counterfactual_cost_usd": 992.09,
+    "cost_reduction_pct": 11.63,
+    "policy_aggregate_successes": 210,
+    "counterfactual_aggregate_successes": 204,
+    "cost_per_success_control_usd": 4.86,
+    "cost_per_success_policy_usd": 4.17
+  }
+}

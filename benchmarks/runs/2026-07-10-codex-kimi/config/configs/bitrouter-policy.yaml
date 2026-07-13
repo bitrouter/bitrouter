@@ -1,0 +1,45 @@
+server:
+  listen: 0.0.0.0:4358
+  control_socket: /home/ubuntu/bitrouter-bench/run/codex-full-a4ce879-c3-20260710T123558Z-policy.sock
+  log_level: debug
+  skip_auth: true
+database:
+  url: sqlite:///home/ubuntu/bitrouter-bench/state/codex-full-a4ce879-c3-20260710T123558Z-policy/bitrouter.db
+providers:
+  openai-codex:
+    active: true
+    api_base: REDACTED  # strong-route provider endpoint redacted — see ../REDACTIONS.md
+    class: REDACTED     # strong-route provider access class redacted — see ../REDACTIONS.md
+    api_protocol:
+      - "*": responses
+    models:
+      - id: gpt-5.5
+  bitrouter:
+    active: true
+    api_key: ${BITROUTER_API_KEY}
+    auto_discover: true
+    api_protocol:
+      - "*": messages
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    cheap: bitrouter:moonshotai/kimi-k2.7-code
+    capable: openai-codex:gpt-5.5
+  fingerprints: {}
+  default_tier: capable
+  tool_use_tier: capable
+  tool_safe_tiers:
+    - cheap
+    - capable
+  adequacy:
+    enabled: true
+    escalation_tier: capable
+    escalation_threshold: 2
+    pin_cooldown_secs: 900
+    explore_enabled: true
+    explore_tier: cheap
+    explore_interval: 2
+    explore_threshold: 3
+    min_semantic_successes_for_lock: 2
+    explore_opening: false
+

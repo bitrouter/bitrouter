@@ -1,0 +1,27 @@
+server:
+  listen: 127.0.0.1:4361
+  control_socket: /home/ubuntu/bitrouter-bench/run/codex-full-a4ce879-c3-20260710T123558Z-strong-v2-canary.sock
+  log_level: debug
+  skip_auth: true
+database:
+  url: sqlite:///home/ubuntu/bitrouter-bench/state/codex-full-a4ce879-c3-20260710T123558Z-strong-v2-canary/bitrouter.db
+providers:
+  openai-codex:
+    active: true
+    api_base: REDACTED  # strong-route provider endpoint redacted — see ../REDACTIONS.md
+    class: REDACTED     # strong-route provider access class redacted — see ../REDACTIONS.md
+    api_protocol:
+      - "*": responses
+    models:
+      - id: gpt-5.5
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    capable: openai-codex:gpt-5.5
+  fingerprints: {}
+  default_tier: capable
+  tool_use_tier: capable
+  tool_safe_tiers:
+    - capable
+  adequacy:
+    enabled: false
