@@ -1,3 +1,0 @@
-[alias]
-# `cargo xtask <task>` — workspace automation (schema generation, etc.)
-xtask = "run --package xtask --"

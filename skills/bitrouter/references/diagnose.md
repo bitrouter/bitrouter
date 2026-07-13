@@ -92,7 +92,7 @@ bitrouter providers list                  # ACTIVE column
 bitrouter route openai/gpt-4o             # does the chain resolve?
 ```
 
-If `ACTIVE` is `no` for a built-in provider, its env var wasn't set when the daemon started — or its OAuth token is missing (`github-copilot`). Two fixes:
+If `ACTIVE` is `no` for a registry provider, its env var wasn't set when the daemon started — or its OAuth token is missing (`github-copilot`). Two fixes:
 
 ```bash
 # A) re-export and hot-reload (no restart needed)
@@ -119,7 +119,7 @@ bitrouter models --provider openai        # filter
 bitrouter route <exact model id>          # resolution + chain
 ```
 
-Model identifiers are **`provider/model`** in v1 (not the old `provider:model` colon form some legacy docs still show). The exact id strings come from the built-in catalog or your config's `models:` list — `bitrouter models` is authoritative.
+Canonical model identifiers are slash-form ids such as **`openai/gpt-4o`**. A colon-form id such as **`openrouter:openai/gpt-4o`** is a deliberate provider pin: it routes directly through the named provider when that provider is active. The exact canonical id strings come from the registry or your config's `models:` list — `bitrouter models` is authoritative.
 
 ## Symptom: env var change didn't propagate
 

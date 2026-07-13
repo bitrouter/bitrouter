@@ -27,5 +27,5 @@ server_tools:
 ```
 
 <Callout type="info">
-**需要任意工具而非网页搜索？** 任何 [MCP](https://modelcontextprotocol.io) 服务器——数据库、文件系统、你自己的 API——都可以接入 BitRouter 的 [MCP 网关](/docs/concepts/tools#the-mcp-gateway)。本页内容专门覆盖内置的搜索供应商。
+**需要任意工具而非网页搜索？** 任何 [MCP](https://modelcontextprotocol.io) 服务器——数据库、文件系统、你自己的 API——都可以接入 BitRouter 的 [MCP 网关](/docs/concepts/tools#the-mcp-gateway)。本页内容专门覆盖内置的搜索后端。
 </Callout>

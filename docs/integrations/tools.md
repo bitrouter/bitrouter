@@ -27,5 +27,5 @@ server_tools:
 ```
 
 <Callout type="info">
-**Need an arbitrary tool, not web search?** Any [MCP](https://modelcontextprotocol.io) server — a database, a file system, your own API — plugs into BitRouter's [MCP gateway](/docs/concepts/tools#the-mcp-gateway). The pages here cover the built-in search providers specifically.
+**Need an arbitrary tool, not web search?** Any [MCP](https://modelcontextprotocol.io) server — a database, a file system, your own API — plugs into BitRouter's [MCP gateway](/docs/concepts/tools#the-mcp-gateway). The pages here cover the built-in search backends specifically.
 </Callout>
