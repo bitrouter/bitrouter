@@ -395,18 +395,18 @@ impl StreamProcessor {
     /// - If an authoritative `Usage` part was observed at any point, that
     ///   wins — covers both clean termination and disconnect *after* the
     ///   usage chunk.
-    /// - If the stream ended via [`StreamOutcome::ClientDisconnected`] before
-    ///   any `Usage` was seen, synthesise a usage from the disconnect
-    ///   estimate: `prompt_tokens` from the request prompt's char count
-    ///   (seeded into the accumulator at stream start) and `completion_tokens`
-    ///   from the observed delta text. The provider bills input tokens the
-    ///   moment it accepts the request, so prompt tokens are charged even when
-    ///   no output streamed before the hang-up; output is added when deltas
-    ///   were seen. Without this, a client could drain a long generation, hang
-    ///   up just before the trailing usage frame, and pay $0.
-    /// - Otherwise (clean error with no usage, or disconnect with neither a
-    ///   seeded prompt nor deltas), leave `final_usage` empty; settlement
-    ///   records the request as un-billable.
+    /// - If the stream completed cleanly or ended via
+    ///   [`StreamOutcome::ClientDisconnected`] before any `Usage` was seen,
+    ///   synthesise a usage estimate: `prompt_tokens` from the request prompt's
+    ///   char count (seeded into the accumulator at stream start) and
+    ///   `completion_tokens` from observed delta text. Some upstreams omit
+    ///   usage on successful streams; benchmark/cost accounting should be
+    ///   estimated rather than silently recorded as `0/0`. The provider bills
+    ///   input tokens the moment it accepts the request, so prompt tokens are
+    ///   charged even when no output streamed before a hang-up; output is added
+    ///   when deltas were seen.
+    /// - Otherwise (error with no usage, or no seeded prompt/deltas), leave
+    ///   `final_usage` empty; settlement records the request as un-billable.
     pub async fn finish(&mut self, outcome: StreamOutcome) -> &StreamContext {
         if self.ended {
             return &self.ctx;
@@ -417,24 +417,62 @@ impl StreamProcessor {
                 tracing::warn!(error = %e, "StreamHook::on_stream_end failed");
             }
         }
-        if let Some(usage) = self.ctx.accumulated_usage.finalized() {
-            self.ctx.final_usage = Some(usage);
-        } else if matches!(outcome, StreamOutcome::ClientDisconnected) {
+        let estimated_usage = || {
             let prompt_tokens = self.ctx.accumulated_usage.estimated_prompt_tokens();
             let completion_tokens = self.ctx.accumulated_usage.estimated_output_tokens();
             if prompt_tokens > 0 || completion_tokens > 0 {
-                tracing::warn!(
-                    request_id = %self.ctx.request_id,
-                    estimated_prompt_tokens = prompt_tokens,
-                    estimated_output_tokens = completion_tokens,
-                    "client disconnected mid-stream before upstream usage frame; billing estimated usage"
-                );
-                self.ctx.final_usage = Some(Usage {
+                Some(Usage {
                     prompt_tokens,
                     completion_tokens,
                     ..Default::default()
-                });
+                })
+            } else {
+                None
             }
+        };
+        if let Some(usage) = self.ctx.accumulated_usage.finalized() {
+            if usage == Usage::default()
+                && matches!(
+                    outcome,
+                    StreamOutcome::Completed | StreamOutcome::ClientDisconnected
+                )
+                && let Some(estimated) = estimated_usage()
+            {
+                tracing::debug!(
+                    request_id = %self.ctx.request_id,
+                    estimated_prompt_tokens = estimated.prompt_tokens,
+                    estimated_output_tokens = estimated.completion_tokens,
+                    "stream reported zero usage despite prompt/output evidence; billing estimated usage"
+                );
+                self.ctx.final_usage = Some(estimated);
+            } else {
+                self.ctx.final_usage = Some(usage);
+            }
+        } else if matches!(
+            outcome,
+            StreamOutcome::Completed | StreamOutcome::ClientDisconnected
+        ) && let Some(estimated) = estimated_usage()
+        {
+            match outcome {
+                StreamOutcome::ClientDisconnected => {
+                    tracing::warn!(
+                        request_id = %self.ctx.request_id,
+                        estimated_prompt_tokens = estimated.prompt_tokens,
+                        estimated_output_tokens = estimated.completion_tokens,
+                        "client disconnected mid-stream before upstream usage frame; billing estimated usage"
+                    );
+                }
+                StreamOutcome::Completed => {
+                    tracing::debug!(
+                        request_id = %self.ctx.request_id,
+                        estimated_prompt_tokens = estimated.prompt_tokens,
+                        estimated_output_tokens = estimated.completion_tokens,
+                        "stream completed without upstream usage frame; billing estimated usage"
+                    );
+                }
+                StreamOutcome::UpstreamError(_) | StreamOutcome::Aborted(_) => {}
+            }
+            self.ctx.final_usage = Some(estimated);
         }
         &self.ctx
     }

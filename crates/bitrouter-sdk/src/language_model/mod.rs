@@ -92,8 +92,8 @@ pub use protocol::{
     Transport, inbound_adapter_for, sanitize_model_name,
 };
 pub use routing::{
-    DefaultFallbackPolicy, FallbackPolicy, ModelInfo, RoutingPrefs, RoutingTable, SortOrder,
-    StaticRoutingTable,
+    DefaultFallbackPolicy, FallbackPolicy, ModelInfo, ModelResolution, ModelSelector, RoutingPrefs,
+    RoutingTable, SortOrder, StaticRoutingTable,
 };
 pub use settlement::{SettlementContext, SettlementRecorder};
 pub use stream::{

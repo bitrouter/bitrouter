@@ -35,7 +35,9 @@ mod tests;
 pub use db::RequestMetric;
 pub use pricing::{ContextTier, ModelPricing, PricingTable, calculate_charge_micro_usd};
 pub use recorder::MeteringRecorder;
-pub use store::{MeteringStore, RateMetrics, TimeWindow, TokenUsage};
+pub use store::{
+    MeteringStore, MeteringUsageRecord, RateMetrics, TimeWindow, TokenUsage, UsagePriceOverride,
+};
 
 /// Render micro-USD for the agent-facing cost surfaces (`status --agent`
 /// spend recap, the MCP tool-result footer, the `spawn` exit summary):

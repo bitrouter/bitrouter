@@ -3100,8 +3100,8 @@ fn regression_227_messages_system_accepts_string_or_array() {
     assert_eq!(p2.system.as_deref(), Some("line one\nline two"));
 }
 
-/// #364 — `tool_result.content` accepts a string or an array; `thinking`
-/// blocks round-trip.
+/// #364 — `tool_result.content` accepts a string or an array; signed
+/// `thinking` blocks round-trip.
 #[test]
 fn regression_364_tool_result_array_and_thinking() {
     let adapter = adapter_for(ApiProtocol::Messages);
@@ -3110,7 +3110,11 @@ fn regression_364_tool_result_array_and_thinking() {
         "messages": [
             {
                 "role": "assistant",
-                "content": [{ "type": "thinking", "thinking": "pondering" }],
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "pondering",
+                    "signature": "SIG-364",
+                }],
             },
             {
                 "role": "user",
@@ -3147,6 +3151,35 @@ fn regression_364_tool_result_array_and_thinking() {
             value: "42".to_string()
         }),
         "text-only array tool_result content flattens to a Text output"
+    );
+}
+
+#[test]
+fn messages_parse_request_drops_unsigned_thinking_blocks() {
+    let adapter = adapter_for(ApiProtocol::Messages);
+    let body = serde_json::json!({
+        "model": "claude",
+        "messages": [{
+            "role": "assistant",
+            "content": [
+                { "type": "thinking", "thinking": "weak-model scratchpad" },
+                { "type": "text", "text": "visible answer" },
+            ],
+        }],
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let content: Vec<_> = prompt.messages.iter().flat_map(|m| &m.content).collect();
+    assert!(
+        !content
+            .iter()
+            .any(|c| matches!(c, Content::Reasoning { .. })),
+        "unsigned thinking must not be replayed to Anthropic"
+    );
+    assert!(
+        content
+            .iter()
+            .any(|c| matches!(c, Content::Text { text, .. } if text == "visible answer")),
+        "ordinary visible content should survive"
     );
 }
 
@@ -6778,6 +6811,39 @@ fn responses_provider_defined_renders_flat_native_shape() {
     assert_eq!(rendered[0]["search_context_size"], "low");
     // No function-only keys leak onto a server tool.
     assert!(rendered[0].get("parameters").is_none());
+}
+
+/// Codex 0.145+ groups multi-agent functions in a Responses namespace tool.
+/// Its explicit name is distinct from the `namespace` type and is required by
+/// the Codex backend, so same-protocol routing must preserve it.
+#[test]
+fn responses_namespace_tool_round_trips_explicit_name() {
+    let request = serde_json::json!({
+        "model": "m",
+        "input": "hi",
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "Tools for spawning and managing sub-agents.",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "parameters": { "type": "object" }
+            }]
+        }]
+    });
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let prompt = adapter.parse_request(request).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let namespace = &rendered["tools"][0];
+
+    assert_eq!(namespace["type"], "namespace");
+    assert_eq!(namespace["name"], "multi_agent_v1");
+    assert_eq!(
+        namespace["description"],
+        "Tools for spawning and managing sub-agents."
+    );
+    assert_eq!(namespace["tools"][0]["name"], "spawn_agent");
 }
 
 /// Every Anthropic server tool round-trips losslessly (an `anthropic.<version>`
