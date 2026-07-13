@@ -38,7 +38,6 @@ use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
     ToolsStatusReport,
 };
-use bitrouter::output::reports::verify::{Check, VerifyReport};
 use bitrouter::output::{CliReport, Output};
 use bitrouter_sdk::config;
 
@@ -166,14 +165,6 @@ enum Command {
         /// Show only models declared by this provider.
         #[arg(short, long)]
         provider: Option<String>,
-    },
-    /// Verify a confidential model's TEE attestation (L1): prove it runs on
-    /// genuine Intel TDX + NVIDIA GPU hardware running the legitimate,
-    /// policy-pinned model. Reads the DCAP policy pins + NVIDIA EAT key from the
-    /// environment (see `bitrouter verify --help` notes / the skill).
-    Verify {
-        /// The confidential model id, e.g. `zai-org/GLM-5.1-FP8`.
-        model: String,
     },
     /// MCP server introspection — list/status/discover against the upstreams
     /// declared under `mcp_servers` in `bitrouter.yaml`. v1.0 does not maintain
@@ -769,10 +760,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Models { config, provider } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             output.emit(&models(&source, provider.as_deref()).await?)?;
-            Ok(())
-        }
-        Command::Verify { model } => {
-            output.emit(&verify_attestation(&model).await?)?;
             Ok(())
         }
         Command::Tools { action } => tools(action, output).await,
@@ -1664,141 +1651,6 @@ fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteR
             })
             .collect(),
     }
-}
-
-/// `bitrouter verify <model>` — run an L1 TEE-attestation check for a
-/// confidential model and print the per-check breakdown.
-///
-/// Configuration comes from the environment (the DCAP policy MUST be pinned —
-/// the verifier refuses to run unpinned, per the load-bearing trust anchor):
-/// - `NEAR_BASE` (default `https://cloud-api.near.ai/v1`)
-/// - `NEAR_KMS_ROOTS` — accepted dstack KMS root pubkey(s), comma-separated
-/// - `NEAR_IMAGE_DIGESTS` and/or `NEAR_WORKLOAD_IDS` — at least one required
-/// - `NEAR_BASE_MEASUREMENTS` — accepted base bundle(s), comma-separated; each
-///   the hex of `MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2` (192 bytes). Required (issue #567)
-/// - `NVIDIA_EAT_KEY_PEM` — path to NVIDIA's NRAS EAT key (EC public PEM)
-async fn verify_attestation(model: &str) -> Result<VerifyReport> {
-    use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use bitrouter_attestation::{
-        AciDcapVerifierPolicy, ConfidentialVerifier, DcapQuoteVerifier, NVIDIA_NRAS_JWKS_URL,
-        NearVerifier, NvidiaEatKey, ReportTransport, ReqwestTransport,
-    };
-
-    fn env_list(key: &str) -> Vec<String> {
-        std::env::var(key)
-            .unwrap_or_default()
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    }
-
-    let base =
-        std::env::var("NEAR_BASE").unwrap_or_else(|_| "https://cloud-api.near.ai/v1".to_string());
-
-    let policy = AciDcapVerifierPolicy::new(
-        env_list("NEAR_WORKLOAD_IDS"),
-        env_list("NEAR_IMAGE_DIGESTS"),
-        env_list("NEAR_KMS_ROOTS"),
-        env_list("NEAR_BASE_MEASUREMENTS"),
-    )
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "attestation policy not pinned ({e}); set NEAR_KMS_ROOTS, \
-             NEAR_IMAGE_DIGESTS/NEAR_WORKLOAD_IDS and NEAR_BASE_MEASUREMENTS"
-        )
-    })?
-    // TCB floor: require an up-to-date platform by default. Operators may
-    // accept specific Intel advisories (out-of-date microcode) via this env.
-    .with_allowed_tcb_advisory_ids(env_list("NEAR_TCB_ALLOWED_ADVISORIES"));
-
-    // GPU EAT key: an explicit PEM override wins; otherwise fetch NVIDIA's JWKS
-    // (its signing keys rotate, so we resolve per-request by the EAT `kid`).
-    let nvidia_key = match std::env::var("NVIDIA_EAT_KEY_PEM") {
-        Ok(path) => NvidiaEatKey::from_ec_pem(&std::fs::read(&path)?)
-            .map_err(|e| anyhow::anyhow!("invalid NVIDIA_EAT_KEY_PEM ({path}): {e}"))?,
-        Err(_) => {
-            let url = std::env::var("NVIDIA_JWKS_URL")
-                .unwrap_or_else(|_| NVIDIA_NRAS_JWKS_URL.to_string());
-            match NvidiaEatKey::fetch_jwks(&url).await {
-                Ok(key) => key,
-                Err(e) => {
-                    bitrouter::error_report::info(format!(
-                        "could not fetch NVIDIA JWKS ({e}); the GPU check will fail closed"
-                    ));
-                    NvidiaEatKey::unconfigured()
-                }
-            }
-        }
-    };
-
-    let verifier = NearVerifier::new(
-        Arc::new(ReqwestTransport::new(&base)) as Arc<dyn ReportTransport>,
-        Arc::new(DcapQuoteVerifier::default()),
-        Arc::new(policy),
-        Arc::new(nvidia_key),
-    );
-
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let verdict = verifier.attestation_cached(model, now).await?;
-
-    let c = &verdict.checks;
-    let st = |b: bool| if b { "pass" } else { "fail" };
-    let opt_st = |v: Option<bool>| match v {
-        Some(true) => "pass",
-        Some(false) => "fail",
-        None => "skip",
-    };
-    let checks = vec![
-        Check {
-            name: "GPU NRAS attestation".into(),
-            status: st(c.gpu_nras_pass),
-        },
-        Check {
-            name: "Intel TDX DCAP quote".into(),
-            status: st(c.dcap_quote_valid),
-        },
-        Check {
-            name: "report_data binds key + nonce".into(),
-            status: st(c.report_data_binds_key_and_nonce),
-        },
-        Check {
-            name: "compose matches measured config".into(),
-            status: st(c.compose_matches_mr_config),
-        },
-        Check {
-            name: "event-log RTMR3 anchors policy fields".into(),
-            status: opt_st(c.event_log_rtmr_ok),
-        },
-        Check {
-            name: "base measurements match pin (MRTD/RTMR0-2)".into(),
-            status: st(c.base_measurements_match),
-        },
-        Check {
-            name: "policy accepts (KMS root + image/workload pin)".into(),
-            status: st(c.policy_accepts),
-        },
-        Check {
-            name: "TD debug disabled".into(),
-            status: st(c.debug_disabled),
-        },
-        Check {
-            name: match &c.tcb_status {
-                Some(s) => format!("TCB level acceptable ({s})"),
-                None => "TCB level acceptable".into(),
-            },
-            status: st(c.tcb_level_acceptable),
-        },
-    ];
-    Ok(VerifyReport {
-        model: model.to_string(),
-        trust_boundary: verdict.trust_boundary,
-        verified: verdict.verified,
-        checks,
-        signers: verdict.attested_addresses,
-    })
 }
 
 // ===== management commands =====

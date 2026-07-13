@@ -13,4 +13,3 @@ pub mod routing;
 pub mod skills;
 pub mod tools;
 pub mod update;
-pub mod verify;
