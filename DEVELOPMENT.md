@@ -4,15 +4,30 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 ## Workspace Architecture
 
-BitRouter is a Cargo workspace with three tiers — `crates/` (the SDK and provider crates), `plugins/` (hook libraries), and `apps/` (the shipped binary):
+BitRouter is a Cargo workspace with three tiers — `crates/` (the SDK, provider, and protocol crates), `plugins/` (hook libraries), and `apps/` (the shipped binary):
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, config loading, and the axum HTTP server |
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
+| `crates/bitrouter-mcp`           | crate   | Origin MCP server — exposes BitRouter's own `complete` / `list_models` / `status` tools over stdio + streamable HTTP        |
+| `crates/bitrouter-substrate`     | crate   | Per-session agent engine — hosts the ACP downstream server (`down`) and session translation                               |
 | `plugins/bitrouter-guardrails`   | plugin  | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `plugins/bitrouter-observe`      | plugin  | `ObserveHook` implementations — a Prometheus accumulator and an optional OTLP/HTTP JSON span exporter                     |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI/TUI binary — turns a `Config` into a running `App` and owns the management commands |
+
+### External interfaces
+
+Clients reach BitRouter through four external **interfaces** — the ways *in*. These are distinct from the SDK's four internal *wire-protocol adapters* (Chat Completions / Responses / Messages / Generate Content, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
+
+| Interface                 | Where it lives                                                                                            | Entry point              |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
+| **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
+| **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
+| **ACP**                   | `crates/bitrouter-substrate` (`down` / `translate`); subcommand glue in `apps/bitrouter/src/acp_cli.rs`   | `bitrouter acp serve`    |
+| **CLI / TUI**             | `apps/bitrouter` — the composition-root binary                                                            | `bitrouter <subcommand>` |
+
+The CLI is the **host** interface: it owns `main()` and mounts the other three as subcommands. That asymmetry is by design — it's why MCP is a standalone crate, ACP rides inside `bitrouter-substrate`, the API rides inside the SDK, and only the CLI/TUI lives in the binary itself.
 
 ### Dependency Logic
 
