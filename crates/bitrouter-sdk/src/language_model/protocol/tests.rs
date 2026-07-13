@@ -6813,6 +6813,39 @@ fn responses_provider_defined_renders_flat_native_shape() {
     assert!(rendered[0].get("parameters").is_none());
 }
 
+/// Codex 0.145+ groups multi-agent functions in a Responses namespace tool.
+/// Its explicit name is distinct from the `namespace` type and is required by
+/// the Codex backend, so same-protocol routing must preserve it.
+#[test]
+fn responses_namespace_tool_round_trips_explicit_name() {
+    let request = serde_json::json!({
+        "model": "m",
+        "input": "hi",
+        "tools": [{
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "Tools for spawning and managing sub-agents.",
+            "tools": [{
+                "type": "function",
+                "name": "spawn_agent",
+                "parameters": { "type": "object" }
+            }]
+        }]
+    });
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let prompt = adapter.parse_request(request).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    let namespace = &rendered["tools"][0];
+
+    assert_eq!(namespace["type"], "namespace");
+    assert_eq!(namespace["name"], "multi_agent_v1");
+    assert_eq!(
+        namespace["description"],
+        "Tools for spawning and managing sub-agents."
+    );
+    assert_eq!(namespace["tools"][0]["name"], "spawn_agent");
+}
+
 /// Every Anthropic server tool round-trips losslessly (an `anthropic.<version>`
 /// id with a stable `name` and verbatim args), covering web search, code
 /// execution, and computer use.
