@@ -79,10 +79,9 @@ jobs:
   dist:
     name: dist
     runs-on: ubuntu-latest
-    # Guards generated/committed artifacts: the config schema and registry dist
-    # JSON must match the Rust source/YAML data, each benchmarks/ run's
-    # results.json must match its report table and committed data/, and
-    # deprecated YAML parsers must stay out of the graph.
+    # Guards generated distribution artifacts: the committed config schema and
+    # registry dist JSON must match the Rust source/YAML data, and deprecated
+    # YAML parsers must stay out of the graph.
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1

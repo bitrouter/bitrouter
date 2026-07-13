@@ -1,8 +1,0 @@
-fingerprint                                                                                                                         distinct_task_successes
-----------------------------------------------------------------------------------------------------------------------------------  -----------------------
-codex|responses|recovery|-|-|exec_command|high|large|likely_recovery|high|medium|high|low|high|medium|requires_structured_tools     1                      
-codex|responses|recovery|-|-|exec_command|high|medium|likely_recovery|high|medium|medium|low|high|medium|requires_structured_tools  1                      
-codex|responses|recovery|-|-|view_image|high|large|likely_recovery|high|medium|high|low|high|medium|requires_structured_tools       2                      
-codex|responses|recovery|-|-|write_stdin|high|large|likely_recovery|high|medium|high|low|high|medium|requires_structured_tools      2                      
-codex|responses|tool_followup|-|-|exec_command|high|large|none|high|low|high|low|medium|medium|requires_structured_tools            1                      
-codex|responses|tool_followup|-|-|update_plan|high|large|none|high|low|high|low|medium|medium|requires_structured_tools             2                      

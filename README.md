@@ -79,9 +79,9 @@ _All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero 
 
 ## Benchmarks
 
-Reproducible benchmark evidence lives in [`benchmarks/`](benchmarks/). In the latest run (Terminal-Bench 2.1, Codex + Kimi), adaptive routing replaced strong-model calls with a cheaper model: round r2 cut imputed cost **32.8%** versus a strong-only control at near-parity score, and the best round scored **82.95%** at −8.2% cost. Each run ships its full report, a machine-readable `results.json`, the frozen config, and the derived evidence needed to recompute every number.
+Benchmark reports live in [`benchmarks/`](benchmarks/). In the first published run (Terminal-Bench 2.1, Codex + Kimi), adaptive routing replaced strong-model calls with a cheaper model: round r2 cut imputed cost **32.8%** versus a strong-only control at near-parity score, and the best round scored **82.95%** at 8.2% lower cost.
 
-This is a mechanism study under a modified protocol (one attempt per task) — **not a Terminal-Bench leaderboard submission**. See [protocol and limitations](benchmarks/README.md#protocol-and-limitations) before citing the numbers.
+The complete traces, messages, tool calls, usage, policy decisions, configs, and checksums are published in the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset. This is a mechanism study under a modified protocol, not a Terminal-Bench leaderboard submission; read the [experiment limitations](benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md#limitations) before citing the numbers.
 
 ## Install
 

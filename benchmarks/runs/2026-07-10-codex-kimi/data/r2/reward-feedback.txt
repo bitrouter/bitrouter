@@ -1,9 +1,0 @@
-✓ applied reward feedback: 219 candidates, 7 pinned keys, 2 new task-success evidence rows
-  pinned codex|responses|recovery|-|-|exec_command|high|medium|likely_recovery|high|medium|medium|low|high|medium|requires_structured_tools
-  pinned codex|responses|recovery|-|-|write_stdin|high|large|likely_recovery|high|medium|high|low|high|medium|requires_structured_tools
-  pinned codex|responses|tool_followup|-|-|exec_command|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools
-  pinned codex|responses|tool_followup|-|-|update_plan|high|large|none|high|low|high|low|medium|medium|requires_structured_tools
-  pinned codex|responses|tool_followup|-|-|view_image|high|large|none|high|low|high|low|medium|medium|requires_structured_tools
-  pinned codex|responses|tool_followup|-|-|write_stdin|high|large|none|high|low|high|low|medium|medium|requires_structured_tools
-  pinned codex|responses|tool_followup|-|-|write_stdin|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools
-  confirmed success codex|responses|tool_followup|-|-|update_plan|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools

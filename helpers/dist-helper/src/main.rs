@@ -6,7 +6,6 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod benchmarks;
 mod registry;
 mod schema;
 
@@ -93,8 +92,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Check => {
             schema::generate(&root, true)?;
             registry::build(&root, true)?;
-            registry::docs(&root, true)?;
-            benchmarks::check(&root)
+            registry::docs(&root, true)
         }
     }
 }
