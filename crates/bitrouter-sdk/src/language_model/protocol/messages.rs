@@ -133,7 +133,10 @@ fn parse_reasoning_metadata(block: &serde_json::Value, block_type: &str) -> Prov
                 data.clone(),
             );
         }
-    } else if let Some(sig) = block.get("signature").filter(|v| !v.is_null()) {
+    } else if let Some(sig) = block
+        .get("signature")
+        .filter(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+    {
         set_provider_metadata(
             &mut meta,
             PROVIDER_ID_ANTHROPIC,
@@ -142,6 +145,20 @@ fn parse_reasoning_metadata(block: &serde_json::Value, block_type: &str) -> Prov
         );
     }
     meta
+}
+
+fn is_replayable_reasoning_block(block: &serde_json::Value, block_type: &str) -> bool {
+    match block_type {
+        "thinking" => block
+            .get("signature")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty()),
+        "redacted_thinking" => block
+            .get("data")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty()),
+        _ => false,
+    }
 }
 
 /// Render a canonical reasoning part back into its Anthropic block, inverting
@@ -649,15 +666,24 @@ fn parse_content(value: &serde_json::Value) -> Result<Vec<Content>> {
                     // field — carry them in `provider_metadata` so a thinking
                     // block can be replayed on a follow-up turn.
                     // <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
-                    "thinking" | "redacted_thinking" => out.push(Content::Reasoning {
-                        text: block
-                            .get("thinking")
-                            .or_else(|| block.get("data"))
-                            .and_then(|t| t.as_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        provider_metadata: parse_reasoning_metadata(block, block_type),
-                    }),
+                    "thinking" | "redacted_thinking" => {
+                        // Unsigned thinking cannot be replayed to Anthropic on a
+                        // later turn. This shows up when a non-Anthropic weak
+                        // model streams reasoning through a Claude-compatible
+                        // harness and the harness sends it back in context; keep
+                        // only blocks with real continuity tokens.
+                        if is_replayable_reasoning_block(block, block_type) {
+                            out.push(Content::Reasoning {
+                                text: block
+                                    .get("thinking")
+                                    .or_else(|| block.get("data"))
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                provider_metadata: parse_reasoning_metadata(block, block_type),
+                            });
+                        }
+                    }
                     // A client `tool_use` block, or a provider-executed
                     // `server_tool_use` block (web search, code execution, …).
                     // They share the same `{id, name, input}` shape and differ

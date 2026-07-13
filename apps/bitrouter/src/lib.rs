@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod acp_cli;
+pub mod adequacy;
 pub mod agent_registry;
 pub mod agents;
 pub mod assemble;
@@ -26,12 +27,15 @@ pub mod metering;
 pub mod output;
 pub mod paths;
 pub mod policy;
+pub mod policy_lock;
+pub mod policy_table_router;
 pub mod reload;
 pub mod skills;
 pub mod spawn;
 pub mod style;
 pub mod tools;
 pub mod update;
+pub mod workflow_state;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
 

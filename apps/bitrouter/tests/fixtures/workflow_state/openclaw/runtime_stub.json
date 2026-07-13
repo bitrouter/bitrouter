@@ -1,0 +1,22 @@
+{
+  "id": "openclaw-runtime-stub-001",
+  "harness": "openclaw",
+  "protocol": "open_claw_runtime",
+  "headers": {},
+  "raw_body": {
+    "agentRuntime": {"id": "openclaw.default"},
+    "runtimePlan": {"tools": ["shell", "edit"]}
+  },
+  "canonical_prompt": {
+    "model": "openclaw-runtime-model",
+    "messages": [
+      {"role": "user", "content": "inspect this repo"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.5
+  }
+}

@@ -11,6 +11,7 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
 use crate::language_model::executor::MockResponse;
+use crate::language_model::routing::PromptOverrides;
 use crate::language_model::*;
 
 // ===== test fixtures =====
@@ -49,6 +50,13 @@ fn request() -> PipelineRequest {
         stream: false,
     };
     PipelineRequest::new("test-model", CallerContext::new("k1", "u1"), prompt)
+}
+
+fn request_for_model(model: &str) -> PipelineRequest {
+    let mut request = request();
+    request.model = model.to_string();
+    request.prompt.model = model.to_string();
+    request
 }
 
 #[derive(Serialize)]
@@ -109,6 +117,18 @@ impl SettlementRecorder for CountingRecorder {
     }
 }
 
+struct RequestEndCountingObserver(Arc<AtomicUsize>);
+#[async_trait]
+impl ObserveHook for RequestEndCountingObserver {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, _outcome: &RequestOutcome) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 /// Records the `(prompt_tokens, completion_tokens)` seen by every settlement
 /// call so a test can assert what was actually billed.
 struct UsageCapturingRecorder(Arc<std::sync::Mutex<Vec<(u64, u64)>>>);
@@ -153,6 +173,66 @@ impl SettlementRecorder for ProviderCapturingRecorder {
             Ok(mut captured) => captured.push(value),
             Err(poisoned) => poisoned.into_inner().push(value),
         }
+        Ok(())
+    }
+}
+
+struct PresetAwareRoutingTable;
+
+#[async_trait]
+impl RoutingTable for PresetAwareRoutingTable {
+    async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
+        if model == "@adaptive:preferred" {
+            Ok(ModelResolution {
+                clean_model: "strong-model".into(),
+                prefs: RoutingPrefs {
+                    only: vec!["preferred-provider".into()],
+                    ..RoutingPrefs::default()
+                },
+                overrides: PromptOverrides::default(),
+                policy: Some("coding".into()),
+            })
+        } else {
+            Ok(ModelResolution::passthrough(model))
+        }
+    }
+
+    async fn route_chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        _caller: &CallerContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        let provider = prefs
+            .only
+            .first()
+            .map(String::as_str)
+            .unwrap_or("default-provider");
+        let mut selected = target(provider);
+        selected.service_id = model.to_string();
+        Ok(vec![selected])
+    }
+
+    fn list_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    fn model_info(&self, _model: &str) -> Option<ModelInfo> {
+        None
+    }
+
+    async fn reload(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct CountingModelSelector(Arc<AtomicUsize>);
+
+impl ModelSelector for CountingModelSelector {
+    fn select(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()> {
+        assert_eq!(policy, "coding");
+        self.0.fetch_add(1, Ordering::SeqCst);
+        ctx.set_model("economy-model");
         Ok(())
     }
 }
@@ -407,6 +487,40 @@ async fn full_pipeline_runs_all_four_stages() {
     let resp = pipeline.execute(request()).await.expect("request succeeds");
     assert_eq!(resp.result.content.len(), 1);
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
+}
+
+#[tokio::test]
+async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
+    let selected = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .executor(Arc::new(MockExecutor::new(vec![
+            MockResponse::Generate(gen_result(Vec::new())),
+            MockResponse::Generate(gen_result(Vec::new())),
+        ])))
+        .model_selector(Arc::new(CountingModelSelector(selected.clone())))
+        .settlement_recorder(ProviderCapturingRecorder(captured.clone()));
+    let pipeline = builder.build().unwrap();
+
+    pipeline
+        .execute(request_for_model("@adaptive:preferred"))
+        .await
+        .unwrap();
+    pipeline
+        .execute(request_for_model("strong-model"))
+        .await
+        .unwrap();
+
+    assert_eq!(selected.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        captured.lock().unwrap().as_slice(),
+        &[
+            ("preferred-provider".into(), "economy-model".into()),
+            ("default-provider".into(), "strong-model".into()),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1123,6 +1237,180 @@ async fn drain_awaits_pending_disconnect_settlements() {
 }
 
 #[tokio::test]
+async fn early_stream_drop_runs_every_settlement_recorder() {
+    struct LabelledRecorder {
+        label: &'static str,
+        recorded: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for LabelledRecorder {
+        async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
+            tokio::task::yield_now().await;
+            self.recorded.lock().unwrap().push(self.label);
+            Ok(())
+        }
+    }
+
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder
+                .settlement_recorder(LabelledRecorder {
+                    label: "adequacy",
+                    recorded: recorded.clone(),
+                })
+                .settlement_recorder(LabelledRecorder {
+                    label: "metering",
+                    recorded: recorded.clone(),
+                });
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    assert!(stream.next().await.unwrap().is_ok());
+    assert!(stream.next().await.unwrap().is_ok());
+    drop(stream);
+
+    pipeline.drain_pending_settlements().await;
+    assert_eq!(
+        recorded.lock().unwrap().as_slice(),
+        &["adequacy", "metering"]
+    );
+}
+
+#[tokio::test]
+async fn disconnect_during_inline_settlement_does_not_cancel_remaining_recorders() {
+    struct BlockingRecorder {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        recorded: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for BlockingRecorder {
+        async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
+            self.recorded.lock().unwrap().push("first-started");
+            self.started.notify_one();
+            self.release.notified().await;
+            self.recorded.lock().unwrap().push("first-finished");
+            Ok(())
+        }
+    }
+
+    struct FinalRecorder(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    #[async_trait]
+    impl SettlementRecorder for FinalRecorder {
+        async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
+            self.0.lock().unwrap().push("second");
+            Ok(())
+        }
+    }
+
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder
+                .settlement_recorder(BlockingRecorder {
+                    started: started.clone(),
+                    release: release.clone(),
+                    recorded: recorded.clone(),
+                })
+                .settlement_recorder(FinalRecorder(recorded.clone()));
+        },
+    );
+
+    let mut stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    assert!(stream.next().await.unwrap().is_ok());
+
+    // The terminal part settles before it is yielded. Poll it on a separate
+    // task so we can cancel the response-body future while settlement blocks.
+    let poller = tokio::spawn(async move { stream.next().await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .expect("first settlement recorder should start");
+    poller.abort();
+    tokio::time::timeout(std::time::Duration::from_secs(1), poller)
+        .await
+        .expect("stream poller should abort promptly")
+        .expect_err("stream poller should be cancelled");
+    // Preserve a permit if the detached finalizer has not polled `notified()`
+    // yet. `notify_waiters()` would lose the wake-up in that scheduling gap.
+    release.notify_one();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        pipeline.drain_pending_settlements(),
+    )
+    .await
+    .expect("detached settlement should finish after release");
+    assert_eq!(
+        recorded.lock().unwrap().as_slice(),
+        &["first-started", "first-finished", "second"]
+    );
+}
+
+#[tokio::test]
+async fn dropped_stream_still_fires_request_end_observers() {
+    let observed_end = Arc::new(AtomicUsize::new(0));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta { text: "hi".into() },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |b| {
+            b.observe_hook(RequestEndCountingObserver(observed_end.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .clone()
+        .execute_stream(stream_request())
+        .await
+        .expect("ok");
+    drop(stream);
+
+    let drained = pipeline.drain_pending_settlements().await;
+    assert!(
+        drained >= 1,
+        "stream drop must detach a settlement task that can be drained"
+    );
+    assert_eq!(
+        observed_end.load(Ordering::SeqCst),
+        1,
+        "request-end observers must run for disconnected streams"
+    );
+}
+
+#[tokio::test]
 async fn disconnect_before_usage_bills_estimated_output() {
     // v0 #463 / cloud #251 audit P0: if the client disconnects mid-stream
     // before the upstream `Usage` frame arrives, the request must still
@@ -1539,6 +1827,229 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         }
         other => panic!("expected BadRequest, got {other:?}"),
     }
+}
+
+struct AuthRecoveryApplier {
+    refreshes: Arc<AtomicUsize>,
+    seen_rejected_auth: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl AuthApplier for AuthRecoveryApplier {
+    async fn apply(
+        &self,
+        mut request: reqwest::Request,
+        _target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        let token = if self.refreshes.load(Ordering::SeqCst) == 0 {
+            "stale"
+        } else {
+            "fresh"
+        };
+        request.headers_mut().insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        );
+        Ok(request)
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        _target: &RoutingTarget,
+        rejected_authorization: Option<&reqwest::header::HeaderValue>,
+    ) -> Result<bool> {
+        if let Some(value) = rejected_authorization.and_then(|v| v.to_str().ok()) {
+            self.seen_rejected_auth
+                .lock()
+                .unwrap()
+                .push(value.to_string());
+        }
+        self.refreshes.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
+fn spawn_auth_retry_server(
+    responses: Vec<(&'static str, &'static str)>,
+    seen_auths: Arc<std::sync::Mutex<Vec<String>>>,
+) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for (status, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0_u8; 1024];
+            let header_end = loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break bytes.len();
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(pos) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+            let header_text = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = header_text
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let total_len = header_end + content_length;
+            while bytes.len() < total_len {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+            }
+            let request = String::from_utf8_lossy(&bytes[..header_end]);
+            let auth = request
+                .lines()
+                .find_map(|line| line.strip_prefix("authorization: "))
+                .or_else(|| {
+                    request
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Authorization: "))
+                })
+                .unwrap_or("")
+                .to_string();
+            seen_auths.lock().unwrap().push(auth);
+            let content_type = if body.starts_with("data: ") {
+                "text/event-stream"
+            } else {
+                "application/json"
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    format!("http://{addr}")
+}
+
+fn auth_retry_target(api_base: String) -> RoutingTarget {
+    RoutingTarget {
+        provider_name: "retry-provider".into(),
+        service_id: "test-model".into(),
+        api_base,
+        api_key: String::new(),
+        api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
+        account_label: None,
+        api_key_override: None,
+        api_base_override: None,
+        auth_scheme: Default::default(),
+    }
+}
+
+fn auth_retry_executor(
+    refreshes: Arc<AtomicUsize>,
+    rejected: Arc<std::sync::Mutex<Vec<String>>>,
+) -> HttpExecutor {
+    let mut auth = AuthAppliers::new();
+    auth.register(
+        "retry-provider",
+        Arc::new(AuthRecoveryApplier {
+            refreshes,
+            seen_rejected_auth: rejected,
+        }),
+    );
+    HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)
+        .expect("executor")
+}
+
+#[tokio::test]
+async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once() {
+    let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let api_base = spawn_auth_retry_server(
+        vec![
+            (
+                "401 Unauthorized",
+                r#"{"error":{"code":"token_revoked","message":"revoked"}}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+            ),
+        ],
+        seen_auths.clone(),
+    );
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let rejected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let executor = auth_retry_executor(refreshes.clone(), rejected.clone());
+    let target = auth_retry_target(api_base);
+    let req = request();
+    let ctx = PipelineContext::new(req.clone());
+
+    let result = executor.execute(&target, &req.prompt, &ctx).await.unwrap();
+
+    assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *seen_auths.lock().unwrap(),
+        vec!["Bearer stale".to_string(), "Bearer fresh".to_string()]
+    );
+    assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
+    match result.result.content.as_slice() {
+        [Content::Text { text, .. }] => assert_eq!(text, "ok"),
+        other => panic!("expected one text block, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn http_executor_refreshes_auth_and_retries_streaming_401_once() {
+    let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stream_body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let api_base = spawn_auth_retry_server(
+        vec![
+            (
+                "401 Unauthorized",
+                r#"{"error":{"code":"token_revoked","message":"revoked"}}"#,
+            ),
+            ("200 OK", stream_body),
+        ],
+        seen_auths.clone(),
+    );
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let rejected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let executor = auth_retry_executor(refreshes.clone(), rejected.clone());
+    let target = auth_retry_target(api_base);
+    let req = stream_request();
+    let ctx = PipelineContext::new(req.clone());
+
+    let mut stream = executor
+        .execute_stream(&target, &req.prompt, &ctx)
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while let Some(part) = stream.next().await {
+        if let StreamPart::TextDelta { text: delta } = part.unwrap() {
+            text.push_str(&delta);
+        }
+    }
+
+    assert_eq!(refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *seen_auths.lock().unwrap(),
+        vec!["Bearer stale".to_string(), "Bearer fresh".to_string()]
+    );
+    assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
+    assert_eq!(text, "ok");
 }
 
 // ===== non-streaming client-disconnect billing (OpenRouter parity) =====

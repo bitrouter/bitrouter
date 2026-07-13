@@ -106,10 +106,12 @@ pub fn enable_if_logged_in(config: &mut Config) {
     // before reading the store, so a running daemon picks up the move to
     // `claude-code` on a serve / reload config-build pass.
     migrate_legacy_anthropic_marker_default();
+    let env_oauth_token_present = bitrouter_providers::claude_code::oauth_token_env_present();
     let Ok(store) = CredentialStore::default_path() else {
+        enable_if_logged_in_with_sources(config, None, env_oauth_token_present);
         return;
     };
-    enable_if_logged_in_with_store(config, &store);
+    enable_if_logged_in_with_sources(config, Some(&store), env_oauth_token_present);
 }
 
 /// Provider id of the legacy platform / pay-as-you-go Anthropic provider. A
@@ -185,14 +187,22 @@ pub fn migrate_legacy_anthropic_marker(store_path: std::path::PathBuf) -> bool {
     moved_any
 }
 
-/// Inner form taking the credential store explicitly so unit tests can drive
-/// the logic without touching the user's real store.
-fn enable_if_logged_in_with_store(config: &mut Config, store: &CredentialStore) {
+/// Inner form that accepts every signal explicitly so tests can verify env-only
+/// auto-enable without depending on the user's real credential store.
+fn enable_if_logged_in_with_sources(
+    config: &mut Config,
+    store: Option<&CredentialStore>,
+    env_oauth_token_present: bool,
+) {
     if config.providers.contains_key(PROVIDER_ID) {
         return;
     }
-    let logged_in = !store.labels(PROVIDER_ID).is_empty()
-        || store.get_any(PROVIDER_ID, DEFAULT_LABEL).is_some();
+    let logged_in = env_oauth_token_present
+        || store
+            .map(|s| {
+                !s.labels(PROVIDER_ID).is_empty() || s.get_any(PROVIDER_ID, DEFAULT_LABEL).is_some()
+            })
+            .unwrap_or(false);
     if !logged_in {
         return;
     }
@@ -312,7 +322,7 @@ mod tests {
             .set(PROVIDER_ID, DEFAULT_LABEL, Credential::ClaudeCodeCli)
             .unwrap();
         let mut config = Config::default();
-        enable_if_logged_in_with_store(&mut config, &store);
+        enable_if_logged_in_with_sources(&mut config, Some(&store), false);
         assert!(
             config.providers.contains_key(PROVIDER_ID),
             "`claude-code` provider should be auto-enabled when a credential is stored"
@@ -323,10 +333,21 @@ mod tests {
     fn enable_noop_when_no_credential() {
         let store = fresh_tmp_store();
         let mut config = Config::default();
-        enable_if_logged_in_with_store(&mut config, &store);
+        enable_if_logged_in_with_sources(&mut config, Some(&store), false);
         assert!(
             !config.providers.contains_key(PROVIDER_ID),
             "no credential → no provider inserted"
+        );
+    }
+
+    #[test]
+    fn enable_inserts_when_env_oauth_token_present() {
+        let store = fresh_tmp_store();
+        let mut config = Config::default();
+        enable_if_logged_in_with_sources(&mut config, Some(&store), true);
+        assert!(
+            config.providers.contains_key(PROVIDER_ID),
+            "`claude-code` provider should be auto-enabled for CLAUDE_CODE_OAUTH_TOKEN"
         );
     }
 
@@ -456,7 +477,7 @@ mod tests {
                 ..ProviderConfig::default()
             },
         );
-        enable_if_logged_in_with_store(&mut config, &store);
+        enable_if_logged_in_with_sources(&mut config, Some(&store), false);
         assert_eq!(
             config.providers.get(PROVIDER_ID).unwrap().api_base,
             "https://example.invalid",
