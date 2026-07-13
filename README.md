@@ -9,11 +9,11 @@
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
 [![Benchmarks](https://img.shields.io/badge/Benchmarks-reports-orange)](benchmarks/)
 
-**A context-aware router that optimizes your agentic loops — every run.**
-An open-source agentic LLM gateway & router that makes models, tools, and agents all routable primitives, then re-optimizes that routing every run. **Today it optimizes for cost**; the same act → observe → evaluate → learn loop generalizes to latency- and accuracy-driven objectives. Zero harness changes.
+**An adaptive router that optimizes your agentic loops — every run.**
+An open-source LLM gateway that makes models, tools, and agents all routable primitives — **one env var, zero harness changes.**
 
 > **You're tokenmaxxing in production.**
-> Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most of them don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
+> Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
 
 ## Three primitives, one gateway
 
