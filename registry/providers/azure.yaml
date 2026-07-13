@@ -151,6 +151,30 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
+  - id: openai/gpt-5.6-luna
+    provider_model_id: gpt-5.6-luna
+    pricing:
+      input_tokens:
+        no_cache: 1
+        cache_read: 0.1
+      output_tokens:
+        text: 6
+  - id: openai/gpt-5.6-sol
+    provider_model_id: gpt-5.6-sol
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+      output_tokens:
+        text: 30
+  - id: openai/gpt-5.6-terra
+    provider_model_id: gpt-5.6-terra
+    pricing:
+      input_tokens:
+        no_cache: 2.5
+        cache_read: 0.25
+      output_tokens:
+        text: 15
 auto_sync:
   feed: models_dev
   key: azure
