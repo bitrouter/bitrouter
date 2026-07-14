@@ -9,8 +9,9 @@
 //!
 //! [`BitrouterError::to_envelope`] projects an error into the canonical,
 //! serializable [`ErrorEnvelope`] (`{"error": {"kind": …, "message": …}}`) —
-//! the stable shape the CLI prints on stdout and the daemon/cloud HTTP
-//! surfaces converge on.
+//! the stable typed shape the CLI prints on stdout. HTTP surfaces use their
+//! protocol-specific projections; provider bad requests preserve the selected
+//! upstream `error` object or string.
 
 use std::fmt;
 
@@ -283,9 +284,10 @@ impl BitrouterError {
     }
 }
 
-/// A machine-readable error category — the stable taxonomy shared across the
-/// CLI, the daemon HTTP API, and (in future) the cloud API. Mirrors the
-/// [`BitrouterError`] variants; serialized in `snake_case`.
+/// A machine-readable error category — the stable taxonomy shared across typed
+/// error consumers. This is a many-to-one projection of [`BitrouterError`];
+/// for example, provider and local bad requests both map to [`Self::BadRequest`].
+/// Serialized in `snake_case`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
@@ -337,9 +339,9 @@ pub struct ErrorBody {
     pub hint: Option<String>,
 }
 
-/// The top-level error envelope emitted on stdout by the CLI (and the shape the
-/// daemon/cloud HTTP surfaces converge on). Wraps a single [`ErrorBody`] under
-/// an `error` key: `{"error": {"kind": …, "message": …}}`.
+/// The top-level typed error envelope emitted on stdout by the CLI. Wraps a
+/// single [`ErrorBody`] under an `error` key:
+/// `{"error": {"kind": …, "message": …}}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorEnvelope {
     /// The error detail.
