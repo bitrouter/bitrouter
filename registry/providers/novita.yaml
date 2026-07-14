@@ -90,30 +90,6 @@ models:
         cache_read: 0.06
       output_tokens:
         text: 1.2
-  - id: inclusionai/ling-2.6-1t
-    provider_model_id: inclusionai/ling-2.6-1t
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 2.5
-  - id: inclusionai/ling-2.6-flash
-    provider_model_id: inclusionai/ling-2.6-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.02
-      output_tokens:
-        text: 0.3
-  - id: inclusionai/ring-2.6-1t
-    provider_model_id: inclusionai/ring-2.6-1t
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 2.5
   - id: z-ai/glm-5
     provider_model_id: zai-org/glm-5
     pricing:

@@ -13,24 +13,6 @@ doc_url: https://docs.gmicloud.ai/inference-engine/api-reference/llm-api-referen
 # api=https://api.gmi-serving.com/v1). OpenAI-compatible inference cloud; USD
 # pricing per 1M tokens. Refreshed by the daily models_dev auto_sync.
 models:
-  - id: kuaishou/kat-coder-pro-v2
-    provider_model_id: kwaipilot/kat-coder-pro-v2
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-        cache_write: 0
-      output_tokens:
-        text: 1.2
-  - id: nvidia/nemotron-3-ultra-550b-a55b
-    provider_model_id: nvidia/nemotron-3-ultra-550b-a55b
-    pricing:
-      input_tokens:
-        no_cache: 0.8
-        cache_read: 0.1
-        cache_write: 0
-      output_tokens:
-        text: 2.6
   - id: qwen/qwen3.7-max
     provider_model_id: Qwen/Qwen3.7-Max
     pricing:

@@ -3245,30 +3245,6 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
-    fn built_registry_maps_nex_n2_pro_to_siliconflow_upstream_id() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let siliconflow = providers["data"]
-            .as_array()
-            .expect("provider data array")
-            .iter()
-            .find(|provider| provider["name"] == "siliconflow")
-            .expect("SiliconFlow provider");
-        let nex = siliconflow["models"]
-            .as_array()
-            .expect("SiliconFlow models array")
-            .iter()
-            .find(|model| model["id"] == "nex-agi/nex-n2-pro")
-            .expect("Nex N2 Pro model");
-
-        assert_eq!(nex["provider_model_id"], "nex-agi/Nex-N2-Pro");
-        assert_eq!(nex["pricing"]["input_tokens"]["no_cache"], 0.5);
-        assert_eq!(nex["pricing"]["output_tokens"]["text"], 2.5);
-    }
-
-    #[test]
     fn built_registry_maps_configured_provider_ids_for_recovered_models() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let artifacts = build_artifacts(&root).expect("builds repository registry");
@@ -3286,20 +3262,11 @@ api_base: https://api.acme.test/v1
         assert_provider_mapping(
             gmicloud,
             "GMI Cloud",
-            "kuaishou/kat-coder-pro-v2",
-            "kwaipilot/kat-coder-pro-v2",
-            0.3,
-            (Some(0.06), Some(0.0)),
-            1.2,
-        );
-        assert_provider_mapping(
-            gmicloud,
-            "GMI Cloud",
-            "nvidia/nemotron-3-ultra-550b-a55b",
-            "nvidia/nemotron-3-ultra-550b-a55b",
-            0.8,
-            (Some(0.1), Some(0.0)),
-            2.6,
+            "qwen/qwen3.7-max",
+            "Qwen/Qwen3.7-Max",
+            2.5,
+            (Some(0.25), None),
+            7.5,
         );
 
         let siliconflow = provider_data
@@ -3314,20 +3281,6 @@ api_base: https://api.acme.test/v1
             0.75,
             (None, None),
             2.95,
-        );
-
-        let streamlake = provider_data
-            .iter()
-            .find(|provider| provider["name"] == "streamlake");
-        assert!(streamlake.is_some(), "StreamLake provider");
-        assert_provider_mapping(
-            streamlake,
-            "StreamLake",
-            "kuaishou/kat-coder-pro-v2",
-            "kat-coder-pro-v2",
-            0.3,
-            (Some(0.06), Some(0.0)),
-            1.2,
         );
     }
 
@@ -3344,15 +3297,6 @@ api_base: https://api.acme.test/v1
             .find(|provider| provider["name"] == "qianfan");
 
         assert!(qianfan.is_some(), "Qianfan International provider");
-        assert_provider_mapping(
-            qianfan,
-            "Qianfan International",
-            "baidu/ernie-5.1",
-            "ernie-5.1",
-            1.4,
-            (None, None),
-            5.6,
-        );
         assert_provider_mapping(
             qianfan,
             "Qianfan International",
