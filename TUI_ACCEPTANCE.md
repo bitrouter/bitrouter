@@ -1,4 +1,13 @@
-# BitRouter TUI — Design Spec & Acceptance
+> ⚠️ **DEPRECATED (v1).** Superseded by [`TUI_SPEC.md`](TUI_SPEC.md) — the v2
+> "Composite Manager" design. v2 inverts the core assumption below: the
+> orchestrator runs in its **native harness TUI wrapped in a PTY pane** rather
+> than being re-rendered by bitrouter, subagents are the **ACP spine**, and the
+> fleet is **daemon-owned**. This document is retained for history and for the
+> parts v2 explicitly keeps (the pure reducer, the rail/decision-queue, the
+> autonomy tiers, and the standing gates). Do not drive new work from it — see
+> `TUI_SPEC.md` §12 for what's deprecated vs. retained.
+
+# BitRouter TUI — Design Spec & Acceptance (v1, deprecated)
 
 Target design + checkable exit criteria for `bitrouter tui`, the in-process
 multi-agent manager (`apps/bitrouter/src/tui/`). Doubles as the goal for the
