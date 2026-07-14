@@ -29,12 +29,19 @@ pub struct PtyView {
 /// reducer uses it to page the scrollback by exactly one screen.
 pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let area = frame.area();
+    // The composer grows with its (Shift-Enter) newlines, up to 5 rows.
+    let input_lines = if state.mode == Mode::Broadcast {
+        state.broadcast_input.split('\n').count()
+    } else {
+        state.input.split('\n').count()
+    }
+    .clamp(1, 5) as u16;
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),    // rail + detail
-            Constraint::Length(3), // input
-            Constraint::Length(1), // mode bar
+            Constraint::Min(1),                  // rail + detail
+            Constraint::Length(input_lines + 2), // composer (+ borders)
+            Constraint::Length(1),               // mode bar
         ])
         .split(area);
     // Narrow terminals get a proportional rail instead of a fixed one.
@@ -149,6 +156,7 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
             ("type + Enter", "prompt the focused agent"),
+            ("Shift-Enter", "newline in the composer"),
             ("y / a / n", "resolve its pending permission"),
             ("PgUp / PgDn", "scroll its scrollback"),
             (": (empty line)", "command palette"),
@@ -158,6 +166,7 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
         ],
         Mode::Agent => &[
             ("j / k / ↑ / ↓", "move the rail cursor"),
+            ("g", "jump to the most actionable agent"),
             ("Enter", "open cursor agent solo"),
             ("s / v", "split cursor agent in (h/v)"),
             ("u", "drop the focused slot"),
@@ -679,8 +688,20 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
     } else {
         ("› ", state.input.as_str())
     };
-    let para =
-        Paragraph::new(format!("{prefix}{text}")).block(Block::default().borders(Borders::ALL));
+    // Multiline composer: the prefix marks the first line; continuation
+    // lines indent under it.
+    let lines: Vec<TuiLine> = text
+        .split('\n')
+        .enumerate()
+        .map(|(i, l)| {
+            if i == 0 {
+                TuiLine::raw(format!("{prefix}{l}"))
+            } else {
+                TuiLine::raw(format!("  {l}"))
+            }
+        })
+        .collect();
+    let para = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
     frame.render_widget(para, area);
 }
 

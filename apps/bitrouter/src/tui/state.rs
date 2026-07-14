@@ -375,6 +375,10 @@ pub struct PaneState {
     pub check_retries: u8,
     /// What renders this pane (ACP monitor vs native PTY).
     pub kind: PaneKind,
+    /// Draft snapshot of the composer: what was typed at this pane before
+    /// focus moved away, restored when focus returns (polish: no lost input
+    /// across pane switches).
+    pub draft: String,
 }
 
 impl PaneState {
@@ -403,6 +407,7 @@ impl PaneState {
             review: None,
             check_retries: 0,
             kind: PaneKind::default(),
+            draft: String::new(),
         }
     }
 
@@ -778,7 +783,33 @@ impl AppState {
 
 /// Fold one event into state, returning effects for the loop to run.
 /// PURE: no I/O, no session access.
+///
+/// Wraps the dispatch with the composer's draft snapshot: whenever an event
+/// moves detail focus, the outgoing pane keeps what was typed and the
+/// incoming pane's draft is restored — switching panes never loses input.
 pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
+    let focus_before = state.detail.focused_id().map(str::to_string);
+    let effects = reduce_inner(state, event);
+    let focus_after = state.detail.focused_id().map(str::to_string);
+    if focus_before != focus_after {
+        if let Some(old) = &focus_before {
+            let typed = std::mem::take(&mut state.input);
+            if let Some(pane) = state.pane_by_id_mut(old) {
+                pane.draft = typed;
+            }
+        }
+        if let Some(new) = &focus_after {
+            let restored = state
+                .pane_by_id_mut(new)
+                .map(|pane| std::mem::take(&mut pane.draft))
+                .unwrap_or_default();
+            state.input = restored;
+        }
+    }
+    effects
+}
+
+fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
     match event {
         AppEvent::Update { record_id, update } => {
             if let Some(pane) = state.pane_by_id_mut(record_id) {
@@ -1003,6 +1034,32 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.clamp_rail_cursor();
             Vec::new()
         }
+        AppEvent::Scroll { up } => {
+            let Some(pane) = state.focused_mut() else {
+                return Vec::new();
+            };
+            match pane.kind {
+                PaneKind::Acp => {
+                    if *up {
+                        pane.scroll_page_up();
+                    } else {
+                        pane.scroll_page_down();
+                    }
+                    Vec::new()
+                }
+                // PTY panes own their scrollback: forward as arrow presses.
+                PaneKind::Pty => {
+                    let record_id = pane.record_id.clone();
+                    let code = if *up { KeyCode::Up } else { KeyCode::Down };
+                    (0..3)
+                        .map(|_| Effect::PtyKey {
+                            record_id: record_id.clone(),
+                            key: KeyEvent::from(code),
+                        })
+                        .collect()
+                }
+            }
+        }
         AppEvent::Tick => {
             state.tick = state.tick.wrapping_add(1);
             Vec::new()
@@ -1147,6 +1204,12 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.input.pop();
             Vec::new()
         }
+        // Shift-Enter inserts a newline (arrives distinctly under the kitty
+        // keyboard enhancement the loop enables when supported).
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            state.input.push('\n');
+            Vec::new()
+        }
         KeyCode::Enter => {
             let text = std::mem::take(&mut state.input);
             if text.is_empty() {
@@ -1185,6 +1248,12 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Up | KeyCode::Char('k') => {
             state.rail_cursor = state.rail_cursor.saturating_sub(1);
+            Vec::new()
+        }
+        // Jump to the most actionable agent (the roster head) — the
+        // cross-pane "take me to who needs me" reflex.
+        KeyCode::Char('g') => {
+            state.rail_cursor = 0;
             Vec::new()
         }
         // ── Queue. ──
@@ -2868,6 +2937,80 @@ mod tests {
             vec!["r2".to_string()],
             "detail refilled with the most actionable agent"
         );
+    }
+
+    // ── Polish: composer drafts, Shift-Enter, jump, wheel scroll. ──
+
+    #[test]
+    fn draft_survives_pane_switches() {
+        let mut st = agents3(); // detail = [r0]
+        st.input = "half-typed thought".into();
+        // Switch to r1 (open solo from the rail).
+        st.mode = Mode::Agent;
+        st.rail_cursor = 1;
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.input, "", "fresh pane starts with its own (empty) draft");
+        // Type into r1, then jump back to r0.
+        st.input = "note for r1".into();
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        st.rail_cursor = 0;
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.input, "half-typed thought", "r0's draft restored");
+        // And r1 kept its own.
+        st.mode = Mode::Agent;
+        st.rail_cursor = 1;
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.input, "note for r1");
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_enter_sends_it_all() {
+        let mut st = AppState::new(pane());
+        st.input = "line one".into();
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+        );
+        assert_eq!(st.input, "line one\n");
+        st.input.push_str("line two");
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert!(
+            matches!(&fx[..], [Effect::Prompt { text, .. }] if text == "line one\nline two"),
+            "{fx:?}"
+        );
+    }
+
+    #[test]
+    fn g_jumps_the_rail_cursor_to_the_roster_head() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r2", "wants")); // r2 tops the roster
+        st.mode = Mode::Agent;
+        st.rail_cursor = 2;
+        reduce(&mut st, &press(KeyCode::Char('g')));
+        assert_eq!(st.rail_cursor, 0, "cursor on the most actionable agent");
+        assert_eq!(st.rail_selected().map(|p| p.record_id.as_str()), Some("r2"));
+    }
+
+    #[test]
+    fn wheel_scroll_pages_acp_and_forwards_to_pty() {
+        let mut st = AppState::new(pane());
+        st.agents[0].viewport = 10;
+        for i in 0..50 {
+            reduce(&mut st, &msg(i));
+        }
+        reduce(&mut st, &AppEvent::Scroll { up: true });
+        assert_eq!(st.agents[0].scroll, Some(30), "wheel pages the scrollback");
+        reduce(&mut st, &AppEvent::Scroll { up: false });
+        assert_eq!(st.agents[0].scroll, None, "back to following");
+
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        let fx = reduce(&mut st, &AppEvent::Scroll { up: true });
+        assert_eq!(fx.len(), 3, "PTY pane gets arrow presses");
+        assert!(matches!(&fx[0], Effect::PtyKey { .. }));
     }
 
     // ── Attach (§13-B4). ──

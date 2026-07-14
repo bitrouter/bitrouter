@@ -93,6 +93,9 @@ pub enum AppEvent {
         message: String,
         ok: bool,
     },
+    /// Mouse wheel over the detail: page the focused pane's scrollback
+    /// (ACP panes) or forward arrow presses to the child (PTY panes).
+    Scroll { up: bool },
     /// Periodic UI tick (drives the running-agent spinner animation).
     Tick,
     /// Unconditional quit (input stream ended / terminal gone). Unlike

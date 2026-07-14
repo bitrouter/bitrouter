@@ -379,10 +379,34 @@ async fn probe_serve(listen: &str) -> Option<String> {
     }
 }
 
+/// Whether the kitty keyboard enhancement was pushed (so restore only pops
+/// what was pushed — a stray pop confuses terminals without the protocol).
+static KITTY_PUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen)?;
+    execute!(
+        out,
+        EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    )?;
+    // Kitty keyboard enhancement: puts the manager leader in a keyspace no
+    // legacy binding collides with and makes Shift-Enter distinct from Enter
+    // (the composer's newline). Only where the terminal supports it.
+    if matches!(
+        crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    ) && execute!(
+        out,
+        crossterm::event::PushKeyboardEnhancementFlags(
+            crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    )
+    .is_ok()
+    {
+        KITTY_PUSHED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     Ok(Terminal::new(CrosstermBackend::new(out))?)
 }
 
@@ -392,7 +416,15 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
 fn restore_terminal() {
     let _ = disable_raw_mode();
     let mut out = io::stdout();
-    let _ = execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
+    if KITTY_PUSHED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = execute!(out, crossterm::event::PopKeyboardEnhancementFlags);
+    }
+    let _ = execute!(
+        out,
+        crossterm::event::DisableMouseCapture,
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
 }
 
 /// Chain `restore` in front of the current panic hook so a panic anywhere in
@@ -478,9 +510,16 @@ async fn event_loop(
         let app_event: Option<AppEvent> = tokio::select! {
             maybe_key = keys.next() => match maybe_key {
                 Some(Ok(CtEvent::Key(k))) => Some(AppEvent::Key(k)),
+                // Wheel scroll pages the focused pane's scrollback.
+                Some(Ok(CtEvent::Mouse(m))) => match m.kind {
+                    crossterm::event::MouseEventKind::ScrollUp =>
+                        Some(AppEvent::Scroll { up: true }),
+                    crossterm::event::MouseEventKind::ScrollDown =>
+                        Some(AppEvent::Scroll { up: false }),
+                    _ => None,
+                },
                 // Resize needs no state change: `None` continues to the top of
-                // the loop, whose draw autoresizes to the new size. Mouse is
-                // deliberately unhandled.
+                // the loop, whose draw autoresizes to the new size.
                 Some(Ok(_)) => None,
                 Some(Err(_)) | None => Some(AppEvent::ForceQuit),
             },
