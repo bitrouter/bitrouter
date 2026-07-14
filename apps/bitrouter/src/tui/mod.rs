@@ -157,8 +157,13 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     );
     // Agents route LLM traffic through `bitrouter serve`; probe it once so a
     // missing proxy is an up-front notice instead of silent agent failures.
-    if let Some(warning) = probe_serve(&cfg.server.listen).await {
-        state.notice = Some(warning);
+    // The loop re-probes every few seconds to keep the `serve` dot live.
+    match probe_serve(&cfg.server.listen).await {
+        Some(warning) => {
+            state.serve_ok = Some(false);
+            state.notice = Some(warning);
+        }
+        None => state.serve_ok = Some(true),
     }
     // https://no-color.org: any non-empty value disables foreground colors.
     state.no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
@@ -196,6 +201,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         notify: notify::NotifyPath::detect(),
         fleet_store,
         session_seq: 0,
+        listen: cfg.server.listen.clone(),
         last_fleet: None,
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
@@ -597,6 +603,9 @@ struct Runtime<'a> {
     fleet_store: bitrouter_substrate::fleet::FleetStore,
     /// Monotonic counter minting record ids for `new session` panes.
     session_seq: u64,
+    /// The daemon's configured listen address, for the periodic liveness
+    /// probe behind the status bar's `serve` dot.
+    listen: String,
     /// The last snapshot written (unstamped), for change detection.
     last_fleet: Option<bitrouter_substrate::fleet::FleetState>,
 }
@@ -752,6 +761,17 @@ async fn event_loop(
             if is_tick && state.tick.is_multiple_of(5) {
                 flush_fleet_state(&state, &mut rt).await;
             }
+            // Liveness probe for the status bar's `serve` dot (~every 5s):
+            // a daemon that dies mid-session must not fail silently until
+            // the next agent call errors.
+            if is_tick && state.tick.is_multiple_of(25) {
+                let listen = rt.listen.clone();
+                let tx = rt.spawner.tx.clone();
+                tokio::spawn(async move {
+                    let ok = probe_serve(&listen).await.is_none();
+                    let _ = tx.send(Incoming::ServeStatus { ok });
+                });
+            }
         }
         // Frame coalescing: a chatty agent can emit hundreds of updates in a
         // burst; fold everything already queued before the next draw so the
@@ -846,6 +866,7 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
             None // the next draw renders the updated grid
         }
         Incoming::PtyExited { record_id } => Some(AppEvent::Exited { record_id }),
+        Incoming::ServeStatus { ok } => Some(AppEvent::ServeStatus { ok }),
     }
 }
 

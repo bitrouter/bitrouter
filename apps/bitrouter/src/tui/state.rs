@@ -624,6 +624,11 @@ impl PaneState {
 /// UI ticks per second (the loop ticks every 200ms).
 const TICKS_PER_SEC: u64 = 5;
 
+/// How long a status-bar notice stays before decaying (~8s of ticks). The
+/// durable facts a notice used to carry live in the status bar's right zone
+/// (`serve` dot, counts), so the text itself can be transient.
+const NOTICE_DECAY_TICKS: u64 = 8 * TICKS_PER_SEC;
+
 /// Compact duration: sub-minute in seconds, sub-hour in minutes, then `NhMMm`.
 fn fmt_elapsed(secs: u64) -> String {
     if secs < 60 {
@@ -762,7 +767,14 @@ pub struct AppState {
     /// Interactive binaries the `new session` picker offers (from the
     /// harness catalog: `claude`, `codex`, …).
     pub available_sessions: Vec<String>,
+    /// Latest daemon-reachability probe (`None` = never probed) — the status
+    /// bar's `serve ●/✗` dot, kept live by the loop's periodic probe.
+    pub serve_ok: Option<bool>,
     pub notice: Option<String>,
+    /// Tick at which `notice` last changed (stamped by the reduce wrapper) —
+    /// notices decay off the status bar after [`NOTICE_DECAY_TICKS`] instead
+    /// of lingering forever.
+    notice_at: u64,
     pub broadcast_input: String,
     /// The configured worktree bootstrap hook (`worktrees.bootstrap`), if any.
     pub bootstrap_cmd: Option<String>,
@@ -803,7 +815,9 @@ impl AppState {
             no_color: false,
             available_agents: Vec::new(),
             available_sessions: Vec::new(),
+            serve_ok: None,
             notice: None,
+            notice_at: 0,
             broadcast_input: String::new(),
             bootstrap_cmd: None,
             bootstrap_decision: None,
@@ -860,16 +874,26 @@ impl AppState {
     /// this changes, so the tab/window name works as a badge.
     pub fn title_badge(&self) -> String {
         let mut badge = String::from("bitrouter");
-        for (bucket, glyph) in [(0u8, '⚠'), (1, '◆'), (2, '●'), (3, '◉')] {
-            let n = self.agents.iter().filter(|p| p.bucket() == bucket).count();
-            if n > 0 {
-                badge.push_str(&format!(" {glyph}{n}"));
-            }
+        for (glyph, n) in self.badge_counts() {
+            badge.push_str(&format!(" {glyph}{n}"));
         }
         if badge == "bitrouter" {
             badge.push_str(" tui");
         }
         badge
+    }
+
+    /// Non-zero attention counts by glyph (`⚠` needs you, `◆` review, `●`
+    /// background trouble, `◉` done-unseen) — shared by the terminal-title
+    /// badge and the status bar's right zone, so the two always agree.
+    pub fn badge_counts(&self) -> Vec<(char, usize)> {
+        [(0u8, '⚠'), (1, '◆'), (2, '●'), (3, '◉')]
+            .into_iter()
+            .filter_map(|(bucket, glyph)| {
+                let n = self.agents.iter().filter(|p| p.bucket() == bucket).count();
+                (n > 0).then_some((glyph, n))
+            })
+            .collect()
     }
 
     /// The manager-layer state of every ACP agent, in the durable
@@ -909,6 +933,21 @@ impl AppState {
         (0..self.agents.len())
             .filter(|&i| self.agents[i].kind == PaneKind::Pty)
             .collect()
+    }
+
+    /// Cumulative metered cost across the fleet — the status bar's `$`
+    /// figure. Sums panes reporting the first-seen currency (mixed
+    /// currencies don't add; later ones are skipped rather than lied about).
+    pub fn total_cost(&self) -> Option<UsageCost> {
+        let mut total: Option<UsageCost> = None;
+        for cost in self.agents.iter().filter_map(|p| p.cost.as_ref()) {
+            match &mut total {
+                None => total = Some(cost.clone()),
+                Some(t) if t.currency == cost.currency => t.amount += cost.amount,
+                Some(_) => {}
+            }
+        }
+        total
     }
 
     /// The agent under the rail cursor.
@@ -999,7 +1038,12 @@ impl AppState {
 /// incoming pane's draft is restored — switching panes never loses input.
 pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
     let focus_before = state.detail.focused_id().map(str::to_string);
+    let notice_before = state.notice.clone();
     let effects = reduce_inner(state, event);
+    // A fresh notice starts its decay clock (the Tick arm clears it).
+    if state.notice != notice_before && state.notice.is_some() {
+        state.notice_at = state.tick;
+    }
     let focus_after = state.detail.focused_id().map(str::to_string);
     if focus_before != focus_after {
         if let Some(old) = &focus_before {
@@ -1383,6 +1427,17 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         }
         AppEvent::Tick => {
             state.tick = state.tick.wrapping_add(1);
+            // Notices are transient: decay off the status bar rather than
+            // lingering until something else overwrites them.
+            if state.notice.is_some()
+                && state.tick.wrapping_sub(state.notice_at) > NOTICE_DECAY_TICKS
+            {
+                state.notice = None;
+            }
+            Vec::new()
+        }
+        AppEvent::ServeStatus { ok } => {
+            state.serve_ok = Some(*ok);
             Vec::new()
         }
         AppEvent::ForceQuit => {
@@ -3671,6 +3726,35 @@ mod tests {
         assert!(st.sessions_collapsed && st.subagents_collapsed);
         let _ = run_command(&mut st, Command::ToggleSessions);
         assert!(!st.sessions_collapsed, "toggle back");
+    }
+
+    #[test]
+    fn notices_decay_after_a_few_seconds_of_ticks() {
+        let mut st = fleet_state();
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawnFailed {
+                agent_id: "a1".into(),
+                error: "boom".into(),
+            },
+        );
+        assert!(st.notice.is_some());
+        for _ in 0..NOTICE_DECAY_TICKS {
+            reduce(&mut st, &AppEvent::Tick);
+        }
+        assert!(st.notice.is_some(), "still visible inside the window");
+        reduce(&mut st, &AppEvent::Tick);
+        assert!(st.notice.is_none(), "decayed one tick past the window");
+    }
+
+    #[test]
+    fn serve_status_updates_the_daemon_dot() {
+        let mut st = fleet_state();
+        assert_eq!(st.serve_ok, None);
+        reduce(&mut st, &AppEvent::ServeStatus { ok: true });
+        assert_eq!(st.serve_ok, Some(true));
+        reduce(&mut st, &AppEvent::ServeStatus { ok: false });
+        assert_eq!(st.serve_ok, Some(false));
     }
 
     // ── Broadcast. ──

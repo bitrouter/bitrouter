@@ -22,8 +22,10 @@ const SESSIONS_WIDTH: u16 = 24;
 
 /// Below this terminal width the sessions sidebar auto-collapses so the
 /// center PTY keeps a usable column count; below `RAIL_MIN_WIDTH` the
-/// subagents sidebar folds too (the title badge + mode bar still signal).
-const SESSIONS_MIN_WIDTH: u16 = 110;
+/// subagents sidebar folds too (the title badge + status bar still signal).
+/// Sidebars are also content-aware: an empty panel folds regardless of
+/// width (unless the AGENT cursor lives there), giving its columns back.
+const SESSIONS_MIN_WIDTH: u16 = 90;
 const RAIL_MIN_WIDTH: u16 = 70;
 
 /// A PTY pane's rendered grid for this frame, produced loop-side from its
@@ -38,6 +40,14 @@ pub struct PtyView {
 /// reducer uses it to page the scrollback by exactly one screen.
 pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let area = frame.area();
+    // The composer renders only when it can receive input — a focused ACP
+    // pane (typed prompts) or BROADCAST composition. A focused PTY pane owns
+    // the keyboard (locked-mode passthrough), so its rows go back to the
+    // terminal; the status bar carries the routing hint instead.
+    let composer = state.mode == Mode::Broadcast
+        || state
+            .focused()
+            .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Acp);
     // The composer grows with its (Shift-Enter) newlines, up to 5 rows.
     let input_lines = if state.mode == Mode::Broadcast {
         state.broadcast_input.split('\n').count()
@@ -45,19 +55,32 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         state.input.split('\n').count()
     }
     .clamp(1, 5) as u16;
+    let mut row_constraints = vec![Constraint::Min(1)]; // sidebars + detail
+    if composer {
+        row_constraints.push(Constraint::Length(input_lines + 2)); // composer (+ borders)
+    }
+    row_constraints.push(Constraint::Length(1)); // status bar
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),                  // rail + detail
-            Constraint::Length(input_lines + 2), // composer (+ borders)
-            Constraint::Length(1),               // mode bar
-        ])
+        .constraints(row_constraints)
         .split(area);
     // Sidebars (sessions left, subagents right) are collapsible — by the
-    // user (palette toggles) and automatically on narrow terminals, so the
-    // center PTY keeps a usable column count.
-    let show_sessions = !state.sessions_collapsed && area.width >= SESSIONS_MIN_WIDTH;
-    let show_rail = !state.subagents_collapsed && area.width >= RAIL_MIN_WIDTH;
+    // user (palette toggles), automatically on narrow terminals (the center
+    // PTY keeps a usable column count), and by content: an empty panel gives
+    // its columns back unless the AGENT cursor lives there.
+    let sessions_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
+    let rail_active = (state.mode == Mode::Agent && state.panel == Panel::Subagents)
+        || state.mode == Mode::Broadcast;
+    let show_sessions = !state.sessions_collapsed
+        && area.width >= SESSIONS_MIN_WIDTH
+        && (!state.sessions_list().is_empty() || sessions_active);
+    let show_rail = !state.subagents_collapsed
+        && area.width >= RAIL_MIN_WIDTH
+        && (state
+            .agents
+            .iter()
+            .any(|p| p.kind == crate::tui::state::PaneKind::Acp)
+            || rail_active);
     // Narrow terminals get a proportional rail instead of a fixed one.
     let rail_w = RAIL_WIDTH.min(rows[0].width / 3);
     let mut constraints = Vec::new();
@@ -82,8 +105,10 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     if show_rail {
         render_rail(state, frame, cols[col + 1]);
     }
-    render_input(state, frame, rows[1]);
-    render_modebar(state, frame, rows[2]);
+    if composer {
+        render_input(state, frame, rows[1]);
+    }
+    render_statusbar(state, frame, rows[rows.len() - 1]);
 
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
@@ -797,20 +822,10 @@ fn render_diff_line(d: &DiffLine, nc: bool, width: usize) -> TuiLine<'static> {
     }
 }
 
+/// The composer (only drawn when a pane can receive typed input — the
+/// renderer gates on ACP focus / BROADCAST; a focused PTY pane's rows go to
+/// the terminal instead).
 fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
-    // A focused PTY pane owns the keyboard (locked-mode passthrough) — the
-    // manager's prompt line would be a lie, so show the routing instead.
-    if state.mode == Mode::Normal
-        && state
-            .focused()
-            .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Pty)
-    {
-        let para = Paragraph::new("⇢ keys go to the orchestrator · Ctrl-A for the manager")
-            .style(tint(state.no_color, Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL));
-        frame.render_widget(para, area);
-        return;
-    }
     let (prefix, text) = if state.mode == Mode::Broadcast {
         ("⇉ ", state.broadcast_input.as_str())
     } else {
@@ -833,24 +848,96 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, area);
 }
 
-fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
+/// The global status bar (one line, three zones): mode + context hints on
+/// the left — a notice temporarily claims that zone (it decays reducer-side)
+/// — and global fleet state on the right (attention counts by glyph, session
+/// count, cumulative cost, and the live `serve` dot).
+fn render_statusbar(state: &AppState, frame: &mut Frame, area: Rect) {
+    let nc = state.no_color;
+    let pty_focused = state
+        .focused()
+        .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Pty);
     let hints = match state.mode {
+        Mode::Normal if pty_focused => {
+            "NORMAL  ⇢ keys go to the orchestrator · ^a manage · ^c interrupt agent"
+        }
         Mode::Normal => {
             "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c interrupt agent"
         }
         Mode::Agent => {
-            "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · t attach · A tier · n new · x close · ? keys · Esc"
+            "AGENT  [/] panel · j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · t attach · A tier · n/N new · x close · ? keys · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
         Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
         Mode::Confirm => "CONFIRM  y run bootstrap · n skip · Esc cancel spawn",
     };
-    let text = match &state.notice {
-        Some(n) => format!("{hints}   ! {n}"),
+    // A live notice takes the whole left zone (full width, never clipped at
+    // the edge mid-word by the hints).
+    let left = match &state.notice {
+        Some(n) => format!("! {n}"),
         None => hints.to_string(),
     };
-    frame.render_widget(Paragraph::new(text), area);
+
+    // Right zone: only segments that carry information right now.
+    let mut segments: Vec<String> = Vec::new();
+    let badge: Vec<String> = state
+        .badge_counts()
+        .into_iter()
+        .map(|(glyph, n)| format!("{glyph}{n}"))
+        .collect();
+    if !badge.is_empty() {
+        segments.push(badge.join(" "));
+    }
+    let sessions = state.sessions_list().len();
+    if sessions > 0 {
+        segments.push(format!(
+            "{sessions} session{}",
+            if sessions == 1 { "" } else { "s" }
+        ));
+    }
+    if let Some(total) = state.total_cost() {
+        segments.push(fmt_cost(&total).trim_start().to_string());
+    }
+    // The `serve` dot renders as its own span: a down daemon is the one
+    // red thing on the bar (glyph carries it too — never color-alone).
+    let serve = match state.serve_ok {
+        Some(true) => Some(("serve ●", tint(nc, Color::DarkGray))),
+        Some(false) => Some(("serve ✗", tint(nc, Color::Red))),
+        None => None,
+    };
+    let mut right = segments.join(" · ");
+    if serve.is_some() && !right.is_empty() {
+        right.push_str(" · ");
+    }
+    let right_chars = right.chars().count() + serve.map_or(0, |(s, _)| s.chars().count());
+
+    // Right-align the state zone. When both don't fit, hints yield to the
+    // global state (truncated with an ellipsis); a notice keeps the whole
+    // line — it's transient, and clipping it is exactly the old failure.
+    let width = area.width as usize;
+    let mut left = left;
+    if state.notice.is_none() && right_chars > 0 && left.chars().count() + right_chars + 2 > width {
+        let keep = width.saturating_sub(right_chars + 3);
+        left = left.chars().take(keep).collect();
+        if !left.is_empty() {
+            left.push('…');
+        }
+    }
+    let left_chars = left.chars().count();
+    let mut spans = Vec::new();
+    if right_chars > 0 && left_chars + right_chars + 2 <= width {
+        let pad = width - left_chars - right_chars;
+        spans.push(Span::raw(left));
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(right, tint(nc, Color::DarkGray)));
+        if let Some((text, style)) = serve {
+            spans.push(Span::styled(text, style));
+        }
+    } else {
+        spans.push(Span::raw(left));
+    }
+    frame.render_widget(Paragraph::new(TuiLine::from(spans)), area);
 }
 
 fn render_picker(picker: &PickerState, nc: bool, frame: &mut Frame, area: Rect) {
@@ -1002,6 +1089,64 @@ mod tests {
         st.subagents_collapsed = true;
         let text = draw(&mut st, 130, 30);
         assert!(!text.contains("subagents"), "rail hidden");
+    }
+
+    #[test]
+    fn sessions_panel_folds_when_no_sessions_exist() {
+        // agents3 is pure-ACP: even on a wide terminal the sessions sidebar
+        // gives its columns back.
+        let text = draw(&mut agents3(), 130, 30);
+        assert!(!text.contains("sessions"), "empty sessions panel folds");
+    }
+
+    #[test]
+    fn composer_renders_only_where_typing_can_land() {
+        let mut st = with_session();
+        // A focused PTY session owns the keyboard: no composer, and the
+        // routing hint lives in the status bar instead.
+        st.detail = DetailLayout {
+            shown: vec!["orchestrator".into()],
+            split: crate::tui::state::Split::H,
+            focus: 0,
+        };
+        let text = draw(&mut st, 100, 24);
+        assert!(!text.contains("› "), "no idle prompt under a PTY pane");
+        assert!(
+            text.contains("keys go to the orchestrator"),
+            "hint moved to the status bar"
+        );
+        // An ACP focus gets the prompt back.
+        st.detail = DetailLayout {
+            shown: vec!["r0".into()],
+            split: crate::tui::state::Split::H,
+            focus: 0,
+        };
+        let text = draw(&mut st, 100, 24);
+        assert!(text.contains("› "), "composer for the ACP pane");
+    }
+
+    #[test]
+    fn status_bar_right_zone_reports_global_state() {
+        let mut st = with_session();
+        st.serve_ok = Some(true);
+        st.agents[0].cost = Some(bitrouter_substrate::translate::UsageCost {
+            amount: 0.30,
+            currency: "USD".into(),
+        });
+        st.agents[1].cost = Some(bitrouter_substrate::translate::UsageCost {
+            amount: 0.12,
+            currency: "USD".into(),
+        });
+        st.agents[2].attention = true;
+        let text = draw(&mut st, 130, 30);
+        assert!(text.contains("serve ●"), "live daemon dot: {text}");
+        assert!(text.contains("1 session"), "session count");
+        assert!(text.contains("$0.42"), "summed fleet cost");
+        assert!(text.contains("●1"), "attention count");
+        // A down daemon flips the glyph.
+        st.serve_ok = Some(false);
+        let text = draw(&mut st, 130, 30);
+        assert!(text.contains("serve ✗"));
     }
 
     #[test]
@@ -1449,9 +1594,14 @@ mod tests {
             split: crate::tui::state::Split::H,
             focus: 0,
         };
+        // An empty rail folds away entirely (content-aware collapse)…
+        let text = draw(&mut st, 80, 24);
+        assert!(!text.contains("subagents"), "empty rail folds");
+        assert!(text.contains("no agent shown"), "detail placeholder");
+        // …but stays open with a placeholder while the AGENT cursor is on it.
+        st.mode = Mode::Agent;
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("(no subagents)"), "rail placeholder");
-        assert!(text.contains("no agent shown"), "detail placeholder");
     }
 
     #[test]

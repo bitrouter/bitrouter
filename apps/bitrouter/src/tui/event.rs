@@ -109,6 +109,9 @@ pub enum AppEvent {
     /// away-notifications and the done-unseen decay: regaining focus marks
     /// the shown panes seen.
     Focus(bool),
+    /// A daemon-reachability probe completed — feeds the status bar's
+    /// `serve ●/✗` dot (the loop probes every few seconds).
+    ServeStatus { ok: bool },
     /// Periodic UI tick (drives the running-agent spinner animation).
     Tick,
     /// Unconditional quit (input stream ended / terminal gone). Unlike
@@ -206,5 +209,9 @@ pub enum Incoming {
     /// A PTY pane's child exited (reader hit EOF).
     PtyExited {
         record_id: String,
+    },
+    /// A background daemon-reachability probe completed.
+    ServeStatus {
+        ok: bool,
     },
 }

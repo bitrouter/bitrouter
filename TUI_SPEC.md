@@ -151,8 +151,15 @@ extra panes."
 > `[`/`]` moves the AGENT cursor between panels), **subagents right** (the
 > actionability-sorted roster, restyled herdr-minimal: dim lowercase headers, per-row
 > `state · harness` meta line, no boxed titles). Palette `toggle sessions` /
-> `toggle subagents` collapse either side; narrow terminals auto-collapse (left
-> < 110 cols, right < 70). Panel slots are reserved for two deferred sections:
+> `toggle subagents` collapse either side; sidebars are **content-aware** (an
+> empty panel folds unless the AGENT cursor is on it) and narrow terminals
+> auto-collapse (left < 90 cols, right < 70). The **composer renders only
+> where typing can land** (ACP focus / BROADCAST — a focused PTY pane's rows
+> go back to the terminal), and the mode bar became a **global status bar**:
+> hints left (notices claim the zone and decay ~8s; hints truncate before the
+> right zone drops), fleet state right (⚠◆●◉ counts, session count, summed
+> cost, live `serve ●/✗` dot re-probed every ~5s).
+> Panel slots are reserved for two deferred sections:
 > **loops** (below sessions) and **states** (below subagents). `fleet-state.json`
 > records `sessions: [{binary, model}]` instead of a single `orchestrator`. The
 > diagrams below predate this and show the single-rail layout.
