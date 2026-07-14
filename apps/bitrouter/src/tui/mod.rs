@@ -58,7 +58,6 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     let _ = bitrouter_substrate::dotdir::ensure_self_ignored(&base_repo.join(".bitrouter"));
     let fleet_store = bitrouter_substrate::fleet::FleetStore::new(&base_repo);
     let previous_fleet = fleet_store.load().await;
-    let mut orchestrator_state: Option<bitrouter_substrate::fleet::OrchestratorState> = None;
 
     // The daemon's advertised model ids (best-effort): fills the synthesized
     // provider catalogs for the config-routed orchestrators (opencode, pi).
@@ -74,6 +73,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
             crate::harness::by_id(agent_id).filter(|h| h.interactive_binary.is_some())
         }
     });
+    let base_url = crate::spawn::derive_base_url(&cfg.server.listen);
     let initial_pane = if let Some(h) = orchestrator {
         // ── Orchestrator: the native harness TUI in a PTY pane. ──
         if worktree.is_some() {
@@ -81,15 +81,16 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
                 "--worktree applies to ACP agents; the orchestrator runs in the base repo"
             );
         }
-        let (record_id, pane, pty_pane) =
-            launch_orchestrator(h, &cfg, &base_repo, tx.clone(), model, &models)?;
+        let (record_id, pane, pty_pane) = launch_orchestrator(
+            h,
+            &base_url,
+            &base_repo,
+            tx.clone(),
+            model,
+            &models,
+            "orchestrator",
+        )?;
         ptys.insert(record_id, pty_pane);
-        if let Some(binary) = h.interactive_binary {
-            orchestrator_state = Some(bitrouter_substrate::fleet::OrchestratorState {
-                binary: binary.to_string(),
-                model: model.map(str::to_string),
-            });
-        }
         pane
     } else if cfg.agents.contains_key(agent_id) {
         // ── ACP fallback: the primary agent rendered from typed events.
@@ -142,6 +143,12 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     let mut state = AppState::new(initial_pane);
     state.bootstrap_cmd = cfg.worktrees.bootstrap.clone();
     state.set_available_agents(agent_ids);
+    // The `new session` picker offers every harness with an interactive
+    // binary — the same set `--agent` accepts.
+    state.available_sessions = crate::harness::CATALOG
+        .iter()
+        .filter_map(|h| h.interactive_binary.map(str::to_string))
+        .collect();
     state.set_harness_map(
         cfg.agents
             .iter()
@@ -174,8 +181,9 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         spawner: Spawner {
             catalog: &catalog,
             base_repo,
-            gateway_base: crate::spawn::derive_base_url(&cfg.server.listen),
+            gateway_base: base_url,
             models,
+            model: model.map(str::to_string),
             tx,
         },
         fleet: Fleet {
@@ -187,7 +195,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         ptys,
         notify: notify::NotifyPath::detect(),
         fleet_store,
-        orchestrator: orchestrator_state,
+        session_seq: 0,
         last_fleet: None,
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
@@ -355,38 +363,45 @@ fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_
 /// mechanism — so it can spawn/manage subagents (TUI_SPEC §2's data flow).
 fn launch_orchestrator(
     h: &'static crate::harness::Harness,
-    cfg: &bitrouter_sdk::config::Config,
+    base_url: &str,
     base_repo: &std::path::Path,
     tx: UnboundedSender<Incoming>,
     model: Option<&str>,
     models: &[String],
+    record_id: &str,
 ) -> Result<(String, PaneState, pty::PtyPane)> {
     let Some(binary) = h.interactive_binary else {
         anyhow::bail!("harness '{}' has no interactive binary", h.id);
     };
-    let base_url = crate::spawn::derive_base_url(&cfg.server.listen);
     let auth = crate::harness::resolve_gateway_auth(
         std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
         false,
     )
     .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    // Synth-config dir: the initial session keeps the historic `.bitrouter`
+    // home; later ones get their own subdir so same-harness sessions never
+    // clobber each other's synthesized files.
+    let state_dir = if record_id == "orchestrator" {
+        base_repo.join(".bitrouter")
+    } else {
+        base_repo.join(".bitrouter").join(record_id)
+    };
     let overlay = h
         .orchestrator_overlay(
-            &base_url,
+            base_url,
             &auth,
             model,
             models,
             Some(&fleet_mcp_server()),
-            &base_repo.join(".bitrouter"),
+            &state_dir,
         )
         .with_context(|| format!("assembling the '{}' orchestrator overlay", h.id))?;
     let args = overlay.args.clone();
 
-    let record_id = "orchestrator".to_string();
     // Sized properly on the first draw (the pane rect is recorded and the
     // loop resizes + SIGWINCHes the child).
     let pane = pty::PtyPane::spawn(
-        &record_id,
+        record_id,
         &pty::PtyLaunch {
             command: binary,
             args: &args,
@@ -399,10 +414,11 @@ fn launch_orchestrator(
     )
     .with_context(|| format!("launching orchestrator '{binary}' on a pty"))?;
 
-    let mut pane_state = PaneState::new(record_id.clone(), binary.to_string());
+    let mut pane_state = PaneState::new(record_id.to_string(), binary.to_string());
     pane_state.kind = crate::tui::state::PaneKind::Pty;
     pane_state.harness = "pty".to_string();
-    Ok((record_id, pane_state, pane))
+    pane_state.model = model.map(str::to_string);
+    Ok((record_id.to_string(), pane_state, pane))
 }
 
 /// The fleet MCP bridge as a stdio server spec: this binary running
@@ -546,6 +562,8 @@ struct Spawner<'a> {
     /// The daemon's advertised model ids at startup (may be empty) — fills
     /// synthesized provider catalogs on attach.
     models: Vec<String>,
+    /// The `--model` pin the manager launched with — new sessions inherit it.
+    model: Option<String>,
     tx: UnboundedSender<Incoming>,
 }
 
@@ -570,20 +588,20 @@ struct Runtime<'a> {
     /// manager's memory across stops. Written on durable changes and once,
     /// with `clean_shutdown`, at teardown.
     fleet_store: bitrouter_substrate::fleet::FleetStore,
-    /// The hosted orchestrator's identity, recorded in the snapshot.
-    orchestrator: Option<bitrouter_substrate::fleet::OrchestratorState>,
+    /// Monotonic counter minting record ids for `new session` panes.
+    session_seq: u64,
     /// The last snapshot written (unstamped), for change detection.
     last_fleet: Option<bitrouter_substrate::fleet::FleetState>,
 }
 
 /// Build the (unstamped) durable snapshot of the manager's current state.
-fn fleet_state(state: &AppState, rt: &Runtime<'_>) -> bitrouter_substrate::fleet::FleetState {
+fn fleet_state(state: &AppState) -> bitrouter_substrate::fleet::FleetState {
     bitrouter_substrate::fleet::FleetState {
         version: bitrouter_substrate::fleet::FLEET_STATE_VERSION,
         saved_at: 0, // stamped by FleetStore::save
         clean_shutdown: false,
         writer_pid: std::process::id(),
-        orchestrator: rt.orchestrator.clone(),
+        sessions: state.fleet_sessions(),
         agents: state.fleet_agents(),
     }
 }
@@ -591,7 +609,7 @@ fn fleet_state(state: &AppState, rt: &Runtime<'_>) -> bitrouter_substrate::fleet
 /// Persist the current fleet state if it changed since the last write.
 /// Best-effort: durability must never take the live manager down.
 async fn flush_fleet_state(state: &AppState, rt: &mut Runtime<'_>) {
-    let snapshot = fleet_state(state, rt);
+    let snapshot = fleet_state(state);
     if rt.last_fleet.as_ref() == Some(&snapshot) {
         return;
     }
@@ -603,7 +621,7 @@ async fn flush_fleet_state(state: &AppState, rt: &mut Runtime<'_>) {
 
 /// The teardown write: same snapshot, marked as an orderly stop.
 async fn flush_fleet_state_clean(state: &AppState, rt: &mut Runtime<'_>) {
-    let mut snapshot = fleet_state(state, rt);
+    let mut snapshot = fleet_state(state);
     snapshot.clean_shutdown = true;
     if let Err(e) = rt.fleet_store.save(&snapshot).await {
         tracing::warn!(error = %e, "failed to write final fleet state");
@@ -619,6 +637,9 @@ fn previous_fleet_notice(prev: &bitrouter_substrate::fleet::FleetState) -> Optio
     let reviews = prev.agents.iter().filter(|a| a.review.is_some()).count();
     let drafts = prev.agents.iter().filter(|a| a.draft.is_some()).count();
     let mut notice = format!("previous fleet remembered: {} agent(s)", prev.agents.len());
+    if prev.sessions.len() > 1 {
+        notice.push_str(&format!(", {} sessions", prev.sessions.len()));
+    }
     if reviews > 0 {
         notice.push_str(&format!(", {reviews} mid-review"));
     }
@@ -955,6 +976,46 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 }
             }
         }
+        Effect::SpawnSession { binary } => {
+            let Some(h) = crate::harness::by_interactive_binary(&binary) else {
+                state.notice = Some(format!("'{binary}' is not a session harness"));
+                return;
+            };
+            rt.session_seq += 1;
+            let record_id = format!("session-{}", rt.session_seq);
+            let model = rt.spawner.model.clone();
+            match launch_orchestrator(
+                h,
+                &rt.spawner.gateway_base,
+                &rt.spawner.base_repo,
+                rt.spawner.tx.clone(),
+                model.as_deref(),
+                &rt.spawner.models,
+                &record_id,
+            ) {
+                Ok((rid, _, pty_pane)) => {
+                    rt.ptys.insert(rid.clone(), pty_pane);
+                    let _ = reduce(
+                        state,
+                        &AppEvent::SessionSpawned {
+                            record_id: rid,
+                            binary,
+                            model,
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(session = %binary, error = %format!("{e:#}"), "session launch failed");
+                    let _ = reduce(
+                        state,
+                        &AppEvent::AgentSpawnFailed {
+                            agent_id: binary,
+                            error: format!("{e:#}"),
+                        },
+                    );
+                }
+            }
+        }
         Effect::CloseAgent { record_id } => {
             if let Some(mut pane) = rt.ptys.remove(&record_id) {
                 // A PTY pane close kills the interactive child only — an
@@ -1263,7 +1324,7 @@ mod tests {
             saved_at: 1,
             clean_shutdown: false,
             writer_pid: 1,
-            orchestrator: None,
+            sessions: Vec::new(),
             agents: vec![agent(Some((1, 2, 3)), None), agent(None, Some("d"))],
         };
         let notice = super::previous_fleet_notice(&prev).expect("notice");

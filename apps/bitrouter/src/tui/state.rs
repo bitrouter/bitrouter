@@ -41,6 +41,7 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     SpawnAgent,
+    NewSession,
     CloseAgent,
     SplitH,
     SplitV,
@@ -49,6 +50,8 @@ pub enum Command {
     Queue,
     Autonomy,
     KillDone,
+    ToggleSessions,
+    ToggleSubagents,
     KeysHelp,
     Quit,
 }
@@ -57,6 +60,7 @@ pub enum Command {
 /// filter is empty.
 pub const COMMANDS: &[(&str, Command)] = &[
     ("spawn agent", Command::SpawnAgent),
+    ("new session", Command::NewSession),
     ("close agent", Command::CloseAgent),
     ("split horizontal", Command::SplitH),
     ("split vertical", Command::SplitV),
@@ -65,6 +69,8 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("queue", Command::Queue),
     ("autonomy cycle", Command::Autonomy),
     ("kill done", Command::KillDone),
+    ("toggle sessions", Command::ToggleSessions),
+    ("toggle subagents", Command::ToggleSubagents),
     ("keys help", Command::KeysHelp),
     ("quit", Command::Quit),
 ];
@@ -98,11 +104,21 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
         .all(|n| hay.any(|h| h == n))
 }
 
+/// What the picker overlay spawns on Enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerPurpose {
+    /// An ACP subagent from the config catalog (`n` / `spawn agent`).
+    Subagent,
+    /// A native orchestrator session on a PTY (`N` / `new session`).
+    Session,
+}
+
 /// State of the agent picker overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PickerState {
     pub agents: Vec<String>,
     pub selected: usize,
+    pub purpose: PickerPurpose,
 }
 
 /// One rendered scrollback line, tagged for styling by the UI layer.
@@ -386,6 +402,9 @@ pub struct PaneState {
     pub check_retries: u8,
     /// What renders this pane (ACP monitor vs native PTY).
     pub kind: PaneKind,
+    /// The model this pane was pinned to at launch (sessions: the `--model`
+    /// value), shown in the sessions panel. `None` = the daemon's default.
+    pub model: Option<String>,
     /// Draft snapshot of the composer: what was typed at this pane before
     /// focus moved away, restored when focus returns (polish: no lost input
     /// across pane switches).
@@ -423,8 +442,16 @@ impl PaneState {
             review: None,
             check_retries: 0,
             kind: PaneKind::default(),
+            model: None,
             draft: String::new(),
         }
+    }
+
+    /// A durable orchestrator session: a PTY pane that isn't a transient
+    /// interactive attach (attaches belong to their ACP agent, not the
+    /// sessions memory).
+    pub fn is_session(&self) -> bool {
+        self.kind == PaneKind::Pty && !self.record_id.starts_with("attach:")
     }
 
     fn push(&mut self, line: Line) {
@@ -677,6 +704,17 @@ impl DetailLayout {
     }
 }
 
+/// Which sidebar the AGENT-mode cursor lives in (TUI_SPEC layout: sessions
+/// left, subagents right). `[`/`]` move it left/right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Panel {
+    /// Left: orchestrator sessions (PTY panes).
+    Sessions,
+    /// Right: ACP subagents — the actionable roster (default).
+    #[default]
+    Subagents,
+}
+
 /// Whole-app render state: a flat agent list + the detail layout + rail cursor.
 /// Accessors return `Option` because the agent list may be empty transiently
 /// (right after the last agent closes, before `should_quit`).
@@ -685,8 +723,17 @@ pub struct AppState {
     /// Every live agent, in spawn order (stable; the roster sorts a projection).
     pub agents: Vec<PaneState>,
     pub detail: DetailLayout,
+    /// Which sidebar AGENT-mode navigation targets.
+    pub panel: Panel,
     /// Rail cursor: an index into `roster()` order.
     pub rail_cursor: usize,
+    /// Sessions cursor: an index into `sessions_list()` order.
+    pub session_cursor: usize,
+    /// User-collapsed sidebars (palette `toggle sessions`/`toggle subagents`;
+    /// narrow terminals also auto-collapse at render time without touching
+    /// these).
+    pub sessions_collapsed: bool,
+    pub subagents_collapsed: bool,
     /// Queue focus mode (`q` in AGENT mode): the rail shows only agents that
     /// need you. Cleared when leaving AGENT mode.
     pub queue_only: bool,
@@ -712,6 +759,9 @@ pub struct AppState {
     /// `NO_COLOR` requested: draw glyphs/styles without foreground colors.
     pub no_color: bool,
     pub available_agents: Vec<String>,
+    /// Interactive binaries the `new session` picker offers (from the
+    /// harness catalog: `claude`, `codex`, …).
+    pub available_sessions: Vec<String>,
     pub notice: Option<String>,
     pub broadcast_input: String,
     /// The configured worktree bootstrap hook (`worktrees.bootstrap`), if any.
@@ -734,7 +784,11 @@ impl AppState {
         Self {
             agents: vec![pane],
             detail,
+            panel: Panel::default(),
             rail_cursor: 0,
+            session_cursor: 0,
+            sessions_collapsed: false,
+            subagents_collapsed: false,
             queue_only: false,
             perm_seq: 0,
             harness_by_agent: HashMap::new(),
@@ -748,6 +802,7 @@ impl AppState {
             term_focused: true,
             no_color: false,
             available_agents: Vec::new(),
+            available_sessions: Vec::new(),
             notice: None,
             broadcast_input: String::new(),
             bootstrap_cmd: None,
@@ -772,13 +827,15 @@ impl AppState {
         self.harness_by_agent = map;
     }
 
-    /// Roster order: indices into `agents`, sorted by actionability bucket
-    /// (needs-you > attention > running > dead). Needs-you rows order by risk
-    /// (high first) then age (oldest pending first) — the queue; other buckets
-    /// keep spawn order. In queue focus mode (`queue_only`) only needs-you
-    /// rows are listed.
+    /// Roster order for the subagents panel: indices of the ACP panes, sorted
+    /// by actionability bucket (needs-you > attention > running > dead).
+    /// Needs-you rows order by risk (high first) then age (oldest pending
+    /// first) — the queue; other buckets keep spawn order. In queue focus
+    /// mode (`queue_only`) only needs-you rows are listed. PTY panes live in
+    /// the sessions panel ([`sessions_list`](Self::sessions_list)).
     pub fn roster(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.agents.len())
+            .filter(|&i| self.agents[i].kind == PaneKind::Acp)
             .filter(|&i| !self.queue_only || self.agents[i].pending.is_some())
             .collect();
         order.sort_by_key(|&i| {
@@ -846,12 +903,50 @@ impl AppState {
             .collect()
     }
 
+    /// Sessions-panel order: indices of the PTY panes (orchestrator sessions
+    /// and interactive attaches) in spawn order — stable, herdr-spaces style.
+    pub fn sessions_list(&self) -> Vec<usize> {
+        (0..self.agents.len())
+            .filter(|&i| self.agents[i].kind == PaneKind::Pty)
+            .collect()
+    }
+
     /// The agent under the rail cursor.
     pub fn rail_selected(&self) -> Option<&PaneState> {
         let order = self.roster();
         order
             .get(self.rail_cursor.min(order.len().saturating_sub(1)))
             .and_then(|&i| self.agents.get(i))
+    }
+
+    /// The session under the sessions-panel cursor.
+    pub fn session_selected(&self) -> Option<&PaneState> {
+        let order = self.sessions_list();
+        order
+            .get(self.session_cursor.min(order.len().saturating_sub(1)))
+            .and_then(|&i| self.agents.get(i))
+    }
+
+    /// The active panel's cursor pane — what panel-aware AGENT verbs
+    /// (Enter/x/s/v) operate on.
+    fn panel_selected(&self) -> Option<&PaneState> {
+        match self.panel {
+            Panel::Sessions => self.session_selected(),
+            Panel::Subagents => self.rail_selected(),
+        }
+    }
+
+    /// The durable identity of every orchestrator session, for the fleet
+    /// snapshot (interactive attaches are transient and skipped).
+    pub fn fleet_sessions(&self) -> Vec<bitrouter_substrate::fleet::OrchestratorState> {
+        self.agents
+            .iter()
+            .filter(|p| p.is_session())
+            .map(|p| bitrouter_substrate::fleet::OrchestratorState {
+                binary: p.agent_id.clone(),
+                model: p.model.clone(),
+            })
+            .collect()
     }
 
     /// The detail-focused pane (receives NORMAL-mode input).
@@ -882,6 +977,16 @@ impl AppState {
             self.rail_cursor = 0;
         } else if self.rail_cursor >= len {
             self.rail_cursor = len - 1;
+        }
+    }
+
+    /// Clamp the sessions cursor into the current sessions list.
+    fn clamp_session_cursor(&mut self) {
+        let len = self.sessions_list().len();
+        if len == 0 {
+            self.session_cursor = 0;
+        } else if self.session_cursor >= len {
+            self.session_cursor = len - 1;
         }
     }
 }
@@ -1103,6 +1208,23 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.notice = Some("attached — Ctrl-A then x detaches".into());
             Vec::new()
         }
+        AppEvent::SessionSpawned {
+            record_id,
+            binary,
+            model,
+        } => {
+            let mut pane = PaneState::new(record_id.clone(), binary.clone());
+            pane.kind = PaneKind::Pty;
+            pane.harness = "pty".to_string();
+            pane.model = model.clone();
+            state.agents.push(pane);
+            // A fresh session is what you asked to talk to — show it solo.
+            state.detail = DetailLayout::solo(record_id.clone());
+            state.session_cursor = state.sessions_list().len().saturating_sub(1);
+            state.mode = Mode::Normal;
+            state.notice = None;
+            Vec::new()
+        }
         AppEvent::PromptFailed { record_id, error } => {
             let shown = state.is_shown(record_id);
             let seen = shown && state.term_focused;
@@ -1311,11 +1433,22 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     // Ctrl-A enters AGENT (manager) mode with the cursor on the focused agent.
     if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.mode = Mode::Agent;
-        // Park the rail cursor on the detail-focused agent's roster row.
+        // Park the cursor on the detail-focused pane's row — in whichever
+        // panel lists it (sessions for PTY panes, subagents for ACP panes).
         if let Some(id) = state.detail.focused_id().map(str::to_string) {
             let order = state.roster();
             if let Some(pos) = order.iter().position(|&i| state.agents[i].record_id == id) {
+                state.panel = Panel::Subagents;
                 state.rail_cursor = pos;
+            } else {
+                let sessions = state.sessions_list();
+                if let Some(pos) = sessions
+                    .iter()
+                    .position(|&i| state.agents[i].record_id == id)
+                {
+                    state.panel = Panel::Sessions;
+                    state.session_cursor = pos;
+                }
             }
         }
         return Vec::new();
@@ -1440,19 +1573,41 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.mode = Mode::Normal;
             Vec::new()
         }
-        // ── Rail navigation. ──
+        // ── Panel navigation (sessions left, subagents right). ──
+        KeyCode::Char('[') => {
+            state.panel = Panel::Sessions;
+            state.clamp_session_cursor();
+            Vec::new()
+        }
+        KeyCode::Char(']') => {
+            state.panel = Panel::Subagents;
+            state.clamp_rail_cursor();
+            Vec::new()
+        }
         KeyCode::Down | KeyCode::Char('j') => {
-            let max = state.roster().len().saturating_sub(1);
-            state.rail_cursor = (state.rail_cursor + 1).min(max);
+            match state.panel {
+                Panel::Sessions => {
+                    let max = state.sessions_list().len().saturating_sub(1);
+                    state.session_cursor = (state.session_cursor + 1).min(max);
+                }
+                Panel::Subagents => {
+                    let max = state.roster().len().saturating_sub(1);
+                    state.rail_cursor = (state.rail_cursor + 1).min(max);
+                }
+            }
             Vec::new()
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            state.rail_cursor = state.rail_cursor.saturating_sub(1);
+            match state.panel {
+                Panel::Sessions => state.session_cursor = state.session_cursor.saturating_sub(1),
+                Panel::Subagents => state.rail_cursor = state.rail_cursor.saturating_sub(1),
+            }
             Vec::new()
         }
         // Jump to the most actionable agent (the roster head) — the
         // cross-pane "take me to who needs me" reflex.
         KeyCode::Char('g') => {
+            state.panel = Panel::Subagents;
             state.rail_cursor = 0;
             Vec::new()
         }
@@ -1464,10 +1619,15 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         // ── Review verbs (cursor agent has a ready-to-review diff). ──
+        // Subagent-panel only — sessions have no pendings, reviews, or
+        // autonomy, so these verbs never fire across panels by surprise.
         // `D` loads the full diff into the pane (opened solo); `m` merges the
         // branch (requires committed work); `p` applies the diff uncommitted;
         // `r` rejects — feedback typed next becomes the agent's next prompt.
-        KeyCode::Char('D') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+        KeyCode::Char('D')
+            if state.panel == Panel::Subagents
+                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
+        {
             match state.rail_selected().map(|p| p.record_id.clone()) {
                 Some(id) => {
                     state.detail = DetailLayout::solo(id.clone());
@@ -1477,19 +1637,28 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 None => Vec::new(),
             }
         }
-        KeyCode::Char('m') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+        KeyCode::Char('m')
+            if state.panel == Panel::Subagents
+                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
+        {
             match state.rail_selected().map(|p| p.record_id.clone()) {
                 Some(id) => vec![Effect::Merge { record_id: id }],
                 None => Vec::new(),
             }
         }
-        KeyCode::Char('p') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+        KeyCode::Char('p')
+            if state.panel == Panel::Subagents
+                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
+        {
             match state.rail_selected().map(|p| p.record_id.clone()) {
                 Some(id) => vec![Effect::Apply { record_id: id }],
                 None => Vec::new(),
             }
         }
-        KeyCode::Char('r') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+        KeyCode::Char('r')
+            if state.panel == Panel::Subagents
+                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
+        {
             if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
                 if let Some(pane) = state.pane_by_id_mut(&id) {
                     pane.review = None;
@@ -1508,7 +1677,8 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         // same `pending` the pane shows inline, so either surface clears both.
         // `d` denies (not `n`, which spawns in this mode).
         KeyCode::Char(c @ ('y' | 'a' | 'd'))
-            if state.rail_selected().is_some_and(|p| p.pending.is_some()) =>
+            if state.panel == Panel::Subagents
+                && state.rail_selected().is_some_and(|p| p.pending.is_some()) =>
         {
             let outcome = match c {
                 'y' => PermissionOutcome::AllowOnce,
@@ -1517,9 +1687,9 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             };
             resolve_rail_pending(state, outcome)
         }
-        // Open the cursor agent solo in the detail (and return to typing).
+        // Open the active panel's cursor pane solo (and return to typing).
         KeyCode::Enter => {
-            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
+            if let Some(id) = state.panel_selected().map(|p| p.record_id.clone()) {
                 state.detail = DetailLayout::solo(id);
                 mark_shown_seen(state);
                 state.queue_only = false;
@@ -1570,6 +1740,17 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.picker = Some(PickerState {
                 agents: state.available_agents.clone(),
                 selected: 0,
+                purpose: PickerPurpose::Subagent,
+            });
+            state.mode = Mode::Picker;
+            Vec::new()
+        }
+        // New orchestrator session (capital N — lowercase spawns a subagent).
+        KeyCode::Char('N') => {
+            state.picker = Some(PickerState {
+                agents: state.available_sessions.clone(),
+                selected: 0,
+                purpose: PickerPurpose::Session,
             });
             state.mode = Mode::Picker;
             Vec::new()
@@ -1585,8 +1766,8 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         // Attach: drive the cursor agent's harness natively (PTY in its
-        // worktree). ACP agents only — a PTY pane can't attach to itself.
-        KeyCode::Char('t') => {
+        // worktree). Live subagents only — sessions ARE native PTYs already.
+        KeyCode::Char('t') if state.panel == Panel::Subagents => {
             match state
                 .rail_selected()
                 .filter(|p| p.kind == PaneKind::Acp && !p.exited)
@@ -1598,7 +1779,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         // Cycle the cursor agent's autonomy tier (capital A — lowercase `a`
         // grants allow-always on a pending row).
-        KeyCode::Char('A') => {
+        KeyCode::Char('A') if state.panel == Panel::Subagents => {
             if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
                 && let Some(pane) = state.pane_by_id_mut(&id)
             {
@@ -1608,8 +1789,11 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        // Close the cursor agent.
-        KeyCode::Char('x') => close_rail_selected(state),
+        // Close the active panel's cursor pane (an attach pane close = detach).
+        KeyCode::Char('x') => match state.panel_selected().map(|p| p.record_id.clone()) {
+            Some(id) => close_agent_by_id(state, &id),
+            None => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }
@@ -1677,6 +1861,16 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             state.picker = Some(PickerState {
                 agents: state.available_agents.clone(),
                 selected: 0,
+                purpose: PickerPurpose::Subagent,
+            });
+            state.mode = Mode::Picker;
+            Vec::new()
+        }
+        Command::NewSession => {
+            state.picker = Some(PickerState {
+                agents: state.available_sessions.clone(),
+                selected: 0,
+                purpose: PickerPurpose::Session,
             });
             state.mode = Mode::Picker;
             Vec::new()
@@ -1735,6 +1929,14 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             }
             effects
         }
+        Command::ToggleSessions => {
+            state.sessions_collapsed = !state.sessions_collapsed;
+            Vec::new()
+        }
+        Command::ToggleSubagents => {
+            state.subagents_collapsed = !state.subagents_collapsed;
+            Vec::new()
+        }
         Command::KeysHelp => {
             state.keys_help = true;
             Vec::new()
@@ -1782,10 +1984,10 @@ fn mark_shown_seen(state: &mut AppState) {
     }
 }
 
-/// Split the detail in `split` direction. Adds the rail-cursor agent — or,
-/// when that agent is already shown (`Ctrl-A` parks the cursor on the focused
-/// agent, so this is the common case), the most actionable agent not yet
-/// shown. A notice explains the no-op cases (all shown / viewport full).
+/// Split the detail in `split` direction. Adds the active panel's cursor
+/// pane — or, when that pane is already shown (`Ctrl-A` parks the cursor on
+/// the focused pane, so this is the common case), the most actionable agent
+/// not yet shown. A notice explains the no-op cases (all shown / full).
 fn split_detail(state: &mut AppState, split: Split) {
     if state.detail.shown.len() >= MAX_SHOWN {
         state.notice = Some(format!(
@@ -1793,7 +1995,7 @@ fn split_detail(state: &mut AppState, split: Split) {
         ));
         return;
     }
-    let cursor = state.rail_selected().map(|p| p.record_id.clone());
+    let cursor = state.panel_selected().map(|p| p.record_id.clone());
     let target = match cursor.filter(|id| !state.detail.shown.contains(id)) {
         Some(id) => Some(id),
         // Cursor agent already visible → fall back to the roster's most
@@ -1835,14 +2037,6 @@ fn resolve_rail_pending(state: &mut AppState, outcome: PermissionOutcome) -> Vec
     vec![Effect::ResolvePermission { record_id, outcome }]
 }
 
-/// Close the agent under the rail cursor.
-fn close_rail_selected(state: &mut AppState) -> Vec<Effect> {
-    match state.rail_selected().map(|p| p.record_id.clone()) {
-        Some(id) => close_agent_by_id(state, &id),
-        None => Vec::new(),
-    }
-}
-
 /// Close one agent by id: remove it, prune the detail layout (refilling it
 /// with the most actionable agent if it empties), emit `CloseAgent`. Closing
 /// the last agent quits.
@@ -1853,11 +2047,18 @@ fn close_agent_by_id(state: &mut AppState, record_id: &str) -> Vec<Effect> {
     state.agents.retain(|p| p.record_id != record_id);
     state.detail.prune(record_id);
     state.clamp_rail_cursor();
+    state.clamp_session_cursor();
     if state.agents.is_empty() {
         state.should_quit = true;
     } else if state.detail.shown.is_empty() {
-        // Refill with the roster head (most actionable agent).
-        if let Some(&head) = state.roster().first() {
+        // Refill with the roster head (most actionable agent), falling back
+        // to the first session when no ACP agents remain.
+        let head = state
+            .roster()
+            .into_iter()
+            .next()
+            .or_else(|| state.sessions_list().into_iter().next());
+        if let Some(head) = head {
             state.detail = DetailLayout::solo(state.agents[head].record_id.clone());
         }
     }
@@ -1889,11 +2090,13 @@ fn reduce_key_picker(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Enter => {
             let selected = picker.agents.get(picker.selected).cloned();
+            let purpose = picker.purpose;
             state.picker = None;
             state.mode = Mode::Normal;
-            match selected {
-                Some(agent_id) => request_spawn(state, agent_id),
-                None => Vec::new(), // empty picker → just close, no spawn
+            match (purpose, selected) {
+                (PickerPurpose::Subagent, Some(agent_id)) => request_spawn(state, agent_id),
+                (PickerPurpose::Session, Some(binary)) => vec![Effect::SpawnSession { binary }],
+                (_, None) => Vec::new(), // empty picker → just close, no spawn
             }
         }
         KeyCode::Esc => {
@@ -2254,6 +2457,7 @@ mod tests {
                 st.picker = Some(PickerState {
                     agents: vec!["alpha".into()],
                     selected: 0,
+                    purpose: PickerPurpose::Subagent,
                 });
             }
             let effects = reduce(&mut st, &ctrl_c());
@@ -3259,10 +3463,11 @@ mod tests {
                 record_id: "r1".into()
             }]
         );
-        // A PTY pane can't attach to itself; a dead agent has nothing to drive.
-        st.agents[1].kind = PaneKind::Pty;
+        // A session can't attach to itself: `t` is inert in the sessions panel.
+        st.panel = Panel::Sessions;
         assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
-        st.agents[1].kind = PaneKind::Acp;
+        st.panel = Panel::Subagents;
+        // A dead agent has nothing to drive.
         st.agents[1].exited = true;
         st.rail_cursor = 2; // dead agents sort last — cursor onto r1
         assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
@@ -3288,6 +3493,184 @@ mod tests {
         assert_eq!(st.detail.shown, vec!["attach:r1".to_string()], "solo");
         assert_eq!(st.mode, Mode::Normal, "keys route to the attach");
         assert!(st.notice.as_deref().is_some_and(|n| n.contains("detach")));
+    }
+
+    // ── Sessions panel (sessions left, subagents right). ──
+
+    /// Two sessions (a PTY orchestrator + one more) beside two ACP agents.
+    fn fleet_state() -> AppState {
+        let mut orch = PaneState::new("orchestrator".into(), "claude".into());
+        orch.kind = PaneKind::Pty;
+        orch.harness = "pty".into();
+        let mut st = AppState::new(orch);
+        st.agents.push(PaneState::new("r1".into(), "a1".into()));
+        st.agents.push(PaneState::new("r2".into(), "a2".into()));
+        let mut s2 = PaneState::new("session-1".into(), "codex".into());
+        s2.kind = PaneKind::Pty;
+        s2.harness = "pty".into();
+        st.agents.push(s2);
+        st
+    }
+
+    #[test]
+    fn roster_lists_acp_panes_and_sessions_list_pty_panes() {
+        let st = fleet_state();
+        let roster: Vec<&str> = st
+            .roster()
+            .into_iter()
+            .map(|i| st.agents[i].record_id.as_str())
+            .collect();
+        assert_eq!(roster, vec!["r1", "r2"], "roster = ACP only");
+        let sessions: Vec<&str> = st
+            .sessions_list()
+            .into_iter()
+            .map(|i| st.agents[i].record_id.as_str())
+            .collect();
+        assert_eq!(
+            sessions,
+            vec!["orchestrator", "session-1"],
+            "sessions = PTY panes in spawn order"
+        );
+    }
+
+    #[test]
+    fn brackets_switch_the_panel_and_jk_move_its_cursor() {
+        let mut st = fleet_state();
+        st.mode = Mode::Agent;
+        assert_eq!(st.panel, Panel::Subagents, "default panel");
+        reduce(&mut st, &press(KeyCode::Char('[')));
+        assert_eq!(st.panel, Panel::Sessions);
+        reduce(&mut st, &press(KeyCode::Char('j')));
+        assert_eq!(st.session_cursor, 1, "j moves the sessions cursor");
+        assert_eq!(st.rail_cursor, 0, "rail cursor untouched");
+        // Enter opens the cursor session solo.
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(st.detail.shown, vec!["session-1".to_string()]);
+        assert_eq!(st.mode, Mode::Normal);
+        // `]` returns cursor control to the subagents roster.
+        st.mode = Mode::Agent;
+        reduce(&mut st, &press(KeyCode::Char(']')));
+        assert_eq!(st.panel, Panel::Subagents);
+    }
+
+    #[test]
+    fn ctrl_a_parks_the_cursor_in_the_focused_panes_panel() {
+        let mut st = fleet_state();
+        st.detail = DetailLayout {
+            shown: vec!["session-1".into()],
+            split: Split::H,
+            focus: 0,
+        };
+        reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        assert_eq!(st.panel, Panel::Sessions);
+        assert_eq!(st.session_cursor, 1, "cursor on the focused session");
+    }
+
+    #[test]
+    fn capital_n_opens_the_session_picker_and_enter_spawns() {
+        let mut st = fleet_state();
+        st.available_sessions = vec!["claude".into(), "codex".into()];
+        st.mode = Mode::Agent;
+        reduce(&mut st, &press(KeyCode::Char('N')));
+        assert_eq!(st.mode, Mode::Picker);
+        let picker = st.picker.as_ref().expect("picker");
+        assert_eq!(picker.purpose, PickerPurpose::Session);
+        assert_eq!(picker.agents, vec!["claude".to_string(), "codex".into()]);
+        reduce(&mut st, &press(KeyCode::Down));
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(
+            fx,
+            vec![Effect::SpawnSession {
+                binary: "codex".into()
+            }],
+            "session spawn bypasses the worktree-bootstrap confirm"
+        );
+    }
+
+    #[test]
+    fn session_spawned_adds_a_solo_pty_pane_with_model() {
+        let mut st = fleet_state();
+        reduce(
+            &mut st,
+            &AppEvent::SessionSpawned {
+                record_id: "session-2".into(),
+                binary: "codex".into(),
+                model: Some("supergrok:grok-4.5".into()),
+            },
+        );
+        let pane = st
+            .agents
+            .iter()
+            .find(|p| p.record_id == "session-2")
+            .expect("session pane added");
+        assert_eq!(pane.kind, PaneKind::Pty);
+        assert!(pane.is_session());
+        assert_eq!(pane.model.as_deref(), Some("supergrok:grok-4.5"));
+        assert_eq!(st.detail.shown, vec!["session-2".to_string()], "solo");
+        assert_eq!(st.session_cursor, 2, "cursor follows the new session");
+    }
+
+    #[test]
+    fn x_in_the_sessions_panel_closes_the_cursor_session() {
+        let mut st = fleet_state();
+        st.mode = Mode::Agent;
+        st.panel = Panel::Sessions;
+        st.session_cursor = 1;
+        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
+        assert_eq!(
+            fx,
+            vec![Effect::CloseAgent {
+                record_id: "session-1".into()
+            }]
+        );
+        assert!(!st.agents.iter().any(|p| p.record_id == "session-1"));
+    }
+
+    #[test]
+    fn review_verbs_and_autonomy_stay_inert_in_the_sessions_panel() {
+        let mut st = fleet_state();
+        st.agents[1].review = Some((1, 2, 3));
+        st.mode = Mode::Agent;
+        st.panel = Panel::Sessions;
+        for key in ['m', 'p', 'D', 'A'] {
+            assert!(
+                reduce(&mut st, &press(KeyCode::Char(key))).is_empty(),
+                "'{key}' must not fire on a subagent from the sessions panel"
+            );
+        }
+        assert!(st.agents[1].review.is_some(), "review untouched");
+        assert_eq!(
+            st.agents[1].autonomy,
+            Autonomy::Manual,
+            "autonomy untouched"
+        );
+    }
+
+    #[test]
+    fn fleet_sessions_reports_binaries_and_models_but_not_attaches() {
+        let mut st = fleet_state();
+        st.agents[0].model = Some("supergrok:grok-4.5".into());
+        let mut attach = PaneState::new("attach:r1".into(), "claude⤴a1".into());
+        attach.kind = PaneKind::Pty;
+        attach.harness = "attach".into();
+        st.agents.push(attach);
+        let sessions = st.fleet_sessions();
+        let binaries: Vec<&str> = sessions.iter().map(|s| s.binary.as_str()).collect();
+        assert_eq!(binaries, vec!["claude", "codex"], "attach pane skipped");
+        assert_eq!(sessions[0].model.as_deref(), Some("supergrok:grok-4.5"));
+    }
+
+    #[test]
+    fn palette_toggles_collapse_the_sidebars() {
+        let mut st = fleet_state();
+        let _ = run_command(&mut st, Command::ToggleSessions);
+        let _ = run_command(&mut st, Command::ToggleSubagents);
+        assert!(st.sessions_collapsed && st.subagents_collapsed);
+        let _ = run_command(&mut st, Command::ToggleSessions);
+        assert!(!st.sessions_collapsed, "toggle back");
     }
 
     // ── Broadcast. ──
@@ -3405,6 +3788,7 @@ mod tests {
         st.picker = Some(PickerState {
             agents,
             selected: 0,
+            purpose: PickerPurpose::Subagent,
         });
         st
     }

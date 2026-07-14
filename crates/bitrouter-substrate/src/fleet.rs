@@ -38,15 +38,16 @@ pub struct FleetState {
     pub clean_shutdown: bool,
     /// Pid of the writing manager process.
     pub writer_pid: u32,
-    /// The hosted orchestrator, when the manager ran one. Its conversation
-    /// is resumable only through the harness's own `--continue`/`--resume`
-    /// for this cwd — an opaque PTY exposes no session id to record.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub orchestrator: Option<OrchestratorState>,
+    /// The hosted orchestrator sessions (PTY panes), in spawn order. Their
+    /// conversations are resumable only through each harness's own
+    /// `--continue`/`--resume` for this cwd — an opaque PTY exposes no
+    /// session id to record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<OrchestratorState>,
     pub agents: Vec<FleetAgent>,
 }
 
-/// The orchestrator pane's identity.
+/// One orchestrator session pane's identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrchestratorState {
     /// Interactive binary hosted in the PTY pane (`claude`, `codex`, …).
@@ -155,10 +156,10 @@ mod tests {
             saved_at: 0,
             clean_shutdown: false,
             writer_pid: 4242,
-            orchestrator: Some(OrchestratorState {
+            sessions: vec![OrchestratorState {
                 binary: "claude".to_string(),
                 model: None,
-            }),
+            }],
             agents: vec![FleetAgent {
                 record_id: "r1".to_string(),
                 autonomy: "assisted".to_string(),
@@ -180,7 +181,7 @@ mod tests {
         let loaded = store.load().await.expect("some");
         assert!(loaded.saved_at > 0, "saved_at stamped by save");
         assert_eq!(loaded.agents, state().agents);
-        assert_eq!(loaded.orchestrator, state().orchestrator);
+        assert_eq!(loaded.sessions, state().sessions);
         // The dot dir became self-ignoring on first save.
         assert_eq!(
             std::fs::read_to_string(base.path().join(".bitrouter/.gitignore")).expect("read"),
@@ -226,14 +227,14 @@ mod tests {
         let base = tempfile::tempdir().expect("tempdir");
         let store = FleetStore::new(base.path());
         let mut s = state();
-        s.orchestrator = None;
+        s.sessions = Vec::new();
         s.agents[0].review = None;
         s.agents[0].pending = None;
         s.agents[0].draft = None;
         s.agents[0].port = None;
         store.save(&s).await.expect("save");
         let raw = std::fs::read_to_string(store.path()).expect("read");
-        for absent in ["orchestrator", "review", "pending", "draft", "port"] {
+        for absent in ["sessions", "review", "pending", "draft", "port"] {
             assert!(!raw.contains(absent), "{absent} serialized despite None");
         }
     }

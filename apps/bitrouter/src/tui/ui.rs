@@ -9,13 +9,22 @@ use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::state::{
-    AppState, DiffLine, Line, Mode, PaneState, PendingView, PickerState, Split, TailKind,
-    diff_lines,
+    AppState, DiffLine, Line, Mode, PaneState, Panel, PendingView, PickerPurpose, PickerState,
+    Split, TailKind, diff_lines,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
 /// plus its expanded `└ y·a·d risk · title` line to stay readable.
 const RAIL_WIDTH: u16 = 28;
+
+/// Sessions-panel (left sidebar) width: a binary name + a dim model line.
+const SESSIONS_WIDTH: u16 = 24;
+
+/// Below this terminal width the sessions sidebar auto-collapses so the
+/// center PTY keeps a usable column count; below `RAIL_MIN_WIDTH` the
+/// subagents sidebar folds too (the title badge + mode bar still signal).
+const SESSIONS_MIN_WIDTH: u16 = 110;
+const RAIL_MIN_WIDTH: u16 = 70;
 
 /// A PTY pane's rendered grid for this frame, produced loop-side from its
 /// terminal backend (state stays pure — the emulator lives with the loop).
@@ -44,15 +53,35 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
             Constraint::Length(1),               // mode bar
         ])
         .split(area);
+    // Sidebars (sessions left, subagents right) are collapsible — by the
+    // user (palette toggles) and automatically on narrow terminals, so the
+    // center PTY keeps a usable column count.
+    let show_sessions = !state.sessions_collapsed && area.width >= SESSIONS_MIN_WIDTH;
+    let show_rail = !state.subagents_collapsed && area.width >= RAIL_MIN_WIDTH;
     // Narrow terminals get a proportional rail instead of a fixed one.
     let rail_w = RAIL_WIDTH.min(rows[0].width / 3);
+    let mut constraints = Vec::new();
+    if show_sessions {
+        constraints.push(Constraint::Length(SESSIONS_WIDTH));
+    }
+    constraints.push(Constraint::Min(1));
+    if show_rail {
+        constraints.push(Constraint::Length(rail_w));
+    }
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(rail_w), Constraint::Min(1)])
+        .constraints(constraints)
         .split(rows[0]);
 
-    render_rail(state, frame, cols[0]);
-    render_detail(state, pty, frame, cols[1]);
+    let mut col = 0;
+    if show_sessions {
+        render_sessions(state, frame, cols[col]);
+        col += 1;
+    }
+    render_detail(state, pty, frame, cols[col]);
+    if show_rail {
+        render_rail(state, frame, cols[col + 1]);
+    }
     render_input(state, frame, rows[1]);
     render_modebar(state, frame, rows[2]);
 
@@ -165,10 +194,11 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
             ("Ctrl-C", "interrupt the focused agent"),
         ],
         Mode::Agent => &[
-            ("j / k / ↑ / ↓", "move the rail cursor"),
+            ("[ / ]", "cursor to sessions / subagents panel"),
+            ("j / k / ↑ / ↓", "move the panel cursor"),
             ("g", "jump to the most actionable agent"),
-            ("Enter", "open cursor agent solo"),
-            ("s / v", "split cursor agent in (h/v)"),
+            ("Enter", "open cursor pane solo"),
+            ("s / v", "split cursor pane in (h/v)"),
             ("u", "drop the focused slot"),
             ("Tab / ← / → / 1-4", "switch detail slot"),
             ("q", "queue focus (needs-you only)"),
@@ -176,8 +206,8 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
             ("D / m / p / r", "review: diff · merge · apply · reject"),
             ("t", "attach: drive the agent's native TUI"),
             ("A", "cycle autonomy tier"),
-            ("n", "new agent"),
-            ("x", "close cursor agent"),
+            ("n / N", "new subagent / new session"),
+            ("x", "close cursor pane"),
             (":", "command palette"),
             ("Esc", "back to normal"),
         ],
@@ -242,8 +272,88 @@ fn state_glyph(pane: &PaneState, tick: u64) -> (&'static str, Color) {
     }
 }
 
-/// Left rail: the roster (every agent, sorted by actionability) over a radar
-/// strip. The rail cursor (`▸`) is shown in AGENT and BROADCAST modes.
+/// Human word for a pane's current state — the dim metadata line under each
+/// panel entry (mirrors `state_glyph`'s order; never color-alone).
+fn state_word(pane: &PaneState) -> &'static str {
+    if pane.pending.is_some() {
+        "needs you"
+    } else if pane.review.is_some() && !pane.exited {
+        "review"
+    } else if pane.attention {
+        "attention"
+    } else if pane.done && !pane.exited {
+        "done"
+    } else if !pane.exited && pane.turn_active {
+        "working"
+    } else if !pane.exited {
+        "idle"
+    } else {
+        "exited"
+    }
+}
+
+/// Dim lowercase section header — the herdr-minimal panel chrome.
+fn header_line(text: String, nc: bool) -> TuiLine<'static> {
+    TuiLine::styled(text, tint(nc, Color::DarkGray).add_modifier(Modifier::BOLD))
+}
+
+/// Left sidebar: orchestrator sessions (PTY panes), herdr-spaces style — a
+/// name line over a dim `state · model` line per entry. The cursor (`▸`)
+/// shows when AGENT-mode panel focus is here (`[`).
+fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
+    let nc = state.no_color;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+    let order = state.sessions_list();
+    let cursor_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
+    let mut lines: Vec<TuiLine> = vec![header_line("sessions".to_string(), nc)];
+    for (row, &idx) in order.iter().enumerate() {
+        let pane = &state.agents[idx];
+        let (glyph, color) = state_glyph(pane, state.tick);
+        let at_cursor = cursor_active && row == state.session_cursor;
+        let cursor = if at_cursor { "▸" } else { " " };
+        let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
+        let mut name_style = Style::default();
+        if shown {
+            name_style = name_style.add_modifier(Modifier::BOLD);
+        }
+        lines.push(TuiLine::raw(""));
+        lines.push(TuiLine::from(vec![
+            Span::raw(cursor.to_string()),
+            Span::styled(glyph.to_string(), tint(nc, color)),
+            Span::raw(" "),
+            Span::styled(pane.agent_id.clone(), name_style),
+        ]));
+        // Which model this session's traffic is pinned to (the glyph already
+        // carries its state; a long `provider:model` id needs every column).
+        let meta = if pane.harness == "attach" {
+            "attach".to_string()
+        } else {
+            pane.model.as_deref().unwrap_or("default model").to_string()
+        };
+        lines.push(TuiLine::from(vec![
+            Span::raw("   "),
+            Span::styled(meta, tint(nc, Color::DarkGray)),
+        ]));
+    }
+    if order.is_empty() {
+        lines.push(TuiLine::raw(""));
+        lines.push(TuiLine::styled("(no sessions)", tint(nc, Color::DarkGray)));
+    }
+    let para = Paragraph::new(lines).block(Block::default().borders(Borders::RIGHT));
+    frame.render_widget(para, chunks[0]);
+    // The `new` affordance, keyboard-flavored.
+    let footer = Paragraph::new(TuiLine::styled("N new session", tint(nc, Color::DarkGray)))
+        .block(Block::default().borders(Borders::RIGHT));
+    frame.render_widget(footer, chunks[1]);
+}
+
+/// Right rail: the subagents roster (every ACP agent, sorted by
+/// actionability) over a radar strip — a name line over a dim
+/// `state · harness` line per entry, herdr-minimal. The rail cursor (`▸`)
+/// shows in AGENT (panel focus here) and BROADCAST modes.
 fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let chunks = Layout::default()
@@ -252,8 +362,14 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         .split(area);
 
     let order = state.roster();
-    let cursor_active = matches!(state.mode, Mode::Agent | Mode::Broadcast);
-    let mut lines: Vec<TuiLine> = Vec::with_capacity(order.len());
+    let cursor_active = (state.mode == Mode::Agent && state.panel == Panel::Subagents)
+        || state.mode == Mode::Broadcast;
+    let header = if state.queue_only {
+        format!("needs you · {}", order.len())
+    } else {
+        "subagents".to_string()
+    };
+    let mut lines: Vec<TuiLine> = vec![header_line(header, nc)];
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
         let (glyph, color) = state_glyph(pane, state.tick);
@@ -273,33 +389,36 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         if pane.selected {
             spans.push(Span::styled(" ✓", tint(nc, Color::Green)));
         }
-        // Non-default autonomy is worth knowing at a glance.
-        match pane.autonomy {
-            crate::tui::state::Autonomy::Manual => {}
-            crate::tui::state::Autonomy::Assisted => {
-                spans.push(Span::styled(" [a]", tint(nc, Color::DarkGray)))
-            }
-            crate::tui::state::Autonomy::Auto => {
-                spans.push(Span::styled(" [A]", tint(nc, Color::DarkGray)))
-            }
-        }
-        // Cumulative cost, when the upstream meters it (the `$` column).
-        if let Some(cost) = &pane.cost {
-            spans.push(Span::styled(fmt_cost(cost), tint(nc, Color::DarkGray)));
-        }
-        // The fleet-allocated dev-server port, so N servers stay tellable apart.
-        if let Some(port) = pane.port {
-            spans.push(Span::styled(format!(" :{port}"), tint(nc, Color::DarkGray)));
+        lines.push(TuiLine::raw(""));
+        lines.push(TuiLine::from(spans));
+        // Dim metadata line: state word, harness tag, then the quantitative
+        // extras (time-in-state, dev-server port, metered cost, autonomy).
+        let mut meta = vec![Span::raw("   ")];
+        let mut words = vec![state_word(pane).to_string()];
+        if !pane.harness.is_empty() {
+            words.push(pane.harness.clone());
         }
         // Time-in-state: how long it has been working/blocked/done — the
         // "is it stuck?" signal. Idle and dead rows stay calm.
         if let Some(elapsed) = pane.elapsed_label(state.tick) {
-            spans.push(Span::styled(
-                format!(" {elapsed}"),
-                tint(nc, Color::DarkGray),
-            ));
+            words.push(elapsed);
         }
-        lines.push(TuiLine::from(spans));
+        // The fleet-allocated dev-server port, so N servers stay tellable apart.
+        if let Some(port) = pane.port {
+            words.push(format!(":{port}"));
+        }
+        // Cumulative cost, when the upstream meters it.
+        if let Some(cost) = &pane.cost {
+            words.push(fmt_cost(cost).trim_start().to_string());
+        }
+        // Non-default autonomy is worth knowing at a glance.
+        match pane.autonomy {
+            crate::tui::state::Autonomy::Manual => {}
+            crate::tui::state::Autonomy::Assisted => words.push("[a]".to_string()),
+            crate::tui::state::Autonomy::Auto => words.push("[A]".to_string()),
+        }
+        meta.push(Span::styled(words.join(" · "), tint(nc, Color::DarkGray)));
+        lines.push(TuiLine::from(meta));
         // Actionable rows expand inline: risk + what the agent wants, and (on
         // the cursor row in AGENT mode) the resolve keys.
         if let Some(pending) = &pane.pending {
@@ -341,19 +460,15 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             lines.push(TuiLine::from(detail));
         }
     }
-    if lines.is_empty() {
+    if order.is_empty() {
+        lines.push(TuiLine::raw(""));
         if state.queue_only {
             lines.push(TuiLine::styled("✓ all clear", tint(nc, Color::Green)));
         } else {
-            lines.push(TuiLine::styled("(no agents)", tint(nc, Color::DarkGray)));
+            lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
         }
     }
-    let title = if state.queue_only {
-        format!(" needs you · {} ", order.len())
-    } else {
-        format!(" agents · {} ", state.agents.len())
-    };
-    let roster = Paragraph::new(lines).block(Block::default().borders(Borders::RIGHT).title(title));
+    let roster = Paragraph::new(lines).block(Block::default().borders(Borders::LEFT));
     frame.render_widget(roster, chunks[0]);
 
     // Radar: one glyph per agent in roster order — peripheral vision of every
@@ -365,7 +480,10 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             Span::styled(glyph.to_string(), tint(nc, color))
         })
         .collect();
-    frame.render_widget(Paragraph::new(TuiLine::from(radar)), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(TuiLine::from(radar)).block(Block::default().borders(Borders::LEFT)),
+        chunks[1],
+    );
 }
 
 /// Detail viewport: the shown agents in a horizontal or vertical split.
@@ -754,8 +872,11 @@ fn render_picker(picker: &PickerState, nc: bool, frame: &mut Frame, area: Rect) 
             })
             .collect()
     };
-    let para =
-        Paragraph::new(items).block(Block::default().borders(Borders::ALL).title(" pick agent "));
+    let title = match picker.purpose {
+        PickerPurpose::Subagent => " pick agent ",
+        PickerPurpose::Session => " new session ",
+    };
+    let para = Paragraph::new(items).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(para, popup);
 }
 
@@ -814,7 +935,9 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::state::{AppState, DetailLayout, Line, Mode, PaneState, PickerState};
+    use crate::tui::state::{
+        AppState, DetailLayout, Line, Mode, PaneState, PickerPurpose, PickerState,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -843,7 +966,52 @@ mod tests {
     fn rail_lists_every_agent_even_when_detail_is_solo() {
         let text = draw(&mut agents3(), 80, 24);
         assert!(text.contains("a0") && text.contains("a1") && text.contains("a2"));
-        assert!(text.contains("agents · 3"), "rail header with count");
+        assert!(text.contains("subagents"), "rail header");
+    }
+
+    /// agents3 plus a PTY orchestrator session pinned to a model.
+    fn with_session() -> AppState {
+        let mut st = agents3();
+        let mut orch = PaneState::new("orchestrator".into(), "claude".into());
+        orch.kind = crate::tui::state::PaneKind::Pty;
+        orch.harness = "pty".into();
+        orch.model = Some("supergrok:grok-4.5".into());
+        st.agents.push(orch);
+        st
+    }
+
+    #[test]
+    fn sessions_panel_shows_binary_model_and_footer_on_wide_terminals() {
+        let text = draw(&mut with_session(), 130, 30);
+        assert!(text.contains("sessions"), "left header");
+        assert!(text.contains("claude"), "session binary");
+        assert!(text.contains("supergrok:grok-4.5"), "session model");
+        assert!(text.contains("N new session"), "footer affordance");
+    }
+
+    #[test]
+    fn sessions_panel_folds_on_narrow_terminals_and_on_collapse() {
+        let mut st = with_session();
+        let text = draw(&mut st, 80, 24);
+        assert!(!text.contains("N new session"), "auto-collapsed at 80 cols");
+        // Wide but user-collapsed: stays hidden.
+        st.sessions_collapsed = true;
+        let text = draw(&mut st, 130, 30);
+        assert!(!text.contains("N new session"), "user collapse wins");
+        // Both sidebars collapsed: the detail still renders.
+        st.subagents_collapsed = true;
+        let text = draw(&mut st, 130, 30);
+        assert!(!text.contains("subagents"), "rail hidden");
+    }
+
+    #[test]
+    fn subagent_rows_carry_a_state_and_harness_meta_line() {
+        let mut st = agents3();
+        st.agents[1].harness = "claude".into();
+        st.agents[1].turn_active = true;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("working · claude"), "meta line: {text}");
+        assert!(text.contains("idle"), "calm rows say idle");
     }
 
     #[test]
@@ -991,6 +1159,7 @@ mod tests {
         st.picker = Some(PickerState {
             agents: vec!["alpha".into(), "beta".into()],
             selected: 0,
+            purpose: PickerPurpose::Subagent,
         });
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("alpha") && text.contains("beta"));
@@ -1281,7 +1450,7 @@ mod tests {
             focus: 0,
         };
         let text = draw(&mut st, 80, 24);
-        assert!(text.contains("(no agents)"), "rail placeholder");
+        assert!(text.contains("(no subagents)"), "rail placeholder");
         assert!(text.contains("no agent shown"), "detail placeholder");
     }
 
@@ -1317,6 +1486,7 @@ mod tests {
         st.picker = Some(PickerState {
             agents: vec!["alpha".into()],
             selected: 0,
+            purpose: PickerPurpose::Subagent,
         });
         st.notice = Some("spawn failed".into());
 

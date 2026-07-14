@@ -145,6 +145,18 @@ One screen: a fixed **left rail** (the control tower) beside a **detail region**
 "splittable detail of re-rendered agents" with "the orchestrator's native TUI + optional
 extra panes."
 
+> **Shipped deviation (2026-07-14, herdr-layout round):** the single left rail became
+> **two collapsible sidebars** around the detail region — **sessions left** (every
+> orchestrator PTY session as `binary` over a dim model line; `Ctrl-A N` spawns more,
+> `[`/`]` moves the AGENT cursor between panels), **subagents right** (the
+> actionability-sorted roster, restyled herdr-minimal: dim lowercase headers, per-row
+> `state · harness` meta line, no boxed titles). Palette `toggle sessions` /
+> `toggle subagents` collapse either side; narrow terminals auto-collapse (left
+> < 110 cols, right < 70). Panel slots are reserved for two deferred sections:
+> **loops** (below sessions) and **states** (below subagents). `fleet-state.json`
+> records `sessions: [{binary, model}]` instead of a single `orchestrator`. The
+> diagrams below predate this and show the single-rail layout.
+
 ```
 ┌ roster · 4 ─────────┐┌ orchestrator · claude-code ──────────────────────────────────┐
 │▸🔴 api-1  needs you  ││  (native Claude Code TUI, full fidelity, PTY-hosted)          │

@@ -72,6 +72,15 @@ pub enum AppEvent {
     /// PTY pane and show it solo. Closing it detaches (kills the interactive
     /// child; the ACP session is untouched).
     PtyAttached { record_id: String, agent_id: String },
+    /// A new orchestrator session launched on a PTY: add it to the sessions
+    /// panel and show it solo.
+    SessionSpawned {
+        record_id: String,
+        /// The interactive binary hosted in the pane (`claude`, `codex`, …).
+        binary: String,
+        /// The model the session's LLM traffic is pinned to, if any.
+        model: Option<String>,
+    },
     /// The loop checked a finished turn's worktree: non-empty diff (and
     /// passing checks) — the agent is ready to review.
     ReviewReady {
@@ -127,6 +136,9 @@ pub enum Effect {
     Notify { title: String, body: String },
     /// Launch a new agent session (the loop performs the async launch).
     SpawnAgent { agent_id: String },
+    /// Launch a new orchestrator session: `binary`'s harness on a fresh PTY
+    /// pane, routed through the daemon like the initial `--agent` one.
+    SpawnSession { binary: String },
     /// Shut down and remove the session `record_id`.
     CloseAgent { record_id: String },
     /// Route one key press to a PTY pane's child (the loop encodes it via
