@@ -184,7 +184,7 @@ impl BitrouterError {
             Self::NotFound(_) => "not_found",
             Self::RateLimited { .. } => "rate_limit_exceeded",
             Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
-            Self::UpstreamBadRequest { .. } => "upstream_bad_request",
+            Self::UpstreamBadRequest { .. } => "invalid_request",
             Self::Upstream { .. } => "upstream_bad_gateway",
             Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
             Self::UpstreamAuth { .. } => "upstream_auth_required",
@@ -267,12 +267,13 @@ impl BitrouterError {
 
     /// A message safe to return to an untrusted HTTP/SSE client.
     ///
-    /// Upstream diagnostics may contain echoed prompts, credentials, provider
-    /// stack traces, or account details. Keep those on the internal error while
-    /// exposing only a stable summary at the public boundary.
+    /// Provider bad-request payloads are intentionally preserved so callers can
+    /// correct rejected parameters. Other upstream diagnostics may contain
+    /// echoed prompts, credentials, provider stack traces, or account details,
+    /// so they expose only a stable summary at the public boundary.
     pub fn public_message(&self) -> String {
         match self {
-            Self::UpstreamBadRequest { .. } => "upstream rejected the request".to_string(),
+            Self::UpstreamBadRequest { error } => upstream_payload_text(error),
             Self::Upstream { .. } => "upstream request failed".to_string(),
             Self::UpstreamInvalidResponse { .. } => {
                 "upstream returned an invalid response".to_string()
@@ -357,13 +358,13 @@ mod tests {
 
         assert_eq!(error.status(), 400);
         assert_eq!(error.error_type(), "invalid_request_error");
-        assert_eq!(error.error_code(), "upstream_bad_request");
+        assert_eq!(error.error_code(), "invalid_request");
         assert_eq!(error.kind(), ErrorKind::BadRequest);
         assert_eq!(
             serde_json::to_value(error.kind()).unwrap(),
             serde_json::json!("bad_request")
         );
-        assert_eq!(error.public_message(), "upstream rejected the request");
+        assert_eq!(error.public_message(), "provider secret");
         assert!(
             error
                 .to_envelope()
