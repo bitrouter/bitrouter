@@ -442,14 +442,17 @@ it.
 **Escape hatch:** the trait keeps `alacritty_terminal` / **libghostty-FFI** (herdr's pick)
 available if cross-terminal fidelity proves decisive.
 
-> **Implementation note (B3, shipped):** the default backend is
-> `alacritty_terminal`, not wezterm-term — wezterm-term is not published to
+> **Implementation note (B3, shipped; encoder upgraded post-B4):** the grid
+> is `alacritty_terminal`, not wezterm-term — wezterm-term is not published to
 > crates.io, and a git dependency would make the published `bitrouter` binary
-> unpublishable. The input encoder (the reason wezterm-term was preferred)
-> lives behind `TerminalBackend` as a mode-aware implementation in
-> `apps/bitrouter/src/tui/term.rs`; it is the §11 spike's probe surface, and a
-> wezterm-term (vendored) or libghostty backend can replace it through the
-> trait without touching the TUI. **Validation gate:** before
+> unpublishable. The **input encoder is wezterm's own**, from the published
+> crates: `termwiz::input::KeyCode::encode` (legacy/DECCKM) and
+> `wezterm_input_types::KeyEvent::encode_kitty` (kitty protocol), driven by
+> the keyboard-mode state the alacritty emulator tracks (`kitty_keyboard`
+> enabled, so an inner app's `CSI > flags u` push/pop switches the encoding —
+> the herdr #106 class is covered). A wezterm-term (vendored) or libghostty
+> grid can still replace the backend through the `TerminalBackend` trait
+> without touching the TUI. **Validation gate:** before
 committing, a spike must A/B a live `claude-code` + `codex` pane on our target terminal
 matrix (`{Ghostty, iTerm2, kitty, Terminal.app, WezTerm, tmux, Windows Terminal}`) — the
 Shift-Enter-under-kitty class of bug is the thing to probe. **Windows caveat:** PTY-composite

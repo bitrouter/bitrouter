@@ -5,15 +5,19 @@
 //! responses (DA/DSR answers). The default implementation rides
 //! `alacritty_terminal` — TUI_SPEC §11 picked wezterm-term for its input
 //! encoder, but wezterm-term is not published to crates.io (a git dependency
-//! would make this binary unpublishable), so the trait is exactly the escape
-//! hatch §11 keeps: the input encoder lives here (mode-aware, the §11 spike's
-//! probe surface) and a wezterm-term/libghostty backend can slot in later
-//! without touching the TUI.
+//! would make this binary unpublishable). The encoders themselves, however,
+//! ARE published, and [`encode_key`] delegates to them: legacy/DECCKM via
+//! `termwiz::input::KeyCode::encode`, and — when the inner app pushed kitty
+//! keyboard flags (tracked by the emulator, `kitty_keyboard: true`) —
+//! `wezterm_input_types::KeyEvent::encode_kitty`, the same encoder wezterm's
+//! GUI feeds its own panes. The trait remains §11's escape hatch: a full
+//! wezterm-term/libghostty grid can slot in later without touching the TUI.
 //!
 //! Fidelity mechanics (§9) implemented at this layer:
-//! - **Input encoding** is mode-aware (application cursor keys, bracketed
-//!   paste); `Ctrl-C` encodes to `0x03` — it interrupts the inner agent, it
-//!   does not quit the manager.
+//! - **Input encoding** follows what the inner app negotiated (kitty flags,
+//!   application cursor keys, newline mode); `Ctrl-C` encodes to an
+//!   interrupt (`0x03` legacy, `CSI 99;5u` kitty) — it interrupts the inner
+//!   agent, it does not quit the manager.
 //! - **OSC passthrough**: [`Osc52Scanner`] peels OSC-52 clipboard writes out
 //!   of the PTY stream so the host loop can re-emit them verbatim to the
 //!   outer terminal (the tmux `allow-passthrough` pattern), capped so a
@@ -29,6 +33,8 @@ use alacritty_terminal::vte::ansi::{Color as VtColor, NamedColor, Processor, Rgb
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TuiLine, Span};
+use termwiz::escape::csi::KittyKeyboardFlags;
+use termwiz::input::{KeyCodeEncodeModes, KeyboardEncoding};
 
 /// The VT emulation core under a PTY pane. Object-safe so the pane host can
 /// swap cores (§11's validation-gated backend decision).
@@ -99,8 +105,14 @@ impl AlacrittyBackend {
             cols: cols.max(2) as usize,
             rows: rows.max(1) as usize,
         };
+        let config = Config {
+            // Let the inner app negotiate the kitty keyboard protocol — the
+            // tracked flags drive the wezterm kitty encoder in `encode_key`.
+            kitty_keyboard: true,
+            ..Config::default()
+        };
         Self {
-            term: Term::new(Config::default(), &size, proxy.clone()),
+            term: Term::new(config, &size, proxy.clone()),
             parser: Processor::new(),
             proxy,
         }
@@ -174,7 +186,7 @@ impl TerminalBackend for AlacrittyBackend {
     }
 
     fn encode_key(&self, key: &KeyEvent) -> Option<Vec<u8>> {
-        encode_key(key, self.term.mode().contains(TermMode::APP_CURSOR))
+        encode_key(key, self.term.mode())
     }
 
     fn drain_responses(&mut self) -> Vec<u8> {
@@ -214,112 +226,148 @@ fn vt_color(c: VtColor) -> Color {
     }
 }
 
-/// Encode a crossterm key event to the inner PTY's expected bytes. Legacy
-/// xterm encoding, mode-aware for DECCKM (application cursor keys). `Ctrl-C`
-/// → `0x03` (interrupt the agent, never quit the manager — §9/§12).
-pub fn encode_key(key: &KeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+/// Encode a crossterm key event to the inner PTY's expected bytes via
+/// **wezterm's encoders** — the piece TUI_SPEC §11 wanted from wezterm-term,
+/// available from the published crates: legacy/DECCKM encoding is
+/// `termwiz::input::KeyCode::encode`, and when the inner app pushed kitty
+/// keyboard flags (tracked by the emulator) the key goes through
+/// `wezterm_input_types::KeyEvent::encode_kitty` — exactly what wezterm's
+/// GUI feeds its own panes. `Ctrl-C` still encodes to an interrupt (`0x03`
+/// legacy / `CSI 99;5u` under kitty) — never a manager quit (§9/§12).
+pub fn encode_key(key: &KeyEvent, mode: &TermMode) -> Option<Vec<u8>> {
+    let mut mods = map_mods(key.modifiers);
+    if key.code == KeyCode::BackTab {
+        // crossterm's BackTab is Tab+SHIFT.
+        mods |= termwiz::input::Modifiers::SHIFT;
+    }
 
-    // Arrow/nav keys: CSI (normal) or SS3 (application mode); modifiers use
-    // the xterm `CSI 1;<mod>` form.
-    let csi_mod = |base: &str, final_ch: char| -> Vec<u8> {
-        let m = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
-        if m == 1 {
-            let intro: &str = if app_cursor && base == "1" {
-                "\x1bO"
-            } else {
-                "\x1b["
-            };
-            if base == "1" {
-                return format!("{intro}{final_ch}").into_bytes();
-            }
-            return format!("\x1b[{base}{final_ch}").into_bytes();
+    // Kitty path: the inner app negotiated the protocol — encode with
+    // wezterm's kitty encoder, honoring the exact flag set it pushed.
+    if mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+        let event = wezterm_input_types::KeyEvent {
+            key: map_key_kitty(key.code)?,
+            modifiers: mods,
+            leds: wezterm_input_types::KeyboardLedStatus::empty(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+        };
+        let encoded = event.encode_kitty(kitty_flags(mode));
+        if !encoded.is_empty() {
+            return Some(encoded.into_bytes());
         }
-        format!("\x1b[{base};{m}{final_ch}").into_bytes()
+        // Inexpressible without a raw event (rare) — fall through to legacy.
+    }
+
+    let modes = KeyCodeEncodeModes {
+        encoding: KeyboardEncoding::Xterm,
+        application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
+        newline_mode: mode.contains(TermMode::LINE_FEED_NEW_LINE),
+        // XTMODKEYS (modifyOtherKeys) is not tracked by the emulator; the
+        // kitty path supersedes it for the harnesses we host.
+        modify_other_keys: None,
     };
+    map_key(key.code)?
+        .encode(mods, modes, true)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(String::into_bytes)
+}
 
-    let bytes = match key.code {
-        KeyCode::Char(c) => {
-            if ctrl {
-                // Ctrl-A..Z → 0x01..0x1A (Ctrl-C interrupts the inner agent).
-                let lower = c.to_ascii_lowercase();
-                if lower.is_ascii_lowercase() {
-                    let byte = (lower as u8 - b'a') + 1;
-                    if alt { vec![0x1b, byte] } else { vec![byte] }
-                } else {
-                    return None;
-                }
-            } else {
-                let mut out = Vec::new();
-                if alt {
-                    out.push(0x1b);
-                }
-                let mut buf = [0u8; 4];
-                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-                out
-            }
-        }
-        KeyCode::Enter => {
-            if alt {
-                vec![0x1b, b'\r']
-            } else {
-                vec![b'\r']
-            }
-        }
-        KeyCode::Tab => {
-            if shift {
-                b"\x1b[Z".to_vec()
-            } else {
-                vec![b'\t']
-            }
-        }
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Backspace => {
-            if alt {
-                vec![0x1b, 0x7f]
-            } else {
-                vec![0x7f]
-            }
-        }
-        KeyCode::Esc => vec![0x1b],
-        KeyCode::Up => csi_mod("1", 'A'),
-        KeyCode::Down => csi_mod("1", 'B'),
-        KeyCode::Right => csi_mod("1", 'C'),
-        KeyCode::Left => csi_mod("1", 'D'),
-        KeyCode::Home => csi_mod("1", 'H'),
-        KeyCode::End => csi_mod("1", 'F'),
-        KeyCode::PageUp => csi_mod("5", '~'),
-        KeyCode::PageDown => csi_mod("6", '~'),
-        KeyCode::Insert => csi_mod("2", '~'),
-        KeyCode::Delete => csi_mod("3", '~'),
-        KeyCode::F(n @ 1..=4) => {
-            // F1–F4 are SS3 P/Q/R/S unmodified, CSI 1;<mod> P… modified.
-            let final_ch = b"PQRS"[(n - 1) as usize] as char;
-            let m = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
-            if m == 1 {
-                format!("\x1bO{final_ch}").into_bytes()
-            } else {
-                format!("\x1b[1;{m}{final_ch}").into_bytes()
-            }
-        }
-        KeyCode::F(n @ 5..=12) => {
-            let base = match n {
-                5 => 15,
-                6 => 17,
-                7 => 18,
-                8 => 19,
-                9 => 20,
-                10 => 21,
-                11 => 23,
-                _ => 24,
-            };
-            csi_mod(&base.to_string(), '~')
-        }
+/// crossterm key → wezterm-input-types key for the kitty encoder, which
+/// (per its own docs) wants Enter/Tab/Escape/Backspace as their `Char`
+/// control forms.
+fn map_key_kitty(code: KeyCode) -> Option<wezterm_input_types::KeyCode> {
+    use wezterm_input_types::KeyCode as Wz;
+    Some(match code {
+        KeyCode::Char(c) => Wz::Char(c),
+        KeyCode::Enter => Wz::Char('\r'),
+        KeyCode::Tab | KeyCode::BackTab => Wz::Char('\t'),
+        KeyCode::Esc => Wz::Char('\u{1b}'),
+        KeyCode::Backspace => Wz::Char('\u{8}'),
+        KeyCode::Delete => Wz::Char('\u{7f}'),
+        KeyCode::Up => Wz::UpArrow,
+        KeyCode::Down => Wz::DownArrow,
+        KeyCode::Left => Wz::LeftArrow,
+        KeyCode::Right => Wz::RightArrow,
+        KeyCode::Home => Wz::Home,
+        KeyCode::End => Wz::End,
+        KeyCode::PageUp => Wz::PageUp,
+        KeyCode::PageDown => Wz::PageDown,
+        KeyCode::Insert => Wz::Insert,
+        KeyCode::F(n) => Wz::Function(n),
         _ => return None,
-    };
-    Some(bytes)
+    })
+}
+
+/// The emulator's kitty keyboard state → termwiz's flag set (1:1 bits).
+fn kitty_flags(mode: &TermMode) -> KittyKeyboardFlags {
+    let mut flags = KittyKeyboardFlags::NONE;
+    flags.set(
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        mode.contains(TermMode::DISAMBIGUATE_ESC_CODES),
+    );
+    flags.set(
+        KittyKeyboardFlags::REPORT_EVENT_TYPES,
+        mode.contains(TermMode::REPORT_EVENT_TYPES),
+    );
+    flags.set(
+        KittyKeyboardFlags::REPORT_ALTERNATE_KEYS,
+        mode.contains(TermMode::REPORT_ALTERNATE_KEYS),
+    );
+    flags.set(
+        KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+        mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
+    );
+    flags.set(
+        KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT,
+        mode.contains(TermMode::REPORT_ASSOCIATED_TEXT),
+    );
+    flags
+}
+
+/// crossterm key → termwiz key. `None` = a key we deliberately don't forward
+/// (media keys, bare modifiers).
+fn map_key(code: KeyCode) -> Option<termwiz::input::KeyCode> {
+    use termwiz::input::KeyCode as Tw;
+    Some(match code {
+        KeyCode::Char(c) => Tw::Char(c),
+        KeyCode::Enter => Tw::Enter,
+        KeyCode::Tab | KeyCode::BackTab => Tw::Tab,
+        KeyCode::Backspace => Tw::Backspace,
+        KeyCode::Esc => Tw::Escape,
+        KeyCode::Up => Tw::UpArrow,
+        KeyCode::Down => Tw::DownArrow,
+        KeyCode::Left => Tw::LeftArrow,
+        KeyCode::Right => Tw::RightArrow,
+        KeyCode::Home => Tw::Home,
+        KeyCode::End => Tw::End,
+        KeyCode::PageUp => Tw::PageUp,
+        KeyCode::PageDown => Tw::PageDown,
+        KeyCode::Insert => Tw::Insert,
+        KeyCode::Delete => Tw::Delete,
+        KeyCode::F(n) => Tw::Function(n),
+        _ => return None,
+    })
+}
+
+/// crossterm modifiers → termwiz modifiers.
+fn map_mods(m: KeyModifiers) -> termwiz::input::Modifiers {
+    use termwiz::input::Modifiers as Tw;
+    let mut out = Tw::NONE;
+    if m.contains(KeyModifiers::SHIFT) {
+        out |= Tw::SHIFT;
+    }
+    if m.contains(KeyModifiers::ALT) {
+        out |= Tw::ALT;
+    }
+    if m.contains(KeyModifiers::CONTROL) {
+        out |= Tw::CTRL;
+    }
+    if m.contains(KeyModifiers::SUPER) {
+        out |= Tw::SUPER;
+    }
+    out
 }
 
 /// OSC-52 sequences beyond this are dropped, not forwarded (herdr's cap —
@@ -477,34 +525,77 @@ mod tests {
     #[test]
     fn ctrl_c_encodes_to_interrupt_not_quit() {
         let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(encode_key(&key, false), Some(vec![0x03]));
+        assert_eq!(encode_key(&key, &TermMode::default()), Some(vec![0x03]));
     }
 
     #[test]
     fn arrows_honor_application_cursor_mode() {
         let up = KeyEvent::from(KeyCode::Up);
-        assert_eq!(encode_key(&up, false), Some(b"\x1b[A".to_vec()));
-        assert_eq!(encode_key(&up, true), Some(b"\x1bOA".to_vec()));
+        assert_eq!(
+            encode_key(&up, &TermMode::default()),
+            Some(b"\x1b[A".to_vec())
+        );
+        // Drive DECCKM through the emulator, not a hand-set flag: the inner
+        // app enables application cursor keys and the encoder follows.
+        let mut b = AlacrittyBackend::new(20, 4);
+        b.feed(b"\x1b[?1h");
+        assert_eq!(b.encode_key(&up), Some(b"\x1bOA".to_vec()));
         // Modified arrows always use the CSI 1;<mod> form.
         let ctrl_up = KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL);
-        assert_eq!(encode_key(&ctrl_up, true), Some(b"\x1b[1;5A".to_vec()));
+        assert_eq!(b.encode_key(&ctrl_up), Some(b"\x1b[1;5A".to_vec()));
     }
 
     #[test]
     fn plain_and_alt_keys_encode() {
+        let m = TermMode::default();
         let a = KeyEvent::from(KeyCode::Char('a'));
-        assert_eq!(encode_key(&a, false), Some(b"a".to_vec()));
+        assert_eq!(encode_key(&a, &m), Some(b"a".to_vec()));
         let alt_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
-        assert_eq!(encode_key(&alt_a, false), Some(vec![0x1b, b'a']));
+        assert_eq!(encode_key(&alt_a, &m), Some(vec![0x1b, b'a']));
         let enter = KeyEvent::from(KeyCode::Enter);
-        assert_eq!(encode_key(&enter, false), Some(vec![b'\r']));
+        assert_eq!(encode_key(&enter, &m), Some(vec![b'\r']));
         let del = KeyEvent::from(KeyCode::Delete);
-        assert_eq!(encode_key(&del, false), Some(b"\x1b[3~".to_vec()));
+        assert_eq!(encode_key(&del, &m), Some(b"\x1b[3~".to_vec()));
         let f5 = KeyEvent::from(KeyCode::F(5));
-        assert_eq!(encode_key(&f5, false), Some(b"\x1b[15~".to_vec()));
-        // The emulator's own cursor mode never leaks into typed characters.
+        assert_eq!(encode_key(&f5, &m), Some(b"\x1b[15~".to_vec()));
         let utf8 = KeyEvent::from(KeyCode::Char('é'));
-        assert_eq!(encode_key(&utf8, false), Some("é".as_bytes().to_vec()));
+        assert_eq!(encode_key(&utf8, &m), Some("é".as_bytes().to_vec()));
+        let shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!(encode_key(&shift_tab, &m), Some(b"\x1b[Z".to_vec()));
+    }
+
+    #[test]
+    fn kitty_negotiation_switches_the_encoder() {
+        // The herdr-#106 class of bug this swap retires: the inner app pushes
+        // kitty keyboard flags; the encoder must follow what was negotiated.
+        let mut b = AlacrittyBackend::new(20, 4);
+        let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        // Legacy: Shift-Enter is indistinguishable from Enter; Ctrl-C is 0x03.
+        assert_eq!(b.encode_key(&shift_enter), Some(vec![b'\r']));
+        assert_eq!(b.encode_key(&ctrl_c), Some(vec![0x03]));
+
+        // The inner app pushes DISAMBIGUATE_ESCAPE_CODES (kitty flag 1).
+        b.feed(b"\x1b[>1u");
+        assert_eq!(
+            b.encode_key(&shift_enter),
+            Some(b"\x1b[13;2u".to_vec()),
+            "Shift-Enter becomes expressible under kitty"
+        );
+        assert_eq!(
+            b.encode_key(&ctrl_c),
+            Some(b"\x1b[99;5u".to_vec()),
+            "Ctrl-C is CSI-u encoded — still an interrupt to the app"
+        );
+        // Plain text stays plain under DISAMBIGUATE alone.
+        let a = KeyEvent::from(KeyCode::Char('a'));
+        assert_eq!(b.encode_key(&a), Some(b"a".to_vec()));
+
+        // The app pops its flags on exit: back to legacy encoding.
+        b.feed(b"\x1b[<u");
+        assert_eq!(b.encode_key(&shift_enter), Some(vec![b'\r']));
+        assert_eq!(b.encode_key(&ctrl_c), Some(vec![0x03]));
     }
 
     #[test]
