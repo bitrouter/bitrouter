@@ -236,14 +236,21 @@ fn port_env(port: Option<u16>) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// Terse harness tag for a pane header: the basename of the agent command
-/// (e.g. `/usr/local/bin/claude` → `claude`).
+/// Terse harness tag for a pane header / roster meta line. Invocation
+/// matching against the catalog names the harness even through a runner
+/// (`npx …claude-code-acp…` → `claude`, not `npx`); a non-catalog agent
+/// falls back to the command basename (`/usr/local/bin/foo` → `foo`).
 fn harness_tag(transport: &bitrouter_sdk::acp::AcpTransport) -> String {
     match transport {
-        bitrouter_sdk::acp::AcpTransport::Stdio { command, .. } => std::path::Path::new(command)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| command.clone()),
+        bitrouter_sdk::acp::AcpTransport::Stdio { command, args, .. } => {
+            if let Some(h) = crate::harness::match_invocation(command, args) {
+                return h.interactive_binary.unwrap_or(h.id).to_string();
+            }
+            std::path::Path::new(command)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| command.clone())
+        }
     }
 }
 
@@ -1342,6 +1349,29 @@ mod tests {
         assert!(
             super::previous_fleet_notice(&prev).is_none(),
             "an empty fleet is not worth a notice"
+        );
+    }
+
+    #[test]
+    fn harness_tag_names_the_catalog_harness_through_a_runner() {
+        let stdio = |command: &str, args: &[&str]| bitrouter_sdk::acp::AcpTransport::Stdio {
+            command: command.to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env: std::collections::HashMap::new(),
+        };
+        // Runner invocations map to the catalog harness, not the runner.
+        assert_eq!(
+            super::harness_tag(&stdio(
+                "npx",
+                &["-y", "@zed-industries/claude-code-acp@latest"]
+            )),
+            "claude"
+        );
+        assert_eq!(super::harness_tag(&stdio("codex-acp", &[])), "codex");
+        // A non-catalog agent keeps the command basename.
+        assert_eq!(
+            super::harness_tag(&stdio("/usr/local/bin/my-agent", &[])),
+            "my-agent"
         );
     }
 
