@@ -34,12 +34,16 @@ use bitrouter_cloud_sdk::management::{
     presets, usage,
 };
 
+use super::api::ApiArgs;
+
 /// `bitrouter cloud …`. All variants land in [`run`].
 #[derive(Debug, Subcommand)]
 pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
     /// `/v1/*` base URL the CLI will target.
     Whoami,
+    /// Make an authenticated request to a relative BitRouter Cloud API endpoint.
+    Api(ApiArgs),
     /// Sign in to BitRouter Cloud from this terminal.
     ///
     /// Prints a verification URL — open it, approve, and this CLI stores an
@@ -567,6 +571,7 @@ pub async fn run(action: CloudAction, format: crate::output::Format) -> Result<(
 async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
     match action {
         CloudAction::Whoami => whoami().await,
+        CloudAction::Api(args) => super::api::run(args).await.map_err(SdkError::Auth),
         CloudAction::Login {
             authorization_server,
             client_id,
@@ -1424,5 +1429,19 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn cloud_api_subcommand_is_wired() {
+        let parsed =
+            CloudHarness::try_parse_from(["test", "api", "/v1/models", "--include"]).unwrap();
+
+        match parsed.action {
+            CloudAction::Api(args) => {
+                assert_eq!(args.endpoint, "/v1/models");
+                assert!(args.include);
+            }
+            other => panic!("expected API action, got {other:?}"),
+        }
     }
 }

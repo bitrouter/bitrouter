@@ -22,6 +22,7 @@
 //! — typed wrappers around every endpoint on
 //! [`bitrouter_cloud_sdk::management::ManagementClient`].
 
+pub mod api;
 pub mod cli;
 
 use std::sync::Arc;
