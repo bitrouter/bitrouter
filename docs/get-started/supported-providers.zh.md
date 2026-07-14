@@ -12,11 +12,11 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `alibaba` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 8 |
 | `alibaba_cn` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 13 |
 | `alibaba_coding_plan` | Alibaba Cloud | CN | openai | Subscription | 8 |
-| `ambient` | Ambient | US | openai | Per-token | 2 |
+| `ambient` | Ambient | US | openai | Per-token | 3 |
 | `anthropic` | Anthropic | US | anthropic | Per-token | 8 |
 | `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
 | `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 14 |
-| `azure` | Microsoft Azure | US | openai, responses | Per-token | 15 |
+| `azure` | Microsoft Azure | US | openai, responses | Per-token | 18 |
 | `bitrouter` | BitRouter | US | openai | Per-token | 48 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
 | `cerebras` | Cerebras | US | openai | Per-token | 3 |
