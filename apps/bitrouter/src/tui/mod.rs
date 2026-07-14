@@ -57,7 +57,17 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     // provider catalogs for the config-routed orchestrators (opencode, pi).
     let models = fetch_models(&cfg.server.listen).await;
 
-    let initial_pane = if let Some(h) = crate::harness::by_interactive_binary(agent_id) {
+    // `--agent` names the orchestrator by its interactive binary (`claude`,
+    // `agy`, …) or by its catalog id (`antigravity`) — but a configured
+    // `agents:` entry with the same name keeps meaning the ACP pane.
+    let orchestrator = crate::harness::by_interactive_binary(agent_id).or_else(|| {
+        if cfg.agents.contains_key(agent_id) {
+            None
+        } else {
+            crate::harness::by_id(agent_id).filter(|h| h.interactive_binary.is_some())
+        }
+    });
+    let initial_pane = if let Some(h) = orchestrator {
         // ── Orchestrator: the native harness TUI in a PTY pane. ──
         if worktree.is_some() {
             anyhow::bail!(

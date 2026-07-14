@@ -39,8 +39,10 @@ pub struct Harness {
     pub description: &'static str,
     /// Upstream project URL — the source of the recommended invocation.
     pub project_url: &'static str,
-    /// The ACP adapter invocation (`command` + `args`) for `bitrouter spawn`.
-    pub acp_command: &'static str,
+    /// The ACP adapter invocation (`command` + `args`) for `bitrouter spawn`,
+    /// when the harness has one. `None` for interactive-only harnesses
+    /// (grok, antigravity) — they have no headless ACP adapter today.
+    pub acp_command: Option<&'static str>,
     /// Args passed to [`acp_command`](Self::acp_command).
     pub acp_args: &'static [&'static str],
     /// A substring that identifies this harness inside a configured agent's
@@ -98,6 +100,12 @@ pub enum Routing {
     /// CLI flag. Interactive facet only; headless spawn launches direct
     /// with a note.
     PiConfigDir,
+    /// No gateway redirection, by design: the harness IS a subscription
+    /// client whose session the daemon itself borrows as a provider (grok →
+    /// `supergrok`, agy → `google-ai`) — routing it through the daemon would
+    /// loop back to the same backend on the same credential. It launches
+    /// with its own auth; `--model` forwards as the harness's native flag.
+    OwnAuth,
 }
 
 /// The child-process overrides a [`Routing`] contributes: env vars to set
@@ -118,7 +126,7 @@ pub const CATALOG: &[Harness] = &[
         id: "claude-acp",
         description: "Anthropic Claude via Zed's `claude-code-acp`",
         project_url: "https://github.com/zed-industries/claude-code-acp",
-        acp_command: "npx",
+        acp_command: Some("npx"),
         acp_args: &["-y", "@zed-industries/claude-code-acp@latest"],
         // A substring of both the npm spec (`@zed-industries/claude-code-acp`)
         // and the globally-installed binary name (`claude-code-acp`), so a
@@ -142,7 +150,7 @@ pub const CATALOG: &[Harness] = &[
         id: "codex-acp",
         description: "OpenAI Codex via Zed's `codex-acp`",
         project_url: "https://github.com/zed-industries/codex-acp",
-        acp_command: "npx",
+        acp_command: Some("npx"),
         acp_args: &["-y", "@zed-industries/codex-acp@latest"],
         package_marker: "codex-acp",
         interactive_binary: Some("codex"),
@@ -152,7 +160,7 @@ pub const CATALOG: &[Harness] = &[
         id: "gemini-cli",
         description: "Google's Gemini CLI with `--experimental-acp` (best-effort routing)",
         project_url: "https://github.com/google-gemini/gemini-cli",
-        acp_command: "npx",
+        acp_command: Some("npx"),
         acp_args: &[
             "-y",
             "--",
@@ -179,7 +187,7 @@ pub const CATALOG: &[Harness] = &[
         id: "opencode",
         description: "sst's opencode via its native `opencode acp`",
         project_url: "https://github.com/sst/opencode",
-        acp_command: "opencode",
+        acp_command: Some("opencode"),
         acp_args: &["acp"],
         package_marker: "opencode",
         interactive_binary: Some("opencode"),
@@ -189,11 +197,31 @@ pub const CATALOG: &[Harness] = &[
         id: "pi-acp",
         description: "pi coding agent via `pi-acp` (needs `pi` on PATH)",
         project_url: "https://github.com/svkozak/pi-acp",
-        acp_command: "npx",
+        acp_command: Some("npx"),
         acp_args: &["-y", "pi-acp@latest"],
         package_marker: "pi-acp",
         interactive_binary: Some("pi"),
         routing: Routing::PiConfigDir,
+    },
+    Harness {
+        id: "grok",
+        description: "xAI's Grok CLI (interactive only; own SuperGrok auth)",
+        project_url: "https://x.ai/",
+        acp_command: None,
+        acp_args: &[],
+        package_marker: "grok-cli",
+        interactive_binary: Some("grok"),
+        routing: Routing::OwnAuth,
+    },
+    Harness {
+        id: "antigravity",
+        description: "Google's Antigravity CLI `agy` (interactive only; own Google auth)",
+        project_url: "https://antigravity.google/",
+        acp_command: None,
+        acp_args: &[],
+        package_marker: "antigravity-cli",
+        interactive_binary: Some("agy"),
+        routing: Routing::OwnAuth,
     },
 ];
 
@@ -257,8 +285,11 @@ impl Harness {
             }
             Routing::CodexArgs => codex_overlay(base_url, auth, model),
             // Config-synthesis harnesses have no pure env/args overlay —
-            // callers that can't synthesize launch direct (and say so).
-            Routing::OpencodeConfig | Routing::PiConfigDir => RoutingOverlay::default(),
+            // callers that can't synthesize launch direct (and say so) —
+            // and own-auth harnesses are never redirected at all.
+            Routing::OpencodeConfig | Routing::PiConfigDir | Routing::OwnAuth => {
+                RoutingOverlay::default()
+            }
         }
     }
 
@@ -288,7 +319,7 @@ impl Harness {
         match self.routing {
             Routing::Env { model_env, .. } => model_env.is_some(),
             Routing::CodexArgs => true,
-            Routing::OpencodeConfig | Routing::PiConfigDir => false,
+            Routing::OpencodeConfig | Routing::PiConfigDir | Routing::OwnAuth => false,
         }
     }
 
@@ -417,6 +448,21 @@ impl Harness {
                     args,
                 })
             }
+            // Own-auth harnesses (grok, agy): no redirection, no MCP
+            // mechanism we can inject non-invasively — hosted with their own
+            // subscription auth; `--model` forwards as their native flag.
+            "grok" => Ok(RoutingOverlay {
+                env: Vec::new(),
+                args: model
+                    .map(|m| vec!["-m".to_string(), m.to_string()])
+                    .unwrap_or_default(),
+            }),
+            "antigravity" => Ok(RoutingOverlay {
+                env: Vec::new(),
+                args: model
+                    .map(|m| vec!["--model".to_string(), m.to_string()])
+                    .unwrap_or_default(),
+            }),
             // Unknown interactive harness: routing only, no MCP mechanism.
             _ => Ok(self.routing_overlay(base_url, auth, model)),
         }
@@ -583,7 +629,41 @@ mod tests {
         assert_eq!(by_interactive_binary("codex").unwrap().id, "codex-acp");
         assert_eq!(by_interactive_binary("opencode").unwrap().id, "opencode");
         assert_eq!(by_interactive_binary("pi").unwrap().id, "pi-acp");
+        assert_eq!(by_interactive_binary("grok").unwrap().id, "grok");
+        assert_eq!(by_interactive_binary("agy").unwrap().id, "antigravity");
         assert!(by_interactive_binary("gemini").is_none());
+    }
+
+    #[test]
+    fn own_auth_harnesses_never_redirect_and_forward_model_natively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (id, flag) in [("grok", "-m"), ("antigravity", "--model")] {
+            let h = by_id(id).unwrap();
+            assert!(!h.env_args_routable(), "{id} launches with its own auth");
+            assert!(h.acp_command.is_none(), "{id} has no ACP adapter");
+            assert_eq!(
+                h.routing_overlay("http://x:1", "t", None),
+                RoutingOverlay::default()
+            );
+            // The orchestrator overlay sets no env (no redirection) and
+            // forwards --model as the harness's native flag.
+            let o = h
+                .orchestrator_overlay(
+                    "http://x:1",
+                    "t",
+                    Some("some-model"),
+                    &[],
+                    Some(&mcp()),
+                    dir.path(),
+                )
+                .expect("overlay");
+            assert!(o.env.is_empty(), "{id}: no redirection env");
+            assert_eq!(o.args, vec![flag, "some-model"], "{id}");
+            let bare = h
+                .orchestrator_overlay("http://x:1", "t", None, &[], None, dir.path())
+                .expect("overlay");
+            assert_eq!(bare, RoutingOverlay::default(), "{id}: bare launch");
+        }
     }
 
     #[test]

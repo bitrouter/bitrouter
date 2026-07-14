@@ -338,6 +338,13 @@ it ships as a fast-follow. Until then pi spawns with a
 > synthesized `OPENCODE_CONFIG` JSON carrying provider + default model +
 > MCP). Headless `spawn` still launches both direct with a note — wiring
 > the synthesis into the ACP facet remains the v1.1 follow-up.
+>
+> The catalog also carries two **interactive-only, own-auth** harnesses
+> (`Routing::OwnAuth`, `acp_command: None`): `grok` (xAI Grok CLI) and
+> `antigravity` (Google's `agy`). They are subscription clients whose
+> sessions the daemon borrows as providers (`supergrok` / `google-ai`), so
+> redirecting them would loop back to the same backend — they launch with
+> their own auth and `--model` forwards natively.
 
 ### 6.5 ACP-native gateway auth (noted for phase 2)
 

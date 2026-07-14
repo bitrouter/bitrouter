@@ -385,18 +385,21 @@ enum Command {
     },
     /// Launch the composite multi-agent TUI: a left rail (roster sorted by
     /// who needs you, radar strip, decision + review queues) beside the
-    /// primary pane. `--agent claude|codex|opencode|pi` hosts that harness's
-    /// REAL native TUI in a PTY pane (the orchestrator — keys pass through;
-    /// `Ctrl-A` is the one manager leader; `Ctrl-C` interrupts the agent,
-    /// not the TUI) with the fleet MCP bridge injected where the harness
-    /// supports MCP (pi has no MCP mechanism). A configured `agents:` id
-    /// instead renders that ACP agent from typed events. `Ctrl-A n` spawns
+    /// primary pane. `--agent claude|codex|opencode|pi|grok|agy` hosts that
+    /// harness's REAL native TUI in a PTY pane (the orchestrator — keys pass
+    /// through; `Ctrl-A` is the one manager leader; `Ctrl-C` interrupts the
+    /// agent, not the TUI) with the fleet MCP bridge injected where the
+    /// harness supports MCP (pi/grok/agy have no mechanism). grok and agy
+    /// launch with their own subscription auth (the daemon borrows those
+    /// same sessions as providers). A configured `agents:` id instead
+    /// renders that ACP agent from typed events. `Ctrl-A n` spawns
     /// worktree-isolated ACP subagents either way.
     #[cfg(feature = "tui")]
     Tui {
         /// The primary agent: a native harness (`claude`, `codex`,
-        /// `opencode`, `pi`) hosted in a PTY as the orchestrator, or a
-        /// configured `agents:` entry rendered from ACP events.
+        /// `opencode`, `pi`, `grok`, `agy`/`antigravity`) hosted in a PTY
+        /// as the orchestrator, or a configured `agents:` entry rendered
+        /// from ACP events.
         #[arg(short, long)]
         agent: String,
         /// Optional git worktree name for the first session (ACP agents only).

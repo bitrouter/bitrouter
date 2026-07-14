@@ -172,13 +172,16 @@ pub async fn apply_routing(
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
         && let Some(h) = crate::harness::by_id(agent_id)
+        // Interactive-only harnesses (grok, antigravity) have no ACP
+        // adapter to synthesize — the id falls through to not-found.
+        && let Some(command) = h.acp_command
     {
         config.agents.insert(
             agent_id.to_string(),
             AcpAgentConfig {
                 name: agent_id.to_string(),
                 transport: AcpTransport::Stdio {
-                    command: h.acp_command.to_string(),
+                    command: command.to_string(),
                     args: h.acp_args.iter().map(|s| s.to_string()).collect(),
                     env: Default::default(),
                 },
@@ -365,21 +368,30 @@ pub async fn spawn_check(
             ));
             (command.clone(), args.clone())
         }
-        (None, Some(h)) => {
-            checks.push(row(
-                "agent",
-                SpawnCheckStatus::Pass,
-                format!(
-                    "bundled catalog ({} {})",
-                    h.acp_command,
-                    h.acp_args.join(" ")
-                ),
-            ));
-            (
-                h.acp_command.to_string(),
-                h.acp_args.iter().map(|s| s.to_string()).collect(),
-            )
-        }
+        (None, Some(h)) => match h.acp_command {
+            Some(command) => {
+                checks.push(row(
+                    "agent",
+                    SpawnCheckStatus::Pass,
+                    format!("bundled catalog ({} {})", command, h.acp_args.join(" ")),
+                ));
+                (
+                    command.to_string(),
+                    h.acp_args.iter().map(|s| s.to_string()).collect(),
+                )
+            }
+            None => {
+                checks.push(row(
+                    "agent",
+                    SpawnCheckStatus::Fail,
+                    format!(
+                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter tui --agent {}`",
+                        h.interactive_binary.unwrap_or(agent_id)
+                    ),
+                ));
+                (String::new(), Vec::new())
+            }
+        },
         (None, None) => {
             checks.push(row(
                 "agent",
