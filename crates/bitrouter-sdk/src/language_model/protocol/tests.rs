@@ -2856,6 +2856,31 @@ fn chat_completions_streaming_forces_include_usage() {
 }
 
 #[test]
+fn chat_completions_does_not_forward_terminus_session_id() {
+    let inbound = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "gpt-5.6-terra",
+        "messages": [{"role": "user", "content": "hi"}],
+        "session_id": "terminus-parent-cont-1"
+    });
+    let prompt = inbound.parse_request(body).unwrap();
+
+    assert!(
+        !prompt.params.extra.contains_key("session_id"),
+        "Terminus session identity is router metadata, not an upstream model parameter"
+    );
+    for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
+        let rendered = adapter_for(protocol.clone())
+            .render_request(&prompt)
+            .unwrap();
+        assert!(
+            rendered.get("session_id").is_none(),
+            "{protocol:?} upstream must not receive Terminus session metadata"
+        );
+    }
+}
+
+#[test]
 fn generate_content_passes_through_top_level_extras() {
     // toolConfig / safetySettings / cachedContent live at the request root,
     // not under generationConfig. They must survive the round-trip.

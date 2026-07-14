@@ -545,6 +545,11 @@ impl InboundAdapter for ChatCompletionsAdapter {
         // / `text` carry no schema, so re-attach them to `extra` to pass through
         // opaquely on render (v0 parity).
         let mut extra = req.extra;
+        // Terminus 2 adds `session_id` to the Chat Completions body as harness
+        // identity. The workflow-state layer reads it from the raw request
+        // before protocol parsing; it is not a model parameter and upstreams
+        // such as OpenAI Responses reject it.
+        extra.remove("session_id");
         let response_format = match req.response_format {
             Some(ChatResponseFormat::JsonSchema { json_schema }) => {
                 Some(ResponseFormat::JsonSchema {
