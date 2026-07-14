@@ -27,7 +27,7 @@ pub struct PtyView {
 /// Render the whole app for one frame. Takes `&mut` so panes can record the
 /// viewport height they were drawn at (ratatui stateful-render idiom) — the
 /// reducer uses it to page the scrollback by exactly one screen.
-pub fn render(state: &mut AppState, pty: Option<&PtyView>, frame: &mut Frame) {
+pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let area = frame.area();
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -165,6 +165,7 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
             ("q", "queue focus (needs-you only)"),
             ("y / a / d", "resolve cursor pending"),
             ("D / m / p / r", "review: diff · merge · apply · reject"),
+            ("t", "attach: drive the agent's native TUI"),
             ("A", "cycle autonomy tier"),
             ("n", "new agent"),
             ("x", "close cursor agent"),
@@ -349,7 +350,7 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
 }
 
 /// Detail viewport: the shown agents in a horizontal or vertical split.
-fn render_detail(state: &mut AppState, pty: Option<&PtyView>, frame: &mut Frame, area: Rect) {
+fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let shown = state.detail.shown.clone();
     let focus = state.detail.focus;
@@ -362,22 +363,27 @@ fn render_detail(state: &mut AppState, pty: Option<&PtyView>, frame: &mut Frame,
         return;
     }
     let rects = split_rects(area, shown.len(), split);
-    let mut pty_area = state.pty_area;
+    let mut pty_areas = Vec::new();
     for (slot, (rid, rect)) in shown.iter().zip(rects.iter()).enumerate() {
         if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
-            match (pane.kind, pty) {
-                (crate::tui::state::PaneKind::Pty, _) => {
+            match pane.kind {
+                crate::tui::state::PaneKind::Pty => {
                     // Record the drawn inner size so the loop can resize the
                     // emulator + PTY (SIGWINCH) when the layout changes.
-                    pty_area = Some((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
-                    let view = pty.filter(|v| &v.record_id == rid);
+                    pty_areas.push((
+                        rid.clone(),
+                        (rect.width.saturating_sub(2), rect.height.saturating_sub(2)),
+                    ));
+                    let view = pty.iter().find(|v| &v.record_id == rid);
                     render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
                 }
-                _ => render_pane(pane, slot, slot == focus, nc, frame, *rect),
+                crate::tui::state::PaneKind::Acp => {
+                    render_pane(pane, slot, slot == focus, nc, frame, *rect)
+                }
             }
         }
     }
-    state.pty_area = pty_area;
+    state.pty_areas = pty_areas;
 }
 
 /// Render a PTY pane: the emulator's grid verbatim inside the pane border —
@@ -682,7 +688,7 @@ fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
         Mode::Normal => "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c quit",
         Mode::Agent => {
-            "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · A tier · n new · x close · ? keys · Esc"
+            "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · t attach · A tier · n new · x close · ? keys · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
@@ -783,7 +789,7 @@ mod tests {
     fn draw(state: &mut AppState, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal.draw(|f| render(state, None, f)).expect("draw");
+        terminal.draw(|f| render(state, &[], f)).expect("draw");
         terminal
             .backend()
             .buffer()
@@ -1125,7 +1131,7 @@ mod tests {
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal
-            .draw(|f| render(&mut st, Some(&view), f))
+            .draw(|f| render(&mut st, std::slice::from_ref(&view), f))
             .expect("draw");
         let text: String = terminal
             .backend()
@@ -1140,8 +1146,9 @@ mod tests {
             text.contains("keys go to the orchestrator"),
             "passthrough hint replaces the prompt line"
         );
-        let (cols, rows) = st.pty_area.expect("drawn size recorded for resize");
-        assert!(cols > 0 && rows > 0);
+        let (rid, (cols, rows)) = st.pty_areas.first().expect("drawn size recorded");
+        assert_eq!(rid, "orchestrator");
+        assert!(*cols > 0 && *rows > 0);
     }
 
     #[test]
@@ -1200,7 +1207,7 @@ mod tests {
         st.no_color = true;
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal.draw(|f| render(&mut st, None, f)).expect("draw");
+        terminal.draw(|f| render(&mut st, &[], f)).expect("draw");
         let buffer = terminal.backend().buffer();
         let colored = buffer
             .content()

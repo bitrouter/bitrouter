@@ -68,6 +68,10 @@ pub enum AppEvent {
     /// A submitted prompt failed to reach the agent; surface it in the pane
     /// (otherwise a dead proxy/agent looks like a silent hang).
     PromptFailed { record_id: String, error: String },
+    /// An interactive attach pane opened for `source` (an ACP agent): add a
+    /// PTY pane and show it solo. Closing it detaches (kills the interactive
+    /// child; the ACP session is untouched).
+    PtyAttached { record_id: String, agent_id: String },
     /// The loop checked a finished turn's worktree: non-empty diff (and
     /// passing checks) — the agent is ready to review.
     ReviewReady {
@@ -121,6 +125,9 @@ pub enum Effect {
     /// Cancel the ACP session's in-flight turn (`Ctrl-C` = interrupt the
     /// focused agent, not quit — TUI_SPEC §9/§12).
     CancelTurn { record_id: String },
+    /// Attach: relaunch the ACP agent's harness interactively on a PTY in
+    /// its worktree (native fidelity for driving one agent; TUI_SPEC §13-B4).
+    Attach { record_id: String },
     /// A turn ended cleanly: inspect the agent's worktree (diff + checks) and
     /// report back with `ReviewReady`/`ChecksFailed`.
     CheckReview { record_id: String },

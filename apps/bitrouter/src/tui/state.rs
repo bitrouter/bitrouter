@@ -662,9 +662,10 @@ pub struct AppState {
     pub bootstrap_decision: Option<bool>,
     /// The spawn awaiting the bootstrap decision (present in `Mode::Confirm`).
     pub confirm_agent: Option<String>,
-    /// The PTY pane's inner size `(cols, rows)` as last drawn — the loop
-    /// resizes the emulator + PTY (SIGWINCH) when it changes.
-    pub pty_area: Option<(u16, u16)>,
+    /// Each PTY pane's inner size `(cols, rows)` as last drawn — the loop
+    /// resizes the emulator + PTY (SIGWINCH) when one changes. Rebuilt every
+    /// frame by the renderer.
+    pub pty_areas: Vec<(String, (u16, u16))>,
 }
 
 impl AppState {
@@ -691,7 +692,7 @@ impl AppState {
             bootstrap_cmd: None,
             bootstrap_decision: None,
             confirm_agent: None,
-            pty_area: None,
+            pty_areas: Vec::new(),
         }
     }
 
@@ -897,6 +898,21 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         }
         AppEvent::AgentSpawnFailed { agent_id, error } => {
             state.notice = Some(format!("failed to spawn {agent_id}: {error}"));
+            Vec::new()
+        }
+        AppEvent::PtyAttached {
+            record_id,
+            agent_id,
+        } => {
+            let mut pane = PaneState::new(record_id.clone(), agent_id.clone());
+            pane.kind = PaneKind::Pty;
+            pane.harness = "attach".to_string();
+            state.agents.push(pane);
+            // Attaching is for DRIVING this one agent — show it solo, keys
+            // pass through; `Ctrl-A x` detaches back to supervision.
+            state.detail = DetailLayout::solo(record_id.clone());
+            state.mode = Mode::Normal;
+            state.notice = Some("attached — Ctrl-A then x detaches".into());
             Vec::new()
         }
         AppEvent::PromptFailed { record_id, error } => {
@@ -1298,6 +1314,18 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         KeyCode::Char('?') => {
             state.keys_help = true;
             Vec::new()
+        }
+        // Attach: drive the cursor agent's harness natively (PTY in its
+        // worktree). ACP agents only — a PTY pane can't attach to itself.
+        KeyCode::Char('t') => {
+            match state
+                .rail_selected()
+                .filter(|p| p.kind == PaneKind::Acp && !p.exited)
+                .map(|p| p.record_id.clone())
+            {
+                Some(record_id) => vec![Effect::Attach { record_id }],
+                None => Vec::new(),
+            }
         }
         // Cycle the cursor agent's autonomy tier (capital A — lowercase `a`
         // grants allow-always on a pending row).
@@ -2840,6 +2868,51 @@ mod tests {
             vec!["r2".to_string()],
             "detail refilled with the most actionable agent"
         );
+    }
+
+    // ── Attach (§13-B4). ──
+
+    #[test]
+    fn t_attaches_the_cursor_acp_agent_only() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.rail_cursor = 1; // r1
+        let fx = reduce(&mut st, &press(KeyCode::Char('t')));
+        assert_eq!(
+            fx,
+            vec![Effect::Attach {
+                record_id: "r1".into()
+            }]
+        );
+        // A PTY pane can't attach to itself; a dead agent has nothing to drive.
+        st.agents[1].kind = PaneKind::Pty;
+        assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
+        st.agents[1].kind = PaneKind::Acp;
+        st.agents[1].exited = true;
+        st.rail_cursor = 2; // dead agents sort last — cursor onto r1
+        assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
+    }
+
+    #[test]
+    fn pty_attached_adds_a_solo_pty_pane() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        reduce(
+            &mut st,
+            &AppEvent::PtyAttached {
+                record_id: "attach:r1".into(),
+                agent_id: "claude⤴a1".into(),
+            },
+        );
+        let pane = st
+            .agents
+            .iter()
+            .find(|p| p.record_id == "attach:r1")
+            .expect("attach pane added");
+        assert_eq!(pane.kind, PaneKind::Pty);
+        assert_eq!(st.detail.shown, vec!["attach:r1".to_string()], "solo");
+        assert_eq!(st.mode, Mode::Normal, "keys route to the attach");
+        assert!(st.notice.as_deref().is_some_and(|n| n.contains("detach")));
     }
 
     // ── Broadcast. ──

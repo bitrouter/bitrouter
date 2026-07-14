@@ -48,7 +48,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     let (tx, rx) = unbounded_channel::<Incoming>();
     let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
     let mut port_alloc: HashMap<String, u16> = HashMap::new();
-    let mut pty: Option<(String, pty::PtyPane)> = None;
+    let mut ptys: HashMap<String, pty::PtyPane> = HashMap::new();
 
     let initial_pane = if let Some(h) = crate::harness::by_interactive_binary(agent_id) {
         // ── Orchestrator: the native harness TUI in a PTY pane. ──
@@ -58,7 +58,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
             );
         }
         let (record_id, pane, pty_pane) = launch_orchestrator(h, &cfg, &base_repo, tx.clone())?;
-        pty = Some((record_id, pty_pane));
+        ptys.insert(record_id, pty_pane);
         pane
     } else if cfg.agents.contains_key(agent_id) {
         // ── ACP fallback: the primary agent rendered from typed events.
@@ -136,6 +136,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
         spawner: Spawner {
             catalog: &catalog,
             base_repo,
+            gateway_base: crate::spawn::derive_base_url(&cfg.server.listen),
             tx,
         },
         fleet: Fleet {
@@ -144,7 +145,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
             meta: HashMap::new(),
             checks: cfg.worktrees.checks.clone(),
         },
-        pty,
+        ptys,
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
@@ -192,6 +193,92 @@ fn harness_tag(transport: &bitrouter_sdk::acp::AcpTransport) -> String {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| command.clone()),
+    }
+}
+
+/// Attach (TUI_SPEC §13-B4): relaunch the ACP agent's harness interactively
+/// on a PTY in its worktree — native fidelity for driving one agent — and
+/// resume the same provider-native conversation when its id is known.
+/// Detach (`Ctrl-A x` on the attach pane) kills only the interactive child;
+/// the ACP session is untouched.
+fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_>) {
+    let attach_id = format!("attach:{record_id}");
+    if rt.ptys.contains_key(&attach_id) {
+        state.notice = Some("already attached — Ctrl-A x on the attach pane detaches".into());
+        return;
+    }
+    let Some(sess) = rt.sessions.get(record_id) else {
+        state.notice = Some("nothing to attach to".into());
+        return;
+    };
+    let agent_id = sess.state().agent_id.clone();
+    // Map the ACP agent's configured invocation back to its catalog harness
+    // (invocation matching — the YAML key carries no semantics).
+    let Some(bitrouter_sdk::acp::AcpTransport::Stdio { command, args, .. }) =
+        rt.spawner.catalog.lookup(&agent_id)
+    else {
+        state.notice = Some(format!("no transport for '{agent_id}'"));
+        return;
+    };
+    let Some(h) = crate::harness::match_invocation(command, args) else {
+        state.notice = Some(format!(
+            "'{agent_id}' matches no catalog harness — cannot attach"
+        ));
+        return;
+    };
+    let Some(binary) = h.interactive_binary else {
+        state.notice = Some(format!("'{}' has no interactive binary to attach", h.id));
+        return;
+    };
+    // Drive the SAME work: cwd = the agent's worktree (base repo when none).
+    let cwd = rt
+        .fleet
+        .meta
+        .get(record_id)
+        .map(|m| m.worktree.clone())
+        .or_else(|| sess.worktree_path().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| rt.spawner.base_repo.clone());
+    // Continue the SAME conversation when the provider-native session id is
+    // known (claude-code-acp reports it as agentSessionId).
+    let mut extra: Vec<String> = Vec::new();
+    if let Some(sid) = &sess.state().agent_session_id {
+        match binary {
+            "claude" => extra.extend(["--resume".to_string(), sid.clone()]),
+            "codex" => extra.extend(["resume".to_string(), sid.clone()]),
+            _ => {}
+        }
+    }
+    let auth = crate::harness::resolve_gateway_auth(
+        std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
+        false,
+    )
+    .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    let overlay = h.routing_overlay(&rt.spawner.gateway_base, &auth, None);
+    let mut all_args = overlay.args.clone();
+    all_args.extend(extra);
+    match pty::PtyPane::spawn(
+        &attach_id,
+        &pty::PtyLaunch {
+            command: binary,
+            args: &all_args,
+            env: &overlay.env,
+            cwd: &cwd,
+        },
+        80,
+        24,
+        rt.spawner.tx.clone(),
+    ) {
+        Ok(pane) => {
+            rt.ptys.insert(attach_id.clone(), pane);
+            let _ = reduce(
+                state,
+                &AppEvent::PtyAttached {
+                    record_id: attach_id,
+                    agent_id: format!("{binary}⤴{}", agent_id),
+                },
+            );
+        }
+        Err(e) => state.notice = Some(format!("attach failed: {e:#}")),
     }
 }
 
@@ -323,6 +410,9 @@ fn install_panic_restore(restore: fn()) {
 struct Spawner<'a> {
     catalog: &'a bitrouter_sdk::acp::ConfigAcpRoutingTable,
     base_repo: std::path::PathBuf,
+    /// The daemon gateway base URL (derived from `server.listen`) — routing
+    /// overlay for interactive attaches.
+    gateway_base: String,
     tx: UnboundedSender<Incoming>,
 }
 
@@ -338,9 +428,9 @@ struct Runtime<'a> {
     prompt_tasks: PromptTasks,
     spawner: Spawner<'a>,
     fleet: Fleet,
-    /// The orchestrator's PTY pane (record id → pane), when `--agent` named a
-    /// native harness. One PTY pane in B3 (the orchestrator).
-    pty: Option<(String, pty::PtyPane)>,
+    /// Live PTY panes by record id: the orchestrator (when `--agent` named a
+    /// native harness) plus any interactive attaches (TUI_SPEC §13-B4).
+    ptys: HashMap<String, pty::PtyPane>,
 }
 
 /// The core loop over a registry of sessions. Draws, muxes input vs pumped
@@ -358,20 +448,26 @@ async fn event_loop(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        // Snapshot the PTY grid for this frame (the emulator lives loop-side;
-        // state stays pure).
-        let pty_view = rt.pty.as_ref().map(|(rid, pane)| ui::PtyView {
-            record_id: rid.clone(),
-            lines: pane.backend.lines(state.no_color),
-        });
-        if let Err(e) = terminal.draw(|f| ui::render(&mut state, pty_view.as_ref(), f)) {
+        // Snapshot the PTY grids for this frame (the emulators live
+        // loop-side; state stays pure).
+        let pty_views: Vec<ui::PtyView> = rt
+            .ptys
+            .iter()
+            .map(|(rid, pane)| ui::PtyView {
+                record_id: rid.clone(),
+                lines: pane.backend.lines(state.no_color),
+            })
+            .collect();
+        if let Err(e) = terminal.draw(|f| ui::render(&mut state, &pty_views, f)) {
             cleanup(&mut rt).await;
             return Err(e).context("draw");
         }
         // Resize recovery (§9): the drawn pane rect is authoritative — resize
         // the emulator and SIGWINCH the child whenever it changes.
-        if let (Some((_, pane)), Some((cols, rows))) = (&mut rt.pty, state.pty_area) {
-            pane.resize(cols, rows);
+        for (rid, (cols, rows)) in &state.pty_areas {
+            if let Some(pane) = rt.ptys.get_mut(rid) {
+                pane.resize(*cols, *rows);
+            }
         }
         if state.should_quit {
             cleanup(&mut rt).await;
@@ -480,9 +576,7 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
         }
         Incoming::DiffLoaded { record_id, text } => Some(AppEvent::DiffLoaded { record_id, text }),
         Incoming::PtyOutput { record_id, bytes } => {
-            if let Some((rid, pane)) = &mut rt.pty
-                && *rid == record_id
-            {
+            if let Some(pane) = rt.ptys.get_mut(&record_id) {
                 // Feed the emulator; re-emit OSC-52 clipboard writes verbatim
                 // to the outer terminal (tmux allow-passthrough pattern) so
                 // copy-from-the-inner-app reaches the user's clipboard.
@@ -627,6 +721,12 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
         }
         Effect::CloseAgent { record_id } => {
+            if let Some(mut pane) = rt.ptys.remove(&record_id) {
+                // A PTY pane close kills the interactive child only — an
+                // attach's underlying ACP session is untouched (detach).
+                pane.kill();
+                return;
+            }
             rt.pending.remove(&record_id);
             rt.fleet.port_alloc.remove(&record_id);
             rt.fleet.meta.remove(&record_id);
@@ -641,12 +741,14 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
         }
         Effect::PtyKey { record_id, key } => {
-            if let Some((rid, pane)) = &mut rt.pty
-                && *rid == record_id
+            if let Some(pane) = rt.ptys.get_mut(&record_id)
                 && let Some(bytes) = pane.backend.encode_key(&key)
             {
                 pane.write_input(&bytes);
             }
+        }
+        Effect::Attach { record_id } => {
+            attach_interactive(&record_id, state, rt);
         }
         Effect::CancelTurn { record_id } => {
             if let Some(sess) = rt.sessions.get(&record_id) {
@@ -832,10 +934,10 @@ async fn abort_prompt_tasks(tasks: &mut PromptTasks) {
 /// Deny in the substrate), and shut down every session. Called on every
 /// loop-exit path.
 async fn cleanup(rt: &mut Runtime<'_>) {
-    if let Some((_, pane)) = &mut rt.pty {
-        // The orchestrator is a PTY child of the TUI and dies with it (§2's
-        // named asymmetry) — its own --resume/session files are its
-        // continuity story, not bitrouter's.
+    for pane in rt.ptys.values_mut() {
+        // PTY children die with the TUI (§2's named asymmetry) — the
+        // harness's own --resume/session files are their continuity story,
+        // not bitrouter's.
         pane.kill();
     }
     abort_prompt_tasks(&mut rt.prompt_tasks).await;
