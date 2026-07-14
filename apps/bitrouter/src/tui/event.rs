@@ -96,6 +96,10 @@ pub enum AppEvent {
     /// Mouse wheel over the detail: page the focused pane's scrollback
     /// (ACP panes) or forward arrow presses to the child (PTY panes).
     Scroll { up: bool },
+    /// The outer terminal gained (`true`) or lost (`false`) focus. Drives
+    /// away-notifications and the done-unseen decay: regaining focus marks
+    /// the shown panes seen.
+    Focus(bool),
     /// Periodic UI tick (drives the running-agent spinner animation).
     Tick,
     /// Unconditional quit (input stream ended / terminal gone). Unlike
@@ -118,6 +122,9 @@ pub enum Effect {
     Quit,
     /// Ring the terminal bell (background pane needs attention).
     Bell,
+    /// Post an outer-terminal notification (OSC 9/99/777, per terminal) —
+    /// how the tower reaches the human when the terminal is unfocused.
+    Notify { title: String, body: String },
     /// Launch a new agent session (the loop performs the async launch).
     SpawnAgent { agent_id: String },
     /// Shut down and remove the session `record_id`.

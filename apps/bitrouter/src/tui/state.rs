@@ -330,7 +330,18 @@ pub struct PaneState {
     pub pending: Option<PendingView>,
     pub exited: bool,
     pub selected: bool,
+    /// Something went wrong in the background (error, exit, gated
+    /// permission) and the human hasn't looked yet.
     pub attention: bool,
+    /// A turn finished and the human hasn't looked yet — the inbox-unread
+    /// state (herdr's `done`). Decays on view: seeing the pane while the
+    /// terminal is focused clears it back to idle.
+    pub done: bool,
+    /// Tick at which the pane last changed actionability bucket; feeds the
+    /// rail's time-in-state column.
+    since: u64,
+    /// The bucket `since` was stamped for (change detection in `reduce`).
+    last_bucket: u8,
     /// Which permission requests reach the user (cycled with `A` on the rail).
     pub autonomy: Autonomy,
     /// Arrival order of the current `pending` (from `AppState.perm_seq`);
@@ -392,6 +403,11 @@ impl PaneState {
             exited: false,
             selected: false,
             attention: false,
+            done: false,
+            since: 0,
+            // Sentinel: no bucket stamped yet — the first reduce stamps
+            // `since` with the current tick.
+            last_bucket: u8::MAX,
             autonomy: Autonomy::default(),
             pending_seq: 0,
             scroll: None,
@@ -547,14 +563,48 @@ impl PaneState {
         } else if self.review.is_some() && !self.exited {
             1 // ready to review (the rail head's second tier)
         } else if self.attention {
-            2 // something happened in the background
+            2 // something went wrong in the background
+        } else if self.done && !self.exited {
+            3 // finished, unseen — inbox material until viewed
         } else if !self.exited && self.turn_active {
-            3 // working (a turn is in flight)
+            4 // working (a turn is in flight)
         } else if !self.exited {
-            4 // idle
+            5 // idle
         } else {
-            5 // dead
+            6 // dead
         }
+    }
+
+    /// Compact time-in-state for the rail row (`42s`, `7m`, `1h05m`) — shown
+    /// for the states the human watches or acts on (needs-you, review,
+    /// attention, done, working). Idle and dead rows stay calm.
+    pub fn elapsed_label(&self, tick: u64) -> Option<String> {
+        if self.exited {
+            return None;
+        }
+        let watched = self.pending.is_some()
+            || self.review.is_some()
+            || self.attention
+            || self.done
+            || self.turn_active;
+        if !watched {
+            return None;
+        }
+        Some(fmt_elapsed(tick.saturating_sub(self.since) / TICKS_PER_SEC))
+    }
+}
+
+/// UI ticks per second (the loop ticks every 200ms).
+const TICKS_PER_SEC: u64 = 5;
+
+/// Compact duration: sub-minute in seconds, sub-hour in minutes, then `NhMMm`.
+fn fmt_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
     }
 }
 
@@ -654,6 +704,11 @@ pub struct AppState {
     pub keys_help: bool,
     /// UI tick counter (drives the running spinner frame).
     pub tick: u64,
+    /// The outer terminal has focus (crossterm focus events; assumed focused
+    /// until told otherwise). While unfocused, completions and gated
+    /// permissions emit outer-terminal notifications, and shown panes accrue
+    /// unseen state that regaining focus clears.
+    pub term_focused: bool,
     /// `NO_COLOR` requested: draw glyphs/styles without foreground colors.
     pub no_color: bool,
     pub available_agents: Vec<String>,
@@ -690,6 +745,7 @@ impl AppState {
             palette: None,
             keys_help: false,
             tick: 0,
+            term_focused: true,
             no_color: false,
             available_agents: Vec::new(),
             notice: None,
@@ -739,6 +795,24 @@ impl AppState {
             }
         });
         order
+    }
+
+    /// Terminal-title badge: pending attention counts by glyph (`⚠` needs
+    /// you, `◆` review, `●` background trouble, `◉` done-unseen), or a calm
+    /// app name when all clear. The loop re-emits the title (OSC 2) whenever
+    /// this changes, so the tab/window name works as a badge.
+    pub fn title_badge(&self) -> String {
+        let mut badge = String::from("bitrouter");
+        for (bucket, glyph) in [(0u8, '⚠'), (1, '◆'), (2, '●'), (3, '◉')] {
+            let n = self.agents.iter().filter(|p| p.bucket() == bucket).count();
+            if n > 0 {
+                badge.push_str(&format!(" {glyph}{n}"));
+            }
+        }
+        if badge == "bitrouter" {
+            badge.push_str(" tui");
+        }
+        badge
     }
 
     /// The agent under the rail cursor.
@@ -806,6 +880,16 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.input = restored;
         }
     }
+    // Time-in-state: stamp the tick whenever a pane changes actionability
+    // bucket, so the rail can show how long it has been working/blocked/done.
+    let tick = state.tick;
+    for pane in state.agents.iter_mut() {
+        let bucket = pane.bucket();
+        if bucket != pane.last_bucket {
+            pane.last_bucket = bucket;
+            pane.since = tick;
+        }
+    }
     effects
 }
 
@@ -821,7 +905,10 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             record_id,
             stop_reason,
         } => {
-            let shown = state.is_shown(record_id);
+            // Seen = visible in the detail while the terminal has focus;
+            // anything less makes the completion inbox material.
+            let seen = state.is_shown(record_id) && state.term_focused;
+            let notify = !state.term_focused;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.flush_tail();
@@ -841,16 +928,30 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         record_id: record_id.clone(),
                     });
                 }
-                if !shown {
+                if !seen {
                     // A finished turn is exactly what the tower should
                     // surface — glyph only, no bell (completions are calm).
-                    pane.attention = true;
+                    // Cleared when the human views the pane.
+                    pane.done = true;
+                }
+                if notify {
+                    // The human is away — reach them through the terminal.
+                    effects.push(Effect::Notify {
+                        title: format!("{} finished", pane.agent_id),
+                        body: if *stop_reason == StopReason::EndTurn {
+                            "turn complete".to_string()
+                        } else {
+                            stop_label(stop_reason).to_string()
+                        },
+                    });
                 }
             }
             effects
         }
         AppEvent::Exited { record_id } => {
             let shown = state.is_shown(record_id);
+            let seen = shown && state.term_focused;
+            let notify = !state.term_focused;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.flush_tail();
@@ -859,9 +960,17 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 // A dead agent's decision is moot — drop it from the queue.
                 // (The loop's teardown drops the resolvable handle → Deny.)
                 pane.pending = None;
-                if !shown {
+                if !seen {
                     pane.attention = true;
+                }
+                if !shown {
                     effects.push(Effect::Bell);
+                }
+                if notify {
+                    effects.push(Effect::Notify {
+                        title: format!("{} exited", pane.agent_id),
+                        body: "the agent process ended".to_string(),
+                    });
                 }
             }
             state.clamp_rail_cursor();
@@ -875,6 +984,8 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             risk,
         } => {
             let shown = state.is_shown(record_id);
+            let seen = shown && state.term_focused;
+            let notify = !state.term_focused;
             state.perm_seq += 1;
             let seq = state.perm_seq;
             let mut effects = Vec::new();
@@ -903,9 +1014,21 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         risk: *risk,
                     });
                     pane.pending_seq = seq;
-                    if !shown {
+                    if !seen {
                         pane.attention = true;
+                    }
+                    if !shown {
                         effects.push(Effect::Bell);
+                    }
+                    if notify {
+                        let risk_tag = match risk {
+                            Risk::High => "high risk · ",
+                            Risk::Low => "",
+                        };
+                        effects.push(Effect::Notify {
+                            title: format!("{} needs approval", pane.agent_id),
+                            body: format!("{risk_tag}{title}"),
+                        });
                     }
                 }
             }
@@ -948,13 +1071,23 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         }
         AppEvent::PromptFailed { record_id, error } => {
             let shown = state.is_shown(record_id);
+            let seen = shown && state.term_focused;
+            let notify = !state.term_focused;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.push_external(Line::Error(format!("prompt failed: {error}")));
                 pane.turn_active = false;
-                if !shown {
+                if !seen {
                     pane.attention = true;
+                }
+                if !shown {
                     effects.push(Effect::Bell);
+                }
+                if notify {
+                    effects.push(Effect::Notify {
+                        title: format!("{} prompt failed", pane.agent_id),
+                        body: error.clone(),
+                    });
                 }
             }
             effects
@@ -965,20 +1098,30 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             adds,
             dels,
         } => {
-            let shown = state.is_shown(record_id);
+            let seen = state.is_shown(record_id) && state.term_focused;
+            let notify = !state.term_focused;
+            let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.review = Some((*files, *adds, *dels));
                 pane.push(Line::Note(format!(
                     "ready to review: {files} file(s), +{adds}/-{dels}"
                 )));
-                if !shown {
-                    pane.attention = true; // glyph only — completions are calm
+                if !seen {
+                    pane.done = true; // glyph only — completions are calm
+                }
+                if notify {
+                    effects.push(Effect::Notify {
+                        title: format!("{} ready to review", pane.agent_id),
+                        body: format!("{files} file(s), +{adds}/-{dels}"),
+                    });
                 }
             }
-            Vec::new()
+            effects
         }
         AppEvent::ChecksFailed { record_id, output } => {
             let shown = state.is_shown(record_id);
+            let seen = shown && state.term_focused;
+            let notify = !state.term_focused;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 if pane.check_retries < CHECK_RETRY_CAP {
@@ -989,6 +1132,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         "checks failed — sent back to the agent (retry {retry}/{CHECK_RETRY_CAP})"
                     )));
                     pane.turn_active = true;
+                    pane.done = false;
                     effects.push(Effect::Prompt {
                         record_id: record_id.clone(),
                         text: format!(
@@ -1001,9 +1145,19 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     pane.push_external(Line::Error(format!(
                         "checks still failing after {CHECK_RETRY_CAP} retries — review manually"
                     )));
-                    if !shown {
+                    if !seen {
                         pane.attention = true;
+                    }
+                    if !shown {
                         effects.push(Effect::Bell);
+                    }
+                    if notify {
+                        effects.push(Effect::Notify {
+                            title: format!("{} checks failing", pane.agent_id),
+                            body: format!(
+                                "still failing after {CHECK_RETRY_CAP} retries — review manually"
+                            ),
+                        });
                     }
                 }
             }
@@ -1025,7 +1179,10 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         } => {
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 if *ok {
+                    // Integrated — the human has engaged with this result.
                     pane.review = None;
+                    pane.done = false;
+                    pane.attention = false;
                     pane.push_external(Line::Note(message.clone()));
                 } else {
                     pane.push_external(Line::Error(message.clone()));
@@ -1059,6 +1216,14 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         .collect()
                 }
             }
+        }
+        AppEvent::Focus(gained) => {
+            state.term_focused = *gained;
+            if *gained {
+                // Back at the terminal: what is on screen counts as seen.
+                mark_shown_seen(state);
+            }
+            Vec::new()
         }
         AppEvent::Tick => {
             state.tick = state.tick.wrapping_add(1);
@@ -1218,8 +1383,9 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if let Some(pane) = state.focused_mut() {
                 pane.push_external(Line::UserPrompt(text.clone()));
                 pane.turn_active = true;
-                // New work supersedes the previous turn's review state.
+                // New work supersedes the previous turn's review/done state.
                 pane.review = None;
+                pane.done = false;
                 pane.check_retries = 0;
             }
             vec![Effect::Prompt {
@@ -1271,7 +1437,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             match state.rail_selected().map(|p| p.record_id.clone()) {
                 Some(id) => {
                     state.detail = DetailLayout::solo(id.clone());
-                    clear_shown_attention(state);
+                    mark_shown_seen(state);
                     vec![Effect::LoadDiff { record_id: id }]
                 }
                 None => Vec::new(),
@@ -1295,7 +1461,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                     pane.review = None;
                 }
                 state.detail = DetailLayout::solo(id);
-                clear_shown_attention(state);
+                mark_shown_seen(state);
                 state.clamp_rail_cursor();
                 state.mode = Mode::Normal;
                 state.notice = Some(
@@ -1321,7 +1487,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         KeyCode::Enter => {
             if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
                 state.detail = DetailLayout::solo(id);
-                clear_shown_attention(state);
+                mark_shown_seen(state);
                 state.queue_only = false;
                 state.clamp_rail_cursor();
                 state.mode = Mode::Normal;
@@ -1347,7 +1513,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if !state.detail.shown.is_empty() {
                 state.detail.focus = (state.detail.focus + 1) % state.detail.shown.len();
             }
-            clear_shown_attention(state);
+            mark_shown_seen(state);
             Vec::new()
         }
         KeyCode::Left | KeyCode::Char('h') => {
@@ -1355,7 +1521,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if n > 0 {
                 state.detail.focus = (state.detail.focus + n - 1) % n;
             }
-            clear_shown_attention(state);
+            mark_shown_seen(state);
             Vec::new()
         }
         KeyCode::Char(c @ '1'..='9') => {
@@ -1363,7 +1529,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if idx < state.detail.shown.len() {
                 state.detail.focus = idx;
             }
-            clear_shown_attention(state);
+            mark_shown_seen(state);
             Vec::new()
         }
         KeyCode::Char('n') => {
@@ -1546,13 +1712,18 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
     }
 }
 
-/// Clear the `attention` flag on every agent visible in the detail viewport
-/// (the user is now looking at them).
-fn clear_shown_attention(state: &mut AppState) {
+/// Mark every agent visible in the detail viewport as seen (the user is now
+/// looking at them): clears `attention` and decays `done` back to idle.
+fn mark_shown_seen(state: &mut AppState) {
+    if !state.term_focused {
+        // On screen but the human is elsewhere — not seen yet.
+        return;
+    }
     let shown: Vec<String> = state.detail.shown.clone();
     for pane in state.agents.iter_mut() {
         if shown.iter().any(|r| r == &pane.record_id) {
             pane.attention = false;
+            pane.done = false;
         }
     }
 }
@@ -1582,7 +1753,7 @@ fn split_detail(state: &mut AppState, split: Split) {
     match target {
         Some(id) => {
             state.detail.add(id, split);
-            clear_shown_attention(state);
+            mark_shown_seen(state);
         }
         None => {
             state.notice = Some("nothing to split with — every agent is already shown".into());
@@ -1602,7 +1773,9 @@ fn resolve_rail_pending(state: &mut AppState, outcome: PermissionOutcome) -> Vec
         if pane.pending.take().is_none() {
             return Vec::new();
         }
-        pane.attention = false; // decided — nothing left to look at
+        // Decided — nothing left to look at.
+        pane.attention = false;
+        pane.done = false;
     }
     state.clamp_rail_cursor();
     vec![Effect::ResolvePermission { record_id, outcome }]
@@ -1761,6 +1934,7 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                     p.push_external(Line::UserPrompt(text.clone()));
                     p.turn_active = true;
                     p.review = None;
+                    p.done = false;
                     p.check_retries = 0;
                     effects.push(Effect::Prompt {
                         record_id: p.record_id.clone(),
@@ -2392,7 +2566,7 @@ mod tests {
     }
 
     #[test]
-    fn background_turn_end_sets_attention_without_bell() {
+    fn background_turn_end_sets_done_without_bell() {
         let mut st = agents3(); // detail shows only r0
         let fx = reduce(
             &mut st,
@@ -2405,7 +2579,11 @@ mod tests {
             !fx.contains(&Effect::Bell),
             "completions are calm — no bell"
         );
-        assert!(st.agents[1].attention, "but the tower flags them");
+        assert!(st.agents[1].done, "but the tower flags them done-unseen");
+        assert!(
+            !st.agents[1].attention,
+            "done is inbox material, not trouble"
+        );
     }
 
     // ── Usage + cost. ──
@@ -3935,5 +4113,168 @@ mod tests {
         reduce(&mut st, &press(KeyCode::Enter));
         assert_eq!(st.detail.shown, vec!["r1".to_string()]);
         assert!(!st.agents[1].attention, "looking at it clears attention");
+    }
+
+    // ── Done-unseen (the inbox state) + focus tracking. ──
+
+    #[test]
+    fn opening_an_agent_decays_done_to_idle() {
+        let mut st = agents3();
+        st.agents[1].done = true;
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0; // r1 tops the roster (done-unseen)
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert!(!st.agents[1].done, "viewing decays done back to idle");
+    }
+
+    #[test]
+    fn done_sorts_above_working_below_attention() {
+        let mut st = agents3();
+        st.agents[0].turn_active = true; // working
+        st.agents[1].done = true; // finished, unseen
+        st.agents[2].attention = true; // trouble
+        assert_eq!(st.roster(), vec![2, 1, 0], "attention > done > working");
+    }
+
+    #[test]
+    fn shown_pane_accrues_done_while_unfocused_and_refocus_clears_it() {
+        let mut st = agents3(); // r0 shown solo
+        reduce(&mut st, &AppEvent::Focus(false));
+        let fx = reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "r0".into(),
+                stop_reason: StopReason::EndTurn,
+            },
+        );
+        assert!(st.agents[0].done, "on screen but the human is away");
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::Notify { title, .. } if title.contains("finished"))),
+            "away completions reach the terminal: {fx:?}"
+        );
+        reduce(&mut st, &AppEvent::Focus(true));
+        assert!(!st.agents[0].done, "coming back marks the shown pane seen");
+    }
+
+    #[test]
+    fn focused_events_do_not_notify() {
+        let mut st = agents3();
+        let fx = reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "r1".into(),
+                stop_reason: StopReason::EndTurn,
+            },
+        );
+        let fx2 = reduce(&mut st, &perm("r2", "wants write"));
+        assert!(
+            !fx.iter()
+                .chain(fx2.iter())
+                .any(|e| matches!(e, Effect::Notify { .. })),
+            "in-terminal signals own the focused case"
+        );
+    }
+
+    #[test]
+    fn unfocused_permission_notifies_with_the_risk_tag() {
+        let mut st = agents3();
+        reduce(&mut st, &AppEvent::Focus(false));
+        let fx = reduce(&mut st, &perm("r1", "rm -rf scratch"));
+        assert!(
+            fx.iter().any(|e| matches!(
+                e,
+                Effect::Notify { title, body }
+                    if title == "a1 needs approval" && body == "high risk · rm -rf scratch"
+            )),
+            "{fx:?}"
+        );
+        assert!(
+            fx.contains(&Effect::Bell),
+            "the background bell still rings"
+        );
+    }
+
+    #[test]
+    fn review_ready_flags_done_not_attention_and_notifies_when_away() {
+        let mut st = agents3();
+        reduce(&mut st, &AppEvent::Focus(false));
+        let fx = reduce(&mut st, &review_ready("r2"));
+        assert!(st.agents[2].done, "a ready review is inbox material");
+        assert!(!st.agents[2].attention, "nothing went wrong");
+        assert!(
+            fx.iter().any(|e| matches!(
+                e,
+                Effect::Notify { title, body }
+                    if title.contains("ready to review") && body.contains("+10/-3")
+            )),
+            "{fx:?}"
+        );
+    }
+
+    #[test]
+    fn new_prompt_supersedes_the_unread_completion() {
+        let mut st = agents3();
+        st.agents[0].done = true;
+        reduce(&mut st, &press(KeyCode::Char('g')));
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert!(!st.agents[0].done, "new work clears done");
+        assert!(st.agents[0].turn_active);
+    }
+
+    // ── Time-in-state. ──
+
+    #[test]
+    fn elapsed_label_tracks_time_in_state_and_resets_on_change() {
+        let mut st = agents3();
+        st.agents[0].turn_active = true;
+        reduce(&mut st, &AppEvent::Tick); // stamps every pane's bucket
+        st.tick += 42 * 5; // 42s later at 5 ticks/sec
+        assert_eq!(st.agents[0].elapsed_label(st.tick), Some("42s".into()));
+        assert_eq!(
+            st.agents[1].elapsed_label(st.tick),
+            None,
+            "idle rows stay calm"
+        );
+        // A bucket change restarts the clock.
+        reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "r1".into(),
+                stop_reason: StopReason::EndTurn,
+            },
+        );
+        assert_eq!(
+            st.agents[1].elapsed_label(st.tick),
+            Some("0s".into()),
+            "done-unseen just started"
+        );
+    }
+
+    #[test]
+    fn fmt_elapsed_compacts_units() {
+        assert_eq!(fmt_elapsed(0), "0s");
+        assert_eq!(fmt_elapsed(59), "59s");
+        assert_eq!(fmt_elapsed(60), "1m");
+        assert_eq!(fmt_elapsed(3599), "59m");
+        assert_eq!(fmt_elapsed(3600), "1h00m");
+        assert_eq!(fmt_elapsed(4500), "1h15m");
+    }
+
+    // ── Title badge. ──
+
+    #[test]
+    fn title_badge_counts_by_glyph_and_reads_calm_when_clear() {
+        let mut st = agents3();
+        assert_eq!(st.title_badge(), "bitrouter tui");
+        st.agents[0].pending = Some(PendingView {
+            title: "w".into(),
+            diff: None,
+            options: vec![],
+            risk: Risk::High,
+        });
+        st.agents[1].review = Some((1, 2, 3));
+        st.agents[2].done = true;
+        assert_eq!(st.title_badge(), "bitrouter ⚠1 ◆1 ◉1");
     }
 }

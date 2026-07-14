@@ -515,6 +515,19 @@ Sequenced **A0 → B → polish**, remapped to this architecture. **Target scale
 - Composer (atomic elements, Enter/Shift-Enter via kitty, `@`-mentions, draft-snapshot
   across pane switches), mouse, cross-thread "jump to requesting agent," HistoryCell
   compact/full.
+- **Attention beacons (shipped).** The tower must reach the human when the terminal is
+  *unfocused* (crossterm focus events): completions, ready-to-review, gated permissions,
+  exits, and exhausted check retries post an outer-terminal notification — one escape per
+  terminal (OSC 9 iTerm2, OSC 99 kitty, OSC 777 elsewhere, none on Terminal.app), tmux
+  DCS-passthrough-wrapped — and the terminal title doubles as a badge
+  (`bitrouter ⚠1 ◆1 ◉2`; original title pushed/popped via XTWINOPS). Notifications never
+  fire while focused: in-terminal signals (bell, glyphs, radar) own that case.
+- **Done-unseen + time-in-state (shipped, herdr-inspired).** A turn that finishes unseen
+  is `◉` done — an inbox-unread state distinct from `●` trouble — decaying to idle when
+  the pane is viewed *while the terminal has focus*; new work or integration clears it.
+  Roster order becomes needs-you > review > attention > done > working > idle > dead.
+  Rail rows in an actionable or working state show time-in-state (`42s`/`7m`/`1h05m`) —
+  the "is it stuck?" signal.
 
 **Deferred / non-goals:** container-per-agent isolation; a full task-DAG scheduler
 (Anthropic's caution: coding is less parallelizable than research — favor isolated,

@@ -329,6 +329,16 @@ it ships as a fast-follow. Until then pi spawns with a
 `routing unavailable — synthesize PI_CODING_AGENT_DIR manually` warning
 (§8), i.e. today's behavior, not a regression.
 
+> **Shipped for the interactive facet** (`Routing::PiConfigDir`,
+> `Harness::orchestrator_overlay`): the `bitrouter tui` orchestrator and
+> attach synthesize `models.json` (model list from the daemon's
+> `/v1/models`) and select `--provider bitrouter --model <id>`; the model
+> default rides the CLI flag rather than a `settings.json`. The same
+> mechanism also routes **opencode** (`Routing::OpencodeConfig`, one
+> synthesized `OPENCODE_CONFIG` JSON carrying provider + default model +
+> MCP). Headless `spawn` still launches both direct with a note — wiring
+> the synthesis into the ACP facet remains the v1.1 follow-up.
+
 ### 6.5 ACP-native gateway auth (noted for phase 2)
 
 claude-code-acp and gemini-cli both expose a first-class ACP `gateway` auth

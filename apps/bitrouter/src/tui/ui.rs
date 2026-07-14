@@ -230,7 +230,9 @@ fn state_glyph(pane: &PaneState, tick: u64) -> (&'static str, Color) {
     } else if pane.review.is_some() && !pane.exited {
         ("◆", Color::Blue) // ready to review
     } else if pane.attention {
-        ("●", Color::Yellow) // happened in the background
+        ("●", Color::Yellow) // went wrong in the background
+    } else if pane.done && !pane.exited {
+        ("◉", Color::Magenta) // finished, unseen — decays to ○ on view
     } else if !pane.exited && pane.turn_active {
         (SPINNER[(tick % 8) as usize], Color::Cyan) // working (turn in flight)
     } else if !pane.exited {
@@ -288,6 +290,14 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         // The fleet-allocated dev-server port, so N servers stay tellable apart.
         if let Some(port) = pane.port {
             spans.push(Span::styled(format!(" :{port}"), tint(nc, Color::DarkGray)));
+        }
+        // Time-in-state: how long it has been working/blocked/done — the
+        // "is it stuck?" signal. Idle and dead rows stay calm.
+        if let Some(elapsed) = pane.elapsed_label(state.tick) {
+            spans.push(Span::styled(
+                format!(" {elapsed}"),
+                tint(nc, Color::DarkGray),
+            ));
         }
         lines.push(TuiLine::from(spans));
         // Actionable rows expand inline: risk + what the agent wants, and (on
@@ -935,6 +945,25 @@ mod tests {
         st.agents[1].attention = true;
         let text = draw(&mut st, 80, 24);
         assert!(text.contains('●'), "attention glyph rendered in rail/radar");
+    }
+
+    #[test]
+    fn rail_shows_done_unseen_glyph() {
+        let mut st = agents3();
+        st.agents[1].done = true;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains('◉'), "done-unseen glyph rendered: {text:?}");
+    }
+
+    #[test]
+    fn rail_shows_time_in_state_for_working_rows() {
+        let mut st = agents3();
+        st.agents[0].turn_active = true;
+        // Stamp the bucket, then advance 42s of ticks (5/sec).
+        crate::tui::state::reduce(&mut st, &crate::tui::event::AppEvent::Tick);
+        st.tick += 42 * 5;
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("42s"), "elapsed column rendered: {text:?}");
     }
 
     #[test]

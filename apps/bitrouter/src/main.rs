@@ -385,22 +385,29 @@ enum Command {
     },
     /// Launch the composite multi-agent TUI: a left rail (roster sorted by
     /// who needs you, radar strip, decision + review queues) beside the
-    /// primary pane. `--agent claude|codex` hosts that harness's REAL native
-    /// TUI in a PTY pane (the orchestrator — keys pass through; `Ctrl-A` is
-    /// the one manager leader; `Ctrl-C` interrupts the agent, not the TUI)
-    /// with the fleet MCP bridge injected so it can spawn subagents. A
-    /// configured `agents:` id instead renders that ACP agent from typed
-    /// events. `Ctrl-A n` spawns worktree-isolated ACP subagents either way.
+    /// primary pane. `--agent claude|codex|opencode|pi` hosts that harness's
+    /// REAL native TUI in a PTY pane (the orchestrator — keys pass through;
+    /// `Ctrl-A` is the one manager leader; `Ctrl-C` interrupts the agent,
+    /// not the TUI) with the fleet MCP bridge injected where the harness
+    /// supports MCP (pi has no MCP mechanism). A configured `agents:` id
+    /// instead renders that ACP agent from typed events. `Ctrl-A n` spawns
+    /// worktree-isolated ACP subagents either way.
     #[cfg(feature = "tui")]
     Tui {
-        /// The primary agent: a native harness (`claude`, `codex`) hosted in
-        /// a PTY as the orchestrator, or a configured `agents:` entry
-        /// rendered from ACP events.
+        /// The primary agent: a native harness (`claude`, `codex`,
+        /// `opencode`, `pi`) hosted in a PTY as the orchestrator, or a
+        /// configured `agents:` entry rendered from ACP events.
         #[arg(short, long)]
         agent: String,
         /// Optional git worktree name for the first session (ACP agents only).
         #[arg(short, long)]
         worktree: Option<String>,
+        /// Pin the orchestrator's model (a daemon-routable id, e.g.
+        /// `anthropic/claude-sonnet-5` or the explicit `provider:model`
+        /// form). Defaults to the harness's own configuration (claude,
+        /// codex) or the daemon's first advertised model (opencode, pi).
+        #[arg(short, long)]
+        model: Option<String>,
     },
 }
 
@@ -1185,7 +1192,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
         #[cfg(feature = "tui")]
-        Command::Tui { agent, worktree } => bitrouter::tui::run(&agent, worktree.as_deref()).await,
+        Command::Tui {
+            agent,
+            worktree,
+            model,
+        } => bitrouter::tui::run(&agent, worktree.as_deref(), model.as_deref()).await,
         Command::Update {
             check,
             tag,

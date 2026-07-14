@@ -1,6 +1,7 @@
 //! `bitrouter tui` — in-process multi-agent manager.
 mod event;
 mod highlight;
+mod notify;
 mod pty;
 mod pump;
 mod state;
@@ -28,11 +29,13 @@ use crate::tui::event::{AppEvent, DiffData, Effect, Incoming, PermOption};
 use crate::tui::state::{AppState, PaneState, reduce};
 
 /// Launch the TUI. `--agent` names either a native harness (`claude`,
-/// `codex`) — the **orchestrator**, hosted at full fidelity in a PTY pane
-/// (TUI_SPEC §2/§3) with the fleet MCP bridge injected — or a configured
-/// `agents:` entry, which falls back to an ACP-rendered primary pane.
-/// `n` (in AGENT mode) spawns worktree-isolated ACP subagents either way.
-pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
+/// `codex`, `opencode`, `pi`) — the **orchestrator**, hosted at full
+/// fidelity in a PTY pane (TUI_SPEC §2/§3) with the fleet MCP bridge
+/// injected where the harness supports MCP — or a configured `agents:`
+/// entry, which falls back to an ACP-rendered primary pane. `--model` pins
+/// the orchestrator's model (a daemon-routable id). `n` (in AGENT mode)
+/// spawns worktree-isolated ACP subagents either way.
+pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) -> Result<()> {
     // ── Config + catalog. ──
     let source = crate::paths::resolve_config(None)?;
     let cfg = crate::paths::load_config(&source).await?;
@@ -50,6 +53,10 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     let mut port_alloc: HashMap<String, u16> = HashMap::new();
     let mut ptys: HashMap<String, pty::PtyPane> = HashMap::new();
 
+    // The daemon's advertised model ids (best-effort): fills the synthesized
+    // provider catalogs for the config-routed orchestrators (opencode, pi).
+    let models = fetch_models(&cfg.server.listen).await;
+
     let initial_pane = if let Some(h) = crate::harness::by_interactive_binary(agent_id) {
         // ── Orchestrator: the native harness TUI in a PTY pane. ──
         if worktree.is_some() {
@@ -57,7 +64,8 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
                 "--worktree applies to ACP agents; the orchestrator runs in the base repo"
             );
         }
-        let (record_id, pane, pty_pane) = launch_orchestrator(h, &cfg, &base_repo, tx.clone())?;
+        let (record_id, pane, pty_pane) =
+            launch_orchestrator(h, &cfg, &base_repo, tx.clone(), model, &models)?;
         ptys.insert(record_id, pty_pane);
         pane
     } else if cfg.agents.contains_key(agent_id) {
@@ -137,6 +145,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
             catalog: &catalog,
             base_repo,
             gateway_base: crate::spawn::derive_base_url(&cfg.server.listen),
+            models,
             tx,
         },
         fleet: Fleet {
@@ -146,6 +155,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
             checks: cfg.worktrees.checks.clone(),
         },
         ptys,
+        notify: notify::NotifyPath::detect(),
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
@@ -253,7 +263,31 @@ fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_
         false,
     )
     .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
-    let overlay = h.routing_overlay(&rt.spawner.gateway_base, &auth, None);
+    // Same overlay family as the orchestrator (synthesizes config for
+    // opencode/pi), but no MCP bridge — an attach drives one agent, it
+    // doesn't orchestrate. Synth files live under the BASE repo's
+    // .bitrouter (never the agent's worktree, where they would dirty the
+    // review diff), in a per-attach dir so attaches don't clobber the
+    // orchestrator's own synth config.
+    let state_dir = rt
+        .spawner
+        .base_repo
+        .join(".bitrouter")
+        .join(format!("attach-{record_id}"));
+    let overlay = match h.orchestrator_overlay(
+        &rt.spawner.gateway_base,
+        &auth,
+        None,
+        &rt.spawner.models,
+        None,
+        &state_dir,
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            state.notice = Some(format!("attach overlay failed: {e:#}"));
+            return;
+        }
+    };
     let mut all_args = overlay.args.clone();
     all_args.extend(extra);
     match pty::PtyPane::spawn(
@@ -284,13 +318,15 @@ fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_
 
 /// Launch the orchestrator: the harness's interactive binary on a PTY, its
 /// LLM traffic routed through the daemon (same overlay as `bitrouter launch`)
-/// and the fleet MCP bridge injected so it can spawn/manage subagents
-/// (TUI_SPEC §2's data flow).
+/// and the fleet MCP bridge injected — where the harness has an MCP
+/// mechanism — so it can spawn/manage subagents (TUI_SPEC §2's data flow).
 fn launch_orchestrator(
     h: &'static crate::harness::Harness,
     cfg: &bitrouter_sdk::config::Config,
     base_repo: &std::path::Path,
     tx: UnboundedSender<Incoming>,
+    model: Option<&str>,
+    models: &[String],
 ) -> Result<(String, PaneState, pty::PtyPane)> {
     let Some(binary) = h.interactive_binary else {
         anyhow::bail!("harness '{}' has no interactive binary", h.id);
@@ -301,9 +337,17 @@ fn launch_orchestrator(
         false,
     )
     .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
-    let overlay = h.routing_overlay(&base_url, &auth, None);
-    let mut args = overlay.args.clone();
-    args.extend(fleet_mcp_args(binary, base_repo)?);
+    let overlay = h
+        .orchestrator_overlay(
+            &base_url,
+            &auth,
+            model,
+            models,
+            Some(&fleet_mcp_server()),
+            &base_repo.join(".bitrouter"),
+        )
+        .with_context(|| format!("assembling the '{}' orchestrator overlay", h.id))?;
+    let args = overlay.args.clone();
 
     let record_id = "orchestrator".to_string();
     // Sized properly on the first draw (the pane rect is recorded and the
@@ -328,42 +372,47 @@ fn launch_orchestrator(
     Ok((record_id, pane_state, pane))
 }
 
-/// The args that wire the fleet MCP bridge into the orchestrator's harness,
-/// so its `spawn_subagent`/… tools reach this repo's fleet. Stdio subprocess,
-/// per TUI_SPEC §15-Q2.
-fn fleet_mcp_args(binary: &str, base_repo: &std::path::Path) -> Result<Vec<String>> {
-    let exe = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "bitrouter".to_string());
-    match binary {
-        "claude" => {
-            // Claude Code loads extra MCP servers from --mcp-config <file>.
-            let dir = base_repo.join(".bitrouter");
-            std::fs::create_dir_all(&dir).context("creating .bitrouter/")?;
-            let path = dir.join("fleet-mcp.json");
-            let config = serde_json::json!({
-                "mcpServers": {
-                    "bitrouter_fleet": {
-                        "command": exe,
-                        "args": ["mcp", "serve", "--backend", "fleet"],
-                    }
-                }
-            });
-            std::fs::write(&path, serde_json::to_string_pretty(&config)?)
-                .context("writing fleet MCP config")?;
-            Ok(vec!["--mcp-config".to_string(), path.display().to_string()])
-        }
-        "codex" => Ok(vec![
-            "-c".to_string(),
-            format!("mcp_servers.bitrouter_fleet.command={exe:?}"),
-            "-c".to_string(),
-            "mcp_servers.bitrouter_fleet.args=[\"mcp\",\"serve\",\"--backend\",\"fleet\"]"
-                .to_string(),
-        ]),
-        // Unknown harness: no injection mechanism — the orchestrator still
-        // runs, without fleet tools.
-        _ => Ok(Vec::new()),
+/// The fleet MCP bridge as a stdio server spec: this binary running
+/// `mcp serve --backend fleet`, so the orchestrator's `spawn_subagent`/…
+/// tools reach this repo's fleet (stdio subprocess, per TUI_SPEC §15-Q2).
+fn fleet_mcp_server() -> crate::harness::McpServer {
+    crate::harness::McpServer {
+        name: "bitrouter_fleet".to_string(),
+        command: std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "bitrouter".to_string()),
+        args: ["mcp", "serve", "--backend", "fleet"]
+            .map(str::to_string)
+            .to_vec(),
     }
+}
+
+/// Best-effort fetch of the daemon's advertised model ids (`/v1/models`) —
+/// they fill the synthesized provider catalogs for the config-routed
+/// orchestrators. Empty when the daemon is unreachable (the TUI still
+/// launches; the startup notice already covers the daemon being down).
+async fn fetch_models(listen: &str) -> Vec<String> {
+    let base = crate::spawn::derive_base_url(listen);
+    let request = reqwest::Client::new()
+        .get(format!("{base}/v1/models"))
+        .timeout(std::time::Duration::from_secs(2))
+        .send();
+    let Ok(Ok(resp)) = tokio::time::timeout(std::time::Duration::from_secs(3), request).await
+    else {
+        return Vec::new();
+    };
+    let Ok(body) = resp.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
+    body["data"]
+        .as_array()
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|m| m["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Probe the configured `bitrouter serve` listen address; `Some(warning)` when
@@ -389,8 +438,13 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     execute!(
         out,
         EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        // Focus events drive away-notifications and the seen/unseen decay.
+        crossterm::event::EnableFocusChange
     )?;
+    // Save the user's title so restore can put it back (XTWINOPS push/pop);
+    // the loop then uses the title as the attention badge.
+    write_out(&notify::NotifyPath::detect().title_push());
     // Kitty keyboard enhancement: puts the manager leader in a keyspace no
     // legacy binding collides with and makes Shift-Enter distinct from Enter
     // (the composer's newline). Only where the terminal supports it.
@@ -419,12 +473,23 @@ fn restore_terminal() {
     if KITTY_PUSHED.swap(false, std::sync::atomic::Ordering::SeqCst) {
         let _ = execute!(out, crossterm::event::PopKeyboardEnhancementFlags);
     }
+    write_out(&notify::NotifyPath::detect().title_pop());
     let _ = execute!(
         out,
+        crossterm::event::DisableFocusChange,
         crossterm::event::DisableMouseCapture,
         LeaveAlternateScreen,
         crossterm::cursor::Show
     );
+}
+
+/// Write a raw escape sequence to the outer terminal (best-effort — by the
+/// time a write fails we're exiting anyway).
+fn write_out(bytes: &[u8]) {
+    use std::io::Write;
+    let mut out = io::stdout();
+    let _ = out.write_all(bytes);
+    let _ = out.flush();
 }
 
 /// Chain `restore` in front of the current panic hook so a panic anywhere in
@@ -445,6 +510,9 @@ struct Spawner<'a> {
     /// The daemon gateway base URL (derived from `server.listen`) — routing
     /// overlay for interactive attaches.
     gateway_base: String,
+    /// The daemon's advertised model ids at startup (may be empty) — fills
+    /// synthesized provider catalogs on attach.
+    models: Vec<String>,
     tx: UnboundedSender<Incoming>,
 }
 
@@ -463,6 +531,8 @@ struct Runtime<'a> {
     /// Live PTY panes by record id: the orchestrator (when `--agent` named a
     /// native harness) plus any interactive attaches (TUI_SPEC §13-B4).
     ptys: HashMap<String, pty::PtyPane>,
+    /// The host terminal's notification dialect, detected once at startup.
+    notify: notify::NotifyPath,
 }
 
 /// The core loop over a registry of sessions. Draws, muxes input vs pumped
@@ -478,8 +548,15 @@ async fn event_loop(
     // redraw cadence.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(200));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The terminal title doubles as the attention badge; re-emit on change.
+    let mut last_title = String::new();
 
     loop {
+        let badge = state.title_badge();
+        if badge != last_title {
+            write_out(&rt.notify.title(&badge));
+            last_title = badge;
+        }
         // Snapshot the PTY grids for this frame (the emulators live
         // loop-side; state stays pure).
         let pty_views: Vec<ui::PtyView> = rt
@@ -518,6 +595,10 @@ async fn event_loop(
                         Some(AppEvent::Scroll { up: false }),
                     _ => None,
                 },
+                // Focus drives away-notifications; regaining it marks the
+                // shown panes seen (the done → idle decay).
+                Some(Ok(CtEvent::FocusGained)) => Some(AppEvent::Focus(true)),
+                Some(Ok(CtEvent::FocusLost)) => Some(AppEvent::Focus(false)),
                 // Resize needs no state change: `None` continues to the top of
                 // the loop, whose draw autoresizes to the new size.
                 Some(Ok(_)) => None,
@@ -639,10 +720,14 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         Effect::Quit => {}
         Effect::Bell => {
             // Ring the terminal bell (BEL). Best-effort; ignore write errors.
-            use std::io::Write;
-            let mut out = std::io::stdout();
-            let _ = out.write_all(b"\x07");
-            let _ = out.flush();
+            write_out(b"\x07");
+        }
+        Effect::Notify { title, body } => {
+            // The human is away — deliver through the host terminal's
+            // notification escape (it decides how to show it).
+            if let Some(seq) = rt.notify.notification(&title, &body) {
+                write_out(&seq);
+            }
         }
         Effect::Prompt { record_id, text } => {
             if let Some(sess) = rt.sessions.get(&record_id) {
@@ -1050,27 +1135,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
-    fn fleet_mcp_args_wire_the_bridge_per_harness() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // claude: a --mcp-config file carrying the stdio fleet bridge.
-        let args = super::fleet_mcp_args("claude", dir.path()).expect("claude");
-        assert_eq!(args[0], "--mcp-config");
-        let written = std::fs::read_to_string(&args[1]).expect("config file written");
-        assert!(written.contains("bitrouter_fleet"), "{written}");
-        assert!(written.contains("\"fleet\""), "fleet backend: {written}");
-        // codex: -c TOML overrides.
-        let args = super::fleet_mcp_args("codex", dir.path()).expect("codex");
-        assert!(
-            args.iter()
-                .any(|a| a.contains("mcp_servers.bitrouter_fleet.command")),
-            "{args:?}"
-        );
-        // Unknown harness: no injection mechanism, no args.
-        assert!(
-            super::fleet_mcp_args("mystery", dir.path())
-                .expect("unknown")
-                .is_empty()
-        );
+    fn fleet_mcp_server_spec_names_the_fleet_backend() {
+        let mcp = super::fleet_mcp_server();
+        assert_eq!(mcp.name, "bitrouter_fleet");
+        assert_eq!(mcp.args, vec!["mcp", "serve", "--backend", "fleet"]);
+        assert!(!mcp.command.is_empty());
     }
 
     #[test]

@@ -217,12 +217,13 @@ pub async fn apply_routing(
         warn_model_dropped("the agent is not catalog-matched");
         return Ok(None);
     };
-    if let crate::harness::Routing::Unroutable { reason } = &harness.routing {
+    if !harness.env_args_routable() {
         eprintln!(
-            "note: '{}' is not routable: {reason}; launching direct",
+            "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
+             (the `bitrouter tui` orchestrator facet does); launching direct",
             harness.id
         );
-        warn_model_dropped("the harness is not routable");
+        warn_model_dropped("the harness routes only in the interactive facet");
         return Ok(None);
     }
 
@@ -404,7 +405,7 @@ pub async fn spawn_check(
         ));
     } else {
         match harness {
-            Some(h) if h.is_routable() => {
+            Some(h) if h.env_args_routable() => {
                 routable_harness = Some(h);
                 checks.push(row(
                     "routing",
@@ -413,14 +414,14 @@ pub async fn spawn_check(
                 ));
             }
             Some(h) => {
-                let reason = match &h.routing {
-                    crate::harness::Routing::Unroutable { reason } => *reason,
-                    _ => "no gateway mechanism",
-                };
                 checks.push(row(
                     "routing",
                     SpawnCheckStatus::Warn,
-                    format!("'{}' is not routable ({reason}); will run direct", h.id),
+                    format!(
+                        "'{}' routes via synthesized config (interactive facet only); \
+                         will run direct",
+                        h.id
+                    ),
                 ));
             }
             None => checks.push(row(
