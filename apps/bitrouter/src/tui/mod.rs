@@ -942,11 +942,14 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     );
                 }
                 Err(e) => {
+                    // The full error chain goes to the log; the reducer
+                    // flattens it into the one-line mode-bar notice.
+                    tracing::warn!(agent = %agent_id, error = %format!("{e:#}"), "subagent spawn failed");
                     let _ = reduce(
                         state,
                         &AppEvent::AgentSpawnFailed {
                             agent_id,
-                            error: e.to_string(),
+                            error: format!("{e:#}"),
                         },
                     );
                 }

@@ -1082,7 +1082,10 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             Vec::new()
         }
         AppEvent::AgentSpawnFailed { agent_id, error } => {
-            state.notice = Some(format!("failed to spawn {agent_id}: {error}"));
+            // The mode bar is one line: a multi-line upstream error (JSON-RPC
+            // bodies…) must flatten or everything after the first newline is
+            // silently lost.
+            state.notice = Some(one_line(&format!("failed to spawn {agent_id}: {error}")));
             Vec::new()
         }
         AppEvent::PtyAttached {
@@ -1741,6 +1744,26 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             vec![Effect::Quit]
         }
     }
+}
+
+/// Collapse text into one mode-bar-sized line: whitespace runs (including
+/// newlines) become single spaces, capped at 200 chars with an ellipsis.
+fn one_line(text: &str) -> String {
+    const CAP: usize = 200;
+    let mut out = String::new();
+    let mut count = 0usize;
+    for word in text.split_whitespace() {
+        if count > 0 {
+            out.push(' ');
+        }
+        out.push_str(word);
+        count += word.chars().count() + 1;
+        if count > CAP {
+            out.push('…');
+            break;
+        }
+    }
+    out
 }
 
 /// Mark every agent visible in the detail viewport as seen (the user is now
@@ -4290,6 +4313,40 @@ mod tests {
         assert_eq!(fmt_elapsed(3599), "59m");
         assert_eq!(fmt_elapsed(3600), "1h00m");
         assert_eq!(fmt_elapsed(4500), "1h15m");
+    }
+
+    #[test]
+    fn spawn_failure_notice_flattens_multiline_errors() {
+        let mut st = agents3();
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawnFailed {
+                agent_id: "claude-acp".into(),
+                error:
+                    "Internal error: {\n  \"details\": \"Query closed before response received\"\n}"
+                        .into(),
+            },
+        );
+        let notice = st.notice.clone().expect("notice set");
+        assert!(
+            !notice.contains('\n'),
+            "one line for the mode bar: {notice:?}"
+        );
+        assert!(
+            notice.contains("Query closed before response received"),
+            "the details survive the flatten: {notice}"
+        );
+        // Pathologically long errors are capped, not dumped.
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawnFailed {
+                agent_id: "x".into(),
+                error: "word ".repeat(100),
+            },
+        );
+        let capped = st.notice.expect("notice set");
+        assert!(capped.chars().count() < 260, "{}", capped.len());
+        assert!(capped.ends_with('…'));
     }
 
     // ── Fleet-state snapshot. ──
