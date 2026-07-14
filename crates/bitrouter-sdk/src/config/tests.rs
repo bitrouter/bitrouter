@@ -260,10 +260,13 @@ providers:
     let cfg = parse_with(yaml, |_| None).unwrap();
     let model = &cfg.providers.get("alibaba").unwrap().models[0];
     let pricing = model.pricing.as_ref().expect("pricing present");
-    assert_eq!(pricing.input_micro_usd_per_token, 1.3);
+    assert_eq!(pricing.input_micro_usd_per_token, Some(1.3));
     assert_eq!(pricing.context_tiers.len(), 1);
     assert_eq!(pricing.context_tiers[0].above_input_tokens, 128_000);
-    assert_eq!(pricing.context_tiers[0].output_micro_usd_per_token, 12.0);
+    assert_eq!(
+        pricing.context_tiers[0].output_micro_usd_per_token,
+        Some(12.0)
+    );
 }
 
 #[test]
@@ -286,6 +289,42 @@ providers:
         .as_ref()
         .expect("pricing present");
     assert!(pricing.context_tiers.is_empty());
+}
+
+#[test]
+fn pricing_preserves_missing_rates_and_cache_rates() {
+    let yaml = r#"
+providers:
+  anthropic:
+    api_base: https://api.anthropic.com/v1
+    api_key: k
+    models:
+      - id: claude-test
+        pricing:
+          input_micro_usd_per_token: 3.0
+          cache_read_micro_usd_per_token: 0.3
+          cache_write_micro_usd_per_token: 3.75
+          context_tiers:
+            - above_input_tokens: 128000
+              output_micro_usd_per_token: 20.0
+"#;
+    let cfg = parse_with(yaml, |_| None).unwrap();
+    let pricing = cfg.providers.get("anthropic").unwrap().models[0]
+        .pricing
+        .as_ref()
+        .expect("pricing present");
+    assert_eq!(pricing.input_micro_usd_per_token, Some(3.0));
+    assert_eq!(pricing.cache_read_micro_usd_per_token, Some(0.3));
+    assert_eq!(pricing.cache_write_micro_usd_per_token, Some(3.75));
+    assert_eq!(pricing.output_micro_usd_per_token, None);
+    assert_eq!(
+        pricing.context_tiers[0].output_micro_usd_per_token,
+        Some(20.0)
+    );
+    assert_eq!(
+        pricing.context_tiers[0].cache_read_micro_usd_per_token,
+        None
+    );
 }
 
 #[test]

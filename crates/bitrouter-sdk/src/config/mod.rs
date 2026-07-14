@@ -558,12 +558,19 @@ pub struct RateLimit {
 /// [`context_tiers`]: PricingConfig::context_tiers
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct PricingConfig {
-    /// Micro-USD per prompt (input) token (base bracket).
+    /// Micro-USD per uncached prompt token (base bracket). `None` means the
+    /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
-    pub input_micro_usd_per_token: f64,
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read prompt token (base bracket).
+    #[serde(default)]
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write prompt token (base bracket).
+    #[serde(default)]
+    pub cache_write_micro_usd_per_token: Option<f64>,
     /// Micro-USD per completion (output) token (base bracket).
     #[serde(default)]
-    pub output_micro_usd_per_token: f64,
+    pub output_micro_usd_per_token: Option<f64>,
     /// Optional higher context brackets, applied by total input-token count.
     /// The selected bracket's rates apply to the whole request (a step
     /// function); the consumer's bracket pick is order-independent.
@@ -579,12 +586,22 @@ pub struct PricingTierConfig {
     /// size is strictly greater than this enters the bracket (a base bracket
     /// documented as "≤ 128k" is written as `above_input_tokens: 128000`).
     pub above_input_tokens: u64,
-    /// Micro-USD per prompt (input) token for this bracket.
+    /// Micro-USD per uncached prompt token for this bracket. `None` inherits
+    /// the base rate.
     #[serde(default)]
-    pub input_micro_usd_per_token: f64,
-    /// Micro-USD per completion (output) token for this bracket.
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read prompt token for this bracket. `None` inherits
+    /// the base rate.
     #[serde(default)]
-    pub output_micro_usd_per_token: f64,
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write prompt token for this bracket. `None` inherits
+    /// the base rate.
+    #[serde(default)]
+    pub cache_write_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per completion (output) token for this bracket. `None`
+    /// inherits the base rate.
+    #[serde(default)]
+    pub output_micro_usd_per_token: Option<f64>,
 }
 
 /// One upstream provider entry — registry-style.

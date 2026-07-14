@@ -418,7 +418,9 @@ impl PipelineContext {
     pub fn settlement_context(&mut self) -> SettlementContext {
         let target = self.serving_target();
         let exec = self.execution_result.as_ref();
-        let usage = exec.and_then(|e| e.result.usage).unwrap_or_default();
+        let usage = exec
+            .and_then(|e| e.result.usage.clone())
+            .unwrap_or_default();
         SettlementContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
@@ -431,6 +433,8 @@ impl PipelineContext {
             reasoning_tokens: usage.reasoning_tokens,
             cache_read_tokens: usage.cache_read_tokens,
             cache_write_tokens: usage.cache_write_tokens,
+            usage_origin: usage.origin,
+            raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
             media_input_count: count_media(self.prompt.messages.iter().flat_map(|m| &m.content)),
             // Note: for streamed requests both fields below are 0 / empty.
@@ -806,9 +810,14 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("disconnect with a non-empty prompt must still bill input tokens");
         assert_eq!(usage.prompt_tokens, expected_prompt);
         assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(
+            usage.origin,
+            crate::language_model::types::UsageOrigin::Estimated
+        );
     }
 
     #[tokio::test]
@@ -824,7 +833,11 @@ mod tests {
             .expect("text delta passes through with no hooks");
         proc.finish(StreamOutcome::ClientDisconnected).await;
 
-        let usage = proc.context().final_usage.expect("billed on disconnect");
+        let usage = proc
+            .context()
+            .final_usage
+            .clone()
+            .expect("billed on disconnect");
         assert_eq!(
             usage.prompt_tokens,
             (user.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
@@ -851,9 +864,54 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("completed stream without upstream usage should fall back to estimates");
         assert_eq!(usage.prompt_tokens, 2);
         assert_eq!(usage.completion_tokens, 2);
+        assert_eq!(
+            usage.origin,
+            crate::language_model::types::UsageOrigin::Estimated
+        );
+    }
+
+    #[test]
+    fn settlement_context_preserves_usage_provenance_and_raw_payload() {
+        let raw = serde_json::json!({
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "cache_read_input_tokens": 5
+        });
+        let mut ctx = ctx_from_prompt(prompt_with_text(None, "hello"));
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: "anthropic".into(),
+            model_id: "claude".into(),
+            account_label: None,
+            result: crate::language_model::types::GenerateResult {
+                content: Vec::new(),
+                usage: Some(Usage {
+                    prompt_tokens: 12,
+                    completion_tokens: 4,
+                    cache_read_tokens: 5,
+                    origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                    raw: Some(Box::new(raw.clone())),
+                    ..Default::default()
+                }),
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: 1,
+            generation_time_ms: 1,
+            server_tool_calls: Vec::new(),
+        });
+
+        let settlement = ctx.settlement_context();
+        assert_eq!(
+            settlement.usage_origin,
+            crate::language_model::types::UsageOrigin::ProviderReported
+        );
+        assert_eq!(settlement.raw_usage.as_ref(), Some(&raw));
     }
 
     #[tokio::test]
@@ -877,6 +935,7 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("completed stream should have usage");
         assert_eq!(usage.prompt_tokens, 2);
         assert_eq!(usage.completion_tokens, 2);
@@ -903,6 +962,7 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("authoritative usage billed");
         assert_eq!(
             usage.prompt_tokens, 11,

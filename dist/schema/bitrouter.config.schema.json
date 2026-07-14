@@ -460,16 +460,40 @@
       "type": "object",
       "properties": {
         "input_micro_usd_per_token": {
-          "description": "Micro-USD per prompt (input) token (base bracket).",
-          "type": "number",
+          "description": "Micro-USD per uncached prompt token (base bracket). `None` means the\nprovider did not publish a rate; explicit `0` remains free.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
+        },
+        "cache_read_micro_usd_per_token": {
+          "description": "Micro-USD per cache-read prompt token (base bracket).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "cache_write_micro_usd_per_token": {
+          "description": "Micro-USD per cache-write prompt token (base bracket).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
         },
         "output_micro_usd_per_token": {
           "description": "Micro-USD per completion (output) token (base bracket).",
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
         },
         "context_tiers": {
           "description": "Optional higher context brackets, applied by total input-token count.\nThe selected bracket's rates apply to the whole request (a step\nfunction); the consumer's bracket pick is order-independent.",
@@ -491,16 +515,40 @@
           "minimum": 0
         },
         "input_micro_usd_per_token": {
-          "description": "Micro-USD per prompt (input) token for this bracket.",
-          "type": "number",
+          "description": "Micro-USD per uncached prompt token for this bracket. `None` inherits\nthe base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
+        },
+        "cache_read_micro_usd_per_token": {
+          "description": "Micro-USD per cache-read prompt token for this bracket. `None` inherits\nthe base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "cache_write_micro_usd_per_token": {
+          "description": "Micro-USD per cache-write prompt token for this bracket. `None` inherits\nthe base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
         },
         "output_micro_usd_per_token": {
-          "description": "Micro-USD per completion (output) token for this bracket.",
-          "type": "number",
+          "description": "Micro-USD per completion (output) token for this bracket. `None`\ninherits the base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
         }
       },
       "required": [

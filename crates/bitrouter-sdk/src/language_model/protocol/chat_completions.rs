@@ -22,7 +22,7 @@ use crate::language_model::types::{
     ApiProtocol, ChatTokenLimitField, Content, DataContent, FinishReason, GenerateResult,
     GenerationParams, Message, Modality, Prompt, ProviderMetadata, ResponseFormat, Role,
     RoutingTarget, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput,
-    Usage, provider_namespace, set_provider_metadata,
+    Usage, UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -718,8 +718,8 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 "finish_reason": rendered_finish_reason(result, PROVIDER_ID_OPENAI, finish_reason_str),
             }]),
         );
-        if let Some(usage) = result.usage {
-            response.insert("usage".into(), render_usage(&usage));
+        if let Some(usage) = &result.usage {
+            response.insert("usage".into(), render_usage(usage));
         }
         // Restore the OpenAI `system_fingerprint` from result-level provider
         // metadata when present (only ever set by this protocol's
@@ -1417,7 +1417,26 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         cache_read_tokens: cache_read,
         cache_write_tokens: 0,
         web_search_count: 0,
+        origin: UsageOrigin::ProviderReported,
+        raw: Some(Box::new(value.clone())),
     })
+}
+
+#[cfg(test)]
+#[test]
+fn parse_usage_retains_provider_payload_and_origin() {
+    use crate::language_model::types::UsageOrigin;
+
+    let raw = serde_json::json!({
+        "prompt_tokens": 12,
+        "completion_tokens": 4,
+        "prompt_tokens_details": { "cached_tokens": 5 },
+        "provider_extension": { "billing_tier": "priority" }
+    });
+
+    let usage = parse_usage(&raw).expect("usage present");
+    assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+    assert_eq!(usage.raw.as_deref(), Some(&raw));
 }
 
 fn render_usage(usage: &Usage) -> serde_json::Value {

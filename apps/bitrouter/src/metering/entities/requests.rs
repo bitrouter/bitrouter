@@ -27,6 +27,18 @@ pub struct Model {
     pub cache_read_tokens: i64,
     /// Cache-write prompt tokens.
     pub cache_write_tokens: i64,
+    /// Uncached input tokens after normalizing cache subsets.
+    pub uncached_input_tokens: i64,
+    /// Non-reasoning output tokens after normalizing the reasoning subset.
+    pub output_tokens: i64,
+    /// Usage provenance (`provider_reported`, `estimated`, or `unknown`).
+    pub usage_origin: String,
+    /// Verbatim provider usage object serialized as JSON.
+    pub raw_usage_json: Option<String>,
+    /// Charge evidence state (`computed`, `unknown`, or `legacy_unknown`).
+    pub charge_status: String,
+    /// Full charge evidence serialized as JSON.
+    pub charge_evidence_json: Option<String>,
     /// Estimated charge in micro-USD computed from pricing × tokens.
     pub estimated_charge_micro_usd: i64,
     /// Whether the request was streamed (`1`) or not (`0`).

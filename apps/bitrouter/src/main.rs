@@ -429,7 +429,8 @@ enum WorkflowStateAction {
         /// Output usage JSONL path.
         #[arg(long)]
         output: PathBuf,
-        /// Impute zero/missing charges as provider:model=input_micro_usd,output_micro_usd.
+        /// Impute charges as provider:model=uncached,cache_read,cache_write,output.
+        /// Legacy input,output is accepted only for records with no cache usage.
         #[arg(long = "impute-price")]
         impute_prices: Vec<String>,
         /// Inclusive RFC3339 lower bound. Defaults to the current UTC month.

@@ -30,6 +30,8 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         reasoning_tokens: 0,
         cache_read_tokens: 0,
         cache_write_tokens: 0,
+        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        raw_usage: None,
         web_search_count: 0,
         media_input_count: 0,
         media_output_count: 0,
@@ -64,7 +66,54 @@ async fn recorder_writes_estimated_charge_from_pricing() -> Result<()> {
 }
 
 #[tokio::test]
-async fn recorder_writes_zero_when_pricing_missing() -> Result<()> {
+async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let mut table = PricingTable::new();
+    table.insert(
+        "openai",
+        "gpt-5",
+        ModelPricing::cache_aware(Some(2.0), Some(0.2), Some(2.5), Some(10.0)),
+    );
+    let recorder = MeteringRecorder::new(store.clone(), Arc::new(table));
+    let raw = serde_json::json!({
+        "prompt_tokens": 100,
+        "completion_tokens": 30,
+        "prompt_tokens_details": { "cached_tokens": 40 },
+        "cache_write_tokens": 20
+    });
+    let mut settlement = ctx("cache", 100, 30);
+    settlement.reasoning_tokens = 10;
+    settlement.cache_read_tokens = 40;
+    settlement.cache_write_tokens = 20;
+    settlement.raw_usage = Some(raw.clone());
+
+    recorder.record(&mut settlement).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let record = records.first().expect("one usage record");
+
+    assert_eq!(record.uncached_input_tokens, 40);
+    assert_eq!(record.cache_read_tokens, 40);
+    assert_eq!(record.cache_write_tokens, 20);
+    assert_eq!(record.output_tokens, 20);
+    assert_eq!(record.reasoning_tokens, 10);
+    assert_eq!(record.final_charge_micro_usd, Some(438));
+    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.raw_usage.as_ref(), Some(&raw));
+    let evidence = record.charge_evidence.as_ref().expect("charge evidence");
+    assert_eq!(evidence.charge_micro_usd, Some(438));
+    assert!(evidence.pricing_version.starts_with("sha256:"));
+    let cloud: crate::workflow_state::archive::CloudUsageRecord =
+        serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap();
+    assert_eq!(cloud.cache_read_tokens, 40);
+    assert_eq!(cloud.cache_write_tokens, 20);
+    assert_eq!(cloud.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(cloud.charge_evidence.unwrap().charge_micro_usd, Some(438));
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_marks_charge_unknown_when_pricing_is_missing() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let empty = Arc::new(PricingTable::new());
@@ -75,6 +124,39 @@ async fn recorder_writes_zero_when_pricing_missing() -> Result<()> {
     // The row was still written — count is 1.
     let count = store.get_request_count("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(count, 1);
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    assert_eq!(records[0].final_charge_micro_usd, None);
+    assert_eq!(records[0].charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(
+        records[0]
+            .charge_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.unknown_reason.as_deref()),
+        Some("pricing_not_found")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let mut settlement = ctx("unknown", 0, 0);
+    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+
+    recorder.record(&mut settlement).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+
+    assert_eq!(records[0].final_charge_micro_usd, None);
+    assert_eq!(records[0].charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(
+        records[0]
+            .charge_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.unknown_reason.as_deref()),
+        Some("usage_unavailable")
+    );
     Ok(())
 }
 
@@ -159,6 +241,9 @@ async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
     let store = MeteringStore::new(pool);
     let spend = store.get_spend("k", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 42, "legacy row's spend is preserved across rename");
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    assert_eq!(records[0].final_charge_micro_usd, None);
+    assert_eq!(records[0].charge_status, super::ChargeStatus::LegacyUnknown);
     Ok(())
 }
 
@@ -251,10 +336,75 @@ fn usage_price_override_imputes_missing_charges() {
         completion_tokens: 17,
         final_charge_micro_usd: Some(0),
         status: Some("completed".to_string()),
+        ..Default::default()
     }];
     let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
 
     super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records[0].final_charge_micro_usd, Some(530));
+    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    assert_eq!(
+        records[0]
+            .charge_evidence
+            .as_ref()
+            .map(|evidence| evidence.pricing_source),
+        Some(super::PricingSource::Override)
+    );
+}
+
+#[test]
+fn four_rate_override_prices_cache_buckets() {
+    let mut records = vec![super::MeteringUsageRecord {
+        provider_id: "anthropic".to_string(),
+        model_id: "claude-test".to_string(),
+        prompt_tokens: 100,
+        completion_tokens: 30,
+        reasoning_tokens: 10,
+        cache_read_tokens: 40,
+        cache_write_tokens: 20,
+        ..Default::default()
+    }];
+    let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,0.2,2.5,10")
+        .expect("four-rate override");
+
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+
+    assert_eq!(records[0].final_charge_micro_usd, Some(438));
+    assert_eq!(records[0].uncached_input_tokens, 40);
+    assert_eq!(records[0].output_tokens, 20);
+    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+}
+
+#[test]
+fn legacy_two_rate_override_refuses_cached_usage() {
+    let mut records = vec![super::MeteringUsageRecord {
+        provider_id: "anthropic".to_string(),
+        model_id: "claude-test".to_string(),
+        prompt_tokens: 100,
+        completion_tokens: 30,
+        cache_read_tokens: 40,
+        ..Default::default()
+    }];
+    let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,10")
+        .expect("legacy override remains parseable");
+
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+
+    assert_eq!(records[0].final_charge_micro_usd, None);
+    assert_eq!(records[0].charge_status, super::ChargeStatus::LegacyUnknown);
+}
+
+#[test]
+fn price_override_rejects_negative_or_non_finite_rates() {
+    for value in [
+        "anthropic:claude-test=-1,0.2,2.5,10",
+        "anthropic:claude-test=2,NaN,2.5,10",
+        "anthropic:claude-test=2,0.2,inf,10",
+    ] {
+        assert!(
+            super::UsagePriceOverride::parse(value).is_err(),
+            "override should reject {value}"
+        );
+    }
 }

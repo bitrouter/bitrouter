@@ -277,35 +277,37 @@ fn map_rate_limits(rl: &RegistryRateLimits) -> RateLimit {
     }
 }
 
-/// Map registry pricing onto config pricing. OSS metering tracks the base
-/// no-cache input rate, the text output rate, and context tiers (USD per 1M
-/// tokens == µUSD per token). Returns `None` when no usable rate is present.
+/// Map registry pricing onto cache-aware config pricing (USD per 1M tokens ==
+/// µUSD per token). Missing rates remain `None`; explicit zero remains free.
 fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
     let input = p.input_tokens.as_ref().and_then(|i| i.no_cache);
+    let cache_read = p.input_tokens.as_ref().and_then(|i| i.cache_read);
+    let cache_write = p.input_tokens.as_ref().and_then(|i| i.cache_write);
     let output = p.output_tokens.as_ref().and_then(|o| o.text);
     let context_tiers: Vec<PricingTierConfig> = p
         .context_tiers
         .iter()
         .map(|t| PricingTierConfig {
             above_input_tokens: t.above_input_tokens,
-            input_micro_usd_per_token: t
-                .input_tokens
-                .as_ref()
-                .and_then(|i| i.no_cache)
-                .unwrap_or(0.0),
-            output_micro_usd_per_token: t
-                .output_tokens
-                .as_ref()
-                .and_then(|o| o.text)
-                .unwrap_or(0.0),
+            input_micro_usd_per_token: t.input_tokens.as_ref().and_then(|i| i.no_cache),
+            cache_read_micro_usd_per_token: t.input_tokens.as_ref().and_then(|i| i.cache_read),
+            cache_write_micro_usd_per_token: t.input_tokens.as_ref().and_then(|i| i.cache_write),
+            output_micro_usd_per_token: t.output_tokens.as_ref().and_then(|o| o.text),
         })
         .collect();
-    if input.is_none() && output.is_none() && context_tiers.is_empty() {
+    if input.is_none()
+        && cache_read.is_none()
+        && cache_write.is_none()
+        && output.is_none()
+        && context_tiers.is_empty()
+    {
         return None;
     }
     Some(PricingConfig {
-        input_micro_usd_per_token: input.unwrap_or(0.0),
-        output_micro_usd_per_token: output.unwrap_or(0.0),
+        input_micro_usd_per_token: input,
+        cache_read_micro_usd_per_token: cache_read,
+        cache_write_micro_usd_per_token: cache_write,
+        output_micro_usd_per_token: output,
         context_tiers,
     })
 }
@@ -333,6 +335,8 @@ mod tests {
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
+                        cache_read: None,
+                        cache_write: None,
                     }),
                     output_tokens: Some(OutputTokenPricing { text: Some(0.41) }),
                     context_tiers: Vec::new(),
@@ -365,6 +369,25 @@ mod tests {
             models[0].compatibility.chat_completions.token_limit_field,
             Some(ChatTokenLimitField::MaxCompletionTokens)
         );
+    }
+
+    #[test]
+    fn registry_cache_rates_map_without_fabricating_missing_values() {
+        let pricing = RegistryPricing {
+            input_tokens: Some(InputTokenPricing {
+                no_cache: Some(3.0),
+                cache_read: Some(0.3),
+                cache_write: Some(3.75),
+            }),
+            output_tokens: Some(OutputTokenPricing { text: None }),
+            context_tiers: Vec::new(),
+        };
+
+        let mapped = map_pricing(&pricing).expect("partial pricing retained");
+        assert_eq!(mapped.input_micro_usd_per_token, Some(3.0));
+        assert_eq!(mapped.cache_read_micro_usd_per_token, Some(0.3));
+        assert_eq!(mapped.cache_write_micro_usd_per_token, Some(3.75));
+        assert_eq!(mapped.output_micro_usd_per_token, None);
     }
 
     fn data_with(providers: Vec<RegistryProvider>, canonical: Vec<&str>) -> RegistryData {
@@ -450,8 +473,8 @@ mod tests {
                 Some(ProtocolList(vec![ApiProtocol::ChatCompletions]))
             );
             let pricing = model.pricing.as_ref().expect("pricing mapped");
-            assert_eq!(pricing.input_micro_usd_per_token, 0.27);
-            assert_eq!(pricing.output_micro_usd_per_token, 0.41);
+            assert_eq!(pricing.input_micro_usd_per_token, Some(0.27));
+            assert_eq!(pricing.output_micro_usd_per_token, Some(0.41));
         });
     }
 

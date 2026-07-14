@@ -7,13 +7,14 @@ description: >
   https://api.bitrouter.ai/v1 (managed, brk_* keys, Stripe credits or
   x402 wallet). Unifies OpenAI, Anthropic, Google, OpenRouter, GitHub
   Copilot, and OpenCode Zen/Go behind one endpoint. Also covers signup
-  on bitrouter.ai, minting brk_ API keys, migrating off LiteLLM /
+  on bitrouter.ai, minting brk_ API keys, running auditable benchmarks,
+  migrating off LiteLLM /
   OpenRouter / any OpenAI- or Anthropic-compatible gateway, editing
   bitrouter.yaml, and wiring coding-agent harnesses (Claude Code, Codex,
-  Hermes Agent, OpenClaw). Trigger on "set up a local LLM proxy",
+  Hermes Agent, Harbor Terminus-2, OpenClaw). Trigger on "set up a local LLM proxy",
   "managed AI gateway", "replace litellm", "point claude code at a
   proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
-  port 4356, or api.bitrouter.ai — even when the user does not name
+  port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name
   BitRouter directly.
 version: 1.0.0
 license: Apache-2.0
@@ -182,6 +183,8 @@ Read these on demand — don't load them all upfront.
 | `references/agent-plugin.md` | The installable Claude Code / Codex agent plugin — hooks, cost feed, MCP enable steps, restart handoff |
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
+| `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
+| `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 | `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
 | `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt\|sessions`, NDJSON format, worktree retention, session records, one-agent-per-session, turn queue, identity, v1 limits |

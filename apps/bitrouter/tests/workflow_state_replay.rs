@@ -4,17 +4,30 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::routing::post;
 use axum_test::TestServer;
+use bitrouter::metering::{ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource};
 use bitrouter::workflow_state::archive::{CloudUsageRecord, TraceArchive, WorkflowRunArtifact};
 use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
+use bitrouter::workflow_state::ir::{
+    AgentRole, ContextTransition, HarnessId, ProtocolKind, SessionConfidence, WorkflowIdentity,
+};
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+
+fn workflow_fingerprint(run: &str, trial: &str, parent: &str, epoch: u32) -> String {
+    let material = format!("terminus_2|{run}|{trial}|{parent}|{epoch}");
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(material.as_bytes()))
+    )
+}
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -61,6 +74,248 @@ fn temp_path(name: &str) -> PathBuf {
         "bitrouter-workflow-state-{name}-{}-{unique}",
         std::process::id()
     ))
+}
+
+fn computed_usage(
+    request_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    charge_micro_usd: u64,
+) -> CloudUsageRecord {
+    let input_rate = if prompt_tokens > 0 {
+        charge_micro_usd as f64 / prompt_tokens as f64
+    } else {
+        0.0
+    };
+    let normalized = NormalizedUsage {
+        uncached_input_tokens: prompt_tokens,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        output_tokens: completion_tokens,
+        reasoning_tokens: 0,
+    };
+    CloudUsageRecord {
+        id: Some(format!("usage-{request_id}")),
+        request_id: Some(request_id.to_string()),
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        prompt_tokens,
+        completion_tokens,
+        reasoning_tokens: 0,
+        uncached_input_tokens: prompt_tokens,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        output_tokens: completion_tokens,
+        usage_origin: UsageOrigin::ProviderReported,
+        raw_usage: Some(json!({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens
+        })),
+        final_charge_micro_usd: Some(charge_micro_usd),
+        charge_status: ChargeStatus::Computed,
+        charge_evidence: Some(ChargeEvidence {
+            status: ChargeStatus::Computed,
+            charge_micro_usd: Some(charge_micro_usd as i64),
+            normalized_usage: normalized,
+            effective_rates: EffectivePricingRates {
+                uncached_input_micro_usd_per_token: Some(input_rate),
+                cache_read_micro_usd_per_token: Some(0.1),
+                cache_write_micro_usd_per_token: Some(1.25),
+                output_micro_usd_per_token: Some(0.0),
+            },
+            pricing_source: PricingSource::Configured,
+            pricing_version: format!("sha256:{}", "0".repeat(64)),
+            unknown_reason: None,
+        }),
+        status: Some("succeeded".to_string()),
+    }
+}
+
+#[test]
+fn benchmark_integrity_recomputes_charge_from_effective_rates() {
+    let traces = vec![benchmark_trace("req-1")];
+    let mut usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+    usage
+        .charge_evidence
+        .as_mut()
+        .expect("charge evidence")
+        .effective_rates
+        .uncached_input_micro_usd_per_token = Some(1.0);
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect_err("charge inconsistent with effective rates must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("charge does not match effective rates")
+    );
+}
+
+fn benchmark_trace(request_id: &str) -> CapturedIngressTrace {
+    CapturedIngressTrace {
+        id: format!("trace-{request_id}"),
+        captured_at: None,
+        harness: HarnessId::Hermes,
+        protocol: ProtocolKind::ChatCompletions,
+        method: "POST".to_string(),
+        path: "/v1/chat/completions".to_string(),
+        headers: [("x-request-id".to_string(), request_id.to_string())]
+            .into_iter()
+            .collect(),
+        raw_body: json!({"model": "test", "messages": []}),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    }
+}
+
+fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
+    PolicyDecisionRecord {
+        captured_at: None,
+        request_id: Some(request_id.to_string()),
+        input_model: "inbound".to_string(),
+        key_strategy: "workflow_state".to_string(),
+        request_key: "terminus_2|chat_completions|opening".to_string(),
+        ledger_key: None,
+        legacy_fingerprint: "opening".to_string(),
+        workflow_state: "opening".to_string(),
+        workflow_identity: Default::default(),
+        static_tier: Some("strong".to_string()),
+        static_model: Some("vendor/strong".to_string()),
+        selected_tier: Some("strong".to_string()),
+        selected_model: Some("vendor/strong".to_string()),
+        reason: "static_table".to_string(),
+        pinned: false,
+        request_qualified: false,
+        semantic_successes: 0,
+        semantic_success_threshold: 0,
+        locked: false,
+        trialed: false,
+    }
+}
+
+#[test]
+fn benchmark_integrity_rejects_unknown_charge_evidence() {
+    let traces = vec![benchmark_trace("req-1")];
+    let mut usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+    usage.charge_status = ChargeStatus::Unknown;
+    usage.final_charge_micro_usd = None;
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect_err("unknown charge must fail benchmark integrity");
+
+    assert!(error.to_string().contains("charge is not computed"));
+}
+
+#[test]
+fn benchmark_integrity_rejects_duplicate_or_unmatched_request_ids() {
+    let traces = vec![benchmark_trace("req-1")];
+    let duplicate = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+    let error =
+        WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[duplicate.clone(), duplicate])
+            .expect_err("duplicate usage ids must fail");
+    assert!(error.to_string().contains("duplicate usage request id"));
+
+    let unmatched = computed_usage("req-2", "openai", "gpt-test", 10, 2, 30);
+    let error = WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[unmatched])
+        .expect_err("unmatched usage ids must fail");
+    assert!(error.to_string().contains("request ids differ"));
+}
+
+#[test]
+fn benchmark_integrity_requires_unambiguous_terminus_identity_join() {
+    let fingerprint = workflow_fingerprint("short13-run", "trial-01", "parent-01", 0);
+    let mut trace = benchmark_trace("req-1");
+    trace.harness = HarnessId::Terminus2;
+    trace.headers.extend([
+        (
+            "x-bitrouter-benchmark-run-id".to_string(),
+            "short13-run".to_string(),
+        ),
+        ("x-bitrouter-trial-id".to_string(), "trial-01".to_string()),
+        (
+            "x-bitrouter-parent-session-id".to_string(),
+            "parent-01".to_string(),
+        ),
+        (
+            "x-bitrouter-agent-session-id".to_string(),
+            "parent-01:main:0".to_string(),
+        ),
+        ("x-bitrouter-agent-role".to_string(), "main".to_string()),
+        ("x-bitrouter-context-epoch".to_string(), "0".to_string()),
+        (
+            "x-bitrouter-context-transition".to_string(),
+            "none".to_string(),
+        ),
+        (
+            "x-bitrouter-session-fingerprint".to_string(),
+            fingerprint.clone(),
+        ),
+    ]);
+    let mut decision = benchmark_decision("req-1");
+    decision.workflow_identity = WorkflowIdentity {
+        benchmark_run_id: Some("short13-run".to_string()),
+        trial_id: Some("trial-01".to_string()),
+        agent_session_id: Some("parent-01:main:0".to_string()),
+        parent_session_id: Some("parent-01".to_string()),
+        role: AgentRole::Main,
+        context_epoch: 0,
+        transition: ContextTransition::None,
+        fingerprint,
+        source: "explicit_headers".to_string(),
+        confidence: SessionConfidence::High,
+    };
+    let usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+
+    WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &[trace.clone()],
+        std::slice::from_ref(&usage),
+        &[decision.clone()],
+    )
+    .expect("complete Terminus identity should join");
+
+    let mut forged = decision.clone();
+    forged.workflow_identity.fingerprint = format!("sha256:{}", "1".repeat(64));
+    let mut forged_trace = trace.clone();
+    forged_trace.headers.insert(
+        "x-bitrouter-session-fingerprint".to_string(),
+        forged.workflow_identity.fingerprint.clone(),
+    );
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &[forged_trace],
+        std::slice::from_ref(&usage),
+        &[forged],
+    )
+    .expect_err("well-formed but forged session fingerprint must fail");
+    assert!(error.to_string().contains("fingerprint"));
+
+    let mut mismatched = decision.clone();
+    mismatched.workflow_identity.parent_session_id = Some("other-parent".to_string());
+    mismatched.workflow_identity.fingerprint =
+        workflow_fingerprint("short13-run", "trial-01", "other-parent", 0);
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &[trace.clone()],
+        std::slice::from_ref(&usage),
+        &[mismatched],
+    )
+    .expect_err("ambiguous session identity must fail");
+    assert!(error.to_string().contains("identity mismatch"));
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        &[trace],
+        &[usage],
+        &[decision.clone(), decision],
+    )
+    .expect_err("duplicate decisions must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate policy decision request id")
+    );
 }
 
 #[test]
@@ -396,6 +651,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
             completion_tokens: 10,
             final_charge_micro_usd: Some(42),
             status: Some("succeeded".to_string()),
+            ..Default::default()
         },
         CloudUsageRecord {
             id: Some("usage-row-2".to_string()),
@@ -406,6 +662,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
             completion_tokens: 20,
             final_charge_micro_usd: Some(420),
             status: Some("succeeded".to_string()),
+            ..Default::default()
         },
     ];
 
@@ -470,6 +727,43 @@ fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
         artifact.semantic_inadequacy_candidates[0].task_id,
         "filter-js-from-html"
     );
+}
+
+#[test]
+fn terminus_subagent_reward_joins_by_explicit_trial_not_agent_session() {
+    let mut trace = benchmark_trace("req-terminus-summary");
+    trace.harness = HarnessId::Terminus2;
+    trace.headers.extend([
+        (
+            "x-bitrouter-trial-id".to_string(),
+            "regex-log__trial-a".to_string(),
+        ),
+        (
+            "x-bitrouter-parent-session-id".to_string(),
+            "root-session".to_string(),
+        ),
+        (
+            "x-bitrouter-workflow-session".to_string(),
+            "root-session-summarization-1-summary".to_string(),
+        ),
+    ]);
+    let outcomes = vec![BenchmarkOutcomeRecord {
+        session_key: "regex-log__trial-a".to_string(),
+        task_id: "regex-log".to_string(),
+        reward: 1.0,
+        failed_reason: None,
+        finished_at: None,
+        trial_name: Some("regex-log__trial-a".to_string()),
+        agent_started_at: None,
+        agent_finished_at: None,
+    }];
+
+    let artifact =
+        WorkflowRunArtifact::build_with_outcomes("run-a", &[trace], &[], &outcomes).unwrap();
+
+    assert_eq!(artifact.reward_join.matched_trace_count, 1);
+    assert_eq!(artifact.reward_join.unmatched_trace_count, 0);
+    assert_eq!(artifact.reward_join.unmatched_outcome_count, 0);
 }
 
 #[test]
@@ -683,16 +977,14 @@ fn run_artifact_embeds_offline_shadow_policy_summary() {
             status: "completed".to_string(),
         },
     }];
-    let usage = vec![CloudUsageRecord {
-        id: Some("usage-row-1".to_string()),
-        request_id: Some("cloud-req-001".to_string()),
-        provider_id: "deepseek".to_string(),
-        model_id: "deepseek-v4-flash".to_string(),
-        prompt_tokens: 100,
-        completion_tokens: 10,
-        final_charge_micro_usd: Some(42),
-        status: Some("succeeded".to_string()),
-    }];
+    let usage = vec![computed_usage(
+        "cloud-req-001",
+        "deepseek",
+        "deepseek-v4-flash",
+        100,
+        10,
+        42,
+    )];
 
     let artifact = WorkflowRunArtifact::build("run-a", &traces, &usage).unwrap();
 
@@ -740,16 +1032,14 @@ fn run_artifact_bundle_writes_fixed_benchmark_layout() {
             status: "completed".to_string(),
         },
     }];
-    let usage = vec![CloudUsageRecord {
-        id: Some("usage-row-1".to_string()),
-        request_id: Some("cloud-req-001".to_string()),
-        provider_id: "deepseek".to_string(),
-        model_id: "deepseek-v4-flash".to_string(),
-        prompt_tokens: 100,
-        completion_tokens: 10,
-        final_charge_micro_usd: Some(42),
-        status: Some("succeeded".to_string()),
-    }];
+    let usage = vec![computed_usage(
+        "cloud-req-001",
+        "deepseek",
+        "deepseek-v4-flash",
+        100,
+        10,
+        42,
+    )];
 
     let artifact = WorkflowRunArtifact::write_bundle(
         "run-a",
@@ -810,16 +1100,14 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
             status: "completed".to_string(),
         },
     }];
-    let usage = vec![CloudUsageRecord {
-        id: Some("usage-row-1".to_string()),
-        request_id: Some("req-001".to_string()),
-        provider_id: "bitrouter".to_string(),
-        model_id: "moonshotai/kimi-k2.7-code".to_string(),
-        prompt_tokens: 100,
-        completion_tokens: 10,
-        final_charge_micro_usd: Some(42),
-        status: Some("succeeded".to_string()),
-    }];
+    let usage = vec![computed_usage(
+        "req-001",
+        "bitrouter",
+        "moonshotai/kimi-k2.7-code",
+        100,
+        10,
+        42,
+    )];
     let decisions = vec![PolicyDecisionRecord {
         captured_at: None,
         request_id: Some("req-001".to_string()),
@@ -829,6 +1117,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -954,6 +1243,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -1049,6 +1339,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         ledger_key: Some("coding\0codex|responses|tool_followup".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
         workflow_state: "tool_followup".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -1146,6 +1437,38 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
     );
 
     let _ = std::fs::remove_dir_all(&output_dir);
+}
+
+#[test]
+fn benchmark_bundle_rejects_unmatched_outcomes_before_writing() {
+    let output_dir = temp_path("workflow-run-bundle-unmatched-outcomes");
+    let mut trace = benchmark_trace("req-1");
+    trace
+        .headers
+        .insert("x-bitrouter-trial-id".to_string(), "trial-a".to_string());
+    let outcomes = vec![BenchmarkOutcomeRecord {
+        session_key: "trial-b".to_string(),
+        task_id: "filter-js-from-html".to_string(),
+        reward: 0.0,
+        failed_reason: Some("verifier_failed".to_string()),
+        finished_at: None,
+        trial_name: Some("trial-b".to_string()),
+        agent_started_at: None,
+        agent_finished_at: None,
+    }];
+
+    let error = WorkflowRunArtifact::write_bundle_with_outcomes(
+        "run-a",
+        &output_dir,
+        &[trace],
+        &[],
+        &outcomes,
+        &TraceSanitizer::default(),
+    )
+    .expect_err("unmatched outcome must reject benchmark bundle");
+
+    assert!(error.to_string().contains("outcome join"));
+    assert!(!output_dir.exists());
 }
 
 #[test]

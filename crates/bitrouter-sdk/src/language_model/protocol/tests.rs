@@ -1626,7 +1626,7 @@ fn messages_cache_tokens_round_trip() {
         }
     });
     let result = adapter.parse_response(body).unwrap();
-    let usage = result.usage.unwrap();
+    let usage = result.usage.clone().unwrap();
     assert_eq!(usage.cache_read_tokens, 80);
     assert_eq!(usage.cache_write_tokens, 20);
     // Canonical IR: prompt_tokens is the inclusive total (100 + 80 + 20).
@@ -1762,7 +1762,7 @@ fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
     let usage = parts
         .iter()
         .find_map(|p| match p {
-            StreamPart::Usage { usage } => Some(*usage),
+            StreamPart::Usage { usage } => Some(usage.clone()),
             _ => None,
         })
         .expect("terminal Usage frame missing");
@@ -1770,6 +1770,18 @@ fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
     assert_eq!(usage.cache_write_tokens, 20);
     assert_eq!(usage.completion_tokens, 200);
     assert_eq!(usage.prompt_tokens, 5_000 + 30_000 + 20);
+    assert_eq!(
+        usage.raw.as_deref(),
+        Some(&serde_json::json!({
+            "message_start": {
+                "input_tokens": 5_000,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 30_000,
+                "cache_creation_input_tokens": 20,
+            },
+            "message_delta": { "output_tokens": 200 },
+        }))
+    );
 }
 
 #[test]
@@ -1819,7 +1831,7 @@ fn messages_stream_web_search_count_from_delta() {
     let usage = parts
         .iter()
         .find_map(|p| match p {
-            StreamPart::Usage { usage } => Some(*usage),
+            StreamPart::Usage { usage } => Some(usage.clone()),
             _ => None,
         })
         .expect("terminal Usage frame missing");
@@ -1842,7 +1854,7 @@ fn chat_completions_cache_tokens_round_trip() {
         }
     });
     let result = adapter.parse_response(body).unwrap();
-    let usage = result.usage.unwrap();
+    let usage = result.usage.clone().unwrap();
     assert_eq!(usage.cache_read_tokens, 70);
     let rendered = adapter
         .render_response(&result, &sample_prompt(), "c1")
@@ -3550,8 +3562,8 @@ fn responses_completed_preserves_id_status_and_usage() {
         Some(StreamPart::ResponseCompleted { id, status, usage }) => {
             assert_eq!(id, "resp_xyz");
             assert_eq!(status, "completed");
-            assert_eq!(usage.unwrap().prompt_tokens, 12);
-            assert_eq!(usage.unwrap().completion_tokens, 8);
+            assert_eq!(usage.as_ref().unwrap().prompt_tokens, 12);
+            assert_eq!(usage.as_ref().unwrap().completion_tokens, 8);
         }
         other => panic!("expected ResponseCompleted, got {other:?}"),
     }

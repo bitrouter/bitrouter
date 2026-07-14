@@ -11,6 +11,10 @@
 //! pre-OSS-refactor `final_charge_micro_usd` column); this module only
 //! reads and writes rows.
 
+use bitrouter_sdk::language_model::UsageOrigin;
+
+use super::pricing::{ChargeEvidence, ChargeStatus};
+
 /// One settled request, as recorded by [`super::MeteringRecorder`].
 #[derive(Debug, Clone)]
 pub struct RequestMetric {
@@ -34,9 +38,21 @@ pub struct RequestMetric {
     pub cache_read_tokens: u64,
     /// Cache-write prompt tokens.
     pub cache_write_tokens: u64,
-    /// Estimated charge in micro-USD computed from pricing × tokens. `0`
-    /// when pricing was unavailable (the recorder skips the math in that
-    /// case and writes 0, plus emits a `PricingUnavailable` event).
+    /// Uncached input tokens after cache subsets are removed.
+    pub uncached_input_tokens: u64,
+    /// Non-reasoning output tokens.
+    pub output_tokens: u64,
+    /// Usage provenance.
+    pub usage_origin: UsageOrigin,
+    /// Verbatim provider usage object.
+    pub raw_usage: Option<serde_json::Value>,
+    /// Whether the charge is computed or unknown.
+    pub charge_status: ChargeStatus,
+    /// Auditable normalization and pricing evidence.
+    pub charge_evidence: ChargeEvidence,
+    /// Estimated charge in micro-USD computed from pricing × tokens. Consult
+    /// `charge_status` before using this legacy non-null numeric column: its
+    /// stored value is `0` when the auditable charge is unknown.
     pub estimated_charge_micro_usd: i64,
     /// End-to-end latency in milliseconds.
     pub latency_ms: u64,

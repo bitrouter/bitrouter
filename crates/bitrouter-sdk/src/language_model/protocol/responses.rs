@@ -30,7 +30,7 @@ use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
     Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart, Tool,
-    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, provider_namespace,
+    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
     set_provider_metadata,
 };
 
@@ -949,8 +949,8 @@ impl InboundAdapter for ResponsesAdapter {
         // key entirely when the upstream reported no token counts. A
         // zero-filled object would let downstream callers conclude the
         // request used zero tokens.
-        if let Some(usage) = result.usage {
-            body["usage"] = render_responses_usage(&usage);
+        if let Some(usage) = &result.usage {
+            body["usage"] = render_responses_usage(usage);
         }
         Ok(body)
     }
@@ -2053,7 +2053,26 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         cache_read_tokens: cache_read,
         cache_write_tokens: 0,
         web_search_count: 0,
+        origin: UsageOrigin::ProviderReported,
+        raw: Some(Box::new(value.clone())),
     })
+}
+
+#[cfg(test)]
+#[test]
+fn parse_usage_retains_provider_payload_and_origin() {
+    use crate::language_model::types::UsageOrigin;
+
+    let raw = serde_json::json!({
+        "input_tokens": 12,
+        "output_tokens": 4,
+        "input_tokens_details": { "cached_tokens": 5 },
+        "provider_extension": { "service_tier": "flex" }
+    });
+
+    let usage = parse_usage(&raw).expect("usage present");
+    assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+    assert_eq!(usage.raw.as_deref(), Some(&raw));
 }
 
 // ===== streaming =====
@@ -2997,7 +3016,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 } else {
                     id.clone()
                 };
-                self.emit_terminal(&mut frames, status, &response_id, *usage);
+                self.emit_terminal(&mut frames, status, &response_id, usage.clone());
             }
         }
         Ok(frames)

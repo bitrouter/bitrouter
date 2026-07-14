@@ -8,6 +8,8 @@ use bitrouter_sdk::{BitrouterError, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::workflow_state::ir::WorkflowIdentity;
+
 pub const POLICY_DECISION_JSONL_ENV: &str = "BITROUTER_POLICY_DECISION_JSONL";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +27,8 @@ pub struct PolicyDecisionRecord {
     pub ledger_key: Option<String>,
     pub legacy_fingerprint: String,
     pub workflow_state: String,
+    #[serde(default)]
+    pub workflow_identity: WorkflowIdentity,
     #[serde(default)]
     pub static_tier: Option<String>,
     #[serde(default)]
@@ -61,6 +65,8 @@ pub struct PolicyDecisionSummary {
     pub replacement_by_reason: BTreeMap<String, usize>,
     pub by_reason: BTreeMap<String, usize>,
     pub by_workflow_state: BTreeMap<String, usize>,
+    pub by_agent_role: BTreeMap<String, usize>,
+    pub by_context_epoch: BTreeMap<u32, usize>,
 }
 
 pub struct PolicyDecisionJsonlRecorder {
@@ -200,6 +206,14 @@ impl PolicyDecisionSummary {
             *summary
                 .by_workflow_state
                 .entry(record.workflow_state.clone())
+                .or_insert(0) += 1;
+            *summary
+                .by_agent_role
+                .entry(record.workflow_identity.role.as_str().to_string())
+                .or_insert(0) += 1;
+            *summary
+                .by_context_epoch
+                .entry(record.workflow_identity.context_epoch)
                 .or_insert(0) += 1;
         }
         summary

@@ -341,8 +341,8 @@ pub struct RegistryModel {
 }
 
 /// Per-token pricing for a registry model. bitrouter consumes the base
-/// no-cache input rate, the text output rate, and any context tiers; other
-/// rates (cache read/write, reasoning) are ignored by OSS metering.
+/// no-cache, cache-read, cache-write input rates, the text output rate, and
+/// any context tiers.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryPricing {
     /// Input-token rates.
@@ -362,6 +362,12 @@ pub struct InputTokenPricing {
     /// Uncached input rate.
     #[serde(default)]
     pub no_cache: Option<f64>,
+    /// Cache-read input rate.
+    #[serde(default)]
+    pub cache_read: Option<f64>,
+    /// Cache-write input rate.
+    #[serde(default)]
+    pub cache_write: Option<f64>,
 }
 
 /// Output-token rates (USD per 1M tokens == µUSD per token).

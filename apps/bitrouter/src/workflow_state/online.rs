@@ -1,9 +1,12 @@
 use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::language_model::types::Prompt;
+use bitrouter_sdk::language_model::types::{Content, Prompt};
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::extractors::{ExtractorInput, extract_workflow_state};
-use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
+use crate::workflow_state::ir::{
+    AgentRole, HarnessId, ProtocolKind, RequirementLevel, WorkflowStateIR,
+};
+use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
 
 pub struct OnlineWorkflowState {
     pub ir: WorkflowStateIR,
@@ -13,8 +16,17 @@ pub struct OnlineWorkflowState {
 
 impl OnlineWorkflowState {
     pub fn from_headers(headers: &HeaderMap, prompt: &Prompt) -> Self {
-        let (harness_hint, protocol_hint) = infer_online_context(headers);
-        Self::from_prompt(headers, prompt, harness_hint, protocol_hint)
+        let tracker = WorkflowIdentityTracker::default();
+        Self::from_headers_with_tracker(headers, prompt, &tracker)
+    }
+
+    pub fn from_headers_with_tracker(
+        headers: &HeaderMap,
+        prompt: &Prompt,
+        tracker: &WorkflowIdentityTracker,
+    ) -> Self {
+        let (harness_hint, protocol_hint) = infer_online_context(headers, prompt);
+        Self::from_prompt_with_tracker(headers, prompt, harness_hint, protocol_hint, tracker)
     }
 
     pub fn from_prompt(
@@ -23,14 +35,47 @@ impl OnlineWorkflowState {
         harness_hint: Option<HarnessId>,
         protocol_hint: ProtocolKind,
     ) -> Self {
-        let raw_body = serde_json::Value::Null;
-        let ir = extract_workflow_state(&ExtractorInput {
+        let tracker = WorkflowIdentityTracker::default();
+        Self::from_prompt_with_tracker(headers, prompt, harness_hint, protocol_hint, &tracker)
+    }
+
+    pub fn from_prompt_with_tracker(
+        headers: &HeaderMap,
+        prompt: &Prompt,
+        harness_hint: Option<HarnessId>,
+        protocol_hint: ProtocolKind,
+        tracker: &WorkflowIdentityTracker,
+    ) -> Self {
+        let raw_body = serde_json::Value::Object(
+            prompt
+                .params
+                .extra
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        );
+        let input = ExtractorInput {
             harness_hint,
             protocol_hint,
             headers,
             raw_body: &raw_body,
             prompt,
-        });
+        };
+        let mut ir = extract_workflow_state(&input);
+        ir.identity = resolve_workflow_identity(&input, tracker);
+        if ir.harness_id == HarnessId::Terminus2 && ir.identity.role == AgentRole::Unknown {
+            ir.capability_constraints.tool_reliability = RequirementLevel::High;
+            ir.capability_constraints.expected_redo_penalty = RequirementLevel::High;
+            if !ir
+                .capability_constraints
+                .compatibility
+                .contains(&"requires_terminal_interaction".to_string())
+            {
+                ir.capability_constraints
+                    .compatibility
+                    .push("requires_terminal_interaction".to_string());
+            }
+        }
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
         let routing_key = ir.routing_key();
         Self {
@@ -49,16 +94,18 @@ impl OnlineWorkflowState {
     }
 }
 
-fn infer_online_context(headers: &HeaderMap) -> (Option<HarnessId>, ProtocolKind) {
+fn infer_online_context(headers: &HeaderMap, prompt: &Prompt) -> (Option<HarnessId>, ProtocolKind) {
     let explicit_harness = header_value(headers, "x-bitrouter-harness").and_then(parse_harness);
     let explicit_protocol = header_value(headers, "x-bitrouter-protocol")
         .or_else(|| header_value(headers, "x-bitrouter-inbound-protocol"))
         .and_then(parse_protocol);
-    if explicit_harness.is_some() || explicit_protocol.is_some() {
-        return (
-            explicit_harness,
-            explicit_protocol.unwrap_or(ProtocolKind::Unknown),
-        );
+    if let Some(harness) = explicit_harness {
+        let default_protocol = if harness == HarnessId::Terminus2 {
+            ProtocolKind::ChatCompletions
+        } else {
+            ProtocolKind::Unknown
+        };
+        return (Some(harness), explicit_protocol.unwrap_or(default_protocol));
     }
 
     if headers
@@ -74,7 +121,44 @@ fn infer_online_context(headers: &HeaderMap) -> (Option<HarnessId>, ProtocolKind
         return (Some(HarnessId::ClaudeCode), ProtocolKind::Messages);
     }
 
+    if has_terminus_2_prompt_contract(prompt) {
+        return (
+            Some(HarnessId::Terminus2),
+            explicit_protocol.unwrap_or(ProtocolKind::ChatCompletions),
+        );
+    }
+
+    if let Some(protocol) = explicit_protocol {
+        return (None, protocol);
+    }
+
     (None, ProtocolKind::Unknown)
+}
+
+fn has_terminus_2_prompt_contract(prompt: &Prompt) -> bool {
+    prompt
+        .system
+        .iter()
+        .map(String::as_str)
+        .chain(
+            prompt
+                .messages
+                .iter()
+                .flat_map(|message| message.content.iter())
+                .filter_map(|content| match content {
+                    Content::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                }),
+        )
+        .any(|text| {
+            let normalized = text.to_ascii_lowercase();
+            normalized.contains(
+                "you are an ai assistant tasked with solving command-line tasks in a linux environment",
+            ) && (normalized.contains("format your response as json")
+                || normalized.contains("format your response as xml"))
+                && normalized.contains("commands")
+                && normalized.contains("task_complete")
+        })
 }
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -87,6 +171,7 @@ fn parse_harness(value: &str) -> Option<HarnessId> {
         "hermes" => Some(HarnessId::Hermes),
         "claude" | "claude_code" | "claude-code" => Some(HarnessId::ClaudeCode),
         "codex" => Some(HarnessId::Codex),
+        "terminus_2" | "terminus-2" | "terminus2" => Some(HarnessId::Terminus2),
         "openclaw" | "open_claw" | "open-claw" => Some(HarnessId::OpenClaw),
         "unknown" => Some(HarnessId::Unknown),
         _ => None,

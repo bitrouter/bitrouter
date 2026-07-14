@@ -14,6 +14,7 @@ pub mod m20240101_000003_rename_legacy_charge_column;
 pub mod m20240101_000004_create_adequacy_table;
 pub mod m20240101_000005_create_adequacy_exploration_table;
 pub mod m20240101_000006_create_adequacy_semantic_success_table;
+pub mod m20240101_000007_add_metering_evidence;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -31,6 +32,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000004_create_adequacy_table::Migration),
             Box::new(m20240101_000005_create_adequacy_exploration_table::Migration),
             Box::new(m20240101_000006_create_adequacy_semantic_success_table::Migration),
+            Box::new(m20240101_000007_add_metering_evidence::Migration),
         ]
     }
 }

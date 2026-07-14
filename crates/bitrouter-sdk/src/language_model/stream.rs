@@ -243,7 +243,7 @@ where
 /// Heuristic for the estimate: ~4 chars per token (the OpenAI "rule of thumb"
 /// for English) — wrong for code / non-Latin scripts but bounded, monotonic
 /// in delta length, and far closer to the true cost than `0`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct UsageAccumulator {
     usage: Usage,
     seen: bool,
@@ -279,7 +279,7 @@ impl UsageAccumulator {
             | StreamPart::ResponseCompleted {
                 usage: Some(usage), ..
             } => {
-                self.usage = *usage;
+                self.usage = usage.clone();
                 self.seen = true;
             }
             StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text } => {
@@ -291,7 +291,7 @@ impl UsageAccumulator {
 
     /// The accumulated usage, if any `Usage` part was seen.
     pub fn finalized(&self) -> Option<Usage> {
-        self.seen.then_some(self.usage)
+        self.seen.then_some(self.usage.clone())
     }
 
     /// Estimated output-token count from accumulated delta text, for the
@@ -424,6 +424,7 @@ impl StreamProcessor {
                 Some(Usage {
                     prompt_tokens,
                     completion_tokens,
+                    origin: crate::language_model::types::UsageOrigin::Estimated,
                     ..Default::default()
                 })
             } else {

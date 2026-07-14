@@ -22,7 +22,8 @@ use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
     Modality, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart,
-    Tool, ToolChoice, ToolResultOutput, Usage, provider_namespace, set_provider_metadata,
+    Tool, ToolChoice, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
+    set_provider_metadata,
 };
 
 /// The metadata key, within the `google` namespace, carrying a reasoning part's
@@ -881,7 +882,7 @@ impl InboundAdapter for GenerateContentAdapter {
         _request_id: &str,
     ) -> Result<serde_json::Value> {
         let parts: Vec<serde_json::Value> = result.content.iter().filter_map(render_part).collect();
-        let usage = result.usage.unwrap_or_default();
+        let usage = result.usage.clone().unwrap_or_default();
         let mut candidate = serde_json::json!({
             "content": { "role": "model", "parts": parts },
             // Prefer the stashed raw `finishReason` (e.g. `RECITATION`) over the
@@ -904,7 +905,7 @@ impl InboundAdapter for GenerateContentAdapter {
             "candidates": [candidate],
             "usageMetadata": {
                 "promptTokenCount": usage.prompt_tokens,
-                "candidatesTokenCount": usage.completion_tokens,
+                "candidatesTokenCount": usage.completion_tokens.saturating_sub(usage.reasoning_tokens),
                 "totalTokenCount": usage.total(),
                 "thoughtsTokenCount": usage.reasoning_tokens,
             },
@@ -1252,12 +1253,37 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .unwrap_or(0);
     Some(Usage {
         prompt_tokens: prompt,
-        completion_tokens: candidates,
+        // Gemini reports visible candidate tokens and billed thought tokens as
+        // sibling counters. Canonical `completion_tokens` is inclusive so
+        // reasoning remains a subset, matching the other protocol adapters.
+        completion_tokens: candidates.saturating_add(reasoning),
         reasoning_tokens: reasoning,
         cache_read_tokens: cache_read,
         cache_write_tokens: 0,
         web_search_count: 0,
+        origin: UsageOrigin::ProviderReported,
+        raw: Some(Box::new(value.clone())),
     })
+}
+
+#[cfg(test)]
+#[test]
+fn parse_usage_retains_provider_payload_and_origin() {
+    use crate::language_model::types::UsageOrigin;
+
+    let raw = serde_json::json!({
+        "promptTokenCount": 12,
+        "candidatesTokenCount": 4,
+        "thoughtsTokenCount": 2,
+        "cachedContentTokenCount": 5,
+        "providerExtension": { "trafficType": "onDemand" }
+    });
+
+    let usage = parse_usage(&raw).expect("usage present");
+    assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+    assert_eq!(usage.completion_tokens, 6);
+    assert_eq!(usage.reasoning_tokens, 2);
+    assert_eq!(usage.raw.as_deref(), Some(&raw));
 }
 
 // ===== streaming =====
@@ -1538,7 +1564,7 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                 chunks.push(serde_json::json!({
                     "usageMetadata": {
                         "promptTokenCount": usage.prompt_tokens,
-                        "candidatesTokenCount": usage.completion_tokens,
+                        "candidatesTokenCount": usage.completion_tokens.saturating_sub(usage.reasoning_tokens),
                         "totalTokenCount": usage.total(),
                         "thoughtsTokenCount": usage.reasoning_tokens,
                     }
@@ -1576,7 +1602,7 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                 if let Some(u) = usage {
                     chunk["usageMetadata"] = serde_json::json!({
                         "promptTokenCount": u.prompt_tokens,
-                        "candidatesTokenCount": u.completion_tokens,
+                        "candidatesTokenCount": u.completion_tokens.saturating_sub(u.reasoning_tokens),
                         "totalTokenCount": u.total(),
                         "thoughtsTokenCount": u.reasoning_tokens,
                     });

@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::metering::{MeteringStore, RequestMetric};
+use crate::metering::{
+    ChargeEvidence, ChargeStatus, EffectivePricingRates, MeteringStore, PricingSource,
+    RequestMetric,
+};
 use crate::policy::hook::PolicyHook;
 use crate::policy::policy::Policy;
 use crate::policy::store::PolicyStore;
@@ -12,6 +15,18 @@ use bitrouter_sdk::language_model::{
     GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest, PreRequestHook,
     Prompt, Role, Tool,
 };
+
+fn test_charge_evidence(charge_micro_usd: i64) -> ChargeEvidence {
+    ChargeEvidence {
+        status: ChargeStatus::Computed,
+        charge_micro_usd: Some(charge_micro_usd),
+        normalized_usage: Default::default(),
+        effective_rates: EffectivePricingRates::default(),
+        pricing_source: PricingSource::Configured,
+        pricing_version: "sha256:test".to_string(),
+        unknown_reason: None,
+    }
+}
 
 fn ctx(model: &str, policy_id: Option<&str>) -> PipelineContext {
     let prompt = Prompt {
@@ -259,6 +274,12 @@ async fn spend_cap_is_enforced_via_metering_store() {
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            uncached_input_tokens: 10,
+            output_tokens: 5,
+            usage_origin: Default::default(),
+            raw_usage: None,
+            charge_status: ChargeStatus::Computed,
+            charge_evidence: test_charge_evidence(60),
             estimated_charge_micro_usd: 60,
             latency_ms: 100,
             generation_time_ms: 80,
@@ -287,6 +308,12 @@ async fn spend_cap_is_enforced_via_metering_store() {
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            uncached_input_tokens: 10,
+            output_tokens: 5,
+            usage_origin: Default::default(),
+            raw_usage: None,
+            charge_status: ChargeStatus::Computed,
+            charge_evidence: test_charge_evidence(50),
             estimated_charge_micro_usd: 50,
             latency_ms: 100,
             generation_time_ms: 80,
@@ -328,6 +355,12 @@ async fn rate_limit_is_enforced_via_metering_store() {
                 reasoning_tokens: 0,
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
+                uncached_input_tokens: 1,
+                output_tokens: 1,
+                usage_origin: Default::default(),
+                raw_usage: None,
+                charge_status: ChargeStatus::Computed,
+                charge_evidence: test_charge_evidence(0),
                 estimated_charge_micro_usd: 0,
                 latency_ms: 0,
                 generation_time_ms: 0,

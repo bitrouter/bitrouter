@@ -34,8 +34,9 @@ use bitrouter_sdk::{HeaderMap, PromptTransform};
 use crate::adequacy::AdequacyLedger;
 use crate::adequacy::settlement::{PendingAdequacyDecision, PendingAdequacyStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
-use crate::workflow_state::ir::WorkflowStateKind;
+use crate::workflow_state::ir::{AgentRole, HarnessId, WorkflowIdentity, WorkflowStateKind};
 use crate::workflow_state::online::OnlineWorkflowState;
+use crate::workflow_state::session::WorkflowIdentityTracker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionReason {
@@ -72,6 +73,8 @@ pub struct PolicyDecision {
     pub request_key: String,
     pub legacy_fingerprint: String,
     pub workflow_state_kind: String,
+    pub harness_id: HarnessId,
+    pub workflow_identity: WorkflowIdentity,
     pub static_tier: Option<String>,
     pub static_model: Option<String>,
     pub selected_tier: Option<String>,
@@ -343,6 +346,7 @@ pub struct PolicyTableRouter {
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     pending_adequacy: Option<Arc<PendingAdequacyStore>>,
     state_namespace: Option<String>,
+    identity_tracker: WorkflowIdentityTracker,
 }
 
 impl PolicyTableRouter {
@@ -357,6 +361,7 @@ impl PolicyTableRouter {
             decision_recorder: None,
             pending_adequacy: None,
             state_namespace: None,
+            identity_tracker: WorkflowIdentityTracker::default(),
         })
     }
 
@@ -369,6 +374,7 @@ impl PolicyTableRouter {
             decision_recorder: None,
             pending_adequacy: None,
             state_namespace: None,
+            identity_tracker: WorkflowIdentityTracker::default(),
         }
     }
 
@@ -426,7 +432,8 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         respect_explicit_route: bool,
     ) -> PolicyDecision {
-        let online = OnlineWorkflowState::from_headers(headers, prompt);
+        let online =
+            OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker);
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let request_key = match self.table.key_strategy() {
             PolicyKeyStrategy::LegacyFingerprint => legacy_fingerprint.clone(),
@@ -437,6 +444,8 @@ impl PolicyTableRouter {
             request_key,
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
+            harness_id: online.ir.harness_id.clone(),
+            workflow_identity: online.ir.identity.clone(),
             static_tier: None,
             static_model: None,
             selected_tier: None,
@@ -521,6 +530,11 @@ impl PolicyTableRouter {
     }
 
     fn exploration_allowed_for(&self, decision: &PolicyDecision) -> bool {
+        if decision.harness_id == HarnessId::Terminus2
+            && decision.workflow_identity.role == AgentRole::Unknown
+        {
+            return false;
+        }
         if decision.legacy_fingerprint == "opening" || decision.workflow_state_kind == "opening" {
             return self.table.can_explore_opening();
         }
@@ -572,6 +586,10 @@ impl PolicyTableRouter {
             request_key = %decision.request_key,
             legacy_fingerprint = %decision.legacy_fingerprint,
             workflow_state = %decision.workflow_state_kind,
+            workflow_parent_session = ?decision.workflow_identity.parent_session_id,
+            workflow_agent_role = decision.workflow_identity.role.as_str(),
+            workflow_context_epoch = decision.workflow_identity.context_epoch,
+            workflow_session_fingerprint = %decision.workflow_identity.fingerprint,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
@@ -598,6 +616,7 @@ impl PolicyTableRouter {
                     .map(|_| self.ledger_key(&decision.request_key)),
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
+                workflow_identity: decision.workflow_identity.clone(),
                 static_tier: decision.static_tier.clone(),
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
@@ -684,7 +703,7 @@ mod tests {
     use super::*;
     use crate::adequacy::{InadequacyCause, Outcome};
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::config::PolicyKeyStrategy;
@@ -951,6 +970,16 @@ mod tests {
             "x-bitrouter-request-id",
             HeaderValue::from_static("req-001"),
         );
+        headers.insert(
+            "x-bitrouter-harness",
+            HeaderValue::from_static("terminus_2"),
+        );
+        headers.insert("x-session-id", HeaderValue::from_static("parent-001"));
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("short13-run"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-01"));
         let mut p = prompt("inbound");
         p.messages = vec![user("fix the bug"), assistant_calls("read_file")];
 
@@ -969,6 +998,25 @@ mod tests {
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].reason, "static_table");
+        assert_eq!(records[0].workflow_identity.role, AgentRole::Main);
+        assert_eq!(
+            records[0].workflow_identity.parent_session_id.as_deref(),
+            Some("parent-001")
+        );
+        assert_eq!(
+            records[0].workflow_identity.benchmark_run_id.as_deref(),
+            Some("short13-run")
+        );
+        assert_eq!(
+            records[0].workflow_identity.trial_id.as_deref(),
+            Some("trial-01")
+        );
+        assert!(
+            records[0]
+                .workflow_identity
+                .fingerprint
+                .starts_with("sha256:")
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -1221,6 +1269,33 @@ mod tests {
         assert_eq!(decision.reason, PolicyDecisionReason::ExplorationTrial);
         assert!(decision.trialed);
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+    }
+
+    #[tokio::test]
+    async fn terminus_unknown_role_stays_on_strong_tier_when_exploration_is_due() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            cause: InadequacyCause::None,
+        };
+        ledger.observe("opening", non_trial()).await;
+        ledger.observe("opening", non_trial()).await;
+        let router = exploring_router(ledger);
+        let p = prompt("inbound");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-harness",
+            HeaderValue::from_static("terminus_2"),
+        );
+        headers.insert("x-session-id", HeaderValue::from_static("parent-unknown"));
+
+        let decision = router.decision_for(&p, &headers);
+
+        assert_eq!(decision.workflow_identity.role, AgentRole::Unknown);
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert!(!decision.trialed);
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
     }
 
     #[tokio::test]

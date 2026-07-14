@@ -14,7 +14,7 @@ use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::timing::FirstTokenKind;
-use crate::language_model::types::RoutingTarget;
+use crate::language_model::types::{RoutingTarget, UsageOrigin};
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries
 /// pipeline-observed data only — no charging / funding fields. Deployments
@@ -49,6 +49,10 @@ pub struct SettlementContext {
     /// Subset of `prompt_tokens`. Lets a recorder apply premium pricing
     /// (e.g. Anthropic cache-write at 1.25× the prompt rate).
     pub cache_write_tokens: u64,
+    /// Whether usage was reported by the provider, estimated, or unavailable.
+    pub usage_origin: UsageOrigin,
+    /// Original provider usage object, when the provider reported one.
+    pub raw_usage: Option<serde_json::Value>,
     /// Provider-executed web searches (from `Usage::web_search_count`).
     pub web_search_count: u64,
     /// Media content blocks in the request prompt.
@@ -138,6 +142,8 @@ mod tests {
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            usage_origin: UsageOrigin::Unknown,
+            raw_usage: None,
             web_search_count: 0,
             media_input_count: 0,
             media_output_count: 0,

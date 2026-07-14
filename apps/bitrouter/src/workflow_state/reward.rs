@@ -307,13 +307,21 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
 }
 
 fn trace_session_key(trace: &CapturedIngressTrace) -> Option<String> {
-    trace
-        .headers
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("x-bitrouter-workflow-session"))
-        .map(|(_, value)| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+    [
+        "x-bitrouter-trial-id",
+        "x-bitrouter-parent-session-id",
+        "x-bitrouter-workflow-session",
+    ]
+    .into_iter()
+    .find_map(|name| {
+        trace
+            .headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 fn json_str(value: &serde_json::Value, path: &[&str]) -> Option<String> {

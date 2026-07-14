@@ -947,21 +947,23 @@ fn build_pricing_table(config: &Config) -> PricingTable {
     for (provider_id, provider) in &config.providers {
         for model in &provider.models {
             if let Some(pricing) = &model.pricing {
-                let mut model_pricing = ModelPricing::new(
+                let mut model_pricing = ModelPricing::cache_aware(
                     pricing.input_micro_usd_per_token,
+                    pricing.cache_read_micro_usd_per_token,
+                    pricing.cache_write_micro_usd_per_token,
                     pricing.output_micro_usd_per_token,
                 );
-                // Carry any context ("staged") brackets through to the
-                // metering table; config rates are concrete f64s, so an
-                // omitted per-bracket rate defaults to 0 (free), matching the
-                // base-rate mapping above.
+                // Carry context brackets through with absent rates intact;
+                // resolution inherits each omitted bucket from the base tier.
                 model_pricing.context_tiers = pricing
                     .context_tiers
                     .iter()
                     .map(|t| ContextTier {
                         above_input_tokens: t.above_input_tokens,
-                        input_micro_usd_per_token: Some(t.input_micro_usd_per_token),
-                        output_micro_usd_per_token: Some(t.output_micro_usd_per_token),
+                        input_micro_usd_per_token: t.input_micro_usd_per_token,
+                        cache_read_micro_usd_per_token: t.cache_read_micro_usd_per_token,
+                        cache_write_micro_usd_per_token: t.cache_write_micro_usd_per_token,
+                        output_micro_usd_per_token: t.output_micro_usd_per_token,
                     })
                     .collect();
                 table.insert(provider_id.clone(), model.id.clone(), model_pricing);

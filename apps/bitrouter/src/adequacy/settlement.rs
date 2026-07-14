@@ -202,6 +202,8 @@ mod tests {
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+            raw_usage: None,
             web_search_count: 0,
             media_input_count: 0,
             media_output_count: 0,

@@ -23,10 +23,14 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
+use bitrouter_sdk::language_model::{Usage, UsageOrigin};
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::metering::db::RequestMetric;
 use crate::metering::entities::requests;
+use crate::metering::pricing::{
+    ChargeEvidence, ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
+};
 
 /// A rolling time window for usage queries.
 #[derive(Debug, Clone, Copy)]
@@ -62,7 +66,7 @@ pub struct TokenUsage {
 }
 
 /// A settled request exported in the workflow bundle's usage-record shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MeteringUsageRecord {
     pub id: Option<String>,
     pub request_id: Option<String>,
@@ -72,7 +76,25 @@ pub struct MeteringUsageRecord {
     pub prompt_tokens: u64,
     #[serde(default)]
     pub completion_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub uncached_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub usage_origin: UsageOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_usage: Option<serde_json::Value>,
     pub final_charge_micro_usd: Option<u64>,
+    #[serde(default)]
+    pub charge_status: ChargeStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_evidence: Option<ChargeEvidence>,
     pub status: Option<String>,
 }
 
@@ -81,13 +103,15 @@ pub struct UsagePriceOverride {
     pub provider_id: String,
     pub model_id: String,
     pub input_micro_usd_per_token: f64,
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    pub cache_write_micro_usd_per_token: Option<f64>,
     pub output_micro_usd_per_token: f64,
 }
 
 impl MeteringUsageRecord {
     pub fn apply_price_overrides(records: &mut [Self], prices: &[UsagePriceOverride]) {
         for record in records {
-            if record.final_charge_micro_usd.unwrap_or(0) != 0 {
+            if record.charge_status == ChargeStatus::Computed {
                 continue;
             }
             let Some(price) = prices.iter().find(|price| {
@@ -95,9 +119,41 @@ impl MeteringUsageRecord {
             }) else {
                 continue;
             };
-            let charge = record.prompt_tokens as f64 * price.input_micro_usd_per_token
-                + record.completion_tokens as f64 * price.output_micro_usd_per_token;
-            record.final_charge_micro_usd = Some(charge.round().max(0.0) as u64);
+            if (record.cache_read_tokens > 0 || record.cache_write_tokens > 0)
+                && (price.cache_read_micro_usd_per_token.is_none()
+                    || price.cache_write_micro_usd_per_token.is_none())
+            {
+                continue;
+            }
+            let usage = Usage {
+                prompt_tokens: record.prompt_tokens,
+                completion_tokens: record.completion_tokens,
+                reasoning_tokens: record.reasoning_tokens,
+                cache_read_tokens: record.cache_read_tokens,
+                cache_write_tokens: record.cache_write_tokens,
+                origin: record.usage_origin,
+                raw: record.raw_usage.clone().map(Box::new),
+                ..Default::default()
+            };
+            let pricing = ModelPricing::cache_aware(
+                Some(price.input_micro_usd_per_token),
+                price.cache_read_micro_usd_per_token,
+                price.cache_write_micro_usd_per_token,
+                Some(price.output_micro_usd_per_token),
+            );
+            let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Override);
+            if evidence.status != ChargeStatus::Computed {
+                record.charge_status = evidence.status;
+                record.charge_evidence = Some(evidence);
+                record.final_charge_micro_usd = None;
+                continue;
+            }
+            record.uncached_input_tokens = evidence.normalized_usage.uncached_input_tokens;
+            record.output_tokens = evidence.normalized_usage.output_tokens;
+            record.final_charge_micro_usd =
+                evidence.charge_micro_usd.map(|charge| charge.max(0) as u64);
+            record.charge_status = evidence.status;
+            record.charge_evidence = Some(evidence);
         }
     }
 
@@ -135,32 +191,52 @@ impl MeteringUsageRecord {
 
 impl UsagePriceOverride {
     pub fn parse(value: &str) -> Result<Self> {
+        const EXPECTED: &str =
+            "provider:model=uncached,cache_read,cache_write,output (or legacy input,output)";
         let (route, prices) = value.split_once('=').ok_or_else(|| {
             BitrouterError::bad_request(format!(
-                "invalid price override {value:?}; expected provider:model=input,output"
+                "invalid price override {value:?}; expected {EXPECTED}"
             ))
         })?;
         let (provider_id, model_id) = route.split_once(':').ok_or_else(|| {
             BitrouterError::bad_request(format!(
-                "invalid price override {value:?}; expected provider:model=input,output"
+                "invalid price override {value:?}; expected {EXPECTED}"
             ))
         })?;
-        let (input, output) = prices.split_once(',').ok_or_else(|| {
-            BitrouterError::bad_request(format!(
-                "invalid price override {value:?}; expected provider:model=input,output"
-            ))
-        })?;
-        let input_micro_usd_per_token = input.trim().parse::<f64>().map_err(|e| {
-            BitrouterError::bad_request(format!("invalid input price in override {value:?}: {e}"))
-        })?;
-        let output_micro_usd_per_token = output.trim().parse::<f64>().map_err(|e| {
-            BitrouterError::bad_request(format!("invalid output price in override {value:?}: {e}"))
-        })?;
+        let rates = prices
+            .split(',')
+            .map(str::trim)
+            .map(|rate| {
+                rate.parse::<f64>().map_err(|error| {
+                    BitrouterError::bad_request(format!(
+                        "invalid price in override {value:?}: {error}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0) {
+            return Err(BitrouterError::bad_request(format!(
+                "invalid price override {value:?}; rates must be finite and non-negative"
+            )));
+        }
+        let (input, cache_read, cache_write, output) = match rates.as_slice() {
+            [input, output] => (*input, None, None, *output),
+            [input, cache_read, cache_write, output] => {
+                (*input, Some(*cache_read), Some(*cache_write), *output)
+            }
+            _ => {
+                return Err(BitrouterError::bad_request(format!(
+                    "invalid price override {value:?}; expected {EXPECTED}"
+                )));
+            }
+        };
         Ok(Self {
             provider_id: provider_id.trim().to_string(),
             model_id: model_id.trim().to_string(),
-            input_micro_usd_per_token,
-            output_micro_usd_per_token,
+            input_micro_usd_per_token: input,
+            cache_read_micro_usd_per_token: cache_read,
+            cache_write_micro_usd_per_token: cache_write,
+            output_micro_usd_per_token: output,
         })
     }
 }
@@ -316,6 +392,17 @@ impl MeteringStore {
 
     /// Record one settled request. The single writer.
     pub async fn record_request(&self, record: RequestMetric) -> Result<()> {
+        let raw_usage_json = record
+            .raw_usage
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| BitrouterError::internal(format!("serialize raw usage: {error}")))?;
+        let charge_evidence_json = serde_json::to_string(&record.charge_evidence)
+            .map(Some)
+            .map_err(|error| {
+                BitrouterError::internal(format!("serialize charge evidence: {error}"))
+            })?;
         let row = requests::ActiveModel {
             request_id: Set(record.request_id),
             user_id: Set(record.user_id),
@@ -327,6 +414,12 @@ impl MeteringStore {
             reasoning_tokens: Set(record.reasoning_tokens as i64),
             cache_read_tokens: Set(record.cache_read_tokens as i64),
             cache_write_tokens: Set(record.cache_write_tokens as i64),
+            uncached_input_tokens: Set(record.uncached_input_tokens as i64),
+            output_tokens: Set(record.output_tokens as i64),
+            usage_origin: Set(record.usage_origin.as_str().to_string()),
+            raw_usage_json: Set(raw_usage_json),
+            charge_status: Set(record.charge_status.as_str().to_string()),
+            charge_evidence_json: Set(charge_evidence_json),
             estimated_charge_micro_usd: Set(record.estimated_charge_micro_usd),
             streamed: Set(record.streamed as i32),
             latency_ms: Set(record.latency_ms as i64),
@@ -350,6 +443,12 @@ impl MeteringStore {
                         requests::Column::ReasoningTokens,
                         requests::Column::CacheReadTokens,
                         requests::Column::CacheWriteTokens,
+                        requests::Column::UncachedInputTokens,
+                        requests::Column::OutputTokens,
+                        requests::Column::UsageOrigin,
+                        requests::Column::RawUsageJson,
+                        requests::Column::ChargeStatus,
+                        requests::Column::ChargeEvidenceJson,
                         requests::Column::EstimatedChargeMicroUsd,
                         requests::Column::Streamed,
                         requests::Column::LatencyMs,
@@ -372,6 +471,28 @@ impl From<requests::Model> for MeteringUsageRecord {
         } else {
             "completed"
         };
+        let charge_status = ChargeStatus::from_persisted(&row.charge_status);
+        let charge_evidence = row
+            .charge_evidence_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        let final_charge_micro_usd = if charge_status == ChargeStatus::Computed {
+            charge_evidence
+                .as_ref()
+                .and_then(|evidence: &ChargeEvidence| evidence.charge_micro_usd)
+                .map(|charge| charge.max(0) as u64)
+        } else {
+            None
+        };
+        let usage_origin = match row.usage_origin.as_str() {
+            "provider_reported" => UsageOrigin::ProviderReported,
+            "estimated" => UsageOrigin::Estimated,
+            _ => UsageOrigin::Unknown,
+        };
+        let raw_usage = row
+            .raw_usage_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok());
         Self {
             id: Some(row.request_id.clone()),
             request_id: Some(row.request_id),
@@ -379,7 +500,16 @@ impl From<requests::Model> for MeteringUsageRecord {
             model_id: row.model_id,
             prompt_tokens: row.prompt_tokens.max(0) as u64,
             completion_tokens: row.completion_tokens.max(0) as u64,
-            final_charge_micro_usd: Some(row.estimated_charge_micro_usd.max(0) as u64),
+            reasoning_tokens: row.reasoning_tokens.max(0) as u64,
+            uncached_input_tokens: row.uncached_input_tokens.max(0) as u64,
+            cache_read_tokens: row.cache_read_tokens.max(0) as u64,
+            cache_write_tokens: row.cache_write_tokens.max(0) as u64,
+            output_tokens: row.output_tokens.max(0) as u64,
+            usage_origin,
+            raw_usage,
+            final_charge_micro_usd,
+            charge_status,
+            charge_evidence,
             status: Some(status.to_string()),
         }
     }
