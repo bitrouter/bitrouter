@@ -713,6 +713,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.2",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "cache_write": 0.0,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.2",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "ambient",
@@ -1818,6 +1836,66 @@
             }
           },
           "provider_model_id": "claude-sonnet-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-5.6-luna",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "gpt-5.6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-5.6-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider_model_id": "gpt-5.6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-5.6-terra",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "gpt-5.6-terra",
           "rate_limits": {
             "requests_per_minute": 60
           }
