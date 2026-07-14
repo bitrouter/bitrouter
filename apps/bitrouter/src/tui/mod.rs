@@ -1,8 +1,10 @@
 //! `bitrouter tui` — in-process multi-agent manager.
 mod event;
 mod highlight;
+mod pty;
 mod pump;
 mod state;
+mod term;
 mod ui;
 
 use std::collections::HashMap;
@@ -25,7 +27,11 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use crate::tui::event::{AppEvent, DiffData, Effect, Incoming, PermOption};
 use crate::tui::state::{AppState, PaneState, reduce};
 
-/// Launch the TUI with an initial agent; `n` (in AGENT mode) spawns more.
+/// Launch the TUI. `--agent` names either a native harness (`claude`,
+/// `codex`) — the **orchestrator**, hosted at full fidelity in a PTY pane
+/// (TUI_SPEC §2/§3) with the fleet MCP bridge injected — or a configured
+/// `agents:` entry, which falls back to an ACP-rendered primary pane.
+/// `n` (in AGENT mode) spawns worktree-isolated ACP subagents either way.
 pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     // ── Config + catalog. ──
     let source = crate::paths::resolve_config(None)?;
@@ -35,57 +41,73 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     )
     .context("building acp catalog from config.agents")?;
     let agent_ids: Vec<String> = cfg.agents.keys().cloned().collect();
-    // Fail a bad --agent id up front with the fix in the message, instead of
-    // surfacing the substrate's bare lookup error.
-    if !cfg.agents.contains_key(agent_id) {
-        let mut available = agent_ids.clone();
+    let base_repo = std::env::current_dir().context("resolving current directory")?;
+    let ports = (cfg.worktrees.ports.from, cfg.worktrees.ports.to);
+
+    // ── Channel. The loop keeps `tx` to pump agents spawned later. ──
+    let (tx, rx) = unbounded_channel::<Incoming>();
+    let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
+    let mut port_alloc: HashMap<String, u16> = HashMap::new();
+    let mut pty: Option<(String, pty::PtyPane)> = None;
+
+    let initial_pane = if let Some(h) = crate::harness::by_interactive_binary(agent_id) {
+        // ── Orchestrator: the native harness TUI in a PTY pane. ──
+        if worktree.is_some() {
+            anyhow::bail!(
+                "--worktree applies to ACP agents; the orchestrator runs in the base repo"
+            );
+        }
+        let (record_id, pane, pty_pane) = launch_orchestrator(h, &cfg, &base_repo, tx.clone())?;
+        pty = Some((record_id, pty_pane));
+        pane
+    } else if cfg.agents.contains_key(agent_id) {
+        // ── ACP fallback: the primary agent rendered from typed events.
+        // Runs in the base repo (worktree strictly opt-in via --worktree)
+        // but still draws a fleet PORT. Worktrees are retained on close;
+        // transcripts stay on (LaunchOptions default). ──
+        let initial_port = alloc_port(ports, &HashMap::new());
+        let options = bitrouter_substrate::engine::LaunchOptions {
+            worktree: worktree.map(|name| bitrouter_substrate::worktree::WorktreeSpec {
+                name: name.to_string(),
+                branch: None,
+                remove_on_shutdown: false,
+            }),
+            env: port_env(initial_port),
+            ..Default::default()
+        };
+        let session = Session::launch(&catalog, agent_id, base_repo.clone(), options)
+            .await
+            .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+        let record_id = session.state().record_id.clone();
+        let session = Arc::new(session);
+        pump::spawn(Arc::clone(&session), record_id.clone(), tx.clone());
+        sessions.insert(record_id.clone(), session);
+        if let Some(p) = initial_port {
+            port_alloc.insert(record_id.clone(), p);
+        }
+        let mut pane = PaneState::new(record_id, agent_id.to_string());
+        pane.port = initial_port;
+        pane
+    } else {
+        // Fail a bad --agent id up front with the fix in the message.
+        let mut available: Vec<String> = crate::harness::CATALOG
+            .iter()
+            .filter_map(|h| h.interactive_binary.map(str::to_string))
+            .collect();
+        available.extend(agent_ids.iter().cloned());
         available.sort();
+        available.dedup();
         anyhow::bail!(
-            "no acp agent '{agent_id}' under `agents:` in the config — available: {}",
+            "'{agent_id}' is neither a native harness nor an `agents:` entry — available: {}",
             if available.is_empty() {
                 "none configured (add one with `bitrouter agents install <id>`)".to_string()
             } else {
                 available.join(", ")
             }
         );
-    }
-    let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let ports = (cfg.worktrees.ports.from, cfg.worktrees.ports.to);
-
-    // ── Initial session: the primary agent runs in the base repo (worktree
-    // strictly opt-in via --worktree) but still draws a fleet PORT. Worktrees
-    // are retained on close (they hold the agent's work); transcripts stay on
-    // (LaunchOptions default). ──
-    let initial_port = alloc_port(ports, &HashMap::new());
-    let options = bitrouter_substrate::engine::LaunchOptions {
-        worktree: worktree.map(|name| bitrouter_substrate::worktree::WorktreeSpec {
-            name: name.to_string(),
-            branch: None,
-            remove_on_shutdown: false,
-        }),
-        env: port_env(initial_port),
-        ..Default::default()
     };
-    let session = Session::launch(&catalog, agent_id, base_repo.clone(), options)
-        .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let record_id = session.state().record_id.clone();
-    let session = Arc::new(session);
-
-    // ── Channel + pump. The loop keeps `tx` to pump agents spawned later. ──
-    let (tx, rx) = unbounded_channel::<Incoming>();
-    pump::spawn(Arc::clone(&session), record_id.clone(), tx.clone());
-
-    let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
-    sessions.insert(record_id.clone(), session);
-    let mut port_alloc: HashMap<String, u16> = HashMap::new();
-    if let Some(p) = initial_port {
-        port_alloc.insert(record_id.clone(), p);
-    }
 
     // ── Initial state. ──
-    let mut initial_pane = PaneState::new(record_id, agent_id.to_string());
-    initial_pane.port = initial_port;
     let mut state = AppState::new(initial_pane);
     state.bootstrap_cmd = cfg.worktrees.bootstrap.clone();
     state.set_available_agents(agent_ids);
@@ -122,6 +144,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
             meta: HashMap::new(),
             checks: cfg.worktrees.checks.clone(),
         },
+        pty,
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
@@ -169,6 +192,90 @@ fn harness_tag(transport: &bitrouter_sdk::acp::AcpTransport) -> String {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| command.clone()),
+    }
+}
+
+/// Launch the orchestrator: the harness's interactive binary on a PTY, its
+/// LLM traffic routed through the daemon (same overlay as `bitrouter launch`)
+/// and the fleet MCP bridge injected so it can spawn/manage subagents
+/// (TUI_SPEC §2's data flow).
+fn launch_orchestrator(
+    h: &'static crate::harness::Harness,
+    cfg: &bitrouter_sdk::config::Config,
+    base_repo: &std::path::Path,
+    tx: UnboundedSender<Incoming>,
+) -> Result<(String, PaneState, pty::PtyPane)> {
+    let Some(binary) = h.interactive_binary else {
+        anyhow::bail!("harness '{}' has no interactive binary", h.id);
+    };
+    let base_url = crate::spawn::derive_base_url(&cfg.server.listen);
+    let auth = crate::harness::resolve_gateway_auth(
+        std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
+        false,
+    )
+    .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    let overlay = h.routing_overlay(&base_url, &auth, None);
+    let mut args = overlay.args.clone();
+    args.extend(fleet_mcp_args(binary, base_repo)?);
+
+    let record_id = "orchestrator".to_string();
+    // Sized properly on the first draw (the pane rect is recorded and the
+    // loop resizes + SIGWINCHes the child).
+    let pane = pty::PtyPane::spawn(
+        &record_id,
+        &pty::PtyLaunch {
+            command: binary,
+            args: &args,
+            env: &overlay.env,
+            cwd: base_repo,
+        },
+        80,
+        24,
+        tx,
+    )
+    .with_context(|| format!("launching orchestrator '{binary}' on a pty"))?;
+
+    let mut pane_state = PaneState::new(record_id.clone(), binary.to_string());
+    pane_state.kind = crate::tui::state::PaneKind::Pty;
+    pane_state.harness = "pty".to_string();
+    Ok((record_id, pane_state, pane))
+}
+
+/// The args that wire the fleet MCP bridge into the orchestrator's harness,
+/// so its `spawn_subagent`/… tools reach this repo's fleet. Stdio subprocess,
+/// per TUI_SPEC §15-Q2.
+fn fleet_mcp_args(binary: &str, base_repo: &std::path::Path) -> Result<Vec<String>> {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "bitrouter".to_string());
+    match binary {
+        "claude" => {
+            // Claude Code loads extra MCP servers from --mcp-config <file>.
+            let dir = base_repo.join(".bitrouter");
+            std::fs::create_dir_all(&dir).context("creating .bitrouter/")?;
+            let path = dir.join("fleet-mcp.json");
+            let config = serde_json::json!({
+                "mcpServers": {
+                    "bitrouter_fleet": {
+                        "command": exe,
+                        "args": ["mcp", "serve", "--backend", "fleet"],
+                    }
+                }
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&config)?)
+                .context("writing fleet MCP config")?;
+            Ok(vec!["--mcp-config".to_string(), path.display().to_string()])
+        }
+        "codex" => Ok(vec![
+            "-c".to_string(),
+            format!("mcp_servers.bitrouter_fleet.command={exe:?}"),
+            "-c".to_string(),
+            "mcp_servers.bitrouter_fleet.args=[\"mcp\",\"serve\",\"--backend\",\"fleet\"]"
+                .to_string(),
+        ]),
+        // Unknown harness: no injection mechanism — the orchestrator still
+        // runs, without fleet tools.
+        _ => Ok(Vec::new()),
     }
 }
 
@@ -231,6 +338,9 @@ struct Runtime<'a> {
     prompt_tasks: PromptTasks,
     spawner: Spawner<'a>,
     fleet: Fleet,
+    /// The orchestrator's PTY pane (record id → pane), when `--agent` named a
+    /// native harness. One PTY pane in B3 (the orchestrator).
+    pty: Option<(String, pty::PtyPane)>,
 }
 
 /// The core loop over a registry of sessions. Draws, muxes input vs pumped
@@ -248,9 +358,20 @@ async fn event_loop(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        if let Err(e) = terminal.draw(|f| ui::render(&mut state, f)) {
+        // Snapshot the PTY grid for this frame (the emulator lives loop-side;
+        // state stays pure).
+        let pty_view = rt.pty.as_ref().map(|(rid, pane)| ui::PtyView {
+            record_id: rid.clone(),
+            lines: pane.backend.lines(state.no_color),
+        });
+        if let Err(e) = terminal.draw(|f| ui::render(&mut state, pty_view.as_ref(), f)) {
             cleanup(&mut rt).await;
             return Err(e).context("draw");
+        }
+        // Resize recovery (§9): the drawn pane rect is authoritative — resize
+        // the emulator and SIGWINCH the child whenever it changes.
+        if let (Some((_, pane)), Some((cols, rows))) = (&mut rt.pty, state.pty_area) {
+            pane.resize(cols, rows);
         }
         if state.should_quit {
             cleanup(&mut rt).await;
@@ -265,12 +386,12 @@ async fn event_loop(
                 // the loop, whose draw autoresizes to the new size. Mouse is
                 // deliberately unhandled.
                 Some(Ok(_)) => None,
-                Some(Err(_)) | None => Some(AppEvent::Key(quit_key())),
+                Some(Err(_)) | None => Some(AppEvent::ForceQuit),
             },
             _ = ticker.tick() => Some(AppEvent::Tick),
             maybe_in = rx.recv() => match maybe_in {
                 Some(incoming) => convert_incoming(incoming, &mut rt),
-                None => Some(AppEvent::Key(quit_key())),
+                None => Some(AppEvent::ForceQuit),
             },
         };
 
@@ -358,6 +479,23 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
             Some(AppEvent::ChecksFailed { record_id, output })
         }
         Incoming::DiffLoaded { record_id, text } => Some(AppEvent::DiffLoaded { record_id, text }),
+        Incoming::PtyOutput { record_id, bytes } => {
+            if let Some((rid, pane)) = &mut rt.pty
+                && *rid == record_id
+            {
+                // Feed the emulator; re-emit OSC-52 clipboard writes verbatim
+                // to the outer terminal (tmux allow-passthrough pattern) so
+                // copy-from-the-inner-app reaches the user's clipboard.
+                for seq in pane.feed(&bytes) {
+                    use std::io::Write;
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(&seq);
+                    let _ = out.flush();
+                }
+            }
+            None // the next draw renders the updated grid
+        }
+        Incoming::PtyExited { record_id } => Some(AppEvent::Exited { record_id }),
     }
 }
 
@@ -500,6 +638,24 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
             if let Some(sess) = rt.sessions.remove(&record_id) {
                 shutdown_session(sess).await;
+            }
+        }
+        Effect::PtyKey { record_id, key } => {
+            if let Some((rid, pane)) = &mut rt.pty
+                && *rid == record_id
+                && let Some(bytes) = pane.backend.encode_key(&key)
+            {
+                pane.write_input(&bytes);
+            }
+        }
+        Effect::CancelTurn { record_id } => {
+            if let Some(sess) = rt.sessions.get(&record_id) {
+                let sess = Arc::clone(sess);
+                tokio::spawn(async move {
+                    if let Err(e) = sess.cancel().await {
+                        tracing::warn!(error = %e, "turn cancel failed");
+                    }
+                });
             }
         }
         Effect::CheckReview { record_id } => {
@@ -676,6 +832,12 @@ async fn abort_prompt_tasks(tasks: &mut PromptTasks) {
 /// Deny in the substrate), and shut down every session. Called on every
 /// loop-exit path.
 async fn cleanup(rt: &mut Runtime<'_>) {
+    if let Some((_, pane)) = &mut rt.pty {
+        // The orchestrator is a PTY child of the TUI and dies with it (§2's
+        // named asymmetry) — its own --resume/session files are its
+        // continuity story, not bitrouter's.
+        pane.kill();
+    }
     abort_prompt_tasks(&mut rt.prompt_tasks).await;
     // Dropping a PendingPermission defaults it to Deny in the substrate.
     rt.pending.clear();
@@ -742,14 +904,33 @@ fn perm_options(p: &bitrouter_substrate::up::PendingPermission) -> Vec<PermOptio
         .collect()
 }
 
-fn quit_key() -> crossterm::event::KeyEvent {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn fleet_mcp_args_wire_the_bridge_per_harness() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // claude: a --mcp-config file carrying the stdio fleet bridge.
+        let args = super::fleet_mcp_args("claude", dir.path()).expect("claude");
+        assert_eq!(args[0], "--mcp-config");
+        let written = std::fs::read_to_string(&args[1]).expect("config file written");
+        assert!(written.contains("bitrouter_fleet"), "{written}");
+        assert!(written.contains("\"fleet\""), "fleet backend: {written}");
+        // codex: -c TOML overrides.
+        let args = super::fleet_mcp_args("codex", dir.path()).expect("codex");
+        assert!(
+            args.iter()
+                .any(|a| a.contains("mcp_servers.bitrouter_fleet.command")),
+            "{args:?}"
+        );
+        // Unknown harness: no injection mechanism, no args.
+        assert!(
+            super::fleet_mcp_args("mystery", dir.path())
+                .expect("unknown")
+                .is_empty()
+        );
+    }
 
     #[test]
     fn alloc_port_takes_lowest_free_and_exhausts_cleanly() {

@@ -383,18 +383,22 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Launch the in-process multi-agent TUI: a left rail listing every agent
-    /// (sorted by who needs you, with a radar strip) beside a splittable detail
-    /// view. Starts with one ACP agent (`--agent`); `Ctrl-A` opens manager mode
-    /// (navigate the rail, open/split agents, spawn, close), `Ctrl-B` broadcasts
-    /// a prompt to several agents at once. Streams each agent's output, sends
-    /// prompts, and answers permissions inline.
+    /// Launch the composite multi-agent TUI: a left rail (roster sorted by
+    /// who needs you, radar strip, decision + review queues) beside the
+    /// primary pane. `--agent claude|codex` hosts that harness's REAL native
+    /// TUI in a PTY pane (the orchestrator — keys pass through; `Ctrl-A` is
+    /// the one manager leader; `Ctrl-C` interrupts the agent, not the TUI)
+    /// with the fleet MCP bridge injected so it can spawn subagents. A
+    /// configured `agents:` id instead renders that ACP agent from typed
+    /// events. `Ctrl-A n` spawns worktree-isolated ACP subagents either way.
     #[cfg(feature = "tui")]
     Tui {
-        /// Agent id for the first pane (must exist under `agents:` in the config).
+        /// The primary agent: a native harness (`claude`, `codex`) hosted in
+        /// a PTY as the orchestrator, or a configured `agents:` entry
+        /// rendered from ACP events.
         #[arg(short, long)]
         agent: String,
-        /// Optional git worktree name to create for the first session.
+        /// Optional git worktree name for the first session (ACP agents only).
         #[arg(short, long)]
         worktree: Option<String>,
     },

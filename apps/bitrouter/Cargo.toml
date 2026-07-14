@@ -60,10 +60,20 @@ two-face = { version = "0.4", default-features = false, features = ["syntect-fan
 jsonschema = { version = "0.47.0", default-features = false }
 rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 schemars.workspace = true
+alacritty_terminal = { version = "0.25", optional = true }
+portable-pty = { version = "0.9", optional = true }
 
 [features]
 default = ["tui"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:similar", "dep:syntect", "dep:two-face"]
+tui = [
+    "dep:ratatui",
+    "dep:crossterm",
+    "dep:similar",
+    "dep:syntect",
+    "dep:two-face",
+    "dep:alacritty_terminal",
+    "dep:portable-pty",
+]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

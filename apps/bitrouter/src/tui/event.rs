@@ -91,6 +91,10 @@ pub enum AppEvent {
     },
     /// Periodic UI tick (drives the running-agent spinner animation).
     Tick,
+    /// Unconditional quit (input stream ended / terminal gone). Unlike
+    /// `Ctrl-C` — which interrupts the focused agent in NORMAL mode — this
+    /// always tears down.
+    ForceQuit,
 }
 
 /// Side effect the loop performs after a reduce. Keeps `reduce` pure.
@@ -111,6 +115,12 @@ pub enum Effect {
     SpawnAgent { agent_id: String },
     /// Shut down and remove the session `record_id`.
     CloseAgent { record_id: String },
+    /// Route one key press to a PTY pane's child (the loop encodes it via
+    /// the pane's emulator, which knows the child's keyboard modes).
+    PtyKey { record_id: String, key: KeyEvent },
+    /// Cancel the ACP session's in-flight turn (`Ctrl-C` = interrupt the
+    /// focused agent, not quit — TUI_SPEC §9/§12).
+    CancelTurn { record_id: String },
     /// A turn ended cleanly: inspect the agent's worktree (diff + checks) and
     /// report back with `ReviewReady`/`ChecksFailed`.
     CheckReview { record_id: String },
@@ -158,5 +168,14 @@ pub enum Incoming {
     DiffLoaded {
         record_id: String,
         text: String,
+    },
+    /// Output bytes from a PTY pane's child (fed to its emulator by the loop).
+    PtyOutput {
+        record_id: String,
+        bytes: Vec<u8>,
+    },
+    /// A PTY pane's child exited (reader hit EOF).
+    PtyExited {
+        record_id: String,
     },
 }

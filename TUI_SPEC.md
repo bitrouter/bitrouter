@@ -440,7 +440,16 @@ it.
 - PTY spawning via `portable-pty` (expect to vendor/patch, as herdr did).
 
 **Escape hatch:** the trait keeps `alacritty_terminal` / **libghostty-FFI** (herdr's pick)
-available if cross-terminal fidelity proves decisive. **Validation gate:** before
+available if cross-terminal fidelity proves decisive.
+
+> **Implementation note (B3, shipped):** the default backend is
+> `alacritty_terminal`, not wezterm-term — wezterm-term is not published to
+> crates.io, and a git dependency would make the published `bitrouter` binary
+> unpublishable. The input encoder (the reason wezterm-term was preferred)
+> lives behind `TerminalBackend` as a mode-aware implementation in
+> `apps/bitrouter/src/tui/term.rs`; it is the §11 spike's probe surface, and a
+> wezterm-term (vendored) or libghostty backend can replace it through the
+> trait without touching the TUI. **Validation gate:** before
 committing, a spike must A/B a live `claude-code` + `codex` pane on our target terminal
 matrix (`{Ghostty, iTerm2, kitty, Terminal.app, WezTerm, tmux, Windows Terminal}`) — the
 Shift-Enter-under-kitty class of bug is the thing to probe. **Windows caveat:** PTY-composite

@@ -17,10 +17,17 @@ use crate::tui::state::{
 /// plus its expanded `└ y·a·d risk · title` line to stay readable.
 const RAIL_WIDTH: u16 = 28;
 
+/// A PTY pane's rendered grid for this frame, produced loop-side from its
+/// terminal backend (state stays pure — the emulator lives with the loop).
+pub struct PtyView {
+    pub record_id: String,
+    pub lines: Vec<TuiLine<'static>>,
+}
+
 /// Render the whole app for one frame. Takes `&mut` so panes can record the
 /// viewport height they were drawn at (ratatui stateful-render idiom) — the
 /// reducer uses it to page the scrollback by exactly one screen.
-pub fn render(state: &mut AppState, frame: &mut Frame) {
+pub fn render(state: &mut AppState, pty: Option<&PtyView>, frame: &mut Frame) {
     let area = frame.area();
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -38,7 +45,7 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
         .split(rows[0]);
 
     render_rail(state, frame, cols[0]);
-    render_detail(state, frame, cols[1]);
+    render_detail(state, pty, frame, cols[1]);
     render_input(state, frame, rows[1]);
     render_modebar(state, frame, rows[2]);
 
@@ -342,7 +349,7 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
 }
 
 /// Detail viewport: the shown agents in a horizontal or vertical split.
-fn render_detail(state: &mut AppState, frame: &mut Frame, area: Rect) {
+fn render_detail(state: &mut AppState, pty: Option<&PtyView>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let shown = state.detail.shown.clone();
     let focus = state.detail.focus;
@@ -355,11 +362,66 @@ fn render_detail(state: &mut AppState, frame: &mut Frame, area: Rect) {
         return;
     }
     let rects = split_rects(area, shown.len(), split);
+    let mut pty_area = state.pty_area;
     for (slot, (rid, rect)) in shown.iter().zip(rects.iter()).enumerate() {
         if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
-            render_pane(pane, slot, slot == focus, nc, frame, *rect);
+            match (pane.kind, pty) {
+                (crate::tui::state::PaneKind::Pty, _) => {
+                    // Record the drawn inner size so the loop can resize the
+                    // emulator + PTY (SIGWINCH) when the layout changes.
+                    pty_area = Some((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
+                    let view = pty.filter(|v| &v.record_id == rid);
+                    render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
+                }
+                _ => render_pane(pane, slot, slot == focus, nc, frame, *rect),
+            }
         }
     }
+    state.pty_area = pty_area;
+}
+
+/// Render a PTY pane: the emulator's grid verbatim inside the pane border —
+/// the harness renders itself; bitrouter draws no lines of its own here.
+fn render_pty_pane(
+    pane: &mut PaneState,
+    view: Option<&PtyView>,
+    slot: usize,
+    focused: bool,
+    nc: bool,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    pane.viewport = area.height.saturating_sub(2) as usize;
+    let mut markers = String::new();
+    if pane.exited {
+        markers.push_str(" ✗");
+    }
+    let title = format!(
+        " [{}] {} · {}{} ",
+        slot + 1,
+        pane.agent_id,
+        pane.harness,
+        markers
+    );
+    let border_style = if focused {
+        tint(nc, Color::Cyan)
+    } else {
+        Style::default()
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+    let lines: Vec<TuiLine> = match view {
+        Some(v) => v.lines.clone(),
+        None => vec![TuiLine::styled(
+            "(starting…)",
+            tint(nc, Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )],
+    };
+    // No wrap: the emulator already fits its grid to the pane.
+    let para = Paragraph::new(lines).block(block);
+    frame.render_widget(para, area);
 }
 
 /// Equal division of `area` into `n` slots: columns for [`Split::H`], rows for
@@ -593,6 +655,19 @@ fn render_diff_line(d: &DiffLine, nc: bool, width: usize) -> TuiLine<'static> {
 }
 
 fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
+    // A focused PTY pane owns the keyboard (locked-mode passthrough) — the
+    // manager's prompt line would be a lie, so show the routing instead.
+    if state.mode == Mode::Normal
+        && state
+            .focused()
+            .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Pty)
+    {
+        let para = Paragraph::new("⇢ keys go to the orchestrator · Ctrl-A for the manager")
+            .style(tint(state.no_color, Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(para, area);
+        return;
+    }
     let (prefix, text) = if state.mode == Mode::Broadcast {
         ("⇉ ", state.broadcast_input.as_str())
     } else {
@@ -708,7 +783,7 @@ mod tests {
     fn draw(state: &mut AppState, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal.draw(|f| render(state, f)).expect("draw");
+        terminal.draw(|f| render(state, None, f)).expect("draw");
         terminal
             .backend()
             .buffer()
@@ -1035,6 +1110,50 @@ mod tests {
     }
 
     #[test]
+    fn pty_pane_renders_the_grid_and_records_its_size() {
+        let mut pane = PaneState::new("orchestrator".into(), "claude".into());
+        pane.kind = crate::tui::state::PaneKind::Pty;
+        pane.harness = "pty".into();
+        let mut st = AppState::new(pane);
+        let view = PtyView {
+            record_id: "orchestrator".into(),
+            lines: vec![
+                ratatui::text::Line::raw("NATIVE_TUI_ROW_1"),
+                ratatui::text::Line::raw("NATIVE_TUI_ROW_2"),
+            ],
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|f| render(&mut st, Some(&view), f))
+            .expect("draw");
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("NATIVE_TUI_ROW_1"), "grid rendered: {text:?}");
+        assert!(text.contains("claude · pty"), "pane header");
+        assert!(
+            text.contains("keys go to the orchestrator"),
+            "passthrough hint replaces the prompt line"
+        );
+        let (cols, rows) = st.pty_area.expect("drawn size recorded for resize");
+        assert!(cols > 0 && rows > 0);
+    }
+
+    #[test]
+    fn pty_pane_without_a_view_shows_a_calm_placeholder() {
+        let mut pane = PaneState::new("orchestrator".into(), "claude".into());
+        pane.kind = crate::tui::state::PaneKind::Pty;
+        let mut st = AppState::new(pane);
+        let text = draw(&mut st, 60, 12);
+        assert!(text.contains("starting…"), "{text:?}");
+    }
+
+    #[test]
     fn rail_shows_allocated_port() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
         st.agents[0].port = Some(3101);
@@ -1081,7 +1200,7 @@ mod tests {
         st.no_color = true;
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal.draw(|f| render(&mut st, f)).expect("draw");
+        terminal.draw(|f| render(&mut st, None, f)).expect("draw");
         let buffer = terminal.backend().buffer();
         let colored = buffer
             .content()

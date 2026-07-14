@@ -307,6 +307,17 @@ impl Autonomy {
     }
 }
 
+/// What renders a pane's content (TUI_SPEC §3's pane-source table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaneKind {
+    /// An ACP subagent monitor, rendered by bitrouter from typed events.
+    #[default]
+    Acp,
+    /// A native harness on a PTY (the orchestrator) — rendered by the
+    /// terminal backend; keys pass through except the leader.
+    Pty,
+}
+
 /// One agent pane's state.
 #[derive(Debug, Clone)]
 pub struct PaneState {
@@ -362,6 +373,8 @@ pub struct PaneState {
     /// How many times this turn's failing checks were looped back to the
     /// agent (capped — then the failure surfaces to the human instead).
     pub check_retries: u8,
+    /// What renders this pane (ACP monitor vs native PTY).
+    pub kind: PaneKind,
 }
 
 impl PaneState {
@@ -389,6 +402,7 @@ impl PaneState {
             port: None,
             review: None,
             check_retries: 0,
+            kind: PaneKind::default(),
         }
     }
 
@@ -648,6 +662,9 @@ pub struct AppState {
     pub bootstrap_decision: Option<bool>,
     /// The spawn awaiting the bootstrap decision (present in `Mode::Confirm`).
     pub confirm_agent: Option<String>,
+    /// The PTY pane's inner size `(cols, rows)` as last drawn — the loop
+    /// resizes the emulator + PTY (SIGWINCH) when it changes.
+    pub pty_area: Option<(u16, u16)>,
 }
 
 impl AppState {
@@ -674,6 +691,7 @@ impl AppState {
             bootstrap_cmd: None,
             bootstrap_decision: None,
             confirm_agent: None,
+            pty_area: None,
         }
     }
 
@@ -973,13 +991,29 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.tick = state.tick.wrapping_add(1);
             Vec::new()
         }
+        AppEvent::ForceQuit => {
+            state.should_quit = true;
+            vec![Effect::Quit]
+        }
         AppEvent::Key(key) => {
-            // Ctrl-C is a global quit — every mode, even with a permission
-            // pending (the loop's teardown drops the pending handle, which
-            // Denies it in the substrate). Also the loop's synthesized quit
-            // key on input-stream end, so it must never be swallowed by a
-            // mode's fallthrough.
+            // Ctrl-C interrupts the FOCUSED AGENT in NORMAL mode (PTY: raw
+            // 0x03 passes through; ACP: cancel the in-flight turn) — quit
+            // moved to the leader (`Ctrl-A` → `x`/`:quit`; TUI_SPEC §9/§12).
+            // In manager modes Ctrl-C still quits.
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if state.mode == Mode::Normal
+                    && let Some(pane) = state.focused()
+                    && !pane.exited
+                {
+                    let record_id = pane.record_id.clone();
+                    return match pane.kind {
+                        PaneKind::Pty => vec![Effect::PtyKey {
+                            record_id,
+                            key: *key,
+                        }],
+                        PaneKind::Acp => vec![Effect::CancelTurn { record_id }],
+                    };
+                }
                 state.should_quit = true;
                 return vec![Effect::Quit];
             }
@@ -1013,6 +1047,20 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
         }
         return Vec::new();
+    }
+    // A focused PTY pane is locked-mode passthrough (TUI_SPEC §9): every key
+    // except the `Ctrl-A` leader (handled above) routes to the child — that
+    // includes `Ctrl-B` (readline) and PgUp/PgDn.
+    if let Some(pane) = state.focused()
+        && pane.kind == PaneKind::Pty
+    {
+        if pane.exited {
+            return Vec::new(); // dead child — nothing to type into
+        }
+        return vec![Effect::PtyKey {
+            record_id: pane.record_id.clone(),
+            key: *key,
+        }];
     }
     // Ctrl-B enters BROADCAST mode (with a cleared selection).
     if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1865,17 +1913,16 @@ mod tests {
         );
     }
 
-    // ── Quit. ──
+    // ── Quit / interrupt (TUI_SPEC §9/§12: Ctrl-C interrupts, quit is on
+    // the leader). ──
+
+    fn ctrl_c() -> AppEvent {
+        AppEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+    }
 
     #[test]
-    fn ctrl_c_quits_from_every_mode() {
-        for mode in [
-            Mode::Normal,
-            Mode::Agent,
-            Mode::Picker,
-            Mode::Broadcast,
-            Mode::Command,
-        ] {
+    fn ctrl_c_quits_from_manager_modes_only() {
+        for mode in [Mode::Agent, Mode::Picker, Mode::Broadcast, Mode::Command] {
             let mut st = AppState::new(pane());
             st.mode = mode;
             if mode == Mode::Picker {
@@ -1884,30 +1931,80 @@ mod tests {
                     selected: 0,
                 });
             }
-            let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-            let effects = reduce(&mut st, &AppEvent::Key(key));
+            let effects = reduce(&mut st, &ctrl_c());
             assert!(st.should_quit, "Ctrl-C must quit from {mode:?}");
             assert_eq!(effects, vec![Effect::Quit], "quit effect from {mode:?}");
         }
     }
 
     #[test]
-    fn ctrl_c_during_pending_permission_quits() {
+    fn ctrl_c_in_normal_interrupts_the_focused_agent_not_the_manager() {
+        // ACP pane: cancel the in-flight turn.
         let mut st = AppState::new(pane());
-        reduce(
-            &mut st,
-            &AppEvent::Permission {
-                record_id: "rec-1".into(),
-                title: "WRITE".into(),
-                diff: None,
-                options: allow_deny(),
-                risk: Risk::High,
-            },
+        let effects = reduce(&mut st, &ctrl_c());
+        assert_eq!(
+            effects,
+            vec![Effect::CancelTurn {
+                record_id: "rec-1".into()
+            }]
         );
-        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let effects = reduce(&mut st, &AppEvent::Key(key));
+        assert!(!st.should_quit, "the manager survives");
+
+        // PTY pane: raw 0x03 passes through to the child.
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        let effects = reduce(&mut st, &ctrl_c());
+        assert!(
+            matches!(&effects[..], [Effect::PtyKey { record_id, .. }] if record_id == "rec-1"),
+            "{effects:?}"
+        );
+        assert!(!st.should_quit);
+
+        // Dead pane: nothing to interrupt — Ctrl-C falls back to quit.
+        let mut st = AppState::new(pane());
+        st.agents[0].exited = true;
+        let effects = reduce(&mut st, &ctrl_c());
         assert_eq!(effects, vec![Effect::Quit]);
         assert!(st.should_quit);
+    }
+
+    #[test]
+    fn force_quit_always_tears_down() {
+        // The loop synthesizes ForceQuit on input-stream end; it must quit
+        // even where Ctrl-C would interrupt.
+        let mut st = AppState::new(pane());
+        let effects = reduce(&mut st, &AppEvent::ForceQuit);
+        assert_eq!(effects, vec![Effect::Quit]);
+        assert!(st.should_quit);
+    }
+
+    // ── Locked-mode passthrough (PTY pane focused). ──
+
+    #[test]
+    fn pty_pane_routes_every_key_except_the_leader() {
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        // Plain keys, Ctrl-B (readline), PgUp: all pass through.
+        for key in [
+            KeyEvent::from(KeyCode::Char('x')),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            KeyEvent::from(KeyCode::PageUp),
+            KeyEvent::from(KeyCode::Enter),
+        ] {
+            let fx = reduce(&mut st, &AppEvent::Key(key));
+            assert!(
+                matches!(&fx[..], [Effect::PtyKey { .. }]),
+                "{key:?} must pass through: {fx:?}"
+            );
+            assert!(st.input.is_empty(), "nothing leaks into the prompt line");
+        }
+        // The one leader: Ctrl-A enters the manager.
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Agent, "leader reaches the manager");
     }
 
     // ── Prompt failures. ──
@@ -2486,15 +2583,6 @@ mod tests {
         let effects = reduce(&mut st, &press(KeyCode::Enter));
         assert!(effects.is_empty());
         assert!(st.agents[0].lines.is_empty());
-    }
-
-    #[test]
-    fn ctrl_c_emits_quit() {
-        let mut st = AppState::new(pane());
-        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        let effects = reduce(&mut st, &AppEvent::Key(key));
-        assert_eq!(effects, vec![Effect::Quit]);
-        assert!(st.should_quit);
     }
 
     #[test]
