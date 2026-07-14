@@ -1451,6 +1451,14 @@
         "ports": {
           "description": "Port pool for per-subagent `PORT` allocation, so N dev servers don't\ncollide. Defaults to 3100–3199.",
           "$ref": "#/$defs/PortPoolConfig"
+        },
+        "checks": {
+          "description": "Verification checks (shell commands, run in the subagent's worktree)\nthat must pass before its finished turn is \"ready to review\". A\nfailing check loops back to the subagent, not the human. Empty by\ndefault.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       }
     },

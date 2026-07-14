@@ -575,6 +575,8 @@ dependencies = [
  "rand 0.10.2",
  "ratatui",
  "reqwest",
+ "rmcp",
+ "schemars 1.2.1",
  "sea-orm",
  "sea-orm-migration",
  "semver",

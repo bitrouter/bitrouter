@@ -504,6 +504,11 @@ enum McpAction {
         /// HTTP bind address.
         #[arg(long, default_value = "127.0.0.1:4357")]
         bind: String,
+        /// (fleet backend only) Grant the orchestrator write autonomy:
+        /// apply_subagent/merge_subagent may integrate into the base repo.
+        /// Off by default — writes are human-gated.
+        #[arg(long)]
+        allow_writes: bool,
     },
     /// Write/print the client config block.
     Install {
@@ -526,12 +531,15 @@ enum McpTransport {
 }
 
 /// Backend the MCP tools route to.
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum McpBackend {
     /// The local BYOK daemon at `127.0.0.1:4356`.
     Local,
     /// BitRouter Cloud at `api.bitrouter.ai`.
     Cloud,
+    /// The fleet bridge: tools that spawn/manage worktree-isolated ACP
+    /// subagents for an orchestrating harness (TUI_SPEC §4). Stdio only.
+    Fleet,
 }
 
 /// MCP client targeted by `bitrouter mcp install`.
@@ -550,12 +558,13 @@ impl From<McpTransport> for bitrouter_mcp::Transport {
     }
 }
 
-impl From<McpBackend> for bitrouter_mcp::BackendKind {
-    fn from(b: McpBackend) -> Self {
-        match b {
-            McpBackend::Local => bitrouter_mcp::BackendKind::Local,
-            McpBackend::Cloud => bitrouter_mcp::BackendKind::Cloud,
-        }
+/// Map the completion backends onto the origin server's kind. `Fleet` is
+/// handled before this conversion (it runs a different server entirely).
+fn completion_backend(b: McpBackend) -> Option<bitrouter_mcp::BackendKind> {
+    match b {
+        McpBackend::Local => Some(bitrouter_mcp::BackendKind::Local),
+        McpBackend::Cloud => Some(bitrouter_mcp::BackendKind::Cloud),
+        McpBackend::Fleet => None,
     }
 }
 
@@ -1479,12 +1488,44 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             cloud_url,
             token,
             bind,
+            allow_writes,
         } => {
+            // The fleet bridge is a different server (subagent tools over the
+            // substrate), not a completion backend — and stdio-only: its
+            // tools mutate (spawn processes, write the repo), so they must
+            // inherit the orchestrator's process identity rather than ride
+            // the unauthenticated HTTP→local path.
+            if backend == Some(McpBackend::Fleet) {
+                if matches!(transport, McpTransport::Http) {
+                    anyhow::bail!(
+                        "the fleet backend is stdio-only (its tools mutate;                          HTTP has no local auth story yet)"
+                    );
+                }
+                let source = bitrouter::paths::resolve_config(None)?;
+                let cfg = bitrouter::paths::load_config(&source).await?;
+                let catalog = bitrouter_sdk::acp::ConfigAcpRoutingTable::from_configs(
+                    cfg.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
+                )
+                .context("building acp catalog from config.agents")?;
+                let base_repo = std::env::current_dir().context("resolving current directory")?;
+                return bitrouter::fleet_mcp::serve_stdio(
+                    catalog,
+                    base_repo,
+                    cfg.worktrees.clone(),
+                    allow_writes,
+                )
+                .await;
+            }
+            if allow_writes {
+                eprintln!("note: --allow-writes only applies to --backend fleet; ignored");
+            }
             let transport = bitrouter_mcp::Transport::from(transport);
-            let backend = backend.map(Into::into).unwrap_or(match transport {
-                bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
-                bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
-            });
+            let backend = backend
+                .and_then(completion_backend)
+                .unwrap_or(match transport {
+                    bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
+                    bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
+                });
             let cloud_token = token.or_else(|| std::env::var("BITROUTER_TOKEN").ok());
             if matches!(transport, bitrouter_mcp::Transport::Http) && cloud_token.is_some() {
                 eprintln!(

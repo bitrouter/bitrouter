@@ -6,7 +6,8 @@
 
 use std::collections::HashMap;
 
-use crate::tui::event::{AppEvent, DiffData, Effect, PermOption, Risk};
+use crate::risk::Risk;
+use crate::tui::event::{AppEvent, DiffData, Effect, PermOption};
 use agent_client_protocol::schema::v1::StopReason;
 use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus, UsageCost};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -154,6 +155,31 @@ pub enum DiffLine {
 /// Diffs beyond this size render as a placeholder instead of line-by-line
 /// (keeps a runaway rewrite from flooding the scrollback ring).
 const MAX_DIFF_BYTES: usize = 200 * 1024;
+
+/// How many times failing verification checks are looped back to the agent
+/// before the failure surfaces to the human.
+const CHECK_RETRY_CAP: u8 = 2;
+
+/// Render a unified diff (`git diff` output) into scrollback lines with the
+/// diff_render treatment: `+`/`-` rows tinted, hunk headers as gaps, file
+/// headers dimmed.
+pub fn unified_to_lines(text: &str) -> Vec<Line> {
+    text.lines()
+        .map(|l| {
+            if l.starts_with("@@") {
+                Line::Diff(DiffLine::Gap)
+            } else if l.starts_with("+++") || l.starts_with("---") || l.starts_with("diff --git") {
+                Line::Diff(DiffLine::Ctx(l.to_string()))
+            } else if let Some(rest) = l.strip_prefix('+') {
+                Line::Diff(DiffLine::Add(rest.to_string()))
+            } else if let Some(rest) = l.strip_prefix('-') {
+                Line::Diff(DiffLine::Del(rest.to_string()))
+            } else {
+                Line::Diff(DiffLine::Ctx(l.strip_prefix(' ').unwrap_or(l).to_string()))
+            }
+        })
+        .collect()
+}
 
 /// Render a structured diff into scrollback lines: a `path +N/-M` header, then
 /// hunks of added/deleted/context lines separated by `⋮` gaps.
@@ -329,6 +355,13 @@ pub struct PaneState {
     /// The fleet-allocated `PORT` for this agent's dev server, if any;
     /// shown in the roster row so N servers stay tellable apart.
     pub port: Option<u16>,
+    /// Ready to review (TUI_SPEC §7): the turn ended cleanly with a
+    /// non-empty worktree diff (`(files, adds, dels)`). Cleared by
+    /// merge/apply/reject or a new prompt.
+    pub review: Option<(u64, u64, u64)>,
+    /// How many times this turn's failing checks were looped back to the
+    /// agent (capped — then the failure surfaces to the human instead).
+    pub check_retries: u8,
 }
 
 impl PaneState {
@@ -354,6 +387,8 @@ impl PaneState {
             turn_active: false,
             last_stop: None,
             port: None,
+            review: None,
+            check_retries: 0,
         }
     }
 
@@ -490,14 +525,16 @@ impl PaneState {
     fn bucket(&self) -> u8 {
         if self.pending.is_some() {
             0 // needs you
+        } else if self.review.is_some() && !self.exited {
+            1 // ready to review (the rail head's second tier)
         } else if self.attention {
-            1 // something happened in the background
+            2 // something happened in the background
         } else if !self.exited && self.turn_active {
-            2 // working (a turn is in flight)
+            3 // working (a turn is in flight)
         } else if !self.exited {
-            3 // idle
+            4 // idle
         } else {
-            4 // dead
+            5 // dead
         }
     }
 }
@@ -735,6 +772,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             stop_reason,
         } => {
             let shown = state.is_shown(record_id);
+            let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 pane.flush_tail();
                 pane.turn_active = false;
@@ -746,6 +784,12 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         "turn ended: {}",
                         stop_label(stop_reason)
                     )));
+                } else {
+                    // Clean end: have the loop inspect the worktree (diff +
+                    // checks) — a non-empty diff feeds the review queue.
+                    effects.push(Effect::CheckReview {
+                        record_id: record_id.clone(),
+                    });
                 }
                 if !shown {
                     // A finished turn is exactly what the tower should
@@ -753,7 +797,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     pane.attention = true;
                 }
             }
-            Vec::new()
+            effects
         }
         AppEvent::Exited { record_id } => {
             let shown = state.is_shown(record_id);
@@ -849,6 +893,81 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 }
             }
             effects
+        }
+        AppEvent::ReviewReady {
+            record_id,
+            files,
+            adds,
+            dels,
+        } => {
+            let shown = state.is_shown(record_id);
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.review = Some((*files, *adds, *dels));
+                pane.push(Line::Note(format!(
+                    "ready to review: {files} file(s), +{adds}/-{dels}"
+                )));
+                if !shown {
+                    pane.attention = true; // glyph only — completions are calm
+                }
+            }
+            Vec::new()
+        }
+        AppEvent::ChecksFailed { record_id, output } => {
+            let shown = state.is_shown(record_id);
+            let mut effects = Vec::new();
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                if pane.check_retries < CHECK_RETRY_CAP {
+                    // A failing gate loops back to the subagent, not the human.
+                    pane.check_retries += 1;
+                    let retry = pane.check_retries;
+                    pane.push(Line::Note(format!(
+                        "checks failed — sent back to the agent (retry {retry}/{CHECK_RETRY_CAP})"
+                    )));
+                    pane.turn_active = true;
+                    effects.push(Effect::Prompt {
+                        record_id: record_id.clone(),
+                        text: format!(
+                            "The verification checks failed in your worktree. Fix the failures                              and make the checks pass.\n\nCheck output:\n{output}"
+                        ),
+                    });
+                } else {
+                    // Retries exhausted: the human decides.
+                    pane.review = Some((0, 0, 0));
+                    pane.push_external(Line::Error(format!(
+                        "checks still failing after {CHECK_RETRY_CAP} retries — review manually"
+                    )));
+                    if !shown {
+                        pane.attention = true;
+                        effects.push(Effect::Bell);
+                    }
+                }
+            }
+            effects
+        }
+        AppEvent::DiffLoaded { record_id, text } => {
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.flush_tail();
+                for line in unified_to_lines(text) {
+                    pane.push(line);
+                }
+            }
+            Vec::new()
+        }
+        AppEvent::OpDone {
+            record_id,
+            message,
+            ok,
+        } => {
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                if *ok {
+                    pane.review = None;
+                    pane.push_external(Line::Note(message.clone()));
+                } else {
+                    pane.push_external(Line::Error(message.clone()));
+                }
+            }
+            state.clamp_rail_cursor();
+            Vec::new()
         }
         AppEvent::Tick => {
             state.tick = state.tick.wrapping_add(1);
@@ -972,6 +1091,9 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if let Some(pane) = state.focused_mut() {
                 pane.push_external(Line::UserPrompt(text.clone()));
                 pane.turn_active = true;
+                // New work supersedes the previous turn's review state.
+                pane.review = None;
+                pane.check_retries = 0;
             }
             vec![Effect::Prompt {
                 record_id: focus_id,
@@ -1006,6 +1128,47 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         KeyCode::Char('q') => {
             state.queue_only = !state.queue_only;
             state.clamp_rail_cursor();
+            Vec::new()
+        }
+        // ── Review verbs (cursor agent has a ready-to-review diff). ──
+        // `D` loads the full diff into the pane (opened solo); `m` merges the
+        // branch (requires committed work); `p` applies the diff uncommitted;
+        // `r` rejects — feedback typed next becomes the agent's next prompt.
+        KeyCode::Char('D') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+            match state.rail_selected().map(|p| p.record_id.clone()) {
+                Some(id) => {
+                    state.detail = DetailLayout::solo(id.clone());
+                    clear_shown_attention(state);
+                    vec![Effect::LoadDiff { record_id: id }]
+                }
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Char('m') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+            match state.rail_selected().map(|p| p.record_id.clone()) {
+                Some(id) => vec![Effect::Merge { record_id: id }],
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Char('p') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+            match state.rail_selected().map(|p| p.record_id.clone()) {
+                Some(id) => vec![Effect::Apply { record_id: id }],
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Char('r') if state.rail_selected().is_some_and(|p| p.review.is_some()) => {
+            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
+                if let Some(pane) = state.pane_by_id_mut(&id) {
+                    pane.review = None;
+                }
+                state.detail = DetailLayout::solo(id);
+                clear_shown_attention(state);
+                state.clamp_rail_cursor();
+                state.mode = Mode::Normal;
+                state.notice = Some(
+                    "rejected — type feedback and Enter; it becomes the agent's next prompt".into(),
+                );
+            }
             Vec::new()
         }
         // Resolve the cursor agent's pending decision from the rail — the
@@ -1452,6 +1615,8 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 if p.selected {
                     p.push_external(Line::UserPrompt(text.clone()));
                     p.turn_active = true;
+                    p.review = None;
+                    p.check_retries = 0;
                     effects.push(Effect::Prompt {
                         record_id: p.record_id.clone(),
                         text: text.clone(),
@@ -1548,7 +1713,8 @@ fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::event::{AppEvent, Effect, PermOption, Risk};
+    use crate::risk::Risk;
+    use crate::tui::event::{AppEvent, Effect, PermOption};
     use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -2041,7 +2207,10 @@ mod tests {
                 stop_reason: StopReason::EndTurn,
             },
         );
-        assert!(fx.is_empty(), "completions are calm — no bell");
+        assert!(
+            !fx.contains(&Effect::Bell),
+            "completions are calm — no bell"
+        );
         assert!(st.agents[1].attention, "but the tower flags them");
     }
 
@@ -2847,6 +3016,218 @@ mod tests {
             },
         );
         assert_eq!(st.agents[1].port, Some(3101));
+    }
+
+    // ── Review queue (TUI_SPEC §7). ──
+
+    fn review_ready(record_id: &str) -> AppEvent {
+        AppEvent::ReviewReady {
+            record_id: record_id.into(),
+            files: 2,
+            adds: 10,
+            dels: 3,
+        }
+    }
+
+    #[test]
+    fn clean_turn_end_asks_the_loop_to_check_review() {
+        let mut st = AppState::new(pane());
+        let fx = reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "rec-1".into(),
+                stop_reason: StopReason::EndTurn,
+            },
+        );
+        assert_eq!(
+            fx,
+            vec![Effect::CheckReview {
+                record_id: "rec-1".into()
+            }]
+        );
+        // Abnormal ends don't feed the review queue.
+        let fx = reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "rec-1".into(),
+                stop_reason: StopReason::Cancelled,
+            },
+        );
+        assert!(fx.is_empty());
+    }
+
+    #[test]
+    fn review_ready_sets_state_and_sorts_to_rail_head() {
+        let mut st = agents3();
+        reduce(&mut st, &review_ready("r2"));
+        assert_eq!(st.agents[2].review, Some((2, 10, 3)));
+        assert!(matches!(
+            st.agents[2].lines.last(),
+            Some(Line::Note(n)) if n.contains("+10/-3")
+        ));
+        let order = st.roster();
+        assert_eq!(order[0], 2, "review outranks idle agents");
+        // But needs-you still outranks review.
+        reduce(&mut st, &perm("r1", "wants"));
+        assert_eq!(st.roster()[0], 1, "pending beats review");
+    }
+
+    #[test]
+    fn review_keys_emit_integration_effects() {
+        let mut st = agents3();
+        reduce(&mut st, &review_ready("r1"));
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0; // r1 tops the roster (review tier)
+
+        let fx = reduce(&mut st, &press(KeyCode::Char('m')));
+        assert_eq!(
+            fx,
+            vec![Effect::Merge {
+                record_id: "r1".into()
+            }]
+        );
+        let fx = reduce(&mut st, &press(KeyCode::Char('p')));
+        assert_eq!(
+            fx,
+            vec![Effect::Apply {
+                record_id: "r1".into()
+            }]
+        );
+        let fx = reduce(&mut st, &press(KeyCode::Char('D')));
+        assert_eq!(
+            fx,
+            vec![Effect::LoadDiff {
+                record_id: "r1".into()
+            }]
+        );
+        assert_eq!(
+            st.detail.shown,
+            vec!["r1".to_string()],
+            "D opens the pane so the diff is visible"
+        );
+    }
+
+    #[test]
+    fn review_keys_are_inert_without_review_state() {
+        let mut st = agents3();
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0;
+        for c in ['m', 'p', 'D'] {
+            let fx = reduce(&mut st, &press(KeyCode::Char(c)));
+            assert!(fx.is_empty(), "'{c}' without review state is a no-op");
+        }
+    }
+
+    #[test]
+    fn reject_clears_review_and_routes_feedback_as_next_prompt() {
+        let mut st = agents3();
+        reduce(&mut st, &review_ready("r1"));
+        st.mode = Mode::Agent;
+        st.rail_cursor = 0;
+        let fx = reduce(&mut st, &press(KeyCode::Char('r')));
+        assert!(fx.is_empty());
+        assert!(st.agents[1].review.is_none(), "review cleared");
+        assert_eq!(st.detail.shown, vec!["r1".to_string()], "pane opened");
+        assert_eq!(st.mode, Mode::Normal, "ready to type feedback");
+        assert!(st.notice.as_deref().is_some_and(|n| n.contains("feedback")));
+        // The typed feedback goes to the rejected agent as its next prompt.
+        st.input = "use a builder instead".into();
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(
+            fx,
+            vec![Effect::Prompt {
+                record_id: "r1".into(),
+                text: "use a builder instead".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn successful_op_clears_review_failed_op_keeps_it() {
+        let mut st = agents3();
+        reduce(&mut st, &review_ready("r1"));
+        reduce(
+            &mut st,
+            &AppEvent::OpDone {
+                record_id: "r1".into(),
+                message: "merge failed: dirty".into(),
+                ok: false,
+            },
+        );
+        assert!(
+            st.agents[1].review.is_some(),
+            "failed op keeps the queue item"
+        );
+        assert!(matches!(st.agents[1].lines.last(), Some(Line::Error(_))));
+        reduce(
+            &mut st,
+            &AppEvent::OpDone {
+                record_id: "r1".into(),
+                message: "merged bitrouter/a1-x".into(),
+                ok: true,
+            },
+        );
+        assert!(st.agents[1].review.is_none(), "merged — out of the queue");
+        assert!(matches!(st.agents[1].lines.last(), Some(Line::Note(_))));
+    }
+
+    #[test]
+    fn failing_checks_loop_back_to_the_agent_then_surface() {
+        let mut st = AppState::new(pane());
+        let fail = |st: &mut AppState| {
+            reduce(
+                st,
+                &AppEvent::ChecksFailed {
+                    record_id: "rec-1".into(),
+                    output: "test x failed".into(),
+                },
+            )
+        };
+        // First two failures: feedback goes back to the agent, not the human.
+        for retry in 1..=2u8 {
+            let fx = fail(&mut st);
+            assert_eq!(fx.len(), 1, "retry {retry} re-prompts the agent");
+            assert!(matches!(
+                &fx[0],
+                Effect::Prompt { record_id, text }
+                    if record_id == "rec-1" && text.contains("test x failed")
+            ));
+            assert!(st.agents[0].turn_active, "agent is working again");
+            assert!(st.agents[0].review.is_none());
+        }
+        // Third: retries exhausted — the human decides.
+        let fx = fail(&mut st);
+        assert!(
+            !fx.iter().any(|f| matches!(f, Effect::Prompt { .. })),
+            "no endless retry loop"
+        );
+        assert!(st.agents[0].review.is_some(), "surfaces for manual review");
+        assert!(matches!(
+            st.agents[0].lines.last(),
+            Some(Line::Error(e)) if e.contains("review manually")
+        ));
+    }
+
+    #[test]
+    fn new_prompt_supersedes_review_state() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &review_ready("rec-1"));
+        st.agents[0].check_retries = 2;
+        st.input = "keep going".into();
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert!(st.agents[0].review.is_none());
+        assert_eq!(st.agents[0].check_retries, 0);
+    }
+
+    #[test]
+    fn unified_diff_parses_into_diff_lines() {
+        let lines = unified_to_lines(
+            "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n ctx\n-old\n+new",
+        );
+        assert!(lines.contains(&Line::Diff(DiffLine::Add("new".into()))));
+        assert!(lines.contains(&Line::Diff(DiffLine::Del("old".into()))));
+        assert!(lines.contains(&Line::Diff(DiffLine::Gap)), "@@ → gap");
+        assert!(lines.contains(&Line::Diff(DiffLine::Ctx("ctx".into()))));
     }
 
     // ── Attention. ──

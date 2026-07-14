@@ -710,6 +710,12 @@ impl Session {
         self.transcript_path.as_deref()
     }
 
+    /// The worktree this session runs in, when one was provisioned. Fleet
+    /// managers use it for diff/review over the subagent's work.
+    pub fn worktree_path(&self) -> Option<&std::path::Path> {
+        self.worktree.as_deref()
+    }
+
     /// Record the unix socket this (warm) session accepts manager reattach on,
     /// so `bitrouter acp attach` / `acp sessions` can discover it. Cleared
     /// automatically at shutdown.

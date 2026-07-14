@@ -58,6 +58,8 @@ similar = { version = "2", optional = true }
 syntect = { version = "5", default-features = false, features = ["default-fancy"], optional = true }
 two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"], optional = true }
 jsonschema = { version = "0.47.0", default-features = false }
+rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
+schemars.workspace = true
 
 [features]
 default = ["tui"]

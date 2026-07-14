@@ -116,7 +116,12 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
             base_repo,
             tx,
         },
-        fleet: Fleet { ports, port_alloc },
+        fleet: Fleet {
+            ports,
+            port_alloc,
+            meta: HashMap::new(),
+            checks: cfg.worktrees.checks.clone(),
+        },
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
@@ -129,6 +134,19 @@ struct Fleet {
     ports: (u16, u16),
     /// record_id → allocated port; freed when the agent closes.
     port_alloc: HashMap<String, u16>,
+    /// record_id → integration metadata for worktree-isolated agents.
+    meta: HashMap<String, WorkMeta>,
+    /// Verification checks run in the worktree before "ready to review".
+    checks: Vec<String>,
+}
+
+/// Where a worktree-isolated agent's work lives, for diff/review/merge.
+#[derive(Clone)]
+struct WorkMeta {
+    worktree: std::path::PathBuf,
+    branch: String,
+    /// The base repo `HEAD` at spawn — the diff/merge base.
+    base_ref: String,
 }
 
 /// Lowest port in the inclusive pool not currently allocated; `None` when the
@@ -141,21 +159,6 @@ fn alloc_port(range: (u16, u16), allocated: &HashMap<String, u16>) -> Option<u16
 fn port_env(port: Option<u16>) -> Vec<(String, String)> {
     port.map(|p| vec![("PORT".to_string(), p.to_string())])
         .unwrap_or_default()
-}
-
-/// Branch-safe agent tag for worktree/branch naming: keep `[A-Za-z0-9._]`,
-/// everything else becomes `-`.
-fn branch_tag(agent_id: &str) -> String {
-    agent_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
 }
 
 /// Terse harness tag for a pane header: the basename of the agent command
@@ -320,7 +323,7 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
                     title: p.tool_call.fields.title.clone().unwrap_or_default(),
                     diff: perm_diff(&p),
                     options: perm_options(&p),
-                    risk: classify_risk(&p.tool_call.fields, &rt.spawner.base_repo),
+                    risk: crate::risk::classify(&p.tool_call.fields, &rt.spawner.base_repo),
                 };
                 rt.pending.insert(record_id, *p);
                 Some(ev)
@@ -340,6 +343,21 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
         Incoming::PromptFailed { record_id, error } => {
             Some(AppEvent::PromptFailed { record_id, error })
         }
+        Incoming::ReviewReady {
+            record_id,
+            files,
+            adds,
+            dels,
+        } => Some(AppEvent::ReviewReady {
+            record_id,
+            files,
+            adds,
+            dels,
+        }),
+        Incoming::ChecksFailed { record_id, output } => {
+            Some(AppEvent::ChecksFailed { record_id, output })
+        }
+        Incoming::DiffLoaded { record_id, text } => Some(AppEvent::DiffLoaded { record_id, text }),
     }
 }
 
@@ -399,7 +417,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             // a PORT from the pool, and — when the human approved it — the
             // bootstrap hook. Worktrees are retained on close: cleanup is
             // gated on merged-or-discarded, never automatic.
-            let tag = branch_tag(&agent_id);
+            let tag = crate::fleet_mcp::branch_tag(&agent_id);
             let port = alloc_port(rt.fleet.ports, &rt.fleet.port_alloc);
             let options = bitrouter_substrate::engine::LaunchOptions {
                 worktree: Some(bitrouter_substrate::worktree::WorktreeSpec {
@@ -424,6 +442,26 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             {
                 Ok(sess) => {
                     let rid = sess.state().record_id.clone();
+                    // Integration metadata: where the work lives, on which
+                    // branch, against which base — feeds the review queue.
+                    if let Some(wt) = sess.worktree_path() {
+                        let handle: String = rid.chars().filter(|c| *c != '-').take(16).collect();
+                        let base_ref = crate::fleet_mcp::git_stdout(
+                            &rt.spawner.base_repo,
+                            &["rev-parse", "HEAD"],
+                        )
+                        .await
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
+                        rt.fleet.meta.insert(
+                            rid.clone(),
+                            WorkMeta {
+                                worktree: wt.to_path_buf(),
+                                branch: format!("bitrouter/{tag}-{handle}"),
+                                base_ref,
+                            },
+                        );
+                    }
                     let sess = Arc::new(sess);
                     rt.sessions.insert(rid.clone(), Arc::clone(&sess));
                     if let Some(p) = port {
@@ -453,6 +491,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         Effect::CloseAgent { record_id } => {
             rt.pending.remove(&record_id);
             rt.fleet.port_alloc.remove(&record_id);
+            rt.fleet.meta.remove(&record_id);
             if let Some(handles) = rt.prompt_tasks.remove(&record_id) {
                 for handle in handles {
                     handle.abort();
@@ -463,7 +502,162 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 shutdown_session(sess).await;
             }
         }
+        Effect::CheckReview { record_id } => {
+            // Inspect the worktree in the background (checks may run tests);
+            // results come back as ReviewReady / ChecksFailed.
+            let Some(meta) = rt.fleet.meta.get(&record_id).cloned() else {
+                return; // no worktree — nothing to review
+            };
+            let checks = rt.fleet.checks.clone();
+            let tx = rt.spawner.tx.clone();
+            tokio::spawn(async move {
+                let incoming = inspect_worktree(&record_id, &meta, &checks).await;
+                if let Some(incoming) = incoming {
+                    let _ = tx.send(incoming);
+                }
+            });
+        }
+        Effect::LoadDiff { record_id } => {
+            let Some(meta) = rt.fleet.meta.get(&record_id).cloned() else {
+                state.notice = Some("no worktree to diff (agent runs in the base repo)".into());
+                return;
+            };
+            let tx = rt.spawner.tx.clone();
+            tokio::spawn(async move {
+                let text =
+                    match crate::fleet_mcp::git_stdout(&meta.worktree, &["diff", &meta.base_ref])
+                        .await
+                    {
+                        Ok(t) if t.trim().is_empty() => {
+                            "(no changes vs the spawn base)".to_string()
+                        }
+                        Ok(t) => t,
+                        Err(e) => format!("diff failed: {e:#}"),
+                    };
+                let _ = tx.send(Incoming::DiffLoaded { record_id, text });
+            });
+        }
+        Effect::Merge { record_id } => {
+            // Serialized integration: awaited inline, so one merge lands at a
+            // time (merge-queue semantics).
+            let Some(meta) = rt.fleet.meta.get(&record_id).cloned() else {
+                state.notice = Some("no worktree to merge".into());
+                return;
+            };
+            let result = merge_worktree(&rt.spawner.base_repo, &meta).await;
+            let (message, ok) = match result {
+                Ok(()) => (format!("merged {}", meta.branch), true),
+                Err(e) => (format!("merge failed: {e:#}"), false),
+            };
+            let _ = reduce(
+                state,
+                &AppEvent::OpDone {
+                    record_id,
+                    message,
+                    ok,
+                },
+            );
+        }
+        Effect::Apply { record_id } => {
+            let Some(meta) = rt.fleet.meta.get(&record_id).cloned() else {
+                state.notice = Some("no worktree to apply from".into());
+                return;
+            };
+            let result = apply_worktree(&rt.spawner.base_repo, &meta).await;
+            let (message, ok) = match result {
+                Ok(()) => (
+                    "applied to the base working tree (uncommitted — you write the commit)"
+                        .to_string(),
+                    true,
+                ),
+                Err(e) => (format!("apply failed: {e:#}"), false),
+            };
+            let _ = reduce(
+                state,
+                &AppEvent::OpDone {
+                    record_id,
+                    message,
+                    ok,
+                },
+            );
+        }
     }
+}
+
+/// Diff-stat the worktree and run the verification checks; `None` when the
+/// diff is empty (nothing to review).
+async fn inspect_worktree(record_id: &str, meta: &WorkMeta, checks: &[String]) -> Option<Incoming> {
+    let stat = crate::fleet_mcp::diff_stat(&meta.worktree, &meta.base_ref).await?;
+    let files = stat["files"].as_u64().unwrap_or(0);
+    if files == 0 {
+        return None; // no work — stays idle, not review
+    }
+    // Per-worker verification gates: a failing check loops back to the agent.
+    for check in checks {
+        let out = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(check)
+            .current_dir(&meta.worktree)
+            .output()
+            .await;
+        match out {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let mut text = format!(
+                    "$ {check}
+"
+                );
+                text.push_str(&String::from_utf8_lossy(&out.stdout));
+                text.push_str(&String::from_utf8_lossy(&out.stderr));
+                // Keep the tail — that's where test failures summarize.
+                if text.len() > 4000 {
+                    text = format!("…{}", &text[text.len() - 4000..]);
+                }
+                return Some(Incoming::ChecksFailed {
+                    record_id: record_id.to_string(),
+                    output: text,
+                });
+            }
+            Err(e) => {
+                return Some(Incoming::ChecksFailed {
+                    record_id: record_id.to_string(),
+                    output: format!(
+                        "$ {check}
+failed to run: {e}"
+                    ),
+                });
+            }
+        }
+    }
+    Some(Incoming::ReviewReady {
+        record_id: record_id.to_string(),
+        files,
+        adds: stat["adds"].as_u64().unwrap_or(0),
+        dels: stat["dels"].as_u64().unwrap_or(0),
+    })
+}
+
+/// Merge the agent's branch into the base repo, keeping history. Requires the
+/// agent to have committed its work (a dirty worktree fails with guidance).
+async fn merge_worktree(base_repo: &std::path::Path, meta: &WorkMeta) -> Result<()> {
+    let dirty = crate::fleet_mcp::git_stdout(&meta.worktree, &["status", "--porcelain"]).await?;
+    if !dirty.trim().is_empty() {
+        anyhow::bail!(
+            "the worktree has uncommitted changes — ask the agent to commit, or use p (apply)"
+        );
+    }
+    let msg = format!("merge {}", meta.branch);
+    crate::fleet_mcp::git_ok(base_repo, &["merge", "--no-ff", "-m", &msg, &meta.branch]).await
+}
+
+/// Apply the agent's diff onto the base working tree, uncommitted.
+async fn apply_worktree(base_repo: &std::path::Path, meta: &WorkMeta) -> Result<()> {
+    let patch =
+        crate::fleet_mcp::git_stdout(&meta.worktree, &["diff", "--binary", &meta.base_ref]).await?;
+    if patch.trim().is_empty() {
+        anyhow::bail!("nothing to apply: the diff vs the spawn base is empty");
+    }
+    crate::fleet_mcp::git_apply(base_repo, &patch).await
 }
 
 /// Abort and await every in-flight prompt task (across all sessions) so their
@@ -502,36 +696,6 @@ async fn shutdown_session(sess: Arc<Session>) {
         Err(_) => {
             tracing::warn!("session still referenced at teardown; worktree may leak");
         }
-    }
-}
-
-/// Deterministic risk classification from the tool call's structured fields.
-/// Conservative: only reads/searches and writes provably confined to the
-/// project tree (`workroot`, which also contains `.bitrouter/worktrees/`)
-/// classify Low; deletes, command execution, network access, unknown kinds,
-/// and unverifiable writes are High. (Spend-based classification needs
-/// metering data that isn't available at permission time.)
-fn classify_risk(
-    fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
-    workroot: &std::path::Path,
-) -> crate::tui::event::Risk {
-    use crate::tui::event::Risk;
-    use agent_client_protocol::schema::v1::ToolKind;
-    match fields.kind {
-        Some(ToolKind::Read | ToolKind::Search | ToolKind::Think | ToolKind::SwitchMode) => {
-            Risk::Low
-        }
-        Some(ToolKind::Edit | ToolKind::Move) => {
-            let locations = fields.locations.as_deref().unwrap_or(&[]);
-            if !locations.is_empty() && locations.iter().all(|l| l.path.starts_with(workroot)) {
-                Risk::Low
-            } else {
-                // Outside the tree, or no locations to verify against.
-                Risk::High
-            }
-        }
-        // Delete, Execute (arbitrary commands), Fetch (network), Other/None.
-        _ => Risk::High,
     }
 }
 
@@ -587,78 +751,6 @@ fn quit_key() -> crossterm::event::KeyEvent {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use crate::tui::event::Risk;
-    use agent_client_protocol::schema::v1::{ToolCallLocation, ToolCallUpdateFields, ToolKind};
-
-    fn fields(kind: Option<ToolKind>, paths: &[&str]) -> ToolCallUpdateFields {
-        let locations: Vec<ToolCallLocation> =
-            paths.iter().map(|p| ToolCallLocation::new(*p)).collect();
-        ToolCallUpdateFields::new().kind(kind).locations(locations)
-    }
-
-    #[test]
-    fn classify_risk_is_deterministic_over_kind_and_paths() {
-        let root = std::path::Path::new("/repo");
-        // Reads/searches: low regardless of location.
-        for kind in [ToolKind::Read, ToolKind::Search, ToolKind::Think] {
-            assert_eq!(
-                super::classify_risk(&fields(Some(kind), &["/etc/passwd"]), root),
-                Risk::Low,
-                "{kind:?} is low"
-            );
-        }
-        // Writes inside the tree (including bitrouter worktrees): low.
-        assert_eq!(
-            super::classify_risk(
-                &fields(
-                    Some(ToolKind::Edit),
-                    &["/repo/src/x.rs", "/repo/.bitrouter/worktrees/w1/y.rs"]
-                ),
-                root
-            ),
-            Risk::Low
-        );
-        // Writes outside the tree: high.
-        assert_eq!(
-            super::classify_risk(
-                &fields(Some(ToolKind::Edit), &["/home/user/.ssh/config"]),
-                root
-            ),
-            Risk::High
-        );
-        // One outside path taints the whole request.
-        assert_eq!(
-            super::classify_risk(
-                &fields(Some(ToolKind::Edit), &["/repo/src/x.rs", "/tmp/out"]),
-                root
-            ),
-            Risk::High
-        );
-        // A write with no locations is unverifiable: high.
-        assert_eq!(
-            super::classify_risk(&fields(Some(ToolKind::Edit), &[]), root),
-            Risk::High
-        );
-        // Deletes, execution, network, unknown: high.
-        for kind in [
-            ToolKind::Delete,
-            ToolKind::Execute,
-            ToolKind::Fetch,
-            ToolKind::Other,
-        ] {
-            assert_eq!(
-                super::classify_risk(&fields(Some(kind), &["/repo/src/x.rs"]), root),
-                Risk::High,
-                "{kind:?} is high"
-            );
-        }
-        assert_eq!(
-            super::classify_risk(&fields(None, &["/repo/src/x.rs"]), root),
-            Risk::High,
-            "missing kind is high"
-        );
-    }
-
     #[test]
     fn alloc_port_takes_lowest_free_and_exhausts_cleanly() {
         let mut allocated = std::collections::HashMap::new();
@@ -674,13 +766,6 @@ mod tests {
         // Closing an agent frees its port for the next spawn.
         allocated.remove("r0");
         assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3100));
-    }
-
-    #[test]
-    fn branch_tag_sanitizes_for_git_ref_names() {
-        assert_eq!(super::branch_tag("claude-acp"), "claude-acp");
-        assert_eq!(super::branch_tag("my agent/v2"), "my-agent-v2");
-        assert_eq!(super::branch_tag("gpt_4.1"), "gpt_4.1");
     }
 
     #[tokio::test]

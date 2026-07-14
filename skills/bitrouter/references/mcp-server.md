@@ -18,7 +18,8 @@ Starts the origin MCP server.
 | Flag | Default | Description |
 |---|---|---|
 | `--transport` | `stdio` | `stdio` or `http` |
-| `--backend` | *(derived)* | `local` or `cloud`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud` |
+| `--backend` | *(derived)* | `local`, `cloud`, or `fleet`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` runs a different tool set — subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`) — and is **stdio-only** |
+| `--allow-writes` | off | (`fleet` only) grant the orchestrator write autonomy: `apply_subagent`/`merge_subagent` may integrate into the base repo. Off = writes are human-gated |
 | `--local-url` | `http://127.0.0.1:4356` | Root URL of the local BitRouter daemon |
 | `--cloud-url` | `https://api.bitrouter.ai` | Root URL of BitRouter Cloud |
 | `--token` | *(env fallback)* | Cloud bearer token for **stdio→cloud only**; falls back to `BITROUTER_TOKEN` env var. Ignored when `--transport http` (multi-tenant PerCaller mode). |
@@ -38,6 +39,10 @@ bitrouter mcp serve --transport http
 
 # HTTP — local backend override (no auth middleware)
 bitrouter mcp serve --transport http --backend local --local-url http://127.0.0.1:4356
+
+# stdio — fleet bridge: subagent spawn/manage tools for an orchestrating harness
+bitrouter mcp serve --backend fleet            # writes human-gated
+bitrouter mcp serve --backend fleet --allow-writes
 ```
 
 ### `bitrouter mcp install`

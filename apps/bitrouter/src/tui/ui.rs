@@ -157,6 +157,7 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
             ("Tab / ← / → / 1-4", "switch detail slot"),
             ("q", "queue focus (needs-you only)"),
             ("y / a / d", "resolve cursor pending"),
+            ("D / m / p / r", "review: diff · merge · apply · reject"),
             ("A", "cycle autonomy tier"),
             ("n", "new agent"),
             ("x", "close cursor agent"),
@@ -209,6 +210,8 @@ fn tint(no_color: bool, color: Color) -> Style {
 fn state_glyph(pane: &PaneState, tick: u64) -> (&'static str, Color) {
     if pane.pending.is_some() {
         ("⚠", Color::Red) // needs you
+    } else if pane.review.is_some() && !pane.exited {
+        ("◆", Color::Blue) // ready to review
     } else if pane.attention {
         ("●", Color::Yellow) // happened in the background
     } else if !pane.exited && pane.turn_active {
@@ -274,10 +277,10 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         // the cursor row in AGENT mode) the resolve keys.
         if let Some(pending) = &pane.pending {
             let risk_span = match pending.risk {
-                crate::tui::event::Risk::High => {
+                crate::risk::Risk::High => {
                     Span::styled("high · ", tint(nc, Color::Red).add_modifier(Modifier::BOLD))
                 }
-                crate::tui::event::Risk::Low => Span::styled("low · ", tint(nc, Color::DarkGray)),
+                crate::risk::Risk::Low => Span::styled("low · ", tint(nc, Color::DarkGray)),
             };
             // Keys first, then risk, then the (clippable) title — on a narrow
             // rail the actionable part must survive truncation.
@@ -290,6 +293,24 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             }
             detail.push(risk_span);
             detail.push(Span::styled(pending.title.clone(), tint(nc, Color::Red)));
+            lines.push(TuiLine::from(detail));
+        } else if let Some((files, adds, dels)) = pane.review {
+            // Ready-to-review rows expand with the diff stat and (on the
+            // cursor row in AGENT mode) the integration keys.
+            let mut detail = vec![Span::raw(" └ ")];
+            if at_cursor && state.mode == Mode::Agent {
+                detail.push(Span::styled(
+                    "m·p·D·r ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+            }
+            detail.push(Span::styled(
+                format!("review · {files}f "),
+                tint(nc, Color::Blue),
+            ));
+            detail.push(Span::styled(format!("+{adds}"), tint(nc, Color::Green)));
+            detail.push(Span::raw("/"));
+            detail.push(Span::styled(format!("-{dels}"), tint(nc, Color::Red)));
             lines.push(TuiLine::from(detail));
         }
     }
@@ -586,7 +607,7 @@ fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
         Mode::Normal => "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c quit",
         Mode::Agent => {
-            "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · A tier · n new · x close · ? keys · Esc"
+            "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · A tier · n new · x close · ? keys · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
@@ -718,7 +739,7 @@ mod tests {
             title: "WRITE".into(),
             diff: None,
             options: vec![],
-            risk: crate::tui::event::Risk::High,
+            risk: crate::risk::Risk::High,
         });
         // Show r2's pane so the permission popup doesn't cover the rail.
         st.detail = DetailLayout {
@@ -878,7 +899,7 @@ mod tests {
             title: "rm -rf".into(),
             diff: None,
             options: vec![],
-            risk: crate::tui::event::Risk::High,
+            risk: crate::risk::Risk::High,
         });
         st.mode = Mode::Agent;
         st.rail_cursor = 0; // r1 tops the roster
@@ -895,7 +916,7 @@ mod tests {
             title: "wants".into(),
             diff: None,
             options: vec![],
-            risk: crate::tui::event::Risk::High,
+            risk: crate::risk::Risk::High,
         });
         st.agents[2].autonomy = crate::tui::state::Autonomy::Auto;
         let text = draw(&mut st, 80, 24);
@@ -1111,7 +1132,7 @@ mod tests {
                 outcome: PermissionOutcome::AllowOnce,
                 label: "allow".into(),
             }],
-            risk: crate::tui::event::Risk::High,
+            risk: crate::risk::Risk::High,
         });
         st.agents[1].attention = true;
         st.mode = Mode::Picker;

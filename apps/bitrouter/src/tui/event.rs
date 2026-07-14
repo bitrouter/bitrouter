@@ -6,6 +6,7 @@
 //! message the loop receives (it may carry non-pure handles); the loop converts
 //! each `Incoming` into an `AppEvent` before reducing.
 
+use crate::risk::Risk;
 use agent_client_protocol::schema::v1::StopReason;
 use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind};
 use bitrouter_substrate::up::PendingPermission;
@@ -25,18 +26,6 @@ pub struct DiffData {
     pub path: String,
     pub old: String,
     pub new: String,
-}
-
-/// Deterministic risk classification of a permission request, computed by the
-/// loop from the tool call's structured fields (kind + locations). The reducer
-/// combines it with the pane's autonomy level to decide surface vs auto-allow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Risk {
-    /// Reads/searches and writes confined to the project tree.
-    Low,
-    /// Deletes, command execution, network access, writes outside the project
-    /// tree, or anything unclassifiable (conservative default).
-    High,
 }
 
 /// Pure event the reducer folds into `AppState`.
@@ -79,6 +68,27 @@ pub enum AppEvent {
     /// A submitted prompt failed to reach the agent; surface it in the pane
     /// (otherwise a dead proxy/agent looks like a silent hang).
     PromptFailed { record_id: String, error: String },
+    /// The loop checked a finished turn's worktree: non-empty diff (and
+    /// passing checks) — the agent is ready to review.
+    ReviewReady {
+        record_id: String,
+        files: u64,
+        adds: u64,
+        dels: u64,
+    },
+    /// The configured verification checks failed in the agent's worktree.
+    /// The failure loops back to the subagent (not the human) while retries
+    /// remain; then it surfaces for review with a warning.
+    ChecksFailed { record_id: String, output: String },
+    /// The agent's full worktree diff, loaded for in-pane review (`D`).
+    DiffLoaded { record_id: String, text: String },
+    /// A loop-side git operation (merge/apply) finished; surface the outcome
+    /// in the pane. Success clears the review flag.
+    OpDone {
+        record_id: String,
+        message: String,
+        ok: bool,
+    },
     /// Periodic UI tick (drives the running-agent spinner animation).
     Tick,
 }
@@ -101,6 +111,16 @@ pub enum Effect {
     SpawnAgent { agent_id: String },
     /// Shut down and remove the session `record_id`.
     CloseAgent { record_id: String },
+    /// A turn ended cleanly: inspect the agent's worktree (diff + checks) and
+    /// report back with `ReviewReady`/`ChecksFailed`.
+    CheckReview { record_id: String },
+    /// Load the agent's full worktree diff for in-pane review.
+    LoadDiff { record_id: String },
+    /// Merge the agent's branch into the base repo (human-driven; requires
+    /// committed work). Serialized: the loop runs one integration at a time.
+    Merge { record_id: String },
+    /// Apply the agent's diff onto the base working tree, uncommitted.
+    Apply { record_id: String },
 }
 
 /// The channel message the loop receives. Carries the real `PendingPermission`
@@ -124,5 +144,19 @@ pub enum Incoming {
     PromptFailed {
         record_id: String,
         error: String,
+    },
+    ReviewReady {
+        record_id: String,
+        files: u64,
+        adds: u64,
+        dels: u64,
+    },
+    ChecksFailed {
+        record_id: String,
+        output: String,
+    },
+    DiffLoaded {
+        record_id: String,
+        text: String,
     },
 }

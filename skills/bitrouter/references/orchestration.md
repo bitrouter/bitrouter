@@ -1,0 +1,75 @@
+# Orchestrating a subagent fleet
+
+How an orchestrating agent (you) delegates work to BitRouter-managed,
+worktree-isolated ACP subagents — and when not to.
+
+## The fabric
+
+```
+you (orchestrator, native harness)
+ └─ MCP: bitrouter mcp serve --backend fleet     ← stdio subprocess
+     ├─ subagent codex-acp   (.bitrouter/worktrees/codex-acp-<record16>)
+     ├─ subagent claude-acp  (.bitrouter/worktrees/claude-acp-<record16>)
+     └─ …
+```
+
+Wire the bridge into your harness's MCP config as a **stdio** server:
+
+```json
+{ "mcpServers": { "bitrouter-fleet": {
+    "command": "bitrouter", "args": ["mcp", "serve", "--backend", "fleet"] } } }
+```
+
+It is stdio-only by design — the tools mutate (spawn processes, write the
+repo), so they inherit your process identity instead of an unauthenticated
+HTTP path. Run `bitrouter serve` alongside so subagents' LLM calls route
+through the proxy.
+
+## Tools
+
+| Tool | Effect |
+|---|---|
+| `spawn_subagent(agent, task, worktree?, result_schema?)` | Launch an ACP subagent on an isolated worktree + branch (`bitrouter/<agent>-<record16>`, based on the repo's HEAD at spawn), send `task`, **block until the turn ends**. Returns `{handle, agent, state, stop_reason, reply, worktree, branch, port, diff_stat}` — plus `result`/`schema_ok` when `result_schema` (a JSON Schema object) was given (one repair re-prompt on invalid output, then `schema_ok:false`). `worktree:false` opts out for read-only investigation. |
+| `prompt_subagent(handle, text)` | Follow-up prompt (e.g. review feedback); same blocking summary. |
+| `subagent_status(handle?)` | One agent or the whole fleet: state (`working`/`completed`/`failed`), worktree, branch, diff stat. |
+| `subagent_diff(handle)` | Full diff vs the spawn base (committed + uncommitted; untracked files listed; truncated at 64 KiB). |
+| `apply_subagent(handle)` | Apply the diff onto the base working tree **uncommitted**. **Human-gated** — see below. |
+| `merge_subagent(handle)` | Merge the branch, keeping history; requires the subagent to have committed (clean worktree). Serialized: one integration at a time. **Human-gated.** |
+| `close_subagent(handle)` | Shut the subagent down. Its worktree is **retained** (cleanup is gated on merged-or-discarded, never automatic). |
+
+## Rules of engagement
+
+- **Delegate, don't relay.** Spawn for tasks that are isolated and
+  non-overlapping (a refactor in one crate, a test-fix sweep, a doc pass).
+  Do small or tightly-coupled edits yourself — coding parallelizes worse
+  than research, and a disciplined review gate beats a fancy scheduler.
+- **Phrase tasks with boundaries and an output contract.** Name the files or
+  subsystem in scope, say what "done" means, and — when you need structured
+  data back — pass `result_schema` instead of parsing prose.
+- **Depth 1.** Subagents do not spawn subagents.
+- **Review before integrating.** Read `subagent_diff` (or have the human
+  review in `bitrouter tui`). Rejection loop: `prompt_subagent` with your
+  feedback — the subagent addresses it in the same worktree.
+- **Writes are human-gated by default.** `apply_subagent`/`merge_subagent`
+  refuse unless the human started the bridge with `--allow-writes`. Without
+  the grant, *request* integration: tell the human which handle is ready and
+  let them merge from the `bitrouter tui` review queue (or rerun the bridge
+  with the grant). Never ask for the grant on the human's behalf.
+- **Permissions are auto-policied.** A subagent's reversible, in-worktree
+  actions (reads, searches, edits under the repo) auto-allow; deletes,
+  command execution, network access, and out-of-tree writes are **denied**
+  (there is no human in this loop). Every decision is logged to stderr. If a
+  task genuinely needs command execution, run it under the human-supervised
+  `bitrouter tui` instead.
+- **Worktree hygiene.** Each subagent gets a `PORT` from `worktrees.ports`
+  (default 3100–3199) and the `worktrees.bootstrap` hook runs in each fresh
+  worktree (config-declared; it executes shell). Closed subagents leave
+  their worktrees behind — tell the human what is merged and what can be
+  discarded (`git worktree remove`).
+
+## Headless one-shots (no bridge)
+
+For a fire-and-forget subagent without the MCP bridge:
+`bitrouter spawn <agent> -p "<task>" [--worktree NAME] [--result-schema JSON|@path]`
+streams NDJSON and exits — see `references/cli.md` (NDJSON format + result
+contract).

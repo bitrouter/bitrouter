@@ -136,6 +136,11 @@ pub struct WorktreesConfig {
     /// Port pool for per-subagent `PORT` allocation, so N dev servers don't
     /// collide. Defaults to 3100–3199.
     pub ports: PortPoolConfig,
+    /// Verification checks (shell commands, run in the subagent's worktree)
+    /// that must pass before its finished turn is "ready to review". A
+    /// failing check loops back to the subagent, not the human. Empty by
+    /// default.
+    pub checks: Vec<String>,
 }
 
 /// An inclusive port range fleet-managed subagents draw their `PORT` from.

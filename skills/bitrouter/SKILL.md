@@ -184,6 +184,7 @@ Read these on demand — don't load them all upfront.
 | `references/harness-openclaw.md` | Wiring OpenClaw |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 | `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
+| `references/orchestration.md` | Fleet orchestration — the `mcp serve --backend fleet` stdio bridge, spawn/prompt/status/diff/apply/merge/close tools, human-gated writes, task-phrasing rules |
 | `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt\|sessions`, NDJSON format, worktree retention, session records, one-agent-per-session, turn queue, identity, v1 limits |
 
 ## 7. Gotchas
