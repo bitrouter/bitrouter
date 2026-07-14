@@ -47,16 +47,14 @@ In short, Cloud adds a managed provider network ([Managed Models](/docs/get-star
 
 ## Comparison
 
-BitRouter and the gateways below all route LLM traffic. The difference is *what* they route and *what* they optimize — BitRouter is the only one that treats **models, tools, and agents as a single routable surface** and optimizes the whole production **loop** by cost.
+BitRouter and the gateways below all route LLM traffic. The difference is *what* they route and *what* they optimize — BitRouter is the only one that treats **models, tools, and agents as a single routable surface** and optimizes the whole production **loop** (cost today, multi-objective by design).
 
 |  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Best for** | Cost-optimizing agent loops | Model marketplace | Unifying provider SDKs | Model optimization | Fast unified gateway | Fast unified gateway |
 | **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
-| **Optimizes** | The **loop**, by cost | Static routing | Static routing | The model | Static routing | Static routing |
-| **Model catalog** | Curated + bring any provider | **1,600+ marketplace** | Any provider | Curated | **1,600+** | 23+ providers |
+| **Optimizes** | The **loop**, multi-objective (cost today) | Static routing | Static routing | The model | Static routing | Static routing |
 
-_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust. TensorZero is no longer maintained._
+_All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust._
 
 ### How is BitRouter different from OpenRouter?
 
@@ -72,4 +70,4 @@ Generic gateways treat LLMs as just another upstream API — logging, caching, r
 
 ### How is BitRouter different from TensorZero?
 
-TensorZero (Rust) optimizes **the model itself** — prompts, weights, selection. BitRouter optimizes **the whole loop** by cost, across models, tools, and sub-agents (MCP + ACP). TensorZero is also no longer maintained.
+TensorZero (Rust) optimizes **the model itself** — prompts, weights, selection. BitRouter optimizes **the whole loop** — across models, tools, and sub-agents (MCP + ACP) — cost today, with latency and accuracy next.
