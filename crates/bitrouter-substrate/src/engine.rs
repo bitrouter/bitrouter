@@ -121,6 +121,10 @@ struct BuildArgs {
     /// provisioning, so `{record16}` naming can derive from it).
     record_id: String,
     worktree_path: Option<PathBuf>,
+    /// Branch checked out in the worktree at provisioning, when known.
+    worktree_branch: Option<String>,
+    /// Base-repo `HEAD` a newly created worktree branch was cut from.
+    worktree_base_ref: Option<String>,
     remove_worktree_on_shutdown: bool,
     /// Extra environment overlaid on the transport's `env` for the child.
     env: Vec<(String, String)>,
@@ -262,6 +266,8 @@ impl Session {
             None => None,
         };
         let worktree_path = provisioned.as_ref().map(|p| p.path.clone());
+        let worktree_branch = provisioned.as_ref().and_then(|p| p.branch.clone());
+        let worktree_base_ref = provisioned.as_ref().and_then(|p| p.base_ref.clone());
         // Removal is honored only for a worktree this session newly created; a
         // reused (pre-existing) worktree is never removed by the session.
         let newly_created = provisioned.as_ref().is_some_and(|p| p.newly_created);
@@ -287,6 +293,8 @@ impl Session {
                     base_repo: base_repo.clone(),
                     record_id,
                     worktree_path: worktree_path.clone(),
+                    worktree_branch,
+                    worktree_base_ref,
                     remove_worktree_on_shutdown: remove_on_shutdown,
                     env,
                     transcript,
@@ -363,6 +371,8 @@ impl Session {
             base_repo,
             record_id,
             worktree_path,
+            worktree_branch,
+            worktree_base_ref,
             remove_worktree_on_shutdown,
             env: extra_env,
             transcript,
@@ -558,6 +568,8 @@ impl Session {
             acp_session_id: state.acp_session_id.clone(),
             agent_session_id: state.agent_session_id.clone(),
             worktree: worktree_path.clone(),
+            branch: worktree_branch,
+            base_ref: worktree_base_ref,
             pid: std::process::id(),
             socket: None,
             started_at: now_unix(),

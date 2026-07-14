@@ -32,6 +32,14 @@ pub struct ProvisionedWorktree {
     /// reused instead of created. Reused worktrees are never removed by the
     /// session (neither on launch failure nor at shutdown).
     pub newly_created: bool,
+    /// The branch checked out in the worktree, when it could be determined
+    /// (queried from the worktree itself on reuse, so a reused tree that
+    /// moved branches reports the truth).
+    pub branch: Option<String>,
+    /// The base repo `HEAD` commit a **newly created** branch was cut from.
+    /// `None` when an existing branch or worktree was attached — its true
+    /// base is not knowable at provisioning time.
+    pub base_ref: Option<String>,
 }
 
 /// Creates/removes git worktrees rooted at the session's base repo.
@@ -70,9 +78,14 @@ impl WorktreeManager {
             // A registered worktree carries a `.git` link file; anything else
             // at the path is unexpected and must not be silently adopted.
             if path.join(".git").exists() {
+                // Report the branch the reused tree is actually on — it may
+                // have moved since it was provisioned.
+                let branch = git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
                 return Ok(ProvisionedWorktree {
                     path,
                     newly_created: false,
+                    branch,
+                    base_ref: None,
                 });
             }
             anyhow::bail!(
@@ -89,6 +102,13 @@ impl WorktreeManager {
             .await
             .context("spawning `git rev-parse`")?
             .success();
+        // A new branch is cut from the current HEAD — capture it now so the
+        // session record can persist the diff/merge base durably.
+        let base_ref = if branch_exists {
+            None
+        } else {
+            git_stdout(&self.base_repo, &["rev-parse", "HEAD"]).await
+        };
 
         let mut cmd = tokio::process::Command::new("git");
         cmd.current_dir(&self.base_repo)
@@ -108,6 +128,8 @@ impl WorktreeManager {
         Ok(ProvisionedWorktree {
             path,
             newly_created: true,
+            branch: Some(branch.to_string()),
+            base_ref,
         })
     }
 
@@ -127,6 +149,22 @@ impl WorktreeManager {
         }
         Ok(())
     }
+}
+
+/// Trimmed stdout of a git query, `None` on any failure — provisioning must
+/// not fail because a metadata read did.
+async fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
+    let out = tokio::process::Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 #[cfg(test)]
@@ -215,6 +253,19 @@ mod tests {
             "bitrouter/codex-abc123",
             "branch name is independent of the dir name"
         );
+        // Provisioning reports the branch and the HEAD it was cut from —
+        // the durable diff/merge base for the session record.
+        assert_eq!(p.branch.as_deref(), Some("bitrouter/codex-abc123"));
+        let head_sha = std::process::Command::new("git")
+            .current_dir(repo.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse");
+        assert_eq!(
+            p.base_ref.as_deref(),
+            Some(String::from_utf8_lossy(&head_sha.stdout).trim()),
+            "base_ref is the base repo HEAD at provisioning"
+        );
     }
 
     #[tokio::test]
@@ -228,6 +279,15 @@ mod tests {
         let second = mgr.create("feat-2", None).await.expect("reuse");
         assert!(!second.newly_created, "existing worktree must be reused");
         assert_eq!(second.path, first.path);
+        assert_eq!(
+            second.branch.as_deref(),
+            Some("feat-2"),
+            "reuse reports the branch the tree is actually on"
+        );
+        assert_eq!(
+            second.base_ref, None,
+            "a reused tree's true base is unknowable"
+        );
         assert!(
             second.path.join("wip").exists(),
             "reuse must not clobber existing work"

@@ -522,6 +522,20 @@ Sequenced **A0 → B → polish**, remapped to this architecture. **Target scale
   DCS-passthrough-wrapped — and the terminal title doubles as a badge
   (`bitrouter ⚠1 ◆1 ◉2`; original title pushed/popped via XTWINOPS). Notifications never
   fire while focused: in-terminal signals (bell, glyphs, radar) own that case.
+- **Durable fleet memory (shipped).** The manager persists its state across
+  stops and crashes — memory, **not** auto-resume. Split by ownership:
+  session-scoped facts (`branch`, `base_ref`) moved into the substrate's
+  `SessionRecord` (captured at worktree provisioning, where `HEAD` is
+  authoritative); manager judgments live in `.bitrouter/fleet-state.json`
+  (substrate `FleetStore`: versioned, atomic temp+rename, per-agent
+  autonomy/review/port/pending/drafts keyed by `record_id`, orchestrator
+  identity, `clean_shutdown` flag). Written at most once a second on change
+  and once at orderly teardown; startup shows a one-line previous-fleet
+  notice. The schema is deliberately the seed of the §2 fleet daemon's
+  registry — the daemon later takes over as writer, no format migration.
+  `.bitrouter/` is now created **self-ignoring** (cargo-style `.gitignore`),
+  and `RecordStore` writes became atomic (a crash can no longer truncate a
+  record).
 - **Done-unseen + time-in-state (shipped, herdr-inspired).** A turn that finishes unseen
   is `◉` done — an inbox-unread state distinct from `●` trouble — decaying to idle when
   the pane is viewed *while the terminal has focus*; new work or integration clears it.

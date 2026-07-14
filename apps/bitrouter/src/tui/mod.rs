@@ -53,6 +53,13 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     let mut port_alloc: HashMap<String, u16> = HashMap::new();
     let mut ptys: HashMap<String, pty::PtyPane> = HashMap::new();
 
+    // The manager's durable memory (`.bitrouter/fleet-state.json`) and the
+    // self-ignoring state dir it lives in.
+    let _ = bitrouter_substrate::dotdir::ensure_self_ignored(&base_repo.join(".bitrouter"));
+    let fleet_store = bitrouter_substrate::fleet::FleetStore::new(&base_repo);
+    let previous_fleet = fleet_store.load().await;
+    let mut orchestrator_state: Option<bitrouter_substrate::fleet::OrchestratorState> = None;
+
     // The daemon's advertised model ids (best-effort): fills the synthesized
     // provider catalogs for the config-routed orchestrators (opencode, pi).
     let models = fetch_models(&cfg.server.listen).await;
@@ -77,6 +84,12 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         let (record_id, pane, pty_pane) =
             launch_orchestrator(h, &cfg, &base_repo, tx.clone(), model, &models)?;
         ptys.insert(record_id, pty_pane);
+        if let Some(binary) = h.interactive_binary {
+            orchestrator_state = Some(bitrouter_substrate::fleet::OrchestratorState {
+                binary: binary.to_string(),
+                model: model.map(str::to_string),
+            });
+        }
         pane
     } else if cfg.agents.contains_key(agent_id) {
         // ── ACP fallback: the primary agent rendered from typed events.
@@ -142,6 +155,13 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     }
     // https://no-color.org: any non-empty value disables foreground colors.
     state.no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    // Surface the previous fleet's memory — the daemon warning wins the
+    // single notice slot when both apply.
+    if state.notice.is_none()
+        && let Some(notice) = previous_fleet.as_ref().and_then(previous_fleet_notice)
+    {
+        state.notice = Some(notice);
+    }
 
     // ── Run; the loop owns full session teardown. The panic hook guarantees
     // the terminal is restored even if the loop panics mid-draw. ──
@@ -166,6 +186,9 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         },
         ptys,
         notify: notify::NotifyPath::detect(),
+        fleet_store,
+        orchestrator: orchestrator_state,
+        last_fleet: None,
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
@@ -543,6 +566,70 @@ struct Runtime<'a> {
     ptys: HashMap<String, pty::PtyPane>,
     /// The host terminal's notification dialect, detected once at startup.
     notify: notify::NotifyPath,
+    /// Durable fleet-state writer (`.bitrouter/fleet-state.json`) — the
+    /// manager's memory across stops. Written on durable changes and once,
+    /// with `clean_shutdown`, at teardown.
+    fleet_store: bitrouter_substrate::fleet::FleetStore,
+    /// The hosted orchestrator's identity, recorded in the snapshot.
+    orchestrator: Option<bitrouter_substrate::fleet::OrchestratorState>,
+    /// The last snapshot written (unstamped), for change detection.
+    last_fleet: Option<bitrouter_substrate::fleet::FleetState>,
+}
+
+/// Build the (unstamped) durable snapshot of the manager's current state.
+fn fleet_state(state: &AppState, rt: &Runtime<'_>) -> bitrouter_substrate::fleet::FleetState {
+    bitrouter_substrate::fleet::FleetState {
+        version: bitrouter_substrate::fleet::FLEET_STATE_VERSION,
+        saved_at: 0, // stamped by FleetStore::save
+        clean_shutdown: false,
+        writer_pid: std::process::id(),
+        orchestrator: rt.orchestrator.clone(),
+        agents: state.fleet_agents(),
+    }
+}
+
+/// Persist the current fleet state if it changed since the last write.
+/// Best-effort: durability must never take the live manager down.
+async fn flush_fleet_state(state: &AppState, rt: &mut Runtime<'_>) {
+    let snapshot = fleet_state(state, rt);
+    if rt.last_fleet.as_ref() == Some(&snapshot) {
+        return;
+    }
+    if let Err(e) = rt.fleet_store.save(&snapshot).await {
+        tracing::warn!(error = %e, "failed to write fleet state");
+    }
+    rt.last_fleet = Some(snapshot);
+}
+
+/// The teardown write: same snapshot, marked as an orderly stop.
+async fn flush_fleet_state_clean(state: &AppState, rt: &mut Runtime<'_>) {
+    let mut snapshot = fleet_state(state, rt);
+    snapshot.clean_shutdown = true;
+    if let Err(e) = rt.fleet_store.save(&snapshot).await {
+        tracing::warn!(error = %e, "failed to write final fleet state");
+    }
+}
+
+/// One-line startup notice about the previous fleet, or `None` when there is
+/// nothing worth surfacing (no file, or it held no agents).
+fn previous_fleet_notice(prev: &bitrouter_substrate::fleet::FleetState) -> Option<String> {
+    if prev.agents.is_empty() {
+        return None;
+    }
+    let reviews = prev.agents.iter().filter(|a| a.review.is_some()).count();
+    let drafts = prev.agents.iter().filter(|a| a.draft.is_some()).count();
+    let mut notice = format!("previous fleet remembered: {} agent(s)", prev.agents.len());
+    if reviews > 0 {
+        notice.push_str(&format!(", {reviews} mid-review"));
+    }
+    if drafts > 0 {
+        notice.push_str(&format!(", {drafts} unsent draft(s)"));
+    }
+    if !prev.clean_shutdown {
+        notice.push_str(" · unclean shutdown");
+    }
+    notice.push_str(" — .bitrouter/fleet-state.json");
+    Some(notice)
 }
 
 /// The core loop over a registry of sessions. Draws, muxes input vs pumped
@@ -578,6 +665,7 @@ async fn event_loop(
             })
             .collect();
         if let Err(e) = terminal.draw(|f| ui::render(&mut state, &pty_views, f)) {
+            flush_fleet_state_clean(&state, &mut rt).await;
             cleanup(&mut rt).await;
             return Err(e).context("draw");
         }
@@ -589,6 +677,9 @@ async fn event_loop(
             }
         }
         if state.should_quit {
+            // The manager's memory of the fleet as it stood at the stop —
+            // written before teardown denies pendings and kills children.
+            flush_fleet_state_clean(&state, &mut rt).await;
             cleanup(&mut rt).await;
             return Ok(());
         }
@@ -622,9 +713,16 @@ async fn event_loop(
         };
 
         if let Some(app_event) = app_event {
+            let is_tick = matches!(app_event, AppEvent::Tick);
             let effects = reduce(&mut state, &app_event);
             for effect in effects {
                 apply_effect(effect, &mut state, &mut rt).await;
+            }
+            // Durability heartbeat: at most once a second (every 5th tick),
+            // and only when the snapshot content actually changed — a crash
+            // loses at most the last second of manager state.
+            if is_tick && state.tick.is_multiple_of(5) {
+                flush_fleet_state(&state, &mut rt).await;
             }
         }
         // Frame coalescing: a chatty agent can emit hundreds of updates in a
@@ -1143,6 +1241,45 @@ fn perm_options(p: &bitrouter_substrate::up::PendingPermission) -> Vec<PermOptio
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn previous_fleet_notice_summarizes_and_flags_unclean_stops() {
+        use bitrouter_substrate::fleet::{FLEET_STATE_VERSION, FleetAgent, FleetState};
+        let agent = |review: Option<(u64, u64, u64)>, draft: Option<&str>| FleetAgent {
+            record_id: "r".into(),
+            autonomy: "manual".into(),
+            review,
+            port: None,
+            pending: None,
+            draft: draft.map(str::to_string),
+            turn_active: false,
+            exited: false,
+        };
+        let mut prev = FleetState {
+            version: FLEET_STATE_VERSION,
+            saved_at: 1,
+            clean_shutdown: false,
+            writer_pid: 1,
+            orchestrator: None,
+            agents: vec![agent(Some((1, 2, 3)), None), agent(None, Some("d"))],
+        };
+        let notice = super::previous_fleet_notice(&prev).expect("notice");
+        assert!(notice.contains("2 agent(s)"), "{notice}");
+        assert!(notice.contains("1 mid-review"), "{notice}");
+        assert!(notice.contains("1 unsent draft(s)"), "{notice}");
+        assert!(notice.contains("unclean shutdown"), "{notice}");
+        assert!(notice.contains("fleet-state.json"), "{notice}");
+
+        prev.clean_shutdown = true;
+        let clean = super::previous_fleet_notice(&prev).expect("notice");
+        assert!(!clean.contains("unclean"), "{clean}");
+
+        prev.agents.clear();
+        assert!(
+            super::previous_fleet_notice(&prev).is_none(),
+            "an empty fleet is not worth a notice"
+        );
+    }
 
     #[test]
     fn fleet_mcp_server_spec_names_the_fleet_backend() {

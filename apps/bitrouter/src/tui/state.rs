@@ -815,6 +815,37 @@ impl AppState {
         badge
     }
 
+    /// The manager-layer state of every ACP agent, in the durable
+    /// [`FleetAgent`](bitrouter_substrate::fleet::FleetAgent) shape — the
+    /// fleet-state snapshot's agent list. PTY panes (the orchestrator,
+    /// interactive attaches) are not fleet agents and are skipped; the
+    /// focused pane's live composer text counts as its draft (unfocused
+    /// panes already hold theirs in `draft`).
+    pub fn fleet_agents(&self) -> Vec<bitrouter_substrate::fleet::FleetAgent> {
+        let focused = self.detail.focused_id().map(str::to_string);
+        self.agents
+            .iter()
+            .filter(|p| p.kind == PaneKind::Acp)
+            .map(|p| {
+                let draft = if focused.as_deref() == Some(p.record_id.as_str()) {
+                    &self.input
+                } else {
+                    &p.draft
+                };
+                bitrouter_substrate::fleet::FleetAgent {
+                    record_id: p.record_id.clone(),
+                    autonomy: p.autonomy.label().to_string(),
+                    review: p.review,
+                    port: p.port,
+                    pending: p.pending.as_ref().map(|pending| pending.title.clone()),
+                    draft: (!draft.is_empty()).then(|| draft.clone()),
+                    turn_active: p.turn_active,
+                    exited: p.exited,
+                }
+            })
+            .collect()
+    }
+
     /// The agent under the rail cursor.
     pub fn rail_selected(&self) -> Option<&PaneState> {
         let order = self.roster();
@@ -4259,6 +4290,44 @@ mod tests {
         assert_eq!(fmt_elapsed(3599), "59m");
         assert_eq!(fmt_elapsed(3600), "1h00m");
         assert_eq!(fmt_elapsed(4500), "1h15m");
+    }
+
+    // ── Fleet-state snapshot. ──
+
+    #[test]
+    fn fleet_agents_snapshot_maps_manager_state() {
+        let mut st = agents3(); // r0 focused solo
+        st.input = "half-typed".into(); // the focused pane's live composer
+        st.agents[1].draft = "stored".into();
+        st.agents[1].autonomy = Autonomy::Auto;
+        st.agents[1].review = Some((3, 42, 7));
+        st.agents[1].port = Some(3101);
+        st.agents[2].pending = Some(PendingView {
+            title: "rm -rf scratch".into(),
+            diff: None,
+            options: vec![],
+            risk: Risk::High,
+        });
+        // PTY panes (orchestrator, attaches) are not fleet agents.
+        let mut pty = PaneState::new("orchestrator".into(), "claude".into());
+        pty.kind = PaneKind::Pty;
+        st.agents.push(pty);
+
+        let snap = st.fleet_agents();
+        assert_eq!(snap.len(), 3, "pty panes skipped");
+        assert_eq!(snap[0].record_id, "r0");
+        assert_eq!(
+            snap[0].draft.as_deref(),
+            Some("half-typed"),
+            "focused pane's draft is the live input"
+        );
+        assert_eq!(snap[0].autonomy, "manual");
+        assert_eq!(snap[1].draft.as_deref(), Some("stored"));
+        assert_eq!(snap[1].autonomy, "auto");
+        assert_eq!(snap[1].review, Some((3, 42, 7)));
+        assert_eq!(snap[1].port, Some(3101));
+        assert_eq!(snap[2].pending.as_deref(), Some("rm -rf scratch"));
+        assert_eq!(snap[2].draft, None, "empty drafts are omitted");
     }
 
     // ── Title badge. ──
