@@ -19,26 +19,41 @@ Past those daemon control commands, v1 uses `bitrouter cloud …` for OAuth sign
 
 ## Sign in to BitRouter Cloud
 
-`bitrouter cloud login` runs the RFC 8628 Device Authorization Grant against the configured authorization server, prints an approval URL, and persists the resulting access + refresh tokens under `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode `0600` on Unix). The browser approval page lets you pick the workspace this CLI session is bound to. To switch workspaces, run `bitrouter cloud login` again and choose the target workspace. The token is refreshed automatically within 60 s of expiry — you sign in once per machine.
+`bitrouter cloud login` either runs the RFC 8628 Device Authorization Grant or stores an existing BitRouter API key. Both credential types live under `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode `0600` on Unix) and are reused by raw API requests, management commands, the built-in provider, and telemetry attribution. The API-key form performs no network request, which makes it suitable for CI.
 
 ```bash
 bitrouter cloud login
-# Open this URL in your browser:
-#   https://cloud.bitrouter.ai/oauth/device?user_code=ABCD-EFGH
-# Waiting for authorization (the code expires in 600s)…
+bitrouter cloud login --api-key "$BITROUTER_API_KEY"
+bitrouter cloud whoami
 ```
 
-The default authorization server is `https://api.bitrouter.ai`. Override with `--oauth-as <URL>` (or `BITROUTER_OAUTH_AS`) for a self-hosted deployment. The default scope set covers `inference:invoke`, `usage:read`, `keys:read`/`keys:write`, `billing:read`, `policy:read`/`policy:write`, `byok:read`/`byok:write`, and `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in via `--scope`.
+Interactive OAuth browser approval lets you pick the workspace this CLI session is bound to. To switch workspaces, run `bitrouter cloud login` again and choose the target workspace. OAuth access tokens refresh automatically within 60 s of expiry. The default authorization server is `https://api.bitrouter.ai`; override it with `--oauth-as <URL>` (or `BITROUTER_OAUTH_AS`) for a self-hosted deployment.
 
-Inspect the local session with `bitrouter cloud whoami` — it reads the credentials file directly and never hits the network. Sign out (best-effort revoke at the AS plus delete the local file) with `bitrouter cloud logout`.
+The default OAuth scope set covers `inference:invoke`, `usage:read`, `keys:read`/`keys:write`, `billing:read`, `policy:read`/`policy:write`, `byok:read`/`byok:write`, and `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in via `--scope`. `--api-key` conflicts with OAuth-only `--client-id` and `--scope`.
+
+Inspect the local session with `bitrouter cloud whoami` — it reads the credentials file directly and never hits the network. Sign out with `bitrouter cloud logout`: OAuth credentials are revoked on a best-effort basis before local deletion, while API keys are deleted locally only.
 
 <Callout type="info">
-After `bitrouter cloud login`, the `bitrouter` provider is auto-enabled in zero-config mode — every model your account is entitled to is routable as `bitrouter:<model-id>` with no further setup.
+After either login form, the `bitrouter` provider is auto-enabled in zero-config mode — every model your account is entitled to is routable as `bitrouter:<model-id>` with no further setup.
 </Callout>
+
+## Call Cloud APIs directly
+
+`bitrouter cloud api` is modeled after `gh api`. It accepts an arbitrary relative endpoint on the logged-in origin, injects the stored bearer, and streams the response without requiring a local daemon.
+
+```bash
+bitrouter cloud api /v1/models
+bitrouter cloud api /v1/chat/completions --input request.json
+bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
+```
+
+The command supports `-X/--method`, repeated `-H/--header`, `-f/--raw-field`, `-F/--field`, `--input`, `-i/--include`, `--silent`, and `--verbose`. Absolute URLs and fragments are rejected, and redirect following is disabled, to keep the credential on its login origin. Non-TTY JSON and SSE bytes pass through unchanged. See the [Cloud API guide](/docs/guides/cloud-api) for every initial protocol and field/input semantics.
 
 ## Manage your account: `bitrouter cloud`
 
 Every leaf accepts `--json` for raw response output; the default is a `systemctl`-style key:value block (single resource) or a small table (lists). When the server returns a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint.
+
+OAuth credentials are namespace-baked. API-key credentials use the server's `me` namespace alias for workspace-scoped management routes. `whoami` reports `oauth` or `api_key` without printing the credential; API-key logout only removes the local file.
 
 ### `bitrouter cloud whoami`
 
@@ -47,8 +62,8 @@ Identity stored on this machine plus the `/v1/*` base URL the CLI will target. O
 ### `bitrouter cloud namespace` — workspaces
 
 ```bash
-bitrouter cloud namespace list      # all workspaces; active one marked
-bitrouter cloud namespace current   # offline — reads local credential
+bitrouter cloud namespace list
+bitrouter cloud namespace current
 ```
 
 The credential is namespace-baked: keys, usage, and policies are scoped to the workspace chosen at login. `current` prints `(no namespace — run \`bitrouter cloud login\`)` when the local credential predates namespace binding.
@@ -66,7 +81,7 @@ bitrouter cloud keys revoke <id>
 ### `bitrouter cloud usage` / `bitrouter cloud requests`
 
 ```bash
-bitrouter cloud usage                                       # last 30 days
+bitrouter cloud usage
 bitrouter cloud usage --from 2026-05-01T00:00:00Z --to 2026-06-01T00:00:00Z
 bitrouter cloud requests --limit 50 --offset 0
 ```
@@ -77,7 +92,7 @@ bitrouter cloud requests --limit 50 --offset 0
 
 ```bash
 bitrouter cloud billing balance
-bitrouter cloud billing checkout --amount-cents 2000       # needs billing:write
+bitrouter cloud billing checkout --amount-cents 2000
 ```
 
 `checkout` returns a hosted Stripe URL. Requires the `billing:write` scope (not in the default set — re-login with `--scope`).

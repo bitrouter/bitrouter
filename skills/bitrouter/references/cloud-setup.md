@@ -84,6 +84,15 @@ bitrouter cloud login
 # Waiting for authorization (the code expires in 600s)…
 ```
 
+For CI or another non-interactive environment, store an existing BitRouter key without discovery or browser approval:
+
+```bash
+bitrouter cloud login --api-key "$BITROUTER_API_KEY"
+bitrouter cloud whoami
+```
+
+`--api-key` conflicts with `--client-id` and `--scope`. It accepts `--oauth-as` for a self-hosted origin. Both OAuth and API-key credentials use the same mode-0600 file; API keys are never printed. API-key logout removes only the local file.
+
 Mechanism: RFC 8628 device-authorization grant against the AS advertised at `https://api.bitrouter.ai/.well-known/oauth-authorization-server`. The CLI polls the token endpoint, exchanges the device code for an access + refresh token pair, and persists both to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Every subsequent call auto-refreshes within 60 s of access-token expiry — sign in once per machine.
 
 Override the AS for a self-hosted deployment: `bitrouter cloud login --oauth-as https://my-self-hosted.example.com`.
@@ -127,6 +136,18 @@ bitrouter cloud byok list              # BYOK provider keys
 ```
 
 Every leaf accepts `--json` for raw response output. See `references/cli.md` for the full subcommand index.
+
+### Call Cloud APIs directly
+
+The same stored credential drives a `gh api`-style raw client; the local daemon is not involved:
+
+```bash
+bitrouter cloud api /v1/models
+bitrouter cloud api /v1/chat/completions --input request.json
+bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
+```
+
+Use `-X` for the method, repeated `-H` headers, `-f` string fields, `-F` typed/nested fields, and `--input FILE|-` for exact body bytes. `--include`, `--silent`, and `--verbose` control output. Non-TTY/SSE bytes stream unchanged. Endpoints must be relative to the login origin and redirects are never followed.
 
 ### Sign out
 

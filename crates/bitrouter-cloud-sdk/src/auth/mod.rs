@@ -1,5 +1,5 @@
-//! Sign-in to the BitRouter Cloud OAuth 2.0 Authorization Server via the
-//! Device Authorization Grant (RFC 8628). This module is distinct from the
+//! Sign-in to BitRouter Cloud via an API key or the OAuth 2.0 Device
+//! Authorization Grant (RFC 8628). This module is distinct from the
 //! upstream-provider OAuth code in `bitrouter-providers`:
 //!
 //! - `bitrouter-providers` ships device-code + auth-code clients used to

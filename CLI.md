@@ -4,11 +4,12 @@
 
 ## Output format
 
-Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags, accepted on any subcommand:
+Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags:
 
 - `-j`, `--json` — force JSON (the default).
-- `-H`, `--human` — render a human-readable view to stdout instead of JSON.
-- `-h`, `--help` — unchanged (`-h` is **not** human output; that's `-H`).
+- `--human` — render a human-readable view to stdout instead of JSON.
+- `-H` before the subcommand (for example, `bitrouter -H cloud whoami`) — compatibility spelling for `--human`. Under `bitrouter cloud api`, `-H` means `--header`, matching `gh api`.
+- `-h`, `--help` — unchanged (`-h` is **not** human output).
 
 All diagnostics — progress, warnings, internal logs, and a human echo of errors — go to **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). So:
 
@@ -24,7 +25,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, `cloud api` streams the remote response body, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol, raw response, or the child's terminal—not a JSON result envelope.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
@@ -274,10 +275,13 @@ Removes every stored credential for the provider (subscription OAuth tokens and 
 
 ### `bitrouter cloud login` / `logout` / `whoami`
 
-Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter cloud login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
+Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Interactive login uses the RFC 8628 OAuth Device Authorization Grant. For CI and other non-interactive environments, pass an existing BitRouter API key with `--api-key`. Both forms persist to the same credential file and are reused by `cloud api`, management commands, the built-in `bitrouter` provider, and account-attributed telemetry.
+
+OAuth browser approval asks which workspace to bind; the resulting credential is **namespace-baked** (workspace-baked). To switch workspaces, re-run `bitrouter cloud login`. OAuth credentials auto-refresh on use. API-key login performs no network request and management commands use the server's `me` namespace alias.
 
 ```
 bitrouter cloud login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
+bitrouter cloud login --api-key <BRK_API_KEY> [--oauth-as <URL>]
 bitrouter cloud logout [--oauth-as <URL>] [--client-id <ID>]
 bitrouter cloud whoami
 ```
@@ -287,8 +291,9 @@ bitrouter cloud whoami
 | `--oauth-as` | `https://api.bitrouter.ai` (env: `BITROUTER_OAUTH_AS`) | Authorization server base URL — override only for a self-hosted deployment |
 | `--client-id` | `bitrouter-cli` (env: `BITROUTER_OAUTH_CLIENT_ID`) | Public OAuth client id |
 | `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in. |
+| `--api-key` | *(none)* | Store a `brk_<token_id>.<secret>` credential without browser login or network discovery. Conflicts with `--client-id` and `--scope`; intended for CI. |
 
-Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). `whoami` answers from the local file with no network call; it also prints the bound namespace.
+Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). Existing untagged OAuth files remain compatible. `whoami` answers from the local file with no network call and reports `authentication: oauth|api_key` without printing a bearer. OAuth logout attempts RFC 7009 revocation before deleting the file; API-key logout is local-only.
 
 ---
 
@@ -310,11 +315,44 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call any subcommand.
+`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command.
 
-The credential is **namespace-baked** — keys, usage, and policies are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
+OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
 Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, the CLI prints a copy-pasteable re-login hint that appends the missing scope to your current set.
+
+### `bitrouter cloud api`
+
+Make an authenticated request to any **relative** endpoint on the origin recorded by `cloud login`, modeled after [`gh api`](https://cli.github.com/manual/gh_api):
+
+```bash
+bitrouter cloud api /v1/models
+bitrouter cloud api /v1/chat/completions --input request.json
+bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
+```
+
+```text
+bitrouter cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
+  [-f <KEY=VALUE>] [-F <KEY=VALUE>] [--input <FILE|->] \
+  [-i|--include] [--silent|--verbose]
+```
+
+| Flag | Behavior |
+| --- | --- |
+| `-X`, `--method` | Explicit HTTP method. Default is `GET`, or `POST` when fields or `--input` are present. |
+| `-H`, `--header` | Append a request header; repeat to send multiple values. A supplied `Authorization` overrides the stored bearer. |
+| `-f`, `--raw-field` | Add a string field. Supports `key[subkey]` and `key[]` nesting. |
+| `-F`, `--field` | Add a typed field. `true`, `false`, `null`, and integers become JSON types; `@file` and `@-` read a string value from a file or stdin. |
+| `--input` | Use exact file bytes (or stdin with `-`) as the request body. Fields become query parameters. |
+| `-i`, `--include` | Prepend the HTTP status line and response headers to stdout. |
+| `--silent` | Drain but do not print the response body. Conflicts with `--verbose`. |
+| `--verbose` | Print method, URL, status, and headers to stderr. Credential-like header values are redacted. |
+
+With explicit `GET`, fields are query parameters. Otherwise fields form a JSON body unless `--input` owns the body. Only one consumer may read stdin. Non-TTY response bytes and SSE are streamed unchanged; interactive JSON is pretty-printed. On HTTP 4xx/5xx, the response body remains on stdout, the diagnostic goes to stderr, and the process exits non-zero.
+
+Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are rejected. Redirect following is disabled, so a stored bearer is never forwarded to another origin. Initial documented endpoints are `/v1/models`, `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, and Google-style `:generateContent` / `:streamGenerateContent` routes under `/v1beta/models/*`.
+
+This first release intentionally omits `gh api`'s GraphQL, pagination/slurp, `--jq`, Go templates, cache, hostname, preview, and placeholder expansion features. See the [Cloud API guide](/docs/guides/cloud-api) for copyable requests.
 
 ### `bitrouter cloud whoami`
 

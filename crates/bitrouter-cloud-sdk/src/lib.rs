@@ -4,15 +4,18 @@
 //!
 //! ## Scope
 //!
-//! Today this crate ships three pieces of functionality:
+//! Today this crate ships four pieces of functionality:
 //!
-//! 1. [`auth`] — OAuth 2.0 sign-in for the CLI against the BitRouter Cloud
-//!    authorization server. Implements RFC 8628 device-flow login,
-//!    RFC 6749 §6 refresh, and RFC 7009 best-effort revocation, plus an
+//! 1. [`auth`] — API-key and OAuth 2.0 sign-in for the CLI against BitRouter
+//!    Cloud. Implements non-interactive key storage, RFC 8628 device-flow
+//!    login, RFC 6749 §6 refresh, and RFC 7009 OAuth revocation, plus an
 //!    on-disk credentials store (mode `0o600` on Unix). The
 //!    `bitrouter cloud login` / `logout` / `whoami` subcommands wire to the
 //!    entry points in [`auth::commands`].
-//! 2. [`provider`] — a [`bitrouter_sdk::language_model::AuthApplier`]
+//! 2. [`api`] — an origin-confined raw HTTP client used by `bitrouter cloud
+//!    api`. It reuses the stored OAuth or API-key bearer, disables redirects,
+//!    and returns an unbuffered response body for JSON and SSE streaming.
+//! 3. [`provider`] — a [`bitrouter_sdk::language_model::AuthApplier`]
 //!    implementation for the `bitrouter` provider (the official hosted
 //!    gateway whose user-facing addressing is `bitrouter:<model-id>`).
 //!    Prefers an OAuth
@@ -20,7 +23,7 @@
 //!    [`auth::credentials::REFRESH_WINDOW`] of expiry); falls back to a
 //!    static `brk_…` API key carried on the routing target; otherwise
 //!    returns a 401 with onboarding guidance.
-//! 3. [`management`] — a typed HTTP client for the BitRouter Cloud
+//! 4. [`management`] — a typed HTTP client for the BitRouter Cloud
 //!    `/v1/*` management surface (`keys`, `usage`, `billing`, `policies`,
 //!    `budgets`, `presets`, `byok`, `oauth_clients`). Shares the auth
 //!    module's credentials store, so it transparently picks up the

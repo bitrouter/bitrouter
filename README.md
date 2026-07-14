@@ -113,11 +113,19 @@ export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GEMINI_API_KEY also work
 bitrouter start                 # proxy running at http://localhost:4356
 ```
 
-**Or sign in to BitRouter Cloud** — one OAuth account covers every model, no upstream provider keys:
+**Or sign in to BitRouter Cloud** — use browser OAuth interactively or store an existing API key in CI:
 
 ```bash
 bitrouter cloud login           # RFC 8628 device flow against api.bitrouter.ai
+bitrouter cloud login --api-key "$BITROUTER_API_KEY"  # non-interactive CI login
 bitrouter start                 # `bitrouter` provider auto-enables once signed in
+```
+
+The same credential also drives a [`gh api`](https://cli.github.com/manual/gh_api)-style raw client—no daemon required:
+
+```bash
+bitrouter cloud api /v1/models
+bitrouter cloud api /v1/chat/completions --input request.json
 ```
 
 Point your agent runtime at `http://localhost:4356` and any available provider is live. For advanced routing rules, guardrails, or multi-account failover, scaffold a config with `bitrouter init` (writes `./bitrouter.yaml`).
@@ -127,6 +135,7 @@ bitrouter start / stop / restart        # daemon lifecycle
 bitrouter route <model>                 # trace how a model name resolves
 bitrouter key sign --user <id>          # mint a scoped brvk_ API key
 bitrouter cloud keys / usage / billing  # manage your cloud account
+bitrouter cloud api /v1/models          # call Cloud APIs directly
 ```
 
 See [`CLI.md`](CLI.md) for the full command reference, flags, and config resolution.
