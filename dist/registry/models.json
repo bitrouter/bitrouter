@@ -4365,6 +4365,27 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-5.6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
               "no_cache": 1.0
             },
             "output_tokens": {
@@ -4511,6 +4532,27 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-5.6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
               "no_cache": 5.0
             },
             "output_tokens": {
@@ -4649,6 +4691,27 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-5.6-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": [
             "openai",
@@ -5758,6 +5821,24 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.04,
+              "cache_write": 0.0,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.15
+            }
+          },
+          "provider": "ambient",
+          "provider_model_id": "stepfun/step-3.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": "openai",
           "pricing": {
