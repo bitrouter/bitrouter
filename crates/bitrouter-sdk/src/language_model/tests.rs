@@ -768,7 +768,7 @@ async fn default_fallback_stops_on_upstream_bad_request() {
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "provider rejected max_tokens".into(),
+                error: serde_json::json!("provider rejected max_tokens"),
             }),
             MockResponse::Generate(gen_result(Vec::new())),
         ])),
@@ -787,7 +787,7 @@ async fn custom_fallback_retries_upstream_bad_request_then_succeeds() {
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "provider rejected temperature".into(),
+                error: serde_json::json!("provider rejected temperature"),
             }),
             MockResponse::Generate(gen_result(vec![Content::Text {
                 text: "from b".into(),
@@ -815,10 +815,10 @@ async fn exhausted_upstream_bad_requests_preserve_the_first_diagnostic() {
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "first diagnostic".into(),
+                error: serde_json::json!("first diagnostic"),
             }),
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "second diagnostic".into(),
+                error: serde_json::json!("second diagnostic"),
             }),
         ])),
         |builder| {
@@ -827,8 +827,8 @@ async fn exhausted_upstream_bad_requests_preserve_the_first_diagnostic() {
     );
 
     match pipeline.execute(request()).await.unwrap_err() {
-        BitrouterError::UpstreamBadRequest { message } => {
-            assert_eq!(message, "first diagnostic");
+        BitrouterError::UpstreamBadRequest { error } => {
+            assert_eq!(error, serde_json::json!("first diagnostic"));
         }
         other => panic!("expected UpstreamBadRequest, got {other:?}"),
     }
@@ -840,10 +840,10 @@ async fn exhausted_streaming_upstream_bad_requests_preserve_the_first_diagnostic
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "first streaming diagnostic".into(),
+                error: serde_json::json!("first streaming diagnostic"),
             }),
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "second streaming diagnostic".into(),
+                error: serde_json::json!("second streaming diagnostic"),
             }),
         ])),
         |builder| {
@@ -856,8 +856,8 @@ async fn exhausted_streaming_upstream_bad_requests_preserve_the_first_diagnostic
         Err(error) => error,
     };
     match error {
-        BitrouterError::UpstreamBadRequest { message } => {
-            assert_eq!(message, "first streaming diagnostic");
+        BitrouterError::UpstreamBadRequest { error } => {
+            assert_eq!(error, serde_json::json!("first streaming diagnostic"));
         }
         other => panic!("expected UpstreamBadRequest, got {other:?}"),
     }
@@ -869,7 +869,7 @@ async fn mixed_upstream_bad_request_and_server_error_keep_last_error_semantics()
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                message: "bad parameters".into(),
+                error: serde_json::json!("bad parameters"),
             }),
             MockResponse::Error(BitrouterError::Upstream {
                 status: 503,

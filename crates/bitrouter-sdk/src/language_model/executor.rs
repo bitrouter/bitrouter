@@ -208,6 +208,22 @@ fn truncate_upstream_message(text: &str) -> String {
     }
 }
 
+fn normalize_upstream_error_payload(body: &str) -> serde_json::Value {
+    let parsed = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => value,
+        Err(_) => return serde_json::Value::String(body.to_string()),
+    };
+    let nested_error = parsed
+        .as_object()
+        .and_then(|object| object.get("error"))
+        .filter(|error| !error.is_null())
+        .cloned();
+    match nested_error.unwrap_or(parsed) {
+        value @ (serde_json::Value::Object(_) | serde_json::Value::String(_)) => value,
+        other => serde_json::Value::String(other.to_string()),
+    }
+}
+
 /// Turn a non-2xx upstream response into the right [`BitrouterError`].
 ///
 /// Most non-2xx maps to [`BitrouterError::Upstream`] carrying the status.
@@ -222,7 +238,7 @@ fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) ->
     // <https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1>.
     if status == 400 {
         return BitrouterError::UpstreamBadRequest {
-            message: truncate_upstream_message(body),
+            error: normalize_upstream_error_payload(body),
         };
     }
     if matches!(status, 401..=403) && looks_like_credit_exhaustion(body) {
@@ -992,11 +1008,57 @@ mod error_classification_tests {
     }
 
     #[test]
-    fn upstream_400_has_a_distinct_safe_error() {
-        let body = r#"{"error":"max_tokens must be greater than one"}"#;
-        match classify_upstream_error(400, body, None) {
-            BitrouterError::UpstreamBadRequest { message } => {
-                assert_eq!(message, body);
+    fn upstream_error_payload_selection_prefers_non_null_nested_error() {
+        assert_eq!(
+            normalize_upstream_error_payload(
+                r#"{"error":{"message":"bad","param":"max_tokens"},"request_id":"req_1"}"#,
+            ),
+            serde_json::json!({"message": "bad", "param": "max_tokens"})
+        );
+        assert_eq!(
+            normalize_upstream_error_payload(r#"{"error":"bad temperature"}"#),
+            serde_json::json!("bad temperature")
+        );
+    }
+
+    #[test]
+    fn upstream_error_payload_selection_uses_whole_object_without_non_null_error() {
+        assert_eq!(
+            normalize_upstream_error_payload(r#"{"message":"bad","status":400}"#),
+            serde_json::json!({"message": "bad", "status": 400})
+        );
+        assert_eq!(
+            normalize_upstream_error_payload(r#"{"error":null,"message":"bad"}"#),
+            serde_json::json!({"error": null, "message": "bad"})
+        );
+    }
+
+    #[test]
+    fn upstream_error_payload_selection_normalizes_non_object_values_to_strings() {
+        for (body, expected) in [
+            (r#""bad request""#, "bad request"),
+            ("not json", "not json"),
+            ("[1,2]", "[1,2]"),
+            ("42", "42"),
+            ("true", "true"),
+            ("null", "null"),
+        ] {
+            assert_eq!(
+                normalize_upstream_error_payload(body),
+                serde_json::Value::String(expected.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_400_carries_selected_error_payload() {
+        match classify_upstream_error(
+            400,
+            r#"{"error":{"message":"max_tokens rejected"},"ignored":"value"}"#,
+            None,
+        ) {
+            BitrouterError::UpstreamBadRequest { error } => {
+                assert_eq!(error, serde_json::json!({"message": "max_tokens rejected"}));
             }
             other => panic!("expected UpstreamBadRequest, got {other:?}"),
         }

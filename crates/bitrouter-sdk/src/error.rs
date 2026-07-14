@@ -69,11 +69,11 @@ pub enum BitrouterError {
     },
 
     /// 400 — an upstream provider rejected the request parameters.
-    #[error("upstream rejected the request")]
+    #[error("upstream bad request")]
     UpstreamBadRequest {
-        /// Internal diagnostic detail. Public HTTP/SSE responses use a fixed
-        /// safe message and never expose this value.
-        message: String,
+        /// Upstream-selected error payload. Executor-produced values are
+        /// always a JSON object or JSON string.
+        error: serde_json::Value,
     },
 
     /// 502 — upstream provider returned an error.
@@ -120,6 +120,13 @@ pub enum BitrouterError {
     /// 500 — internal error.
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+fn upstream_payload_text(error: &serde_json::Value) -> String {
+    match error {
+        serde_json::Value::String(message) => message.clone(),
+        other => other.to_string(),
+    }
 }
 
 impl BitrouterError {
@@ -210,7 +217,7 @@ impl BitrouterError {
             Self::NotFound(_) => ErrorKind::NotFound,
             Self::RateLimited { .. } => ErrorKind::RateLimited,
             Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
-            Self::UpstreamBadRequest { .. } => ErrorKind::UpstreamBadRequest,
+            Self::UpstreamBadRequest { .. } => ErrorKind::BadRequest,
             Self::Upstream { .. } => ErrorKind::Upstream,
             Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
@@ -235,9 +242,7 @@ impl BitrouterError {
             Self::RateLimited { .. } => "rate limited".to_string(),
             Self::UpstreamPaymentRequired => "upstream payment required".to_string(),
             Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
-            Self::UpstreamBadRequest { message } => {
-                format!("upstream rejected the request: {message}")
-            }
+            Self::UpstreamBadRequest { error } => upstream_payload_text(error),
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
             }
@@ -299,8 +304,6 @@ pub enum ErrorKind {
     RateLimited,
     /// 429 — all usable upstream routes are rate limited.
     UpstreamRateLimited,
-    /// 400 — an upstream provider rejected the request parameters.
-    UpstreamBadRequest,
     /// 502 — upstream provider error.
     Upstream,
     /// 502 — malformed success response from an upstream protocol.
@@ -349,16 +352,16 @@ mod tests {
     #[test]
     fn upstream_bad_request_error_contract() {
         let error = BitrouterError::UpstreamBadRequest {
-            message: "provider secret".into(),
+            error: serde_json::json!("provider secret"),
         };
 
         assert_eq!(error.status(), 400);
         assert_eq!(error.error_type(), "invalid_request_error");
         assert_eq!(error.error_code(), "upstream_bad_request");
-        assert_eq!(error.kind(), ErrorKind::UpstreamBadRequest);
+        assert_eq!(error.kind(), ErrorKind::BadRequest);
         assert_eq!(
             serde_json::to_value(error.kind()).unwrap(),
-            serde_json::json!("upstream_bad_request")
+            serde_json::json!("bad_request")
         );
         assert_eq!(error.public_message(), "upstream rejected the request");
         assert!(

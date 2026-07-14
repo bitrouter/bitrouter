@@ -1227,7 +1227,7 @@ mod tests {
     #[tokio::test]
     async fn upstream_bad_request_has_safe_400_contract() {
         let response = BitrouterError::UpstreamBadRequest {
-            message: "provider secret: max_tokens must be greater than one".into(),
+            error: serde_json::json!("provider secret: max_tokens must be greater than one"),
         }
         .into_response();
 
@@ -1284,7 +1284,7 @@ mod tests {
         let state =
             test_state_with_executor(Arc::new(MockExecutor::new(vec![MockResponse::Error(
                 BitrouterError::UpstreamBadRequest {
-                    message: "provider secret: temperature is unsupported".into(),
+                    error: serde_json::json!("provider secret: temperature is unsupported"),
                 },
             )])));
         let response = build_router(state)

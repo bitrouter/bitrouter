@@ -799,7 +799,7 @@ mod tests {
         );
         assert_eq!(
             classify_failure(&BitrouterError::UpstreamBadRequest {
-                message: "unsupported parameter".to_string(),
+                error: serde_json::json!("unsupported parameter"),
             }),
             InadequacyCause::ProviderPermanent
         );
