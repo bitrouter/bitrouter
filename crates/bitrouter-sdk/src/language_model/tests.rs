@@ -835,6 +835,35 @@ async fn exhausted_upstream_bad_requests_preserve_the_first_diagnostic() {
 }
 
 #[tokio::test]
+async fn exhausted_streaming_upstream_bad_requests_preserve_the_first_diagnostic() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "first streaming diagnostic".into(),
+            }),
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "second streaming diagnostic".into(),
+            }),
+        ])),
+        |builder| {
+            builder.fallback_policy(Arc::new(RetryUpstreamRequestErrors));
+        },
+    );
+
+    let error = match pipeline.clone().execute_stream(stream_request()).await {
+        Ok(_) => panic!("bad requests must fail before opening a stream"),
+        Err(error) => error,
+    };
+    match error {
+        BitrouterError::UpstreamBadRequest { message } => {
+            assert_eq!(message, "first streaming diagnostic");
+        }
+        other => panic!("expected UpstreamBadRequest, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn mixed_upstream_bad_request_and_server_error_keep_last_error_semantics() {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),

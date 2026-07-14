@@ -356,6 +356,10 @@ mod tests {
         assert_eq!(error.error_type(), "invalid_request_error");
         assert_eq!(error.error_code(), "upstream_bad_request");
         assert_eq!(error.kind(), ErrorKind::UpstreamBadRequest);
+        assert_eq!(
+            serde_json::to_value(error.kind()).unwrap(),
+            serde_json::json!("upstream_bad_request")
+        );
         assert_eq!(error.public_message(), "upstream rejected the request");
         assert!(
             error
