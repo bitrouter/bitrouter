@@ -264,6 +264,7 @@ pub(crate) fn classify_failure(error: &BitrouterError) -> InadequacyCause {
             401 | 403 => InadequacyCause::Auth,
             _ => InadequacyCause::ProviderPermanent,
         },
+        BitrouterError::UpstreamBadRequest { .. } => InadequacyCause::ProviderPermanent,
         BitrouterError::UpstreamTimeout
         | BitrouterError::UpstreamRateLimited { .. }
         | BitrouterError::UpstreamUnavailable
@@ -795,6 +796,12 @@ mod tests {
                 message: "invalid response".to_string(),
             }),
             InadequacyCause::Protocol
+        );
+        assert_eq!(
+            classify_failure(&BitrouterError::UpstreamBadRequest {
+                message: "unsupported parameter".to_string(),
+            }),
+            InadequacyCause::ProviderPermanent
         );
     }
 }
