@@ -210,17 +210,20 @@ fn truncate_upstream_message(text: &str) -> String {
 
 /// Turn a non-2xx upstream response into the right [`BitrouterError`].
 ///
-/// Most non-2xx maps to [`BitrouterError::Upstream`] carrying the
-/// status. The exception: credit / balance exhaustion. Some gateways
-/// signal it cleanly with `402`, but others (e.g. opencode) return a
-/// `401`/`403` with a `CreditsError` / "insufficient balance" body —
-/// which would otherwise be misread as an auth failure. Recognise that
-/// family and map it to [`BitrouterError::UpstreamPaymentRequired`] so the
-/// fallback policy drops to the next account / provider instead of
-/// failing the request outright.
+/// Most non-2xx maps to [`BitrouterError::Upstream`] carrying the status.
+/// Request rejection, rate limiting, and credit exhaustion use distinct
+/// variants so callers can apply explicit fallback and response policies.
 fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) -> BitrouterError {
     if status == 429 {
         return BitrouterError::UpstreamRateLimited { retry_after };
+    }
+    // RFC 9110 section 15.5.1 defines 400 as the server being unable or
+    // unwilling to process the request because of a perceived client error:
+    // <https://www.rfc-editor.org/rfc/rfc9110#section-15.5.1>.
+    if status == 400 {
+        return BitrouterError::UpstreamBadRequest {
+            message: truncate_upstream_message(body),
+        };
     }
     if matches!(status, 401..=403) && looks_like_credit_exhaustion(body) {
         return BitrouterError::UpstreamPaymentRequired;
@@ -985,6 +988,17 @@ mod error_classification_tests {
                 assert_eq!(retry_after, Some(17));
             }
             other => panic!("expected UpstreamRateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn upstream_400_has_a_distinct_safe_error() {
+        let body = r#"{"error":"max_tokens must be greater than one"}"#;
+        match classify_upstream_error(400, body, None) {
+            BitrouterError::UpstreamBadRequest { message } => {
+                assert_eq!(message, body);
+            }
+            other => panic!("expected UpstreamBadRequest, got {other:?}"),
         }
     }
 
