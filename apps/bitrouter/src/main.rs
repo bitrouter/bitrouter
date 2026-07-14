@@ -2422,6 +2422,7 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                         authorization_server: None,
                         client_id: None,
                         scope: None,
+                        api_key: None,
                     },
                     output.format(),
                 )

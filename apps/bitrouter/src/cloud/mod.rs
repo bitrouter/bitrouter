@@ -107,8 +107,8 @@ pub struct CloudBearer {
     store: tokio::sync::Mutex<CredentialsStore>,
     /// Client used for the RFC 6749 §6 refresh exchange.
     client: reqwest::Client,
-    /// Cached AS metadata (token endpoint, etc.), fetched once at construction.
-    metadata: AsMetadata,
+    /// Cached AS metadata for OAuth refresh; absent for a static API key.
+    metadata: Option<AsMetadata>,
 }
 
 impl std::fmt::Debug for CloudBearer {
@@ -129,7 +129,7 @@ impl TelemetryBearer for CloudBearer {
         // swallowed to `None` so the export stays anonymous — best-effort.
         let mut store = self.store.lock().await;
         store
-            .current_token(&self.client, Some(&self.metadata))
+            .current_token(&self.client, self.metadata.as_ref())
             .await
             .ok()
     }
@@ -155,11 +155,16 @@ pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
 async fn cloud_bearer_source_from_store(
     store: CredentialsStore,
 ) -> Option<Arc<dyn TelemetryBearer>> {
-    let creds = store.current()?.oauth()?;
+    let credential = store.current()?;
     let client = reqwest::Client::new();
-    let metadata = bitrouter_cloud_sdk::auth::metadata::fetch(&client, &creds.authorization_server)
-        .await
-        .ok()?;
+    let metadata = match credential.oauth() {
+        Some(creds) => Some(
+            bitrouter_cloud_sdk::auth::metadata::fetch(&client, &creds.authorization_server)
+                .await
+                .ok()?,
+        ),
+        None => None,
+    };
     Some(Arc::new(CloudBearer {
         store: tokio::sync::Mutex::new(store),
         client,
@@ -170,6 +175,7 @@ async fn cloud_bearer_source_from_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_cloud_sdk::auth::credentials::StoredCredential;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -262,6 +268,25 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn cloud_bearer_source_uses_stored_api_key_without_metadata() {
+        let path = fresh_tmp_creds_path("api-key-bearer");
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store
+            .save(StoredCredential::api_key(
+                "brk_telemetry.secret".to_owned(),
+                "https://unreachable.invalid".to_owned(),
+            ))
+            .unwrap();
+
+        let source = cloud_bearer_source_from_store(store).await.unwrap();
+
+        assert_eq!(
+            source.bearer().await.as_deref(),
+            Some("brk_telemetry.secret")
+        );
+    }
+
     #[test]
     fn cloud_bearer_debug_redacts_store() {
         // The `Debug` impl must never render the store (it holds the bearer /
@@ -271,12 +296,12 @@ mod tests {
         let bearer = CloudBearer {
             store: tokio::sync::Mutex::new(store),
             client: reqwest::Client::new(),
-            metadata: AsMetadata {
+            metadata: Some(AsMetadata {
                 issuer: Some("https://api.bitrouter.ai".to_string()),
                 device_authorization_endpoint: "https://api.bitrouter.ai/device".to_string(),
                 token_endpoint: "https://api.bitrouter.ai/token".to_string(),
                 revocation_endpoint: None,
-            },
+            }),
         };
         let rendered = format!("{bearer:?}");
         assert!(

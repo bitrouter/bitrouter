@@ -293,6 +293,7 @@ fn login_inputs_compiles_and_clones() {
         authorization_server: Some("https://example.com".into()),
         client_id: Some("cid".into()),
         scope: None,
+        api_key: None,
     };
     let _ = i.clone();
 }

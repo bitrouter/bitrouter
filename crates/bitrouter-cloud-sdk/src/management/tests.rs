@@ -15,7 +15,7 @@ use wiremock::matchers::{body_string_contains, header, method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
-use crate::auth::credentials::{Credentials, CredentialsStore};
+use crate::auth::credentials::{Credentials, CredentialsStore, StoredCredential};
 
 fn tmp_creds_path(label: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -100,6 +100,31 @@ async fn list_keys_attaches_bearer_and_decodes_body() {
     assert_eq!(resp.data.len(), 1);
     assert_eq!(resp.data[0].display_name, "ci");
     assert_eq!(resp.data[0].scopes, vec!["keys:read", "policy:read"]);
+}
+
+#[tokio::test]
+async fn api_key_uses_me_namespace_without_metadata_discovery() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wm_path("/v1/namespaces/me/keys"))
+        .and(header("authorization", "Bearer brk_stored.secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let path = tmp_creds_path("api-key-list");
+    let mut store = CredentialsStore::load(&path).unwrap();
+    store
+        .save(StoredCredential::api_key(
+            "brk_stored.secret".to_owned(),
+            server.uri(),
+        ))
+        .unwrap();
+    let client = ManagementClient::from_credentials_path(path).unwrap();
+
+    let response = client.list_keys().await.unwrap();
+
+    assert!(response.data.is_empty());
 }
 
 #[tokio::test]

@@ -23,7 +23,9 @@ use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout};
-use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
+use bitrouter_cloud_sdk::auth::credentials::{
+    CredentialKind, CredentialsStore, default_credentials_path,
+};
 use bitrouter_cloud_sdk::management::types::{
     BudgetWindow as SdkBudgetWindow, PolicyKind as SdkPolicyKind,
 };
@@ -58,6 +60,14 @@ pub enum CloudAction {
         /// (env: BITROUTER_OAUTH_SCOPE).
         #[arg(long, value_name = "SCOPE")]
         scope: Option<String>,
+        /// Authenticate with a BitRouter API key instead of OAuth. Intended for
+        /// CI and other non-interactive environments.
+        #[arg(
+            long,
+            value_name = "BRK_API_KEY",
+            conflicts_with_all = ["client_id", "scope"]
+        )]
+        api_key: Option<String>,
     },
     /// Sign out: revoke the stored token at the server (best-effort) and
     /// delete the local credentials file.
@@ -561,11 +571,13 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             authorization_server,
             client_id,
             scope,
+            api_key,
         } => {
-            login(LoginInputs {
+            let credential = login(LoginInputs {
                 authorization_server,
                 client_id,
                 scope,
+                api_key,
             })
             .await
             .map_err(SdkError::Auth)?;
@@ -573,6 +585,7 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
             let body = serde_json::json!({
                 "signed_in": true,
+                "authentication": credential_kind_name(credential.kind()),
                 "namespace": client.namespace_id(),
                 "subject": store.current().and_then(|c| c.subject()),
                 "scope": store.current().and_then(|c| c.scope()),
@@ -588,6 +601,7 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
                 authorization_server,
                 client_id,
                 scope: None,
+                api_key: None,
             })
             .await
             .map_err(SdkError::Auth)?;
@@ -622,8 +636,12 @@ async fn whoami() -> std::result::Result<(), SdkError> {
         .current()
         .and_then(|credential| credential.subject().map(ToOwned::to_owned));
     let signed_in = store.current().is_some();
+    let authentication = store
+        .current()
+        .map(|credential| credential_kind_name(credential.kind()));
     let body = serde_json::json!({
         "signed_in": signed_in,
+        "authentication": authentication,
         "base_url": client.base_url(),
         "namespace": client.namespace_id(),
         "scope": scope.clone(),
@@ -637,6 +655,9 @@ async fn whoami() -> std::result::Result<(), SdkError> {
             client.namespace_id().unwrap_or("(none)")
         );
         if signed_in {
+            if let Some(authentication) = authentication {
+                out.push_str(&format!("\nauthentication: {authentication}"));
+            }
             if let Some(s) = &scope {
                 out.push_str(&format!("\nscope:          {s}"));
             }
@@ -649,6 +670,13 @@ async fn whoami() -> std::result::Result<(), SdkError> {
         }
         out
     })
+}
+
+fn credential_kind_name(kind: CredentialKind) -> &'static str {
+    match kind {
+        CredentialKind::Oauth => "oauth",
+        CredentialKind::ApiKey => "api_key",
+    }
 }
 
 // ----- Namespace -----
@@ -1350,5 +1378,51 @@ fn suggested_scope(missing: &str) -> Option<String> {
         Some(current)
     } else {
         Some(format!("{current} {missing}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Debug, Parser)]
+    struct CloudHarness {
+        #[command(subcommand)]
+        action: CloudAction,
+    }
+
+    #[test]
+    fn login_accepts_api_key() {
+        let parsed = CloudHarness::try_parse_from([
+            "test",
+            "login",
+            "--api-key",
+            "brk_AAAAAAAAAAAAAAAA.secret",
+        ])
+        .unwrap();
+
+        match parsed.action {
+            CloudAction::Login { api_key, .. } => {
+                assert_eq!(api_key.as_deref(), Some("brk_AAAAAAAAAAAAAAAA.secret"));
+            }
+            other => panic!("expected login action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn api_key_conflicts_with_oauth_customization() {
+        let error = CloudHarness::try_parse_from([
+            "test",
+            "login",
+            "--api-key",
+            "brk_AAAAAAAAAAAAAAAA.secret",
+            "--client-id",
+            "custom",
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }

@@ -57,7 +57,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
-use crate::auth::credentials::{CredentialsStore, default_credentials_path};
+use crate::auth::credentials::{CredentialKind, CredentialsStore, default_credentials_path};
 use crate::auth::metadata::{self, AsMetadata};
 
 pub mod billing;
@@ -112,6 +112,8 @@ pub struct ManagementClient {
     /// from this via [`ManagementClient::namespaced`]. Immutable for the
     /// client's lifetime — refresh never rebinds the namespace.
     namespace_id: Option<String>,
+    /// Authentication mechanism used to resolve bearer and namespace paths.
+    credential_kind: CredentialKind,
 }
 
 impl ManagementClient {
@@ -136,6 +138,7 @@ impl ManagementClient {
         let creds = store.current().ok_or(Error::NotSignedIn)?;
         let base_url = creds.base_url().trim_end_matches('/').to_owned();
         let namespace_id = creds.namespace_id().map(ToOwned::to_owned);
+        let credential_kind = creds.kind();
         let http = build_http_client()?;
         Ok(Self {
             base_url,
@@ -143,6 +146,7 @@ impl ManagementClient {
             store: Arc::new(Mutex::new(store)),
             metadata: Arc::new(Mutex::new(None)),
             namespace_id,
+            credential_kind,
         })
     }
 
@@ -159,12 +163,17 @@ impl ManagementClient {
         let namespace_id = store
             .current()
             .and_then(|credential| credential.namespace_id().map(ToOwned::to_owned));
+        let credential_kind = store
+            .current()
+            .map(|credential| credential.kind())
+            .unwrap_or(CredentialKind::Oauth);
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
             store: Arc::new(Mutex::new(store)),
             metadata: Arc::new(Mutex::new(None)),
             namespace_id,
+            credential_kind,
         }
     }
 
@@ -188,7 +197,11 @@ impl ManagementClient {
     /// namespace-scoped method from re-deriving the prefix and guards
     /// the "no namespace" case in exactly one place.
     pub(super) fn namespaced(&self, suffix: &str) -> Result<String> {
-        let nsid = self.namespace_id.as_deref().ok_or(Error::NoNamespace)?;
+        let nsid = match (self.namespace_id.as_deref(), self.credential_kind) {
+            (Some(namespace_id), _) => namespace_id,
+            (None, CredentialKind::ApiKey) => "me",
+            (None, CredentialKind::Oauth) => return Err(Error::NoNamespace),
+        };
         Ok(format!("/v1/namespaces/{nsid}{suffix}"))
     }
 
@@ -199,15 +212,16 @@ impl ManagementClient {
     /// is returned.
     async fn bearer(&self) -> Result<String> {
         let mut store = self.store.lock().await;
-        let creds = store
+        let authorization_server = store
             .current()
             .and_then(|credential| credential.oauth())
-            .ok_or(Error::NotSignedIn)?
-            .authorization_server
-            .clone();
-        let metadata = self.resolve_metadata(&creds).await?;
+            .map(|credentials| credentials.authorization_server.clone());
+        let metadata = match authorization_server {
+            Some(url) => Some(self.resolve_metadata(&url).await?),
+            None => None,
+        };
         store
-            .current_token(&self.http, Some(&metadata))
+            .current_token(&self.http, metadata.as_ref())
             .await
             .map_err(Error::Auth)
     }
