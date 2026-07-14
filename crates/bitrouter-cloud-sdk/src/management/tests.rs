@@ -278,16 +278,11 @@ async fn refreshes_bearer_within_refresh_window_then_calls_management() {
 
     let _ = client.list_keys().await.unwrap();
     let reloaded = CredentialsStore::load(&path).unwrap();
-    assert_eq!(
-        reloaded.current().unwrap().refresh_token.as_deref(),
-        Some("rotated-rt"),
-    );
+    let reloaded = reloaded.current().unwrap().oauth().unwrap();
+    assert_eq!(reloaded.refresh_token.as_deref(), Some("rotated-rt"),);
     // The stored namespace survives rotation; the refresh response's
     // conflicting `ns-evil` is ignored.
-    assert_eq!(
-        reloaded.current().unwrap().namespace_id.as_deref(),
-        Some("ns-1"),
-    );
+    assert_eq!(reloaded.namespace_id.as_deref(), Some("ns-1"),);
 }
 
 #[tokio::test]

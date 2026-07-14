@@ -176,12 +176,12 @@ impl BitrouterCloudAuthApplier {
                 self.credentials_path.display()
             ))
         })?;
-        let Some(creds) = store.current().cloned() else {
+        let Some(creds) = store.current().and_then(|credential| credential.oauth()) else {
             return Ok(None);
         };
         let metadata = self.resolve_metadata(&creds.authorization_server).await?;
         let token = store
-            .current_token(&self.refresh_client, &metadata)
+            .current_token(&self.refresh_client, Some(&metadata))
             .await
             .map_err(|e| BitrouterError::Upstream {
                 status: 401,
@@ -425,7 +425,13 @@ mod tests {
         // The rotated refresh token was persisted.
         let reloaded = CredentialsStore::load(&path).unwrap();
         assert_eq!(
-            reloaded.current().unwrap().refresh_token.as_deref(),
+            reloaded
+                .current()
+                .unwrap()
+                .oauth()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
             Some("rotated-rt")
         );
     }

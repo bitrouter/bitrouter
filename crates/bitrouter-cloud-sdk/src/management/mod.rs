@@ -134,8 +134,8 @@ impl ManagementClient {
             .with_context(|| format!("reading credentials at {}", path.display()))
             .map_err(Error::Auth)?;
         let creds = store.current().ok_or(Error::NotSignedIn)?;
-        let base_url = creds.authorization_server.trim_end_matches('/').to_owned();
-        let namespace_id = creds.namespace_id.clone();
+        let base_url = creds.base_url().trim_end_matches('/').to_owned();
+        let namespace_id = creds.namespace_id().map(ToOwned::to_owned);
         let http = build_http_client()?;
         Ok(Self {
             base_url,
@@ -156,7 +156,9 @@ impl ManagementClient {
         http: reqwest::Client,
         store: CredentialsStore,
     ) -> Self {
-        let namespace_id = store.current().and_then(|c| c.namespace_id.clone());
+        let namespace_id = store
+            .current()
+            .and_then(|credential| credential.namespace_id().map(ToOwned::to_owned));
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
@@ -199,12 +201,13 @@ impl ManagementClient {
         let mut store = self.store.lock().await;
         let creds = store
             .current()
+            .and_then(|credential| credential.oauth())
             .ok_or(Error::NotSignedIn)?
             .authorization_server
             .clone();
         let metadata = self.resolve_metadata(&creds).await?;
         store
-            .current_token(&self.http, &metadata)
+            .current_token(&self.http, Some(&metadata))
             .await
             .map_err(Error::Auth)
     }

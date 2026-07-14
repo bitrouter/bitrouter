@@ -574,8 +574,8 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             let body = serde_json::json!({
                 "signed_in": true,
                 "namespace": client.namespace_id(),
-                "subject": store.current().and_then(|c| c.subject.clone()),
-                "scope": store.current().map(|c| c.scope.clone()),
+                "subject": store.current().and_then(|c| c.subject()),
+                "scope": store.current().and_then(|c| c.scope()),
                 "credentials_path": store.path().display().to_string(),
             });
             emit(false, &body, |_| "signed in".to_string())
@@ -615,8 +615,12 @@ async fn whoami() -> std::result::Result<(), SdkError> {
     // Offline — reads the local credentials file (works without network).
     let client = client()?;
     let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
-    let scope = store.current().map(|c| c.scope.clone());
-    let subject = store.current().and_then(|c| c.subject.clone());
+    let scope = store
+        .current()
+        .and_then(|credential| credential.scope().map(ToOwned::to_owned));
+    let subject = store
+        .current()
+        .and_then(|credential| credential.subject().map(ToOwned::to_owned));
     let signed_in = store.current().is_some();
     let body = serde_json::json!({
         "signed_in": signed_in,
@@ -1339,7 +1343,7 @@ fn print_error_hint(err: &SdkError) {
 fn suggested_scope(missing: &str) -> Option<String> {
     let path = default_credentials_path().ok()?;
     let store = CredentialsStore::load(&path).ok()?;
-    let current = store.current()?.scope.clone();
+    let current = store.current()?.scope()?.to_owned();
     if current.split_whitespace().any(|s| s == missing) {
         // Already present — probably the server is rejecting something
         // we can't auto-fix. Don't suggest a duplicate.

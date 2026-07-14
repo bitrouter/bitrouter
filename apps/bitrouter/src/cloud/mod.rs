@@ -128,7 +128,10 @@ impl TelemetryBearer for CloudBearer {
         // the rotated token. Any error (no stored creds, refresh failure, …) is
         // swallowed to `None` so the export stays anonymous — best-effort.
         let mut store = self.store.lock().await;
-        store.current_token(&self.client, &self.metadata).await.ok()
+        store
+            .current_token(&self.client, Some(&self.metadata))
+            .await
+            .ok()
     }
 }
 
@@ -152,7 +155,7 @@ pub async fn cloud_bearer_source() -> Option<Arc<dyn TelemetryBearer>> {
 async fn cloud_bearer_source_from_store(
     store: CredentialsStore,
 ) -> Option<Arc<dyn TelemetryBearer>> {
-    let creds = store.current()?;
+    let creds = store.current()?.oauth()?;
     let client = reqwest::Client::new();
     let metadata = bitrouter_cloud_sdk::auth::metadata::fetch(&client, &creds.authorization_server)
         .await

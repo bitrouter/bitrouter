@@ -202,7 +202,10 @@ async fn end_to_end_device_flow_with_mock_authorization_server() {
         store.save(initial.clone()).unwrap();
     }
     let mut store = CredentialsStore::load(&path).unwrap();
-    let loaded = store.current().expect("loaded credentials");
+    let loaded = store
+        .current()
+        .and_then(|credential| credential.oauth())
+        .expect("loaded OAuth credentials");
     assert_eq!(loaded.access_token, "AT-INITIAL");
     // The namespace binding survives serialise → disk → reload.
     assert_eq!(loaded.namespace_id.as_deref(), Some("ns-1"));
@@ -215,12 +218,15 @@ async fn end_to_end_device_flow_with_mock_authorization_server() {
     };
     store.save(near_expiry).unwrap();
     let bearer = store
-        .current_token(&client, &metadata)
+        .current_token(&client, Some(&metadata))
         .await
         .expect("refresh succeeds");
     assert_eq!(bearer, "AT-REFRESHED");
     // The rotated refresh token must have been persisted, NOT the old one.
-    let after_refresh = store.current().expect("creds after refresh");
+    let after_refresh = store
+        .current()
+        .and_then(|credential| credential.oauth())
+        .expect("OAuth credentials after refresh");
     assert_eq!(after_refresh.refresh_token.as_deref(), Some("RT-ROTATED"));
     assert_eq!(after_refresh.access_token, "AT-REFRESHED");
     assert!(after_refresh.access_token_valid());

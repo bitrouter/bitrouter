@@ -6,7 +6,9 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 
-use super::credentials::{Credentials, CredentialsStore, default_credentials_path};
+use super::credentials::{
+    Credentials, CredentialsStore, StoredCredential, default_credentials_path,
+};
 use super::flow;
 use super::metadata::{self, AsMetadata};
 use super::settings::{Settings, resolve_from_env};
@@ -36,7 +38,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 
 /// Run the device-authorization grant against the configured AS and
 /// persist the resulting tokens. Used by `bitrouter cloud login`.
-pub async fn login(inputs: LoginInputs) -> Result<Credentials> {
+pub async fn login(inputs: LoginInputs) -> Result<StoredCredential> {
     let settings = resolve_from_env(
         inputs.authorization_server.as_deref(),
         inputs.client_id.as_deref(),
@@ -71,9 +73,10 @@ pub async fn login(inputs: LoginInputs) -> Result<Credentials> {
     })
     .await?;
     let credentials = flow::credentials_from_token_set(token_set, &settings);
+    let stored = StoredCredential::from(credentials.clone());
     let mut store = CredentialsStore::default_path().context("opening credentials store")?;
     store
-        .save(credentials.clone())
+        .save(stored.clone())
         .context("persisting credentials")?;
     eprintln!();
     eprintln!(
@@ -84,14 +87,18 @@ pub async fn login(inputs: LoginInputs) -> Result<Credentials> {
         eprintln!("    subject: {sub}");
     }
     eprintln!("    scope:   {}", credentials.scope);
-    Ok(credentials)
+    Ok(stored)
 }
 
 /// Revoke the stored tokens (best-effort) and clear the local file.
 /// Used by `bitrouter cloud logout`.
 pub async fn logout(inputs: LoginInputs) -> Result<()> {
     let mut store = CredentialsStore::default_path().context("opening credentials store")?;
-    let prior = match store.current().cloned() {
+    let prior = match store
+        .current()
+        .and_then(|credential| credential.oauth())
+        .cloned()
+    {
         Some(p) => p,
         None => {
             eprintln!("  No stored credentials; nothing to do.");
@@ -170,7 +177,13 @@ async fn best_effort_revoke(
 pub async fn whoami() -> Result<()> {
     let store = CredentialsStore::default_path().context("opening credentials store")?;
     match store.current() {
-        Some(creds) => {
+        Some(credential) => {
+            let Some(creds) = credential.oauth() else {
+                println!("authentication:       api_key");
+                println!("authorization server: {}", credential.base_url());
+                println!("credentials file:     {}", store.path().display());
+                return Ok(());
+            };
             let now = Utc::now();
             let status = if now < creds.expires_at {
                 let remaining = (creds.expires_at - now).num_seconds().max(0);

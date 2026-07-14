@@ -1,4 +1,4 @@
-//! On-disk OAuth credentials for the `bitrouter cloud` user-account flow.
+//! On-disk credentials for `bitrouter cloud` authentication.
 //!
 //! Single JSON file at `<data-dir>/account-credentials.json`. The file
 //! is owner-only (mode `0o600` on Unix) — these tokens grant access to
@@ -120,13 +120,149 @@ impl Credentials {
     }
 }
 
+/// Authentication mechanism represented by a stored credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    /// OAuth 2.0 access and refresh tokens.
+    Oauth,
+    /// A static BitRouter Cloud API key.
+    ApiKey,
+}
+
+/// A credential persisted by `bitrouter cloud login`.
+///
+/// New files use a tagged representation. Deserialization also accepts the
+/// original untagged OAuth object so existing logins continue to work.
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StoredCredential {
+    /// OAuth 2.0 device-flow credentials.
+    Oauth {
+        /// The persisted OAuth token set and its refresh metadata.
+        #[serde(flatten)]
+        credential: Credentials,
+    },
+    /// A static API key bound to the login origin.
+    ApiKey {
+        /// The bearer value. Debug output always redacts this field.
+        api_key: String,
+        /// The BitRouter Cloud origin selected at login time.
+        base_url: String,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TaggedCredential {
+    Oauth {
+        #[serde(flatten)]
+        credential: Credentials,
+    },
+    ApiKey {
+        api_key: String,
+        base_url: String,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CompatibleCredential {
+    Tagged(TaggedCredential),
+    LegacyOauth(Credentials),
+}
+
+impl<'de> Deserialize<'de> for StoredCredential {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match CompatibleCredential::deserialize(deserializer)? {
+            CompatibleCredential::Tagged(TaggedCredential::Oauth { credential })
+            | CompatibleCredential::LegacyOauth(credential) => Ok(Self::Oauth { credential }),
+            CompatibleCredential::Tagged(TaggedCredential::ApiKey { api_key, base_url }) => {
+                Ok(Self::ApiKey { api_key, base_url })
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for StoredCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Oauth { credential } => f
+                .debug_struct("StoredCredential::Oauth")
+                .field("credential", credential)
+                .finish(),
+            Self::ApiKey { base_url, .. } => f
+                .debug_struct("StoredCredential::ApiKey")
+                .field("api_key", &"<redacted>")
+                .field("base_url", base_url)
+                .finish(),
+        }
+    }
+}
+
+impl From<Credentials> for StoredCredential {
+    fn from(credential: Credentials) -> Self {
+        Self::Oauth { credential }
+    }
+}
+
+impl StoredCredential {
+    /// Construct a static API-key credential for `base_url`.
+    pub fn api_key(api_key: String, base_url: String) -> Self {
+        Self::ApiKey { api_key, base_url }
+    }
+
+    /// Return the authentication mechanism used by this credential.
+    pub fn kind(&self) -> CredentialKind {
+        match self {
+            Self::Oauth { .. } => CredentialKind::Oauth,
+            Self::ApiKey { .. } => CredentialKind::ApiKey,
+        }
+    }
+
+    /// Return the BitRouter Cloud base URL recorded at login time.
+    pub fn base_url(&self) -> &str {
+        match self {
+            Self::Oauth { credential } => &credential.authorization_server,
+            Self::ApiKey { base_url, .. } => base_url,
+        }
+    }
+
+    /// Return the OAuth payload, or `None` for a static API key.
+    pub fn oauth(&self) -> Option<&Credentials> {
+        match self {
+            Self::Oauth { credential } => Some(credential),
+            Self::ApiKey { .. } => None,
+        }
+    }
+
+    /// Return the namespace bound to an OAuth credential.
+    pub fn namespace_id(&self) -> Option<&str> {
+        self.oauth()
+            .and_then(|credential| credential.namespace_id.as_deref())
+    }
+
+    /// Return the OAuth scope, or `None` for a static API key.
+    pub fn scope(&self) -> Option<&str> {
+        self.oauth().map(|credential| credential.scope.as_str())
+    }
+
+    /// Return the OAuth subject, or `None` for a static API key.
+    pub fn subject(&self) -> Option<&str> {
+        self.oauth()
+            .and_then(|credential| credential.subject.as_deref())
+    }
+}
+
 /// File-backed credentials store. Single-credential — there is one
 /// "current account" per bitrouter install. Multi-account support could
 /// layer on top later; not in scope for v1.
 #[derive(Debug)]
 pub struct CredentialsStore {
     path: PathBuf,
-    current: Option<Credentials>,
+    current: Option<StoredCredential>,
 }
 
 /// Default filename inside the bitrouter data directory.
@@ -163,16 +299,17 @@ impl CredentialsStore {
 
     /// The current stored credentials, if any. Does NOT trigger a
     /// refresh — see [`current_token`](Self::current_token).
-    pub fn current(&self) -> Option<&Credentials> {
+    pub fn current(&self) -> Option<&StoredCredential> {
         self.current.as_ref()
     }
 
     /// Persist `credentials` to disk and update the in-memory cache.
     /// Atomically renames a sibling `.tmp` file so a crash mid-write
     /// can't truncate the credentials file.
-    pub fn save(&mut self, credentials: Credentials) -> Result<()> {
+    pub fn save(&mut self, credential: impl Into<StoredCredential>) -> Result<()> {
+        let credential = credential.into();
         let bytes =
-            serde_json::to_vec_pretty(&credentials).context("serialising credentials to JSON")?;
+            serde_json::to_vec_pretty(&credential).context("serialising credentials to JSON")?;
         let parent = self
             .path
             .parent()
@@ -205,14 +342,14 @@ impl CredentialsStore {
         }
         fs::rename(&tmp, &self.path)
             .with_context(|| format!("renaming {} -> {}", tmp.display(), self.path.display()))?;
-        self.current = Some(credentials);
+        self.current = Some(credential);
         Ok(())
     }
 
     /// Remove the credentials file and clear the in-memory cache.
     /// Returns the prior credentials (if any) so the caller can attempt
     /// a best-effort revoke before they're discarded.
-    pub fn clear(&mut self) -> Result<Option<Credentials>> {
+    pub fn clear(&mut self) -> Result<Option<StoredCredential>> {
         let prior = self.current.take();
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(prior),
@@ -236,16 +373,21 @@ impl CredentialsStore {
     pub async fn current_token(
         &mut self,
         client: &reqwest::Client,
-        metadata: &AsMetadata,
+        metadata: Option<&AsMetadata>,
     ) -> Result<String> {
-        let creds = self
+        let credential = self
             .current
             .as_ref()
             .context("no stored credentials — run `bitrouter cloud login` first")?
             .clone();
+        let creds = match credential {
+            StoredCredential::ApiKey { api_key, .. } => return Ok(api_key),
+            StoredCredential::Oauth { credential } => credential,
+        };
         if !creds.access_token_near_expiry(REFRESH_WINDOW) {
             return Ok(creds.access_token);
         }
+        let metadata = metadata.context("OAuth metadata is required to refresh this credential")?;
         let refresh_token = creds.refresh_token.as_deref().context(
             "access token expired and no refresh token is stored — run `bitrouter cloud login`",
         )?;
@@ -371,7 +513,7 @@ mod tests {
             store.save(creds.clone()).unwrap();
         }
         let reloaded = CredentialsStore::load(&path).unwrap();
-        let got = reloaded.current().unwrap();
+        let got = reloaded.current().unwrap().oauth().unwrap();
         assert_eq!(got.access_token, creds.access_token);
         assert_eq!(got.refresh_token, creds.refresh_token);
         assert_eq!(got.scope, creds.scope);
@@ -389,7 +531,7 @@ mod tests {
         store.save(sample_credentials()).unwrap();
         assert!(path.exists());
         let prior = store.clear().unwrap().unwrap();
-        assert_eq!(prior.access_token, "AT");
+        assert_eq!(prior.oauth().unwrap().access_token, "AT");
         assert!(!path.exists());
         // Second clear is a no-op.
         assert!(store.clear().unwrap().is_none());
@@ -412,6 +554,67 @@ mod tests {
         // Non-secret fields are still visible.
         assert!(rendered.contains("user-42"));
         assert!(rendered.contains("https://as.example.com"));
+    }
+
+    #[test]
+    fn tagged_api_key_round_trips_and_redacts() {
+        let path = tmp_dir("api-key").join(DEFAULT_FILENAME);
+        let credential = StoredCredential::api_key(
+            "brk_AAAAAAAAAAAAAAAA.secret-value".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        );
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store.save(credential).unwrap();
+
+        let reloaded = CredentialsStore::load(&path).unwrap();
+        let current = reloaded.current().unwrap();
+        assert_eq!(current.kind(), CredentialKind::ApiKey);
+        assert_eq!(current.base_url(), "https://api.bitrouter.ai");
+        let rendered = format!("{current:?}");
+        assert!(!rendered.contains("secret-value"));
+        assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn legacy_untagged_oauth_file_still_loads() {
+        let path = tmp_dir("legacy").join(DEFAULT_FILENAME);
+        fs::write(&path, serde_json::to_vec(&sample_credentials()).unwrap()).unwrap();
+
+        let store = CredentialsStore::load(path).unwrap();
+        let current = store.current().unwrap();
+        assert_eq!(current.kind(), CredentialKind::Oauth);
+        assert_eq!(current.oauth().unwrap().access_token, "AT");
+    }
+
+    #[tokio::test]
+    async fn api_key_current_token_needs_no_metadata() {
+        let path = tmp_dir("api-key-token").join(DEFAULT_FILENAME);
+        let mut store = CredentialsStore::load(path).unwrap();
+        store
+            .save(StoredCredential::api_key(
+                "brk_AAAAAAAAAAAAAAAA.secret".to_owned(),
+                "https://api.bitrouter.ai".to_owned(),
+            ))
+            .unwrap();
+
+        let token = store
+            .current_token(&reqwest::Client::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(token, "brk_AAAAAAAAAAAAAAAA.secret");
+    }
+
+    #[tokio::test]
+    async fn fresh_oauth_current_token_needs_no_metadata() {
+        let path = tmp_dir("fresh-oauth-token").join(DEFAULT_FILENAME);
+        let mut store = CredentialsStore::load(path).unwrap();
+        store.save(sample_credentials()).unwrap();
+
+        let token = store
+            .current_token(&reqwest::Client::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(token, "AT");
     }
 
     #[test]
