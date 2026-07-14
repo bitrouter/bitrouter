@@ -1035,10 +1035,12 @@ pub fn launch_options(
     LaunchOptions {
         worktree: worktree.map(|name| WorktreeSpec {
             name: name.to_string(),
+            branch: None,
             remove_on_shutdown: rm_worktree,
         }),
         transcript: !no_transcript,
         turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
+        ..Default::default()
     }
 }
 

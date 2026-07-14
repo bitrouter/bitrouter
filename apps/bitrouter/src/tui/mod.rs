@@ -50,14 +50,20 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
         );
     }
     let base_repo = std::env::current_dir().context("resolving current directory")?;
+    let ports = (cfg.worktrees.ports.from, cfg.worktrees.ports.to);
 
-    // ── Initial session. Worktrees are retained on close (they hold the
-    // agent's work); transcripts stay on (LaunchOptions default). ──
+    // ── Initial session: the primary agent runs in the base repo (worktree
+    // strictly opt-in via --worktree) but still draws a fleet PORT. Worktrees
+    // are retained on close (they hold the agent's work); transcripts stay on
+    // (LaunchOptions default). ──
+    let initial_port = alloc_port(ports, &HashMap::new());
     let options = bitrouter_substrate::engine::LaunchOptions {
         worktree: worktree.map(|name| bitrouter_substrate::worktree::WorktreeSpec {
             name: name.to_string(),
+            branch: None,
             remove_on_shutdown: false,
         }),
+        env: port_env(initial_port),
         ..Default::default()
     };
     let session = Session::launch(&catalog, agent_id, base_repo.clone(), options)
@@ -72,9 +78,16 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
 
     let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
     sessions.insert(record_id.clone(), session);
+    let mut port_alloc: HashMap<String, u16> = HashMap::new();
+    if let Some(p) = initial_port {
+        port_alloc.insert(record_id.clone(), p);
+    }
 
     // ── Initial state. ──
-    let mut state = AppState::new(PaneState::new(record_id, agent_id.to_string()));
+    let mut initial_pane = PaneState::new(record_id, agent_id.to_string());
+    initial_pane.port = initial_port;
+    let mut state = AppState::new(initial_pane);
+    state.bootstrap_cmd = cfg.worktrees.bootstrap.clone();
     state.set_available_agents(agent_ids);
     state.set_harness_map(
         cfg.agents
@@ -94,9 +107,55 @@ pub async fn run(agent_id: &str, worktree: Option<&str>) -> Result<()> {
     // the terminal is restored even if the loop panics mid-draw. ──
     install_panic_restore(restore_terminal);
     let mut terminal = setup_terminal().context("entering raw mode")?;
-    let result = event_loop(&mut terminal, state, rx, sessions, &catalog, base_repo, tx).await;
+    let rt = Runtime {
+        sessions,
+        pending: HashMap::new(),
+        prompt_tasks: HashMap::new(),
+        spawner: Spawner {
+            catalog: &catalog,
+            base_repo,
+            tx,
+        },
+        fleet: Fleet { ports, port_alloc },
+    };
+    let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
     result
+}
+
+/// Fleet-level resources the loop allocates per subagent (TUI_SPEC §6).
+struct Fleet {
+    /// The inclusive `PORT` pool (`worktrees.ports`).
+    ports: (u16, u16),
+    /// record_id → allocated port; freed when the agent closes.
+    port_alloc: HashMap<String, u16>,
+}
+
+/// Lowest port in the inclusive pool not currently allocated; `None` when the
+/// pool is exhausted (the agent then simply gets no `PORT`).
+fn alloc_port(range: (u16, u16), allocated: &HashMap<String, u16>) -> Option<u16> {
+    (range.0..=range.1).find(|p| !allocated.values().any(|used| used == p))
+}
+
+/// The `PORT` env overlay for a launch, when a port was allocated.
+fn port_env(port: Option<u16>) -> Vec<(String, String)> {
+    port.map(|p| vec![("PORT".to_string(), p.to_string())])
+        .unwrap_or_default()
+}
+
+/// Branch-safe agent tag for worktree/branch naming: keep `[A-Za-z0-9._]`,
+/// everything else becomes `-`.
+fn branch_tag(agent_id: &str) -> String {
+    agent_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 /// Terse harness tag for a pane header: the basename of the agent command
@@ -168,6 +227,7 @@ struct Runtime<'a> {
     pending: HashMap<String, bitrouter_substrate::up::PendingPermission>,
     prompt_tasks: PromptTasks,
     spawner: Spawner<'a>,
+    fleet: Fleet,
 }
 
 /// The core loop over a registry of sessions. Draws, muxes input vs pumped
@@ -176,21 +236,8 @@ async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     mut state: AppState,
     mut rx: UnboundedReceiver<Incoming>,
-    sessions: HashMap<String, Arc<Session>>,
-    catalog: &bitrouter_sdk::acp::ConfigAcpRoutingTable,
-    base_repo: std::path::PathBuf,
-    tx: UnboundedSender<Incoming>,
+    mut rt: Runtime<'_>,
 ) -> Result<()> {
-    let mut rt = Runtime {
-        sessions,
-        pending: HashMap::new(),
-        prompt_tasks: HashMap::new(),
-        spawner: Spawner {
-            catalog,
-            base_repo,
-            tx,
-        },
-    };
     let mut keys = EventStream::new();
     // Drives the running-agent spinner and gives coalesced batches a steady
     // redraw cadence.
@@ -346,11 +393,32 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
         }
         Effect::SpawnAgent { agent_id } => {
+            // Fleet-managed subagents are worktree-isolated BY DEFAULT
+            // (TUI_SPEC §6): each gets its own worktree + branch
+            // (`bitrouter/<agent>-<record16>`, based on the manager's HEAD),
+            // a PORT from the pool, and — when the human approved it — the
+            // bootstrap hook. Worktrees are retained on close: cleanup is
+            // gated on merged-or-discarded, never automatic.
+            let tag = branch_tag(&agent_id);
+            let port = alloc_port(rt.fleet.ports, &rt.fleet.port_alloc);
+            let options = bitrouter_substrate::engine::LaunchOptions {
+                worktree: Some(bitrouter_substrate::worktree::WorktreeSpec {
+                    name: format!("{tag}-{{record16}}"),
+                    branch: Some(format!("bitrouter/{tag}-{{record16}}")),
+                    remove_on_shutdown: false,
+                }),
+                worktree_bootstrap: match state.bootstrap_decision {
+                    Some(true) => state.bootstrap_cmd.clone(),
+                    _ => None,
+                },
+                env: port_env(port),
+                ..Default::default()
+            };
             match Session::launch(
                 rt.spawner.catalog,
                 &agent_id,
                 rt.spawner.base_repo.clone(),
-                bitrouter_substrate::engine::LaunchOptions::default(),
+                options,
             )
             .await
             {
@@ -358,12 +426,16 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     let rid = sess.state().record_id.clone();
                     let sess = Arc::new(sess);
                     rt.sessions.insert(rid.clone(), Arc::clone(&sess));
+                    if let Some(p) = port {
+                        rt.fleet.port_alloc.insert(rid.clone(), p);
+                    }
                     pump::spawn(sess, rid.clone(), rt.spawner.tx.clone());
                     let _ = reduce(
                         state,
                         &AppEvent::AgentSpawned {
                             record_id: rid,
                             agent_id,
+                            port,
                         },
                     );
                 }
@@ -380,6 +452,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
         }
         Effect::CloseAgent { record_id } => {
             rt.pending.remove(&record_id);
+            rt.fleet.port_alloc.remove(&record_id);
             if let Some(handles) = rt.prompt_tasks.remove(&record_id) {
                 for handle in handles {
                     handle.abort();
@@ -584,6 +657,30 @@ mod tests {
             Risk::High,
             "missing kind is high"
         );
+    }
+
+    #[test]
+    fn alloc_port_takes_lowest_free_and_exhausts_cleanly() {
+        let mut allocated = std::collections::HashMap::new();
+        assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3100));
+        allocated.insert("r0".to_string(), 3100);
+        assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3101));
+        allocated.insert("r1".to_string(), 3101);
+        assert_eq!(
+            super::alloc_port((3100, 3101), &allocated),
+            None,
+            "an exhausted pool allocates nothing rather than colliding"
+        );
+        // Closing an agent frees its port for the next spawn.
+        allocated.remove("r0");
+        assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3100));
+    }
+
+    #[test]
+    fn branch_tag_sanitizes_for_git_ref_names() {
+        assert_eq!(super::branch_tag("claude-acp"), "claude-acp");
+        assert_eq!(super::branch_tag("my agent/v2"), "my-agent-v2");
+        assert_eq!(super::branch_tag("gpt_4.1"), "gpt_4.1");
     }
 
     #[tokio::test]

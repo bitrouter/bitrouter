@@ -54,6 +54,10 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
         render_palette(palette, state.no_color, frame, area);
     }
 
+    if state.mode == Mode::Confirm {
+        render_confirm(state, frame, area);
+    }
+
     if state.keys_help {
         render_keys_help(state.mode, state.no_color, frame, area);
     }
@@ -98,6 +102,41 @@ fn render_palette(
     frame.render_widget(para, popup);
 }
 
+/// Bootstrap-approval overlay: the hook executes shell on every new worktree,
+/// so it is shown verbatim before the first isolated spawn each session.
+fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
+    let nc = state.no_color;
+    let popup = centered(area, 70, 40);
+    frame.render_widget(Clear, popup);
+    let cmd = state.bootstrap_cmd.as_deref().unwrap_or_default();
+    let agent = state.confirm_agent.as_deref().unwrap_or_default();
+    let lines: Vec<TuiLine> = vec![
+        TuiLine::raw(format!(
+            "spawning {agent} into an isolated worktree — run the configured"
+        )),
+        TuiLine::raw("bootstrap hook in each new worktree? It executes shell:"),
+        TuiLine::raw(""),
+        TuiLine::styled(format!("  {cmd}"), tint(nc, Color::Yellow)),
+        TuiLine::raw(""),
+        TuiLine::from(vec![
+            Span::styled("[y]", tint(nc, Color::Green)),
+            Span::raw(" run for this session   "),
+            Span::styled("[n]", tint(nc, Color::Red)),
+            Span::raw(" skip this session   "),
+            Span::styled("[Esc]", tint(nc, Color::DarkGray)),
+            Span::raw(" cancel spawn"),
+        ]),
+    ];
+    let para = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" worktree bootstrap "),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, popup);
+}
+
 /// Which-key overlay: every binding for the current mode. Any key dismisses.
 fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
@@ -125,6 +164,11 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
             ("Esc", "back to normal"),
         ],
         Mode::Picker => &[("↑ / ↓", "select"), ("Enter", "spawn"), ("Esc", "cancel")],
+        Mode::Confirm => &[
+            ("y", "run bootstrap this session"),
+            ("n", "skip bootstrap this session"),
+            ("Esc", "cancel the spawn"),
+        ],
         Mode::Broadcast => &[
             ("Space", "toggle cursor row"),
             ("1-9", "toggle roster row"),
@@ -220,6 +264,10 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         // Cumulative cost, when the upstream meters it (the `$` column).
         if let Some(cost) = &pane.cost {
             spans.push(Span::styled(fmt_cost(cost), tint(nc, Color::DarkGray)));
+        }
+        // The fleet-allocated dev-server port, so N servers stay tellable apart.
+        if let Some(port) = pane.port {
+            spans.push(Span::styled(format!(" :{port}"), tint(nc, Color::DarkGray)));
         }
         lines.push(TuiLine::from(spans));
         // Actionable rows expand inline: risk + what the agent wants, and (on
@@ -543,6 +591,7 @@ fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
         Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
+        Mode::Confirm => "CONFIRM  y run bootstrap · n skip · Esc cancel spawn",
     };
     let text = match &state.notice {
         Some(n) => format!("{hints}   ! {n}"),
@@ -947,6 +996,29 @@ mod tests {
         });
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("$0.25"), "cost column rendered: {text:?}");
+    }
+
+    #[test]
+    fn confirm_overlay_shows_the_bootstrap_command() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.mode = Mode::Confirm;
+        st.bootstrap_cmd = Some("npm ci".into());
+        st.confirm_agent = Some("codex".into());
+        let text = draw(&mut st, 90, 24);
+        assert!(text.contains("npm ci"), "the shell it will run is visible");
+        assert!(text.contains("codex"), "which spawn is waiting");
+        assert!(
+            text.contains("[y]") && text.contains("[Esc]"),
+            "resolve keys"
+        );
+    }
+
+    #[test]
+    fn rail_shows_allocated_port() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.agents[0].port = Some(3101);
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains(":3101"), "port column rendered: {text:?}");
     }
 
     #[test]

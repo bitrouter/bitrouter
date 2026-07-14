@@ -30,6 +30,9 @@ pub enum Mode {
     Broadcast,
     /// Fuzzy command palette (`:` on an empty prompt, or `:` in AGENT mode).
     Command,
+    /// Approving the worktree bootstrap hook before the first isolated spawn
+    /// (it executes shell — shown to the human on first use, per session).
+    Confirm,
 }
 
 /// One palette command. The table is static; actions map onto existing
@@ -323,6 +326,9 @@ pub struct PaneState {
     pub turn_active: bool,
     /// The last turn's typed ACP stop reason.
     pub last_stop: Option<StopReason>,
+    /// The fleet-allocated `PORT` for this agent's dev server, if any;
+    /// shown in the roster row so N servers stay tellable apart.
+    pub port: Option<u16>,
 }
 
 impl PaneState {
@@ -347,6 +353,7 @@ impl PaneState {
             tool_diffs: HashMap::new(),
             turn_active: false,
             last_stop: None,
+            port: None,
         }
     }
 
@@ -596,6 +603,14 @@ pub struct AppState {
     pub available_agents: Vec<String>,
     pub notice: Option<String>,
     pub broadcast_input: String,
+    /// The configured worktree bootstrap hook (`worktrees.bootstrap`), if any.
+    pub bootstrap_cmd: Option<String>,
+    /// The human's per-session bootstrap decision: `None` = not asked yet
+    /// (the first isolated spawn asks), `Some(true)` = run it on every new
+    /// worktree, `Some(false)` = skip it for this session.
+    pub bootstrap_decision: Option<bool>,
+    /// The spawn awaiting the bootstrap decision (present in `Mode::Confirm`).
+    pub confirm_agent: Option<String>,
 }
 
 impl AppState {
@@ -619,6 +634,9 @@ impl AppState {
             available_agents: Vec::new(),
             notice: None,
             broadcast_input: String::new(),
+            bootstrap_cmd: None,
+            bootstrap_decision: None,
+            confirm_agent: None,
         }
     }
 
@@ -802,11 +820,13 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         AppEvent::AgentSpawned {
             record_id,
             agent_id,
+            port,
         } => {
             let mut pane = PaneState::new(record_id.clone(), agent_id.clone());
             if let Some(h) = state.harness_by_agent.get(agent_id) {
                 pane.harness = h.clone();
             }
+            pane.port = *port;
             state.agents.push(pane);
             // A just-spawned agent is what you want to look at: open it solo.
             state.detail = DetailLayout::solo(record_id.clone());
@@ -855,6 +875,7 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 Mode::Picker => reduce_key_picker(state, key),
                 Mode::Broadcast => reduce_key_broadcast(state, key),
                 Mode::Command => reduce_key_command(state, key),
+                Mode::Confirm => reduce_key_confirm(state, key),
             }
         }
     }
@@ -1336,12 +1357,46 @@ fn reduce_key_picker(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.picker = None;
             state.mode = Mode::Normal;
             match selected {
-                Some(agent_id) => vec![Effect::SpawnAgent { agent_id }],
+                Some(agent_id) => request_spawn(state, agent_id),
                 None => Vec::new(), // empty picker → just close, no spawn
             }
         }
         KeyCode::Esc => {
             state.picker = None;
+            state.mode = Mode::Normal;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Emit the spawn — unless a configured bootstrap hook hasn't been shown to
+/// the human yet this session (it executes shell on worktree creation), in
+/// which case the CONFIRM overlay asks first and the spawn waits.
+fn request_spawn(state: &mut AppState, agent_id: String) -> Vec<Effect> {
+    if state.bootstrap_cmd.is_some() && state.bootstrap_decision.is_none() {
+        state.confirm_agent = Some(agent_id);
+        state.mode = Mode::Confirm;
+        return Vec::new();
+    }
+    vec![Effect::SpawnAgent { agent_id }]
+}
+
+/// CONFIRM-mode keys: decide the bootstrap hook's fate for this session,
+/// then release the pending spawn. `y` = run it on every new worktree,
+/// `n` = skip it this session, Esc = cancel the spawn (ask again next time).
+fn reduce_key_confirm(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Char(c @ ('y' | 'n')) => {
+            state.bootstrap_decision = Some(c == 'y');
+            state.mode = Mode::Normal;
+            match state.confirm_agent.take() {
+                Some(agent_id) => vec![Effect::SpawnAgent { agent_id }],
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Esc => {
+            state.confirm_agent = None;
             state.mode = Mode::Normal;
             Vec::new()
         }
@@ -2181,6 +2236,7 @@ mod tests {
             &AppEvent::AgentSpawned {
                 record_id: "r9".into(),
                 agent_id: "fake".into(),
+                port: None,
             },
         );
         assert_eq!(st.agents.len(), 2);
@@ -2198,6 +2254,7 @@ mod tests {
             &AppEvent::AgentSpawned {
                 record_id: "r9".into(),
                 agent_id: "fake".into(),
+                port: None,
             },
         );
         assert_eq!(st.agents[1].harness, "codex");
@@ -2701,6 +2758,95 @@ mod tests {
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Normal);
         assert!(st.picker.is_none());
+    }
+
+    // ── Bootstrap confirm (worktree hook gating). ──
+
+    fn picker_with_bootstrap() -> AppState {
+        let mut st = picker_state(&["fake"]);
+        st.bootstrap_cmd = Some("cp $BITROUTER_BASE_REPO/.env .".into());
+        st
+    }
+
+    #[test]
+    fn first_spawn_with_bootstrap_asks_instead_of_spawning() {
+        let mut st = picker_with_bootstrap();
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert!(fx.is_empty(), "the hook executes shell — ask first");
+        assert_eq!(st.mode, Mode::Confirm);
+        assert_eq!(st.confirm_agent.as_deref(), Some("fake"));
+        assert_eq!(st.bootstrap_decision, None);
+    }
+
+    #[test]
+    fn confirm_y_approves_for_the_session_and_releases_the_spawn() {
+        let mut st = picker_with_bootstrap();
+        reduce(&mut st, &press(KeyCode::Enter));
+        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert_eq!(
+            fx,
+            vec![Effect::SpawnAgent {
+                agent_id: "fake".into()
+            }]
+        );
+        assert_eq!(st.bootstrap_decision, Some(true));
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.confirm_agent.is_none());
+        // Second spawn: decided — no re-ask.
+        let fx = request_spawn(&mut st, "fake".into());
+        assert_eq!(fx.len(), 1, "asked once per session");
+    }
+
+    #[test]
+    fn confirm_n_skips_bootstrap_but_still_spawns() {
+        let mut st = picker_with_bootstrap();
+        reduce(&mut st, &press(KeyCode::Enter));
+        let fx = reduce(&mut st, &press(KeyCode::Char('n')));
+        assert_eq!(
+            fx,
+            vec![Effect::SpawnAgent {
+                agent_id: "fake".into()
+            }]
+        );
+        assert_eq!(st.bootstrap_decision, Some(false));
+    }
+
+    #[test]
+    fn confirm_esc_cancels_the_spawn_and_keeps_asking_next_time() {
+        let mut st = picker_with_bootstrap();
+        reduce(&mut st, &press(KeyCode::Enter));
+        let fx = reduce(&mut st, &press(KeyCode::Esc));
+        assert!(fx.is_empty(), "cancelled — nothing spawns");
+        assert_eq!(st.mode, Mode::Normal);
+        assert_eq!(st.bootstrap_decision, None, "undecided: ask again");
+        assert!(st.confirm_agent.is_none());
+    }
+
+    #[test]
+    fn spawn_without_bootstrap_config_never_asks() {
+        let mut st = picker_state(&["fake"]);
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(
+            fx,
+            vec![Effect::SpawnAgent {
+                agent_id: "fake".into()
+            }]
+        );
+        assert_eq!(st.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn agent_spawned_records_the_allocated_port() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::AgentSpawned {
+                record_id: "r9".into(),
+                agent_id: "fake".into(),
+                port: Some(3101),
+            },
+        );
+        assert_eq!(st.agents[1].port, Some(3101));
     }
 
     // ── Attention. ──

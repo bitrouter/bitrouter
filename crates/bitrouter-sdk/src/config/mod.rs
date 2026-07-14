@@ -75,6 +75,10 @@ pub struct Config {
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
     /// `bitrouter agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::AcpAgentConfig>,
+    /// Worktree isolation settings for fleet-managed subagents
+    /// (`bitrouter tui` spawns). All fields default — `worktrees:` is
+    /// optional in `bitrouter.yaml`.
+    pub worktrees: WorktreesConfig,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
     /// Public registry integration: whether to fetch + merge the registry's
@@ -109,10 +113,46 @@ impl Default for Config {
             mcp_servers: HashMap::new(),
             server_tools: Default::default(),
             agents: HashMap::new(),
+            worktrees: WorktreesConfig::default(),
             inherit_defaults: true,
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
+        }
+    }
+}
+
+/// Worktree isolation settings for fleet-managed subagents (`bitrouter tui`).
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct WorktreesConfig {
+    /// Shell command run inside each **newly created** worktree before its
+    /// agent launches — the bootstrap hook for untracked files a worktree
+    /// doesn't carry (copy `.env`, install deps). It executes code: the TUI
+    /// shows it for human approval on first use each session. The hook runs
+    /// with cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,
+    /// and the subagent's allocated `PORT`.
+    pub bootstrap: Option<String>,
+    /// Port pool for per-subagent `PORT` allocation, so N dev servers don't
+    /// collide. Defaults to 3100–3199.
+    pub ports: PortPoolConfig,
+}
+
+/// An inclusive port range fleet-managed subagents draw their `PORT` from.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct PortPoolConfig {
+    /// First port in the pool (inclusive).
+    pub from: u16,
+    /// Last port in the pool (inclusive).
+    pub to: u16,
+}
+
+impl Default for PortPoolConfig {
+    fn default() -> Self {
+        Self {
+            from: 3100,
+            to: 3199,
         }
     }
 }

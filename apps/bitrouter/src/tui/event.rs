@@ -68,7 +68,12 @@ pub enum AppEvent {
     /// The session's agent child exited.
     Exited { record_id: String },
     /// A newly launched session's pane should appear.
-    AgentSpawned { record_id: String, agent_id: String },
+    AgentSpawned {
+        record_id: String,
+        agent_id: String,
+        /// The fleet-allocated `PORT` (shown in the roster row), if any.
+        port: Option<u16>,
+    },
     /// Launching a session failed; surface a transient notice.
     AgentSpawnFailed { agent_id: String, error: String },
     /// A submitted prompt failed to reach the agent; surface it in the pane

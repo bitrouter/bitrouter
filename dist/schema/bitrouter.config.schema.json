@@ -74,6 +74,10 @@
       },
       "default": {}
     },
+    "worktrees": {
+      "description": "Worktree isolation settings for fleet-managed subagents\n(`bitrouter tui` spawns). All fields default — `worktrees:` is\noptional in `bitrouter.yaml`.",
+      "$ref": "#/$defs/WorktreesConfig"
+    },
     "inherit_defaults": {
       "description": "Whether providers inherit workspace defaults.",
       "type": "boolean",
@@ -1431,6 +1435,46 @@
           ]
         }
       ]
+    },
+    "WorktreesConfig": {
+      "description": "Worktree isolation settings for fleet-managed subagents (`bitrouter tui`).",
+      "type": "object",
+      "properties": {
+        "bootstrap": {
+          "description": "Shell command run inside each **newly created** worktree before its\nagent launches — the bootstrap hook for untracked files a worktree\ndoesn't carry (copy `.env`, install deps). It executes code: the TUI\nshows it for human approval on first use each session. The hook runs\nwith cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,\nand the subagent's allocated `PORT`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "ports": {
+          "description": "Port pool for per-subagent `PORT` allocation, so N dev servers don't\ncollide. Defaults to 3100–3199.",
+          "$ref": "#/$defs/PortPoolConfig"
+        }
+      }
+    },
+    "PortPoolConfig": {
+      "description": "An inclusive port range fleet-managed subagents draw their `PORT` from.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "First port in the pool (inclusive).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 3100
+        },
+        "to": {
+          "description": "Last port in the pool (inclusive).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 3199
+        }
+      }
     },
     "RegistryConfig": {
       "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
