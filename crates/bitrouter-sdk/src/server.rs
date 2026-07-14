@@ -811,22 +811,31 @@ async fn stream_response(
 
 impl IntoResponse for BitrouterError {
     fn into_response(self) -> Response {
-        let status =
-            StatusCode::from_u16(self.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let body = Json(serde_json::json!({
-            "error": {
-                "message": self.public_message(),
-                "type": self.error_type(),
-                "code": self.error_code(),
+        match self {
+            BitrouterError::UpstreamBadRequest { error } => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response(),
+            error => {
+                let status = StatusCode::from_u16(error.status())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let body = Json(serde_json::json!({
+                    "error": {
+                        "message": error.public_message(),
+                        "type": error.error_type(),
+                        "code": error.error_code(),
+                    }
+                }));
+                //.4 — payment / rate-limit responses must carry the headers
+                // that auto-paying clients (e.g. the MPP autopay flow,) and
+                // well-behaved API consumers expect. RFC 7235 §4.1 for
+                // WWW-Authenticate, RFC 7231 §7.1.3 for Retry-After.
+                let mut response = (status, body).into_response();
+                apply_error_headers(&mut response, &error);
+                response
             }
-        }));
-        //.4 — payment / rate-limit responses must carry the headers
-        // that auto-paying clients (e.g. the MPP autopay flow,) and
-        // well-behaved API consumers expect. RFC 7235 §4.1 for
-        // WWW-Authenticate, RFC 7231 §7.1.3 for Retry-After.
-        let mut response = (status, body).into_response();
-        apply_error_headers(&mut response, &self);
-        response
+        }
     }
 }
 
@@ -1219,6 +1228,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upstream_bad_request_passthroughs_object_without_invented_metadata() {
+        let response = BitrouterError::UpstreamBadRequest {
+            error: serde_json::json!({
+                "message": "max_tokens rejected",
+                "param": "max_tokens"
+            }),
+        }
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.headers().get("x-bitrouter-error-source").is_none());
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "error": {
+                    "message": "max_tokens rejected",
+                    "param": "max_tokens"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn upstream_bad_request_passthroughs_string() {
+        let response = BitrouterError::UpstreamBadRequest {
+            error: serde_json::json!("bad temperature"),
+        }
+        .into_response();
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(value, serde_json::json!({"error": "bad temperature"}));
+    }
+
+    #[tokio::test]
     async fn streaming_preflight_rate_limit_keeps_http_429() {
         let state =
             test_state_with_executor(Arc::new(MockExecutor::new(vec![MockResponse::Error(
@@ -1253,6 +1301,59 @@ mod tests {
             Some("text/event-stream")
         );
         assert_eq!(response.headers()[header::RETRY_AFTER], "7");
+    }
+
+    #[tokio::test]
+    async fn streaming_preflight_upstream_bad_request_keeps_http_400() {
+        let state =
+            test_state_with_executor(Arc::new(MockExecutor::new(vec![MockResponse::Error(
+                BitrouterError::UpstreamBadRequest {
+                    error: serde_json::json!({
+                        "message": "temperature is unsupported",
+                        "param": "temperature"
+                    }),
+                },
+            )])));
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "model": "gpt-5.5",
+                            "messages": [{"role": "user", "content": "ping"}],
+                            "stream": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert!(response.headers().get("x-bitrouter-error-source").is_none());
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "error": {
+                    "message": "temperature is unsupported",
+                    "param": "temperature"
+                }
+            })
+        );
     }
 
     #[tokio::test]
