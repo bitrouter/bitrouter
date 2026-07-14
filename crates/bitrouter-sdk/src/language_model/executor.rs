@@ -18,7 +18,8 @@ use crate::language_model::auth::AuthAppliers;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
 use crate::language_model::types::{
-    ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
+    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, Prompt, RoutingTarget,
+    StreamPart,
 };
 
 /// A boxed stream of canonical stream parts.
@@ -547,6 +548,177 @@ impl HttpExecutor {
         }
         Ok(())
     }
+
+    /// The ChatGPT/Codex backend accepts only streaming Responses requests,
+    /// while callers such as Harbor Terminus 2 require one non-streaming result.
+    /// Execute the upstream request as SSE and fold its canonical parts back into
+    /// the same [`GenerateResult`] that the ordinary non-streaming path returns.
+    async fn execute_codex_stream_bridge(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        let started = Instant::now();
+        let mut stream = self.execute_stream(target, prompt, ctx).await?;
+        let mut content = Vec::new();
+        let mut tool_indices = HashMap::<String, usize>::new();
+        let mut usage = None;
+        let mut finish_reason = None;
+        let mut response_id = None;
+
+        while let Some(part) = stream.next().await {
+            match part? {
+                StreamPart::TextStart { .. } => content.push(Content::Text {
+                    text: String::new(),
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::TextDelta { text } => {
+                    if let Some(Content::Text { text: current, .. }) = content.last_mut() {
+                        current.push_str(&text);
+                    } else {
+                        content.push(Content::Text {
+                            text,
+                            provider_metadata: Default::default(),
+                        });
+                    }
+                }
+                StreamPart::TextEnd { .. } => {}
+                StreamPart::ReasoningStart { .. } => content.push(Content::Reasoning {
+                    text: String::new(),
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::ReasoningDelta { text } => {
+                    if let Some(Content::Reasoning { text: current, .. }) = content.last_mut() {
+                        current.push_str(&text);
+                    } else {
+                        content.push(Content::Reasoning {
+                            text,
+                            provider_metadata: Default::default(),
+                        });
+                    }
+                }
+                StreamPart::ReasoningEnd { .. } => {}
+                StreamPart::ToolCallDelta {
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    let index = match tool_indices.get(&id).copied() {
+                        Some(index) => index,
+                        None => {
+                            let index = content.len();
+                            content.push(Content::ToolCall {
+                                id: id.clone(),
+                                name: name.clone().unwrap_or_default(),
+                                arguments: String::new(),
+                                provider_executed: false,
+                                dynamic: false,
+                                provider_metadata: Default::default(),
+                            });
+                            tool_indices.insert(id, index);
+                            index
+                        }
+                    };
+                    if let Content::ToolCall {
+                        name: current_name,
+                        arguments: current_arguments,
+                        ..
+                    } = &mut content[index]
+                    {
+                        if let Some(name) = name
+                            && current_name.is_empty()
+                        {
+                            *current_name = name;
+                        }
+                        current_arguments.push_str(&arguments);
+                    }
+                }
+                StreamPart::ServerToolCall {
+                    id,
+                    name,
+                    arguments,
+                    dynamic,
+                    ..
+                } => content.push(Content::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    provider_executed: true,
+                    dynamic,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::ServerToolResult {
+                    call_id,
+                    tool_name,
+                    output,
+                    dynamic,
+                } => content.push(Content::ToolResult {
+                    call_id,
+                    tool_name,
+                    output,
+                    dynamic,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::File { media_type, data } => content.push(Content::File {
+                    media_type,
+                    data,
+                    filename: None,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::Source { source } => content.push(Content::Source {
+                    source,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::Usage { usage: reported } => usage = Some(reported),
+                StreamPart::ResponseStarted { id } => response_id = Some(id),
+                StreamPart::Finish { reason } => finish_reason = Some(reason),
+                StreamPart::ResponseCompleted {
+                    id,
+                    status,
+                    usage: reported,
+                } => {
+                    response_id = Some(id);
+                    if reported.is_some() {
+                        usage = reported;
+                    }
+                    if finish_reason.is_none() {
+                        finish_reason = Some(match status.as_str() {
+                            "completed" => FinishReason::Stop,
+                            "incomplete" => FinishReason::Length,
+                            other => FinishReason::Error(format!(
+                                "openai-codex stream ended with status {other}"
+                            )),
+                        });
+                    }
+                }
+            }
+        }
+
+        content.retain(|part| {
+            !matches!(
+                part,
+                Content::Text { text, .. } | Content::Reasoning { text, .. } if text.is_empty()
+            )
+        });
+        let elapsed = started.elapsed().as_millis() as u64;
+        Ok(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content,
+                usage,
+                finish_reason,
+                response_id,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            latency_ms: elapsed,
+            generation_time_ms: elapsed,
+            server_tool_calls: Vec::new(),
+        })
+    }
 }
 
 /// Merge any outbound headers that an `ObserveHook::on_hop_start` stashed
@@ -606,6 +778,9 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        if target.provider_name == "openai-codex" {
+            return self.execute_codex_stream_bridge(target, prompt, ctx).await;
+        }
         let (adapter, transport) = self
             .dispatch
             .lookup(&target.api_protocol)
@@ -1330,5 +1505,137 @@ mod client_selection_tests {
             BitrouterError::UpstreamTimeout => {}
             other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod openai_codex_stream_bridge_tests {
+    use super::*;
+    use crate::caller::CallerContext;
+    use crate::language_model::types::{Content, FinishReason, UsageOrigin};
+    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn read_request_body(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.expect("read request");
+            assert!(count > 0, "request ended before headers were complete");
+            received.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = received.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&received[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .expect("content-length header");
+            let body_start = header_end + 4;
+            if received.len() < body_start + content_length {
+                continue;
+            }
+            return serde_json::from_slice(&received[body_start..body_start + content_length])
+                .expect("JSON request body");
+        }
+    }
+
+    #[tokio::test]
+    async fn non_streaming_codex_request_uses_streaming_upstream_and_aggregates() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let body = read_request_body(&mut socket).await;
+            if body.get("stream") != Some(&serde_json::Value::Bool(true)) {
+                let error = r#"{"detail":"Stream must be set to true"}"#;
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    error.len(),
+                    error
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write stream-required response");
+                return;
+            }
+
+            let events = concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_bridge\"}}\n\n",
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"bridge ok\"}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_bridge\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":1}}}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+                events.len(),
+                events
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write SSE response");
+        });
+
+        let executor = HttpExecutor::with_defaults().expect("build executor");
+        let target = RoutingTarget {
+            provider_name: "openai-codex".into(),
+            service_id: "gpt-5.6-terra".into(),
+            api_base: format!("http://{addr}"),
+            api_key: "unused".into(),
+            api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        };
+        let prompt = Prompt {
+            model: "gpt-5.6-terra".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "return one action")],
+            tools: vec![],
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let context = PipelineContext::new(PipelineRequest::new(
+            "gpt-5.6-terra",
+            CallerContext::local(),
+            prompt.clone(),
+        ));
+
+        let result = executor
+            .execute(&target, &prompt, &context)
+            .await
+            .expect("openai-codex non-stream request should be bridged");
+        server.await.expect("test server");
+
+        assert_eq!(
+            result.result.content,
+            vec![Content::Text {
+                text: "bridge ok".into(),
+                provider_metadata: Default::default(),
+            }]
+        );
+        assert_eq!(result.result.finish_reason, Some(FinishReason::Stop));
+        assert_eq!(result.result.response_id.as_deref(), Some("resp_bridge"));
+        let usage = result.result.usage.expect("provider usage");
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.cache_read_tokens, 5);
+        assert_eq!(usage.cache_write_tokens, 0);
+        assert_eq!(usage.completion_tokens, 4);
+        assert_eq!(usage.reasoning_tokens, 1);
+        assert_eq!(usage.origin, UsageOrigin::ProviderReported);
     }
 }
