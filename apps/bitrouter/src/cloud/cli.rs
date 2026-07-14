@@ -23,7 +23,9 @@ use chrono::{DateTime, Utc};
 use clap::{Subcommand, ValueEnum};
 
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout};
-use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, default_credentials_path};
+use bitrouter_cloud_sdk::auth::credentials::{
+    CredentialKind, CredentialsStore, StoredCredential, default_credentials_path,
+};
 use bitrouter_cloud_sdk::management::types::{
     BudgetWindow as SdkBudgetWindow, PolicyKind as SdkPolicyKind,
 };
@@ -32,12 +34,16 @@ use bitrouter_cloud_sdk::management::{
     presets, usage,
 };
 
+use super::api::ApiArgs;
+
 /// `bitrouter cloud …`. All variants land in [`run`].
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
     /// `/v1/*` base URL the CLI will target.
     Whoami,
+    /// Make an authenticated request to a relative BitRouter Cloud API endpoint.
+    Api(ApiArgs),
     /// Sign in to BitRouter Cloud from this terminal.
     ///
     /// Prints a verification URL — open it, approve, and this CLI stores an
@@ -58,6 +64,14 @@ pub enum CloudAction {
         /// (env: BITROUTER_OAUTH_SCOPE).
         #[arg(long, value_name = "SCOPE")]
         scope: Option<String>,
+        /// Authenticate with a BitRouter API key instead of OAuth. Intended for
+        /// CI and other non-interactive environments.
+        #[arg(
+            long,
+            value_name = "BRK_API_KEY",
+            conflicts_with_all = ["client_id", "scope"]
+        )]
+        api_key: Option<String>,
     },
     /// Sign out: revoke the stored token at the server (best-effort) and
     /// delete the local credentials file.
@@ -557,15 +571,18 @@ pub async fn run(action: CloudAction, format: crate::output::Format) -> Result<(
 async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
     match action {
         CloudAction::Whoami => whoami().await,
+        CloudAction::Api(args) => super::api::run(args).await.map_err(SdkError::Auth),
         CloudAction::Login {
             authorization_server,
             client_id,
             scope,
+            api_key,
         } => {
-            login(LoginInputs {
+            let credential = login(LoginInputs {
                 authorization_server,
                 client_id,
                 scope,
+                api_key,
             })
             .await
             .map_err(SdkError::Auth)?;
@@ -573,9 +590,10 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
             let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
             let body = serde_json::json!({
                 "signed_in": true,
+                "authentication": credential_kind_name(credential.kind()),
                 "namespace": client.namespace_id(),
-                "subject": store.current().and_then(|c| c.subject.clone()),
-                "scope": store.current().map(|c| c.scope.clone()),
+                "subject": store.current().and_then(|c| c.subject()),
+                "scope": store.current().and_then(|c| c.scope()),
                 "credentials_path": store.path().display().to_string(),
             });
             emit(false, &body, |_| "signed in".to_string())
@@ -588,6 +606,7 @@ async fn run_inner(action: CloudAction) -> std::result::Result<(), SdkError> {
                 authorization_server,
                 client_id,
                 scope: None,
+                api_key: None,
             })
             .await
             .map_err(SdkError::Auth)?;
@@ -615,11 +634,19 @@ async fn whoami() -> std::result::Result<(), SdkError> {
     // Offline — reads the local credentials file (works without network).
     let client = client()?;
     let store = CredentialsStore::default_path().map_err(SdkError::Auth)?;
-    let scope = store.current().map(|c| c.scope.clone());
-    let subject = store.current().and_then(|c| c.subject.clone());
+    let scope = store
+        .current()
+        .and_then(|credential| credential.scope().map(ToOwned::to_owned));
+    let subject = store
+        .current()
+        .and_then(|credential| credential.subject().map(ToOwned::to_owned));
     let signed_in = store.current().is_some();
+    let authentication = store
+        .current()
+        .map(|credential| credential_kind_name(credential.kind()));
     let body = serde_json::json!({
         "signed_in": signed_in,
+        "authentication": authentication,
         "base_url": client.base_url(),
         "namespace": client.namespace_id(),
         "scope": scope.clone(),
@@ -633,6 +660,9 @@ async fn whoami() -> std::result::Result<(), SdkError> {
             client.namespace_id().unwrap_or("(none)")
         );
         if signed_in {
+            if let Some(authentication) = authentication {
+                out.push_str(&format!("\nauthentication: {authentication}"));
+            }
             if let Some(s) = &scope {
                 out.push_str(&format!("\nscope:          {s}"));
             }
@@ -645,6 +675,13 @@ async fn whoami() -> std::result::Result<(), SdkError> {
         }
         out
     })
+}
+
+fn credential_kind_name(kind: CredentialKind) -> &'static str {
+    match kind {
+        CredentialKind::Oauth => "oauth",
+        CredentialKind::ApiKey => "api_key",
+    }
 }
 
 // ----- Namespace -----
@@ -1321,30 +1358,108 @@ fn print_error_hint(err: &SdkError) {
         } => {
             eprintln!();
             eprintln!("  This command requires the scope: {scope}");
-            if let Some(extended) = suggested_scope(scope) {
-                eprintln!("  Re-run `bitrouter cloud login --scope \"{extended}\"` to add it.");
-            } else {
-                eprintln!(
-                    "  Re-run `bitrouter cloud login --scope \"<your current scope> {scope}\"`."
-                );
-            }
+            let store = default_credentials_path()
+                .ok()
+                .and_then(|path| CredentialsStore::load(path).ok());
+            let credential = store.as_ref().and_then(CredentialsStore::current);
+            eprintln!("  {}", missing_scope_hint(scope, credential));
         }
         _ => {}
     }
 }
 
-/// Best-effort: read the locally stored scope and append `missing` to
-/// it, so the hint we print is copy-pasteable. Returns `None` when the
-/// credentials file is unreadable.
-fn suggested_scope(missing: &str) -> Option<String> {
-    let path = default_credentials_path().ok()?;
-    let store = CredentialsStore::load(&path).ok()?;
-    let current = store.current()?.scope.clone();
-    if current.split_whitespace().any(|s| s == missing) {
-        // Already present — probably the server is rejecting something
-        // we can't auto-fix. Don't suggest a duplicate.
-        Some(current)
-    } else {
-        Some(format!("{current} {missing}"))
+fn missing_scope_hint(missing: &str, credential: Option<&StoredCredential>) -> String {
+    if credential.is_some_and(|credential| credential.kind() == CredentialKind::ApiKey) {
+        return format!(
+            "Mint or select an API key with the `{missing}` scope, then run \
+             `bitrouter cloud login --api-key \"$BITROUTER_API_KEY\"`."
+        );
+    }
+
+    let current = credential.and_then(StoredCredential::scope);
+    let extended = match current {
+        Some(scope) if scope.split_whitespace().any(|value| value == missing) => scope.to_owned(),
+        Some(scope) => format!("{scope} {missing}"),
+        None => format!("<your current scope> {missing}"),
+    };
+    format!("Re-run `bitrouter cloud login --scope \"{extended}\"` to add it.")
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct CloudHarness {
+        #[command(subcommand)]
+        action: CloudAction,
+    }
+
+    #[test]
+    fn login_accepts_api_key() {
+        let parsed = CloudHarness::try_parse_from([
+            "test",
+            "login",
+            "--api-key",
+            "brk_AAAAAAAAAAAAAAAA.secret",
+        ])
+        .unwrap();
+
+        match parsed.action {
+            CloudAction::Login { api_key, .. } => {
+                assert_eq!(api_key.as_deref(), Some("brk_AAAAAAAAAAAAAAAA.secret"));
+            }
+            _ => panic!("expected login action"),
+        }
+    }
+
+    #[test]
+    fn api_key_conflicts_with_oauth_customization() {
+        let parsed = CloudHarness::try_parse_from([
+            "test",
+            "login",
+            "--api-key",
+            "brk_AAAAAAAAAAAAAAAA.secret",
+            "--client-id",
+            "custom",
+        ]);
+        let error = match parsed {
+            Ok(_) => panic!("conflicting login flags must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn cloud_api_subcommand_is_wired() {
+        let parsed =
+            CloudHarness::try_parse_from(["test", "api", "/v1/models", "--include"]).unwrap();
+
+        match parsed.action {
+            CloudAction::Api(args) => {
+                assert_eq!(args.endpoint, "/v1/models");
+                assert!(args.include);
+            }
+            _ => panic!("expected API action"),
+        }
+    }
+
+    #[test]
+    fn missing_scope_guidance_keeps_api_key_users_on_api_keys() {
+        let credential = bitrouter_cloud_sdk::auth::credentials::StoredCredential::api_key(
+            "brk_test.fixture".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        );
+
+        let hint = missing_scope_hint("keys:write", Some(&credential));
+
+        assert!(hint.contains("API key"));
+        assert!(hint.contains("keys:write"));
+        assert!(hint.contains("bitrouter cloud login --api-key"));
+        assert!(!hint.contains("--scope"));
+        assert!(!hint.contains("brk_test.fixture"));
     }
 }

@@ -81,19 +81,37 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 
 ## BitRouter Cloud sign-in (`bitrouter cloud …`)
 
-OAuth 2.0 device-flow sign-in against the BitRouter Cloud authorization server. The persisted credential drives both the `bitrouter` provider in the local daemon and the management subcommands below.
+OAuth 2.0 device-flow or non-interactive API-key sign-in against BitRouter Cloud. The persisted credential drives the raw API client, the `bitrouter` provider in the local daemon, telemetry attribution, and the management subcommands below.
 
 | Command | Effect |
 |---|---|
-| `bitrouter cloud login [--oauth-as URL] [--client-id ID] [--scope SCOPE]` | RFC 8628 device-flow login. Prints an approval URL, polls the token endpoint, and persists access + refresh tokens to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Auto-refreshes within 60 s of access-token expiry on every subsequent call. Defaults: AS `https://api.bitrouter.ai`, client id `bitrouter-cli`, scope set covering `inference:invoke usage:read keys:* billing:read policy:* byok:* namespace:read`. Override the AS or scope for a self-hosted deployment or to opt into sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write`. |
-| `bitrouter cloud logout` | Best-effort RFC 7009 revoke at the AS, then delete the local credentials file. |
-| `bitrouter cloud whoami` | Print the local credential's AS, client id, scope, subject, expiry, namespace, and cloud base URL. Reads the on-disk file only — no network. |
+| `bitrouter cloud login [--oauth-as URL] [--client-id ID] [--scope SCOPE]` | RFC 8628 device-flow login. Prints an approval URL, polls the token endpoint, and persists access + refresh tokens to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Auto-refreshes within 60 s of access-token expiry on every subsequent call. Defaults: AS `https://api.bitrouter.ai`, client id `bitrouter-cli`, scope set covering `inference:invoke usage:read keys:* billing:read policy:* byok:* namespace:read`. |
+| `bitrouter cloud login --api-key <BRK_API_KEY> [--oauth-as URL]` | Non-interactive CI login. Validates `brk_<token_id>.<secret>` and stores it without a network request. Conflicts with OAuth-only `--client-id` and `--scope`; never prints the key. |
+| `bitrouter cloud logout` | OAuth: best-effort RFC 7009 revoke, then delete the local file. API key: local deletion only. |
+| `bitrouter cloud whoami` | Print auth type (`oauth` or `api_key`) and non-secret local metadata. Reads the on-disk file only — no network. |
+
+## BitRouter Cloud raw API (`bitrouter cloud api`)
+
+`bitrouter cloud api <relative-endpoint>` mirrors the core `gh api` workflow and reuses either stored credential. It accepts arbitrary relative paths but never follows redirects or sends credentials off the login origin.
+
+| Flag | Effect |
+|---|---|
+| `-X, --method METHOD` | Explicit method; implicit `GET`, or `POST` when fields/input are supplied. |
+| `-H, --header KEY:VALUE` | Repeatable request header. User `Authorization` overrides the stored bearer. |
+| `-f, --raw-field KEY=VALUE` | String JSON/query field with nested `key[sub]` / `key[]` grammar; bare `key[]` creates an empty array. |
+| `-F, --field KEY=VALUE` | Typed bool/null/integer field, or `@file` / `@-` string content. |
+| `--input FILE|-` | Exact request body; fields move to the query string. |
+| `-i, --include` | Status line + response headers before body. |
+| `--silent` | Drain without printing the body. |
+| `--verbose` | Redacted method/URL/header/status diagnostics on stderr. |
+
+Non-TTY JSON, binary bodies, and SSE stream byte-for-byte to stdout. HTTP 4xx/5xx preserves the body on stdout, writes the error to stderr, and exits non-zero. Initial tested endpoints: models, Chat Completions, Messages, Responses, `generateContent`, and `streamGenerateContent`.
 
 Side effect: when the credentials file exists, the local daemon auto-adds the `bitrouter` provider to the zero-config providers map, so every model your account is entitled to is routable as `bitrouter:<model-id>` against `localhost:4356` without further configuration.
 
 ## BitRouter Cloud management (`bitrouter cloud …`)
 
-Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter cloud login` first. Every leaf accepts `--json` for raw response output; default is a `systemctl`-style key:value block (single resource) or a small table (lists). On a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint.
+Typed wrappers over the `/v1/*` management API on the cloud. Requires either login form first. OAuth credentials use their baked namespace; API keys use `/v1/namespaces/me/*`. Every leaf accepts `--json` for raw response output; default is a `systemctl`-style key:value block (single resource) or a small table (lists). On a 403 with `missing required scope: <s>`, OAuth users receive a copy-pasteable `--scope` re-login hint; API-key users are directed to a key with that scope.
 
 | Command | Effect |
 |---|---|
