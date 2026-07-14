@@ -810,15 +810,15 @@ async fn custom_fallback_retries_upstream_bad_request_then_succeeds() {
 }
 
 #[tokio::test]
-async fn exhausted_upstream_bad_requests_preserve_the_first_diagnostic() {
+async fn exhausted_upstream_bad_requests_preserve_the_last_payload() {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                error: serde_json::json!("first diagnostic"),
+                error: serde_json::json!({"message": "first"}),
             }),
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                error: serde_json::json!("second diagnostic"),
+                error: serde_json::json!({"message": "second"}),
             }),
         ])),
         |builder| {
@@ -828,22 +828,22 @@ async fn exhausted_upstream_bad_requests_preserve_the_first_diagnostic() {
 
     match pipeline.execute(request()).await.unwrap_err() {
         BitrouterError::UpstreamBadRequest { error } => {
-            assert_eq!(error, serde_json::json!("first diagnostic"));
+            assert_eq!(error, serde_json::json!({"message": "second"}));
         }
         other => panic!("expected UpstreamBadRequest, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn exhausted_streaming_upstream_bad_requests_preserve_the_first_diagnostic() {
+async fn exhausted_streaming_upstream_bad_requests_preserve_the_last_payload() {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                error: serde_json::json!("first streaming diagnostic"),
+                error: serde_json::json!({"message": "first"}),
             }),
             MockResponse::Error(BitrouterError::UpstreamBadRequest {
-                error: serde_json::json!("second streaming diagnostic"),
+                error: serde_json::json!({"message": "second"}),
             }),
         ])),
         |builder| {
@@ -857,7 +857,7 @@ async fn exhausted_streaming_upstream_bad_requests_preserve_the_first_diagnostic
     };
     match error {
         BitrouterError::UpstreamBadRequest { error } => {
-            assert_eq!(error, serde_json::json!("first streaming diagnostic"));
+            assert_eq!(error, serde_json::json!({"message": "second"}));
         }
         other => panic!("expected UpstreamBadRequest, got {other:?}"),
     }

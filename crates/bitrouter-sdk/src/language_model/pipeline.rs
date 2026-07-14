@@ -863,14 +863,6 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
         return BitrouterError::UpstreamPaymentRequired;
     }
 
-    if errors
-        .iter()
-        .all(|error| matches!(error, BitrouterError::UpstreamBadRequest { .. }))
-        && let Some(error) = errors.first()
-    {
-        return error.clone();
-    }
-
     if let Some(error) = errors
         .iter()
         .find(|error| matches!(error, BitrouterError::UpstreamInvalidResponse { .. }))
