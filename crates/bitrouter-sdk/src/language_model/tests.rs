@@ -468,6 +468,19 @@ fn pipeline_with(
     Arc::new(b.build().expect("pipeline builds"))
 }
 
+struct RetryUpstreamRequestErrors;
+
+impl FallbackPolicy for RetryUpstreamRequestErrors {
+    fn classify(&self, error: &BitrouterError, _attempted: &RoutingTarget) -> FallbackDecision {
+        match error {
+            BitrouterError::UpstreamBadRequest { .. } | BitrouterError::Upstream { .. } => {
+                FallbackDecision::TryNext
+            }
+            other => FallbackDecision::Fail(other.clone()),
+        }
+    }
+}
+
 // ===== tests =====
 
 #[tokio::test]
@@ -746,6 +759,105 @@ async fn exhausted_upstream_429s_use_the_earliest_retry_after() {
         BitrouterError::UpstreamRateLimited {
             retry_after: Some(12)
         }
+    ));
+}
+
+#[tokio::test]
+async fn default_fallback_stops_on_upstream_bad_request() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "provider rejected max_tokens".into(),
+            }),
+            MockResponse::Generate(gen_result(Vec::new())),
+        ])),
+        |_builder| {},
+    );
+
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::UpstreamBadRequest { .. }
+    ));
+}
+
+#[tokio::test]
+async fn custom_fallback_retries_upstream_bad_request_then_succeeds() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "provider rejected temperature".into(),
+            }),
+            MockResponse::Generate(gen_result(vec![Content::Text {
+                text: "from b".into(),
+                provider_metadata: Default::default(),
+            }])),
+        ])),
+        |builder| {
+            builder.fallback_policy(Arc::new(RetryUpstreamRequestErrors));
+        },
+    );
+
+    let response = pipeline.execute(request()).await.unwrap();
+    assert_eq!(
+        response.result.content,
+        vec![Content::Text {
+            text: "from b".into(),
+            provider_metadata: Default::default(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn exhausted_upstream_bad_requests_preserve_the_first_diagnostic() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "first diagnostic".into(),
+            }),
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "second diagnostic".into(),
+            }),
+        ])),
+        |builder| {
+            builder.fallback_policy(Arc::new(RetryUpstreamRequestErrors));
+        },
+    );
+
+    match pipeline.execute(request()).await.unwrap_err() {
+        BitrouterError::UpstreamBadRequest { message } => {
+            assert_eq!(message, "first diagnostic");
+        }
+        other => panic!("expected UpstreamBadRequest, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn mixed_upstream_bad_request_and_server_error_keep_last_error_semantics() {
+    let pipeline = pipeline_with(
+        routing_table(&["a-provider", "b-provider"]),
+        Arc::new(MockExecutor::new(vec![
+            MockResponse::Error(BitrouterError::UpstreamBadRequest {
+                message: "bad parameters".into(),
+            }),
+            MockResponse::Error(BitrouterError::Upstream {
+                status: 503,
+                message: "maintenance".into(),
+            }),
+        ])),
+        |builder| {
+            builder.fallback_policy(Arc::new(RetryUpstreamRequestErrors));
+        },
+    );
+
+    assert!(matches!(
+        pipeline.execute(request()).await.unwrap_err(),
+        BitrouterError::Upstream {
+            status: 503,
+            message
+        } if message == "maintenance"
     ));
 }
 

@@ -1280,6 +1280,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_preflight_upstream_bad_request_keeps_http_400() {
+        let state =
+            test_state_with_executor(Arc::new(MockExecutor::new(vec![MockResponse::Error(
+                BitrouterError::UpstreamBadRequest {
+                    message: "provider secret: temperature is unsupported".into(),
+                },
+            )])));
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "model": "gpt-5.5",
+                            "messages": [{"role": "user", "content": "ping"}],
+                            "stream": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_ne!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(response.headers()["x-bitrouter-error-source"], "upstream");
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(value["error"]["message"], "upstream rejected the request");
+        assert!(!value.to_string().contains("provider secret"));
+    }
+
+    #[tokio::test]
     async fn streaming_preflight_rate_limit_with_server_tools_keeps_http_429()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let state = test_state_with_executor_and_server_tools(
