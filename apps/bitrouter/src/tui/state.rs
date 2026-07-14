@@ -6,8 +6,9 @@
 
 use std::collections::HashMap;
 
-use crate::tui::event::{AppEvent, Effect, PermOption, Risk};
-use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus};
+use crate::tui::event::{AppEvent, DiffData, Effect, PermOption, Risk};
+use agent_client_protocol::schema::v1::StopReason;
+use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, ToolStatus, UsageCost};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Max scrollback lines retained per pane (ring buffer).
@@ -109,25 +110,138 @@ pub enum Line {
     Message(String),
     /// Agent thinking text.
     Thought(String),
+    /// One line inside a fenced code block of an agent message; `lang` is the
+    /// fence's info string (may be empty). Syntax-highlighted by the UI layer.
+    Code { text: String, lang: String },
     /// A tool call: title + status.
     Tool {
         id: String,
         title: String,
         status: ToolStatus,
     },
+    /// One line of a rendered file diff (from a tool call or permission).
+    Diff(DiffLine),
     /// A manager-side failure surfaced in the pane (e.g. a prompt that never
     /// reached the agent). Rendered in the danger style.
     Error(String),
     /// An autonomy-tier decision the manager made on the user's behalf.
     /// Nothing auto-resolves silently — every one lands here.
     AutoResolved(String),
+    /// A calm manager-side note (e.g. a turn that ended abnormally).
+    Note(String),
+}
+
+/// One line of the `diff_render` treatment (TUI_SPEC §8b): header chips,
+/// added/deleted/context lines, and the `⋮` gap between hunks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffLine {
+    /// `path  +N/-M` header.
+    Header {
+        path: String,
+        adds: usize,
+        dels: usize,
+    },
+    Add(String),
+    Del(String),
+    Ctx(String),
+    /// `⋮` separator between hunks.
+    Gap,
+}
+
+/// Diffs beyond this size render as a placeholder instead of line-by-line
+/// (keeps a runaway rewrite from flooding the scrollback ring).
+const MAX_DIFF_BYTES: usize = 200 * 1024;
+
+/// Render a structured diff into scrollback lines: a `path +N/-M` header, then
+/// hunks of added/deleted/context lines separated by `⋮` gaps.
+pub fn diff_lines(diff: &DiffData) -> Vec<Line> {
+    use similar::{ChangeTag, TextDiff};
+    if diff.old.len() + diff.new.len() > MAX_DIFF_BYTES {
+        return vec![
+            Line::Diff(DiffLine::Header {
+                path: diff.path.clone(),
+                adds: 0,
+                dels: 0,
+            }),
+            Line::Diff(DiffLine::Ctx("(diff too large to render)".to_string())),
+        ];
+    }
+    let text_diff = TextDiff::from_lines(&diff.old, &diff.new);
+    let (mut adds, mut dels) = (0usize, 0usize);
+    let mut body: Vec<Line> = Vec::new();
+    for (i, group) in text_diff.grouped_ops(2).iter().enumerate() {
+        if i > 0 {
+            body.push(Line::Diff(DiffLine::Gap));
+        }
+        for op in group {
+            for change in text_diff.iter_changes(op) {
+                let text = change
+                    .value()
+                    .trim_end_matches('\n')
+                    .trim_end_matches('\r')
+                    .to_string();
+                body.push(Line::Diff(match change.tag() {
+                    ChangeTag::Insert => {
+                        adds += 1;
+                        DiffLine::Add(text)
+                    }
+                    ChangeTag::Delete => {
+                        dels += 1;
+                        DiffLine::Del(text)
+                    }
+                    ChangeTag::Equal => DiffLine::Ctx(text),
+                }));
+            }
+        }
+    }
+    let mut out = vec![Line::Diff(DiffLine::Header {
+        path: diff.path.clone(),
+        adds,
+        dels,
+    })];
+    out.extend(body);
+    out
+}
+
+/// Parse the substrate's rendered tool-call diff string
+/// (`{path}\n[old]\n{old}\n[new]\n{new}`, from `translate::render_diff`) back
+/// into structured form. Tolerant: returns `None` when the markers are absent.
+pub fn parse_rendered_diff(s: &str) -> Option<DiffData> {
+    let (path, rest) = s.split_once("\n[old]\n")?;
+    let (old, new) = rest.split_once("\n[new]\n")?;
+    Some(DiffData {
+        path: path.to_string(),
+        old: old.to_string(),
+        new: new.to_string(),
+    })
+}
+
+/// Which stream the mutable tail belongs to. Chunked deltas accumulate here
+/// and commit to scrollback only when newline-terminated (two-region model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TailKind {
+    Message,
+    Thought,
+}
+
+/// Short label for a turn's ACP stop reason.
+pub fn stop_label(stop: &StopReason) -> &'static str {
+    match stop {
+        StopReason::EndTurn => "end_turn",
+        StopReason::MaxTokens => "max_tokens",
+        StopReason::MaxTurnRequests => "max_turn_requests",
+        StopReason::Refusal => "refusal",
+        StopReason::Cancelled => "cancelled",
+        // The schema enum is #[non_exhaustive].
+        _ => "unknown",
+    }
 }
 
 /// A pending permission surfaced in the pane, as display data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingView {
     pub title: String,
-    pub diff: Option<String>,
+    pub diff: Option<DiffData>,
     pub options: Vec<PermOption>,
     pub risk: Risk,
 }
@@ -191,6 +305,24 @@ pub struct PaneState {
     /// Context-window occupancy `(used, size)` from the latest upstream
     /// `usage` update; shown in the pane header.
     pub usage: Option<(u64, u64)>,
+    /// Cumulative session cost from the latest upstream `usage` update;
+    /// shown as the `$` column in the roster.
+    pub cost: Option<UsageCost>,
+    /// The mutable tail of the two-region streaming model: chunked deltas
+    /// accumulate here and commit to `lines` only when newline-terminated,
+    /// so a half-formed line never flashes in the scrollback.
+    pub tail: Option<(TailKind, String)>,
+    /// `Some(lang)` while committed message lines are inside a fenced code
+    /// block (streaming fence parser state).
+    code_lang: Option<String>,
+    /// tool id → last raw diff pushed for it, so a `ToolCallUpdate` repeating
+    /// the same diff doesn't duplicate it in the scrollback.
+    tool_diffs: HashMap<String, String>,
+    /// A prompt turn is in flight (set on send, cleared by `TurnEnded`).
+    /// Distinguishes working (spinner) from idle in the rail.
+    pub turn_active: bool,
+    /// The last turn's typed ACP stop reason.
+    pub last_stop: Option<StopReason>,
 }
 
 impl PaneState {
@@ -209,6 +341,12 @@ impl PaneState {
             scroll: None,
             viewport: 0,
             usage: None,
+            cost: None,
+            tail: None,
+            code_lang: None,
+            tool_diffs: HashMap::new(),
+            turn_active: false,
+            last_stop: None,
         }
     }
 
@@ -220,6 +358,102 @@ impl PaneState {
             // Keep a pinned view on the same content as the buffer slides.
             if let Some(s) = &mut self.scroll {
                 *s = s.saturating_sub(overflow);
+            }
+        }
+    }
+
+    /// Push a non-stream line (prompt, tool, error, note), committing any
+    /// half-formed streamed line first so ordering stays faithful.
+    fn push_external(&mut self, line: Line) {
+        self.flush_tail();
+        self.push(line);
+    }
+
+    /// Commit the mutable tail (if any) to the scrollback even without a
+    /// trailing newline — called when the stream is interrupted or ends.
+    fn flush_tail(&mut self) {
+        if let Some((kind, buf)) = self.tail.take()
+            && !buf.is_empty()
+        {
+            self.commit_stream_line(kind, buf);
+        }
+    }
+
+    /// Fold a streamed text delta into the tail, committing every
+    /// newline-terminated line. A kind switch (message ↔ thought) commits the
+    /// other stream's partial line first.
+    fn stream(&mut self, kind: TailKind, text: &str) {
+        if let Some((k, _)) = &self.tail
+            && *k != kind
+        {
+            self.flush_tail();
+        }
+        let mut buf = match self.tail.take() {
+            Some((_, b)) => b,
+            None => String::new(),
+        };
+        buf.push_str(text);
+        // Commit complete lines; keep the unterminated remainder as the tail.
+        while let Some(pos) = buf.find('\n') {
+            let line: String = buf.drain(..=pos).collect();
+            let line = line
+                .trim_end_matches('\n')
+                .trim_end_matches('\r')
+                .to_string();
+            self.commit_stream_line(kind, line);
+        }
+        if !buf.is_empty() {
+            self.tail = Some((kind, buf));
+        }
+    }
+
+    /// Commit one complete streamed line, tracking fenced code blocks in
+    /// message text (the fence lines themselves commit as plain messages).
+    fn commit_stream_line(&mut self, kind: TailKind, line: String) {
+        match kind {
+            TailKind::Thought => self.push(Line::Thought(line)),
+            TailKind::Message => {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```") {
+                    match self.code_lang.take() {
+                        Some(_) => {} // closing fence
+                        None => {
+                            // Opening fence: capture the info string.
+                            self.code_lang =
+                                Some(trimmed.trim_start_matches('`').trim().to_string());
+                        }
+                    }
+                    self.push(Line::Message(line));
+                } else if let Some(lang) = &self.code_lang {
+                    let lang = lang.clone();
+                    self.push(Line::Code { text: line, lang });
+                } else {
+                    self.push(Line::Message(line));
+                }
+            }
+        }
+    }
+
+    /// Append a tool call's diff as rendered diff lines, once per distinct
+    /// diff per tool id (updates repeating the same diff are dropped).
+    fn push_tool_diff(&mut self, id: &str, raw: &str) {
+        if self.tool_diffs.get(id).is_some_and(|prev| prev == raw) {
+            return;
+        }
+        self.tool_diffs.insert(id.to_string(), raw.to_string());
+        match parse_rendered_diff(raw) {
+            Some(data) => {
+                self.flush_tail();
+                for line in diff_lines(&data) {
+                    self.push(line);
+                }
+            }
+            // Unstructured diff content: show it as-is rather than dropping it.
+            None => {
+                self.flush_tail();
+                for l in raw.lines() {
+                    self.push(Line::Message(l.to_string()));
+                }
             }
         }
     }
@@ -251,10 +485,12 @@ impl PaneState {
             0 // needs you
         } else if self.attention {
             1 // something happened in the background
+        } else if !self.exited && self.turn_active {
+            2 // working (a turn is in flight)
         } else if !self.exited {
-            2 // running
+            3 // idle
         } else {
-            3 // dead
+            4 // dead
         }
     }
 }
@@ -476,11 +712,38 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
+        AppEvent::TurnEnded {
+            record_id,
+            stop_reason,
+        } => {
+            let shown = state.is_shown(record_id);
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.flush_tail();
+                pane.turn_active = false;
+                pane.last_stop = Some(*stop_reason);
+                // An abnormal end is worth a visible note; a clean end_turn
+                // shows through the idle glyph alone.
+                if *stop_reason != StopReason::EndTurn {
+                    pane.push(Line::Note(format!(
+                        "turn ended: {}",
+                        stop_label(stop_reason)
+                    )));
+                }
+                if !shown {
+                    // A finished turn is exactly what the tower should
+                    // surface — glyph only, no bell (completions are calm).
+                    pane.attention = true;
+                }
+            }
+            Vec::new()
+        }
         AppEvent::Exited { record_id } => {
             let shown = state.is_shown(record_id);
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.flush_tail();
                 pane.exited = true;
+                pane.turn_active = false;
                 // A dead agent's decision is moot — drop it from the queue.
                 // (The loop's teardown drops the resolvable handle → Deny.)
                 pane.pending = None;
@@ -512,9 +775,9 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 };
                 if auto_allow {
                     // Logged, never silent.
-                    pane.push(Line::AutoResolved(format!(
-                        "auto-allowed ({}): {title}",
-                        pane.autonomy.label()
+                    let label = pane.autonomy.label();
+                    pane.push_external(Line::AutoResolved(format!(
+                        "auto-allowed ({label}): {title}"
                     )));
                     effects.push(Effect::ResolvePermission {
                         record_id: record_id.clone(),
@@ -558,7 +821,8 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             let shown = state.is_shown(record_id);
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
-                pane.push(Line::Error(format!("prompt failed: {error}")));
+                pane.push_external(Line::Error(format!("prompt failed: {error}")));
+                pane.turn_active = false;
                 if !shown {
                     pane.attention = true;
                     effects.push(Effect::Bell);
@@ -685,7 +949,8 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 return Vec::new();
             }
             if let Some(pane) = state.focused_mut() {
-                pane.push(Line::UserPrompt(text.clone()));
+                pane.push_external(Line::UserPrompt(text.clone()));
+                pane.turn_active = true;
             }
             vec![Effect::Prompt {
                 record_id: focus_id,
@@ -1130,7 +1395,8 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             let mut effects = Vec::new();
             for p in state.agents.iter_mut() {
                 if p.selected {
-                    p.lines.push(Line::UserPrompt(text.clone()));
+                    p.push_external(Line::UserPrompt(text.clone()));
+                    p.turn_active = true;
                     effects.push(Effect::Prompt {
                         record_id: p.record_id.clone(),
                         text: text.clone(),
@@ -1160,17 +1426,30 @@ fn clear_broadcast(state: &mut AppState) {
 /// Fold one translated update into a pane's scrollback.
 fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
     match update {
-        SessionUpdateKind::MessageChunk { text, .. } => pane.push(Line::Message(text.clone())),
-        SessionUpdateKind::ThoughtChunk { text, .. } => pane.push(Line::Thought(text.clone())),
+        // Streamed deltas go through the two-region model: only
+        // newline-terminated text commits; the remainder is the mutable tail.
+        SessionUpdateKind::MessageChunk { text, .. } => pane.stream(TailKind::Message, text),
+        SessionUpdateKind::ThoughtChunk { text, .. } => pane.stream(TailKind::Thought, text),
         SessionUpdateKind::ToolCall {
-            id, title, status, ..
-        } => pane.push(Line::Tool {
-            id: id.clone(),
-            title: title.clone(),
-            status: status.clone(),
-        }),
+            id,
+            title,
+            status,
+            diff,
+        } => {
+            pane.push_external(Line::Tool {
+                id: id.clone(),
+                title: title.clone(),
+                status: status.clone(),
+            });
+            if let Some(raw) = diff {
+                pane.push_tool_diff(id, raw);
+            }
+        }
         SessionUpdateKind::ToolCallUpdate {
-            id, status, title, ..
+            id,
+            status,
+            title,
+            diff,
         } => {
             // Merge into the existing tool line by id; if absent, append a new one.
             if let Some(Line::Tool {
@@ -1190,16 +1469,23 @@ fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
                     *t = new_title.clone();
                 }
             } else {
-                pane.push(Line::Tool {
+                pane.push_external(Line::Tool {
                     id: id.clone(),
                     title: title.clone().unwrap_or_default(),
                     status: status.clone().unwrap_or(ToolStatus::Pending),
                 });
             }
+            if let Some(raw) = diff {
+                pane.push_tool_diff(id, raw);
+            }
         }
-        // Context-window occupancy: shown in the pane header, not scrollback.
-        SessionUpdateKind::Usage { used, size, .. } => {
+        // Context-window occupancy + cost: shown in the header/roster, not
+        // scrollback.
+        SessionUpdateKind::Usage { used, size, cost } => {
             pane.usage = Some((*used, *size));
+            if cost.is_some() {
+                pane.cost = cost.clone();
+            }
         }
     }
 }
@@ -1229,11 +1515,22 @@ mod tests {
     }
 
     fn msg(i: usize) -> AppEvent {
+        // Newline-terminated so each chunk commits one scrollback line.
         AppEvent::Update {
             record_id: "rec-1".into(),
             update: SessionUpdateKind::MessageChunk {
                 message_id: None,
-                text: format!("line {i}"),
+                text: format!("line {i}\n"),
+            },
+        }
+    }
+
+    fn chunk_to(record_id: &str, text: &str) -> AppEvent {
+        AppEvent::Update {
+            record_id: record_id.into(),
+            update: SessionUpdateKind::MessageChunk {
+                message_id: None,
+                text: text.into(),
             },
         }
     }
@@ -1441,19 +1738,24 @@ mod tests {
     #[test]
     fn permission_event_sets_pending_view() {
         let mut st = AppState::new(pane());
+        let diff = DiffData {
+            path: "src/x.rs".into(),
+            old: "a\n".into(),
+            new: "b\n".into(),
+        };
         reduce(
             &mut st,
             &AppEvent::Permission {
                 record_id: "rec-1".into(),
                 title: "WRITE src/x.rs".into(),
-                diff: Some("- a\n+ b".into()),
+                diff: Some(diff.clone()),
                 options: allow_deny(),
                 risk: Risk::High,
             },
         );
         let pending = st.agents[0].pending.as_ref().expect("pending set");
         assert_eq!(pending.title, "WRITE src/x.rs");
-        assert_eq!(pending.diff.as_deref(), Some("- a\n+ b"));
+        assert_eq!(pending.diff.as_ref(), Some(&diff));
         assert_eq!(pending.options.len(), 2);
     }
 
@@ -1507,19 +1809,313 @@ mod tests {
         );
     }
 
+    // ── Two-region streaming: only newline-terminated text commits. ──
+
     #[test]
-    fn message_chunk_appends_a_message_line() {
+    fn unterminated_chunk_stays_in_the_tail_not_scrollback() {
         let mut st = AppState::new(pane());
-        let ev = AppEvent::Update {
+        let effects = reduce(&mut st, &chunk_to("rec-1", "hi"));
+        assert!(effects.is_empty());
+        assert!(
+            st.agents[0].lines.is_empty(),
+            "half-formed line must not commit"
+        );
+        assert_eq!(
+            st.agents[0].tail,
+            Some((TailKind::Message, "hi".to_string()))
+        );
+    }
+
+    #[test]
+    fn word_by_word_deltas_commit_one_line_per_newline() {
+        // The core A0 defect: streamed deltas must not render one word per
+        // scrollback line.
+        let mut st = AppState::new(pane());
+        for delta in ["Hello", " ", "world", "!\nSecond", " line\n"] {
+            reduce(&mut st, &chunk_to("rec-1", delta));
+        }
+        assert_eq!(
+            st.agents[0].lines,
+            vec![
+                Line::Message("Hello world!".into()),
+                Line::Message("Second line".into()),
+            ]
+        );
+        assert_eq!(st.agents[0].tail, None, "fully committed");
+    }
+
+    #[test]
+    fn kind_switch_flushes_the_other_streams_partial_line() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "rec-1".into(),
+                update: SessionUpdateKind::ThoughtChunk {
+                    message_id: None,
+                    text: "thinking".into(),
+                },
+            },
+        );
+        reduce(&mut st, &chunk_to("rec-1", "answer\n"));
+        assert_eq!(
+            st.agents[0].lines,
+            vec![
+                Line::Thought("thinking".into()),
+                Line::Message("answer".into()),
+            ],
+            "partial thought commits before the message starts"
+        );
+    }
+
+    #[test]
+    fn tool_call_flushes_a_partial_streamed_line_first() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &chunk_to("rec-1", "partial"));
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "rec-1".into(),
+                update: SessionUpdateKind::ToolCall {
+                    id: "t1".into(),
+                    title: "run tests".into(),
+                    status: ToolStatus::Running,
+                    diff: None,
+                },
+            },
+        );
+        assert_eq!(
+            st.agents[0].lines,
+            vec![
+                Line::Message("partial".into()),
+                Line::Tool {
+                    id: "t1".into(),
+                    title: "run tests".into(),
+                    status: ToolStatus::Running
+                },
+            ],
+            "ordering stays faithful: the partial line lands before the tool"
+        );
+    }
+
+    #[test]
+    fn fenced_code_commits_as_code_lines_with_lang() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &chunk_to("rec-1", "```rust\nfn main() {}\n```\nafter\n"),
+        );
+        assert_eq!(
+            st.agents[0].lines,
+            vec![
+                Line::Message("```rust".into()),
+                Line::Code {
+                    text: "fn main() {}".into(),
+                    lang: "rust".into()
+                },
+                Line::Message("```".into()),
+                Line::Message("after".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn crlf_deltas_commit_clean_lines() {
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &chunk_to("rec-1", "one\r\ntwo\r\n"));
+        assert_eq!(
+            st.agents[0].lines,
+            vec![Line::Message("one".into()), Line::Message("two".into())]
+        );
+    }
+
+    // ── Turn end (stop_reason capture). ──
+
+    #[test]
+    fn turn_ended_flushes_tail_clears_working_and_records_stop() {
+        let mut st = AppState::new(pane());
+        st.input = "go".into();
+        reduce(&mut st, &press(KeyCode::Enter));
+        assert!(st.agents[0].turn_active, "prompt starts a turn");
+        reduce(&mut st, &chunk_to("rec-1", "no trailing newline"));
+        reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "rec-1".into(),
+                stop_reason: StopReason::EndTurn,
+            },
+        );
+        let pane = &st.agents[0];
+        assert!(!pane.turn_active, "turn over");
+        assert_eq!(pane.last_stop, Some(StopReason::EndTurn));
+        assert_eq!(pane.tail, None);
+        assert!(
+            pane.lines
+                .contains(&Line::Message("no trailing newline".into())),
+            "unterminated output commits at turn end"
+        );
+        assert!(
+            !pane.attention,
+            "clean end on the shown pane needs no marker"
+        );
+    }
+
+    #[test]
+    fn abnormal_turn_end_leaves_a_note() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "rec-1".into(),
+                stop_reason: StopReason::Cancelled,
+            },
+        );
+        assert!(matches!(
+            st.agents[0].lines.last(),
+            Some(Line::Note(n)) if n.contains("cancelled")
+        ));
+    }
+
+    #[test]
+    fn background_turn_end_sets_attention_without_bell() {
+        let mut st = agents3(); // detail shows only r0
+        let fx = reduce(
+            &mut st,
+            &AppEvent::TurnEnded {
+                record_id: "r1".into(),
+                stop_reason: StopReason::EndTurn,
+            },
+        );
+        assert!(fx.is_empty(), "completions are calm — no bell");
+        assert!(st.agents[1].attention, "but the tower flags them");
+    }
+
+    // ── Usage + cost. ──
+
+    #[test]
+    fn usage_update_records_occupancy_and_cost() {
+        let mut st = AppState::new(pane());
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "rec-1".into(),
+                update: SessionUpdateKind::Usage {
+                    used: 1500,
+                    size: 200_000,
+                    cost: Some(UsageCost {
+                        amount: 0.25,
+                        currency: "USD".into(),
+                    }),
+                },
+            },
+        );
+        assert_eq!(st.agents[0].usage, Some((1500, 200_000)));
+        assert_eq!(
+            st.agents[0].cost,
+            Some(UsageCost {
+                amount: 0.25,
+                currency: "USD".into()
+            })
+        );
+        // A later usage tick without cost keeps the last metered cost.
+        reduce(
+            &mut st,
+            &AppEvent::Update {
+                record_id: "rec-1".into(),
+                update: SessionUpdateKind::Usage {
+                    used: 1600,
+                    size: 200_000,
+                    cost: None,
+                },
+            },
+        );
+        assert!(st.agents[0].cost.is_some(), "cost survives cost-less ticks");
+    }
+
+    // ── Diff rendering. ──
+
+    #[test]
+    fn diff_lines_render_header_chips_hunks_and_gap() {
+        let old: String = (0..30).map(|i| format!("l{i}\n")).collect();
+        let new = old.replace("l3\n", "L3\n").replace("l25\n", "L25\n");
+        let lines = diff_lines(&DiffData {
+            path: "src/x.rs".into(),
+            old,
+            new,
+        });
+        assert_eq!(
+            lines[0],
+            Line::Diff(DiffLine::Header {
+                path: "src/x.rs".into(),
+                adds: 2,
+                dels: 2
+            })
+        );
+        assert!(
+            lines.contains(&Line::Diff(DiffLine::Gap)),
+            "distant hunks separated by a gap: {lines:?}"
+        );
+        assert!(lines.contains(&Line::Diff(DiffLine::Del("l3".into()))));
+        assert!(lines.contains(&Line::Diff(DiffLine::Add("L3".into()))));
+    }
+
+    #[test]
+    fn oversized_diff_renders_a_placeholder() {
+        let lines = diff_lines(&DiffData {
+            path: "big".into(),
+            old: "x".repeat(300 * 1024),
+            new: String::new(),
+        });
+        assert_eq!(lines.len(), 2);
+        assert!(matches!(
+            &lines[1],
+            Line::Diff(DiffLine::Ctx(t)) if t.contains("too large")
+        ));
+    }
+
+    #[test]
+    fn parse_rendered_diff_roundtrips_the_substrate_format() {
+        let rendered = "src/x.rs\n[old]\na\nb\n[new]\na\nc";
+        assert_eq!(
+            parse_rendered_diff(rendered),
+            Some(DiffData {
+                path: "src/x.rs".into(),
+                old: "a\nb".into(),
+                new: "a\nc".into(),
+            })
+        );
+        assert_eq!(parse_rendered_diff("no markers here"), None);
+    }
+
+    #[test]
+    fn tool_call_diff_pushes_rendered_lines_once() {
+        let mut st = AppState::new(pane());
+        let raw = "x.rs\n[old]\na\n[new]\nb";
+        let tool = |diff: Option<&str>, status: Option<ToolStatus>| AppEvent::Update {
             record_id: "rec-1".into(),
-            update: SessionUpdateKind::MessageChunk {
-                message_id: None,
-                text: "hi".into(),
+            update: SessionUpdateKind::ToolCallUpdate {
+                id: "t1".into(),
+                status,
+                title: Some("WRITE x.rs".into()),
+                diff: diff.map(str::to_string),
             },
         };
-        let effects = reduce(&mut st, &ev);
-        assert!(effects.is_empty());
-        assert_eq!(st.agents[0].lines, vec![Line::Message("hi".into())]);
+        reduce(&mut st, &tool(Some(raw), Some(ToolStatus::Running)));
+        let with_diff = st.agents[0].lines.len();
+        assert!(
+            st.agents[0]
+                .lines
+                .contains(&Line::Diff(DiffLine::Add("b".into()))),
+            "diff rendered under the tool line: {:?}",
+            st.agents[0].lines
+        );
+        // The completion update repeats the same diff — no duplicate render.
+        reduce(&mut st, &tool(Some(raw), Some(ToolStatus::Ok)));
+        assert_eq!(
+            st.agents[0].lines.len(),
+            with_diff,
+            "repeated diff must not duplicate"
+        );
     }
 
     #[test]

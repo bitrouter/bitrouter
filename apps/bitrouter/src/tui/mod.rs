@@ -1,5 +1,6 @@
 //! `bitrouter tui` — in-process multi-agent manager.
 mod event;
+mod highlight;
 mod pump;
 mod state;
 mod ui;
@@ -21,7 +22,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::tui::event::{AppEvent, Effect, Incoming, PermOption};
+use crate::tui::event::{AppEvent, DiffData, Effect, Incoming, PermOption};
 use crate::tui::state::{AppState, PaneState, reduce};
 
 /// Launch the TUI with an initial agent; `n` (in AGENT mode) spawns more.
@@ -270,12 +271,7 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
                 let ev = AppEvent::Permission {
                     record_id: record_id.clone(),
                     title: p.tool_call.fields.title.clone().unwrap_or_default(),
-                    diff: p
-                        .tool_call
-                        .fields
-                        .content
-                        .as_deref()
-                        .and_then(bitrouter_substrate::translate::render_diff),
+                    diff: perm_diff(&p),
                     options: perm_options(&p),
                     risk: classify_risk(&p.tool_call.fields, &rt.spawner.base_repo),
                 };
@@ -286,6 +282,13 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
                 None
             }
         }
+        Incoming::TurnEnded {
+            record_id,
+            stop_reason,
+        } => Some(AppEvent::TurnEnded {
+            record_id,
+            stop_reason,
+        }),
         Incoming::Exited { record_id } => Some(AppEvent::Exited { record_id }),
         Incoming::PromptFailed { record_id, error } => {
             Some(AppEvent::PromptFailed { record_id, error })
@@ -311,13 +314,24 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 let tx = rt.spawner.tx.clone();
                 let rid = record_id.clone();
                 let handle = tokio::spawn(async move {
-                    if let Err(e) = sess.prompt(&text).await {
+                    // Send fails only at teardown; ignore either way.
+                    match sess.prompt(&text).await {
+                        // The typed stop reason feeds working/idle state and
+                        // (with a diff) the review queue — don't discard it.
+                        Ok(resp) => {
+                            let _ = tx.send(Incoming::TurnEnded {
+                                record_id: rid,
+                                stop_reason: resp.stop_reason,
+                            });
+                        }
                         // Surface in the pane — a silent failure looks like a
-                        // hung agent. Send fails only at teardown; ignore.
-                        let _ = tx.send(Incoming::PromptFailed {
-                            record_id: rid,
-                            error: e.to_string(),
-                        });
+                        // hung agent.
+                        Err(e) => {
+                            let _ = tx.send(Incoming::PromptFailed {
+                                record_id: rid,
+                                error: e.to_string(),
+                            });
+                        }
                     }
                 });
                 rt.prompt_tasks.entry(record_id).or_default().push(handle);
@@ -446,6 +460,26 @@ fn classify_risk(
         // Delete, Execute (arbitrary commands), Fetch (network), Other/None.
         _ => Risk::High,
     }
+}
+
+/// Extract the first structured diff from a permission's tool-call content,
+/// ready for the TUI's line-diff renderer.
+fn perm_diff(p: &bitrouter_substrate::up::PendingPermission) -> Option<DiffData> {
+    use agent_client_protocol::schema::v1::ToolCallContent;
+    p.tool_call
+        .fields
+        .content
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .find_map(|c| match c {
+            ToolCallContent::Diff(d) => Some(DiffData {
+                path: d.path.display().to_string(),
+                old: d.old_text.clone().unwrap_or_default(),
+                new: d.new_text.clone(),
+            }),
+            _ => None,
+        })
 }
 
 /// Map a `PendingPermission`'s options to display data, matching `reduce_key`'s

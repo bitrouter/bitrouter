@@ -6,6 +6,7 @@
 //! message the loop receives (it may carry non-pure handles); the loop converts
 //! each `Incoming` into an `AppEvent` before reducing.
 
+use agent_client_protocol::schema::v1::StopReason;
 use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind};
 use bitrouter_substrate::up::PendingPermission;
 use crossterm::event::KeyEvent;
@@ -15,6 +16,15 @@ use crossterm::event::KeyEvent;
 pub struct PermOption {
     pub outcome: PermissionOutcome,
     pub label: String,
+}
+
+/// A structured file diff (old → new text) carried by a permission request or
+/// tool call, ready for the line-diff renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffData {
+    pub path: String,
+    pub old: String,
+    pub new: String,
 }
 
 /// Deterministic risk classification of a permission request, computed by the
@@ -44,10 +54,16 @@ pub enum AppEvent {
     Permission {
         record_id: String,
         title: String,
-        diff: Option<String>,
+        diff: Option<DiffData>,
         options: Vec<PermOption>,
         /// Classified by the loop from the tool call's kind + locations.
         risk: Risk,
+    },
+    /// A prompt turn completed; carries the typed ACP stop reason. Feeds the
+    /// working/idle state and (with a non-empty diff) the review queue.
+    TurnEnded {
+        record_id: String,
+        stop_reason: StopReason,
     },
     /// The session's agent child exited.
     Exited { record_id: String },
@@ -92,6 +108,10 @@ pub enum Incoming {
     Permission {
         record_id: String,
         pending: Box<PendingPermission>,
+    },
+    TurnEnded {
+        record_id: String,
+        stop_reason: StopReason,
     },
     Exited {
         record_id: String,

@@ -54,10 +54,13 @@ axoupdater = { version = "0.10", default-features = false, features = ["github_r
 semver = "1"
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true, features = ["event-stream"] }
+similar = { version = "2", optional = true }
+syntect = { version = "5", default-features = false, features = ["default-fancy"], optional = true }
+two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"], optional = true }
 
 [features]
 default = ["tui"]
-tui = ["dep:ratatui", "dep:crossterm"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:similar", "dep:syntect", "dep:two-face"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

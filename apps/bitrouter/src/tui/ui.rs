@@ -8,7 +8,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::tui::state::{AppState, Line, Mode, PaneState, PendingView, PickerState, Split};
+use crate::tui::state::{
+    AppState, DiffLine, Line, Mode, PaneState, PendingView, PickerState, Split, TailKind,
+    diff_lines,
+};
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
 /// plus its expanded `└ y·a·d risk · title` line to stay readable.
@@ -58,7 +61,7 @@ pub fn render(state: &mut AppState, frame: &mut Frame) {
     if let Some(pane) = state.focused()
         && let Some(pending) = &pane.pending
     {
-        render_permission(pending, frame, area);
+        render_permission(pending, state.no_color, frame, area);
     }
 }
 
@@ -164,8 +167,10 @@ fn state_glyph(pane: &PaneState, tick: u64) -> (&'static str, Color) {
         ("⚠", Color::Red) // needs you
     } else if pane.attention {
         ("●", Color::Yellow) // happened in the background
+    } else if !pane.exited && pane.turn_active {
+        (SPINNER[(tick % 8) as usize], Color::Cyan) // working (turn in flight)
     } else if !pane.exited {
-        (SPINNER[(tick % 8) as usize], Color::Cyan) // running
+        ("○", Color::Green) // idle
     } else {
         ("✗", Color::DarkGray) // dead
     }
@@ -211,6 +216,10 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             crate::tui::state::Autonomy::Auto => {
                 spans.push(Span::styled(" [A]", tint(nc, Color::DarkGray)))
             }
+        }
+        // Cumulative cost, when the upstream meters it (the `$` column).
+        if let Some(cost) = &pane.cost {
+            spans.push(Span::styled(fmt_cost(cost), tint(nc, Color::DarkGray)));
         }
         lines.push(TuiLine::from(spans));
         // Actionable rows expand inline: risk + what the agent wants, and (on
@@ -319,11 +328,16 @@ fn render_pane(
 ) {
     let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
     let inner_height = area.height.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
     pane.viewport = inner_height;
-    let tail_start = pane.lines.len().saturating_sub(inner_height);
+    // The mutable streaming tail counts as one display line after the
+    // committed region.
+    let extra = usize::from(pane.tail.is_some());
+    let total = pane.lines.len() + extra;
+    let tail_start = total.saturating_sub(inner_height);
     // A pin never scrolls past the tail view (no blank space below the tail).
     let start = pane.scroll.map(|s| s.min(tail_start)).unwrap_or(tail_start);
-    let hidden_below = pane.lines.len() - (start + inner_height).min(pane.lines.len());
+    let hidden_below = total - (start + inner_height).min(total);
 
     let mut markers = String::new();
     if pane.pending.is_some() {
@@ -347,18 +361,23 @@ fn render_pane(
     } else {
         format!(" · {}", pane.harness)
     };
-    // Context-window occupancy, when the upstream reports it.
+    // Context-window occupancy + cumulative cost, when the upstream reports them.
     let usage = match pane.usage {
         Some((used, size)) => format!(" · {}/{}", fmt_tokens(used), fmt_tokens(size)),
         None => String::new(),
     };
+    let cost = match &pane.cost {
+        Some(c) => format!(" ·{}", fmt_cost(c)),
+        None => String::new(),
+    };
     let title = format!(
-        " [{}] {}{} · {}{}{} ",
+        " [{}] {}{} · {}{}{}{} ",
         slot + 1,
         pane.agent_id,
         harness,
         short,
         usage,
+        cost,
         markers
     );
     let border_style = if focused {
@@ -372,10 +391,20 @@ fn render_pane(
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title);
-    let mut lines: Vec<TuiLine> = pane.lines[start..]
+    let committed_end = pane.lines.len().min(start + inner_height);
+    let mut lines: Vec<TuiLine> = pane.lines[start.min(pane.lines.len())..committed_end]
         .iter()
-        .map(|l| render_line(l, nc))
+        .map(|l| render_line(l, nc, inner_width))
         .collect();
+    // The mutable tail renders after the committed region while following.
+    if let Some((kind, buf)) = &pane.tail
+        && start + inner_height > pane.lines.len()
+    {
+        lines.push(match kind {
+            TailKind::Message => TuiLine::raw(buf.clone()),
+            TailKind::Thought => TuiLine::styled(buf.clone(), tint(nc, Color::DarkGray)),
+        });
+    }
     if lines.is_empty() && !pane.exited {
         // Calm pre-first-output placeholder, not a blank pane.
         lines.push(TuiLine::styled(
@@ -398,7 +427,17 @@ fn fmt_tokens(n: u64) -> String {
     }
 }
 
-fn render_line(line: &Line, nc: bool) -> TuiLine<'static> {
+/// Compact cumulative cost (` $0.25`, or ` 0.25 EUR` off-dollar).
+fn fmt_cost(cost: &bitrouter_substrate::translate::UsageCost) -> String {
+    if cost.currency == "USD" {
+        format!(" ${:.2}", cost.amount)
+    } else {
+        format!(" {:.2} {}", cost.amount, cost.currency)
+    }
+}
+
+fn render_line(line: &Line, nc: bool, width: usize) -> TuiLine<'static> {
+    use bitrouter_substrate::translate::ToolStatus;
     match line {
         Line::UserPrompt(t) => TuiLine::from(vec![
             Span::styled("› ", tint(nc, Color::Cyan)),
@@ -406,11 +445,21 @@ fn render_line(line: &Line, nc: bool) -> TuiLine<'static> {
         ]),
         Line::Message(t) => TuiLine::raw(t.clone()),
         Line::Thought(t) => TuiLine::styled(t.clone(), tint(nc, Color::DarkGray)),
-        Line::Tool { title, status, .. } => TuiLine::from(vec![
-            Span::styled("⚒ ", tint(nc, Color::Yellow)),
-            Span::raw(title.clone()),
-            Span::raw(format!(" [{status:?}]")),
-        ]),
+        Line::Code { text, lang } => TuiLine::from(crate::tui::highlight::spans(lang, text, nc)),
+        Line::Tool { title, status, .. } => {
+            // Status glyph, not a Debug dump — glyphs carry meaning without color.
+            let (glyph, color) = match status {
+                ToolStatus::Pending => ("· ", Color::DarkGray),
+                ToolStatus::Running => ("⚒ ", Color::Yellow),
+                ToolStatus::Ok => ("✓ ", Color::Green),
+                ToolStatus::Failed => ("✗ ", Color::Red),
+            };
+            TuiLine::from(vec![
+                Span::styled(glyph, tint(nc, color)),
+                Span::raw(title.clone()),
+            ])
+        }
+        Line::Diff(d) => render_diff_line(d, nc, width),
         Line::Error(t) => TuiLine::from(vec![
             Span::styled("✗ ", tint(nc, Color::Red)),
             Span::styled(t.clone(), tint(nc, Color::Red)),
@@ -419,6 +468,58 @@ fn render_line(line: &Line, nc: bool) -> TuiLine<'static> {
             Span::styled("· ", tint(nc, Color::DarkGray)),
             Span::styled(t.clone(), tint(nc, Color::DarkGray)),
         ]),
+        Line::Note(t) => TuiLine::from(vec![
+            Span::styled("· ", tint(nc, Color::DarkGray)),
+            Span::styled(t.clone(), tint(nc, Color::DarkGray)),
+        ]),
+    }
+}
+
+/// Background tint for added lines (kept dark so syntax fg stays readable).
+const ADD_BG: Color = Color::Rgb(16, 48, 16);
+/// Background tint for deleted lines.
+const DEL_BG: Color = Color::Rgb(48, 16, 16);
+
+/// The `diff_render` treatment: `+`/`-` prefixed lines with a full-width
+/// background tint (padded to `width`), dimmed deletions, a `⋮` gap between
+/// hunks, and a `path +N/-M` header with count chips.
+fn render_diff_line(d: &DiffLine, nc: bool, width: usize) -> TuiLine<'static> {
+    let pad = |s: &str| {
+        let mut out = s.to_string();
+        while out.chars().count() < width {
+            out.push(' ');
+        }
+        out
+    };
+    match d {
+        DiffLine::Header { path, adds, dels } => TuiLine::from(vec![
+            Span::styled(path.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(format!("+{adds}"), tint(nc, Color::Green)),
+            Span::raw("/"),
+            Span::styled(format!("-{dels}"), tint(nc, Color::Red)),
+        ]),
+        DiffLine::Add(t) => {
+            let style = if nc {
+                Style::default()
+            } else {
+                Style::default().fg(Color::Green).bg(ADD_BG)
+            };
+            TuiLine::styled(pad(&format!("+{t}")), style)
+        }
+        DiffLine::Del(t) => {
+            let style = if nc {
+                Style::default().add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+                    .fg(Color::Red)
+                    .bg(DEL_BG)
+                    .add_modifier(Modifier::DIM)
+            };
+            TuiLine::styled(pad(&format!("-{t}")), style)
+        }
+        DiffLine::Ctx(t) => TuiLine::styled(format!(" {t}"), tint(nc, Color::DarkGray)),
+        DiffLine::Gap => TuiLine::styled("⋮", tint(nc, Color::DarkGray)),
     }
 }
 
@@ -474,13 +575,15 @@ fn render_picker(picker: &PickerState, nc: bool, frame: &mut Frame, area: Rect) 
     frame.render_widget(para, popup);
 }
 
-fn render_permission(pending: &PendingView, frame: &mut Frame, area: Rect) {
+fn render_permission(pending: &PendingView, nc: bool, frame: &mut Frame, area: Rect) {
     let popup = centered(area, 70, 40);
     frame.render_widget(Clear, popup);
+    let width = popup.width.saturating_sub(2) as usize;
     let mut lines: Vec<TuiLine> = vec![TuiLine::raw(pending.title.clone())];
     if let Some(diff) = &pending.diff {
-        for l in diff.lines() {
-            lines.push(TuiLine::raw(l.to_string()));
+        // Same diff_render treatment as the scrollback, not raw text.
+        for l in diff_lines(diff) {
+            lines.push(render_line(&l, nc, width));
         }
     }
     let keys: Vec<String> = pending
@@ -799,6 +902,62 @@ mod tests {
     }
 
     #[test]
+    fn streaming_tail_renders_after_committed_lines() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.agents[0].lines.push(Line::Message("committed".into()));
+        st.agents[0].tail = Some((TailKind::Message, "half-formed".into()));
+        let text = draw(&mut st, 60, 12);
+        assert!(text.contains("committed"));
+        assert!(text.contains("half-formed"), "mutable tail visible");
+    }
+
+    #[test]
+    fn diff_lines_render_with_prefixes_and_chips() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        for l in crate::tui::state::diff_lines(&crate::tui::event::DiffData {
+            path: "src/x.rs".into(),
+            old: "old line\n".into(),
+            new: "new line\n".into(),
+        }) {
+            st.agents[0].lines.push(l);
+        }
+        let text = draw(&mut st, 60, 12);
+        assert!(text.contains("src/x.rs +1/-1"), "header chips: {text:?}");
+        assert!(text.contains("-old line"), "deletion prefixed");
+        assert!(text.contains("+new line"), "addition prefixed");
+    }
+
+    #[test]
+    fn code_lines_render_their_text() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.agents[0].lines.push(Line::Code {
+            text: "fn main() {}".into(),
+            lang: "rust".into(),
+        });
+        let text = draw(&mut st, 60, 12);
+        assert!(text.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn cost_shows_in_rail_and_pane_header() {
+        let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
+        st.agents[0].cost = Some(bitrouter_substrate::translate::UsageCost {
+            amount: 0.25,
+            currency: "USD".into(),
+        });
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains("$0.25"), "cost column rendered: {text:?}");
+    }
+
+    #[test]
+    fn idle_agent_shows_idle_glyph_not_spinner() {
+        let mut st = agents3(); // no turn in flight anywhere
+        let text = draw(&mut st, 80, 24);
+        assert!(text.contains('○'), "idle glyph");
+        assert!(!text.contains('⣾'), "no spinner without a turn");
+    }
+
+    #[test]
     fn pre_first_output_pane_shows_thinking_placeholder() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
         let text = draw(&mut st, 60, 12);
@@ -812,6 +971,7 @@ mod tests {
     #[test]
     fn spinner_advances_with_tick() {
         let mut st = agents3();
+        st.agents[0].turn_active = true; // spinner = a turn in flight
         st.tick = 0;
         let t0 = draw(&mut st, 80, 24);
         st.tick = 1;
@@ -870,7 +1030,11 @@ mod tests {
         };
         st.agents[0].pending = Some(PendingView {
             title: "write file".into(),
-            diff: Some("+added\n-removed".into()),
+            diff: Some(crate::tui::event::DiffData {
+                path: "src/x.rs".into(),
+                old: "removed\n".into(),
+                new: "added\n".into(),
+            }),
             options: vec![PermOption {
                 outcome: PermissionOutcome::AllowOnce,
                 label: "allow".into(),
