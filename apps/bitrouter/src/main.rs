@@ -889,11 +889,21 @@ async fn main() {
     // result (this match) goes to stdout in the selected format, so
     // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
     let cli = Cli::parse();
+    let raw_cloud_api = matches!(
+        &cli.command,
+        Command::Cloud {
+            action: bitrouter::cloud::cli::CloudAction::Api(_)
+        }
+    );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     match run(cli, &output).await {
         Ok(()) => {}
         Err(e) => {
-            let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
+            if raw_cloud_api {
+                eprintln!("error: {e:#}");
+            } else {
+                let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
+            }
             std::process::exit(1);
         }
     }
