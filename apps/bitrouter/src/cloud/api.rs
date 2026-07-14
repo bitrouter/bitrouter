@@ -12,7 +12,7 @@ use serde_json::{Map, Number, Value};
 
 /// Arguments accepted by `bitrouter cloud api`.
 #[derive(clap::Args)]
-pub struct ApiArgs {
+struct ParsedApiArgs {
     /// Relative API endpoint, for example `/v1/models`.
     pub endpoint: String,
     /// HTTP method. Defaults to GET, or POST when fields/input are present.
@@ -41,10 +41,78 @@ pub struct ApiArgs {
     pub verbose: bool,
 }
 
+/// Arguments accepted by `bitrouter cloud api`.
+pub struct ApiArgs {
+    /// Relative API endpoint, for example `/v1/models`.
+    pub endpoint: String,
+    /// HTTP method. Defaults to GET, or POST when fields/input are present.
+    pub method: Option<String>,
+    /// Request headers supplied by `-H/--header`.
+    pub headers: Vec<String>,
+    /// String fields supplied by `-f/--raw-field`.
+    pub raw_fields: Vec<String>,
+    /// Typed fields supplied by `-F/--field`.
+    pub fields: Vec<String>,
+    /// Exact request body file, or `-` for stdin.
+    pub input: Option<PathBuf>,
+    /// Whether to include response status and headers.
+    pub include: bool,
+    /// Whether to suppress the response body.
+    pub silent: bool,
+    /// Whether to print redacted request and response details.
+    pub verbose: bool,
+    field_order: Vec<FieldKind>,
+}
+
+impl clap::FromArgMatches for ApiArgs {
+    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        let field_order = parsed_field_order(matches);
+        let parsed = <ParsedApiArgs as clap::FromArgMatches>::from_arg_matches(matches)?;
+        Ok(Self::from_parsed(parsed, field_order))
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl clap::Args for ApiArgs {
+    fn group_id() -> Option<clap::Id> {
+        <ParsedApiArgs as clap::Args>::group_id()
+    }
+
+    fn augment_args(command: clap::Command) -> clap::Command {
+        <ParsedApiArgs as clap::Args>::augment_args(command)
+    }
+
+    fn augment_args_for_update(command: clap::Command) -> clap::Command {
+        <ParsedApiArgs as clap::Args>::augment_args_for_update(command)
+    }
+}
+
+impl ApiArgs {
+    fn from_parsed(parsed: ParsedApiArgs, field_order: Vec<FieldKind>) -> Self {
+        Self {
+            endpoint: parsed.endpoint,
+            method: parsed.method,
+            headers: parsed.headers,
+            raw_fields: parsed.raw_fields,
+            fields: parsed.fields,
+            input: parsed.input,
+            include: parsed.include,
+            silent: parsed.silent,
+            verbose: parsed.verbose,
+            field_order,
+        }
+    }
+}
+
 impl std::fmt::Debug for ApiArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let endpoint = redacted_endpoint(&self.endpoint);
         f.debug_struct("ApiArgs")
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &endpoint)
             .field("method", &self.method)
             .field("header_count", &self.headers.len())
             .field("raw_field_count", &self.raw_fields.len())
@@ -57,10 +125,33 @@ impl std::fmt::Debug for ApiArgs {
     }
 }
 
+fn redacted_endpoint(endpoint: &str) -> String {
+    match endpoint.find(['?', '#']) {
+        Some(index) => format!("{}<redacted>", &endpoint[..=index]),
+        None => endpoint.to_owned(),
+    }
+}
+
 #[derive(Clone, Copy)]
 enum FieldKind {
     Raw,
     Typed,
+}
+
+fn parsed_field_order(matches: &clap::ArgMatches) -> Vec<FieldKind> {
+    let raw = matches
+        .indices_of("raw_fields")
+        .into_iter()
+        .flatten()
+        .map(|index| (index, FieldKind::Raw));
+    let typed = matches
+        .indices_of("fields")
+        .into_iter()
+        .flatten()
+        .map(|index| (index, FieldKind::Typed));
+    let mut ordered = raw.chain(typed).collect::<Vec<_>>();
+    ordered.sort_by_key(|(index, _)| *index);
+    ordered.into_iter().map(|(_, kind)| kind).collect()
 }
 
 struct InputField {
@@ -106,18 +197,30 @@ fn build_fields(fields: &[InputField], stdin: &mut dyn Read) -> Result<Value> {
     let mut root = Value::Object(Map::new());
     let mut stdin_used = false;
     for field in fields {
-        let (key, raw_value) = field
-            .assignment
-            .split_once('=')
-            .context("field must use KEY=VALUE syntax")?;
-        let parts = parse_key(key)?;
-        let value = match field.kind {
-            FieldKind::Raw => Value::String(raw_value.to_owned()),
-            FieldKind::Typed => typed_value(raw_value, stdin, &mut stdin_used)?,
-        };
-        insert_value(&mut root, &parts, value)?;
+        let (mut parts, raw_value) = parse_assignment(&field.assignment)?;
+        if let Some(raw_value) = raw_value {
+            let value = match field.kind {
+                FieldKind::Raw => Value::String(raw_value.to_owned()),
+                FieldKind::Typed => typed_value(raw_value, stdin, &mut stdin_used)?,
+            };
+            insert_value(&mut root, &parts, value)?;
+        } else {
+            parts.pop();
+            insert_value(&mut root, &parts, Value::Array(Vec::new()))?;
+        }
     }
     Ok(root)
+}
+
+fn parse_assignment(assignment: &str) -> Result<(Vec<KeyPart>, Option<&str>)> {
+    if let Some((key, value)) = assignment.split_once('=') {
+        return Ok((parse_key(key)?, Some(value)));
+    }
+    let parts = parse_key(assignment)?;
+    if parts.last() != Some(&KeyPart::Array) {
+        anyhow::bail!("field must use KEY=VALUE syntax or KEY[] for an empty array");
+    }
+    Ok((parts, None))
 }
 
 fn parse_key(key: &str) -> Result<Vec<KeyPart>> {
@@ -339,6 +442,9 @@ pub async fn run_with_io(
             stdout
                 .write_all(&chunk)
                 .context("writing BitRouter Cloud response body")?;
+            stdout
+                .flush()
+                .context("flushing BitRouter Cloud response chunk")?;
         }
     }
     if buffer_json {
@@ -367,13 +473,7 @@ fn prepare_request(
     client: &CloudApiClient,
     stdin: &mut dyn Read,
 ) -> Result<PreparedRequest> {
-    let fields = args
-        .raw_fields
-        .iter()
-        .cloned()
-        .map(InputField::raw)
-        .chain(args.fields.iter().cloned().map(InputField::typed))
-        .collect::<Vec<_>>();
+    let fields = ordered_fields(args);
     let method = select_method(
         args.method.as_deref(),
         !fields.is_empty(),
@@ -415,6 +515,28 @@ fn prepare_request(
     })
 }
 
+fn ordered_fields(args: &ApiArgs) -> Vec<InputField> {
+    if args.field_order.len() != args.raw_fields.len() + args.fields.len() {
+        return args
+            .raw_fields
+            .iter()
+            .cloned()
+            .map(InputField::raw)
+            .chain(args.fields.iter().cloned().map(InputField::typed))
+            .collect();
+    }
+
+    let mut raw = args.raw_fields.iter();
+    let mut typed = args.fields.iter();
+    args.field_order
+        .iter()
+        .filter_map(|kind| match kind {
+            FieldKind::Raw => raw.next().cloned().map(InputField::raw),
+            FieldKind::Typed => typed.next().cloned().map(InputField::typed),
+        })
+        .collect()
+}
+
 fn parse_headers(values: &[String]) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for header in values {
@@ -452,15 +574,19 @@ fn endpoint_with_query(
     {
         let mut query = url.query_pairs_mut();
         for field in fields {
-            let (key, raw_value) = field
+            let (parts, raw_value) = parse_assignment(&field.assignment)?;
+            let key = field
                 .assignment
                 .split_once('=')
-                .context("field must use KEY=VALUE syntax")?;
-            parse_key(key)?;
-            let value = match field.kind {
-                FieldKind::Raw => raw_value.to_owned(),
-                FieldKind::Typed => query_value(typed_value(raw_value, stdin, &mut stdin_used)?),
+                .map_or(field.assignment.as_str(), |(key, _)| key);
+            let value = match (field.kind, raw_value) {
+                (_, None) => String::new(),
+                (FieldKind::Raw, Some(raw_value)) => raw_value.to_owned(),
+                (FieldKind::Typed, Some(raw_value)) => {
+                    query_value(typed_value(raw_value, stdin, &mut stdin_used)?)
+                }
             };
+            debug_assert!(!parts.is_empty());
             query.append_pair(key, &value);
         }
     }
@@ -519,7 +645,7 @@ fn write_verbose_request(
     client: &CloudApiClient,
     request: &PreparedRequest,
 ) -> Result<()> {
-    let url = client.endpoint_url(&request.endpoint)?;
+    let url = redacted_url(client.endpoint_url(&request.endpoint)?);
     writeln!(writer, "> {} {url}", request.method).context("writing verbose request")?;
     if !request.headers.contains_key(reqwest::header::AUTHORIZATION) {
         writeln!(writer, "> authorization: <redacted>").context("writing verbose request")?;
@@ -530,6 +656,31 @@ fn write_verbose_request(
         writeln!(writer).context("writing verbose request")?;
     }
     Ok(())
+}
+
+fn redacted_url(mut url: reqwest::Url) -> reqwest::Url {
+    let query = url
+        .query_pairs()
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    if !query.iter().any(|(name, _)| sensitive_name(name)) {
+        return url;
+    }
+    url.set_query(None);
+    {
+        let mut output = url.query_pairs_mut();
+        for (name, value) in query {
+            output.append_pair(
+                &name,
+                if sensitive_name(&name) {
+                    "<redacted>"
+                } else {
+                    &value
+                },
+            );
+        }
+    }
+    url
 }
 
 fn write_verbose_response(
@@ -583,13 +734,20 @@ fn write_redacted_header_value(
 }
 
 fn sensitive_header(name: &HeaderName) -> bool {
-    let name = name.as_str();
+    sensitive_name(name.as_str())
+}
+
+fn sensitive_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
     name.contains("authorization")
         || name.contains("cookie")
         || name.contains("token")
         || name.contains("secret")
         || name.contains("api-key")
         || name.contains("api_key")
+        || name.contains("password")
+        || name.contains("signature")
+        || name == "key"
 }
 
 fn version_name(version: Version) -> &'static str {
@@ -652,6 +810,7 @@ mod tests {
             include: false,
             silent: false,
             verbose: false,
+            field_order: Vec::new(),
         }
     }
 
@@ -854,6 +1013,46 @@ mod tests {
                 "messages": [
                     {"role": "user", "content": "Hello"},
                     {"role": "assistant", "content": "Hi"}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn empty_array_field_builds_an_empty_array() {
+        let fields = vec![InputField::raw("stop[]")];
+
+        let value = build_fields(&fields, &mut std::io::empty()).unwrap();
+
+        assert_eq!(value, json!({"stop": []}));
+    }
+
+    #[test]
+    fn parsed_raw_and_typed_fields_keep_command_line_order() {
+        let parsed = ApiHarness::try_parse_from([
+            "test",
+            "/v1/messages",
+            "-F",
+            "messages[][priority]=1",
+            "-f",
+            "messages[][content]=first",
+            "-F",
+            "messages[][priority]=2",
+            "-f",
+            "messages[][content]=second",
+        ])
+        .unwrap();
+        let client = api_client("https://api.bitrouter.ai", "field-order");
+
+        let request = prepare_request(&parsed.args, &client, &mut std::io::empty()).unwrap();
+        let body = serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap();
+
+        assert_eq!(
+            body,
+            json!({
+                "messages": [
+                    {"priority": 1, "content": "first"},
+                    {"priority": 2, "content": "second"}
                 ]
             })
         );
@@ -1113,7 +1312,7 @@ mod tests {
         assert!(!output.contains("hidden"));
         assert!(stderr.is_empty());
 
-        let mut verbose_args = api_args("/v1/models");
+        let mut verbose_args = api_args("/v1/models?api_key=query-secret&visible=yes");
         verbose_args.headers = vec!["Authorization: Bearer override-secret".to_owned()];
         verbose_args.verbose = true;
         let (result, _, stderr) = execute_for_test(
@@ -1130,6 +1329,8 @@ mod tests {
         assert!(!verbose.contains("override-secret"));
         assert!(!verbose.contains("response-secret"));
         assert!(!verbose.contains("stored-secret"));
+        assert!(!verbose.contains("query-secret"));
+        assert!(verbose.contains("visible=yes"));
     }
 
     #[tokio::test]

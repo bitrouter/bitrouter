@@ -24,13 +24,14 @@ pub struct ApiRequest {
 impl std::fmt::Debug for ApiRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let header_names = self.headers.keys().collect::<Vec<_>>();
+        let endpoint = redacted_endpoint(&self.endpoint);
         let body = self
             .body
             .as_ref()
             .map(|bytes| format!("<redacted> ({} bytes)", bytes.len()));
         f.debug_struct("ApiRequest")
             .field("method", &self.method)
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &endpoint)
             .field("header_names", &header_names)
             .field("body", &body)
             .finish()
@@ -77,9 +78,21 @@ impl ApiRequest {
 }
 
 /// A raw HTTP response whose body remains available as a reqwest stream.
-#[derive(Debug)]
 pub struct ApiResponse {
     response: reqwest::Response,
+}
+
+impl std::fmt::Debug for ApiResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let url = redacted_endpoint(self.response.url().as_str());
+        let header_names = self.response.headers().keys().collect::<Vec<_>>();
+        f.debug_struct("ApiResponse")
+            .field("status", &self.response.status())
+            .field("version", &self.response.version())
+            .field("url", &url)
+            .field("header_names", &header_names)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ApiResponse {
@@ -148,7 +161,7 @@ impl CloudApiClient {
             )
         })?;
         let http = reqwest::Client::builder()
-            .user_agent(concat!("bitrouter-cloud-sdk/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("bitrouter/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -192,6 +205,7 @@ impl CloudApiClient {
         let response = builder
             .send()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("sending BitRouter Cloud request")?;
         Ok(ApiResponse { response })
     }
@@ -234,9 +248,7 @@ fn resolve_endpoint(base_url: &Url, endpoint: &str) -> Result<Url> {
     origin.set_path("/");
     origin.set_query(None);
     origin.set_fragment(None);
-    let resolved = origin
-        .join(endpoint)
-        .with_context(|| format!("resolving API endpoint '{endpoint}'"))?;
+    let resolved = origin.join(endpoint).context("resolving API endpoint")?;
     if resolved.origin() != origin.origin() {
         anyhow::bail!("API endpoint resolves outside the logged-in origin");
     }
@@ -244,6 +256,13 @@ fn resolve_endpoint(base_url: &Url, endpoint: &str) -> Result<Url> {
         anyhow::bail!("API endpoint fragments are not supported");
     }
     Ok(resolved)
+}
+
+fn redacted_endpoint(endpoint: &str) -> String {
+    match endpoint.find(['?', '#']) {
+        Some(index) => format!("{}<redacted>", &endpoint[..=index]),
+        None => endpoint.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -314,13 +333,14 @@ mod tests {
             AUTHORIZATION,
             HeaderValue::from_static("Bearer request-secret"),
         );
-        let request = ApiRequest::new(reqwest::Method::POST, "/v1/responses")
+        let request = ApiRequest::new(reqwest::Method::POST, "/v1/responses?api_key=query-secret")
             .with_headers(headers)
             .with_body(br#"{"input":"private prompt"}"#.to_vec());
 
         let rendered = format!("{request:?}");
 
         assert!(!rendered.contains("request-secret"));
+        assert!(!rendered.contains("query-secret"));
         assert!(!rendered.contains("private prompt"));
         assert!(rendered.contains("<redacted>"));
     }
@@ -333,11 +353,17 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/models"))
             .and(header(
+                "user-agent",
+                concat!("bitrouter/", env!("CARGO_PKG_VERSION")),
+            ))
+            .and(header(
                 "authorization",
                 "Bearer brk_AAAAAAAAAAAAAAAA.secret",
             ))
             .respond_with(
-                ResponseTemplate::new(200).set_body_raw("{\"data\":[]}", "application/json"),
+                ResponseTemplate::new(200)
+                    .insert_header("x-api-key", "response-secret")
+                    .set_body_raw("{\"data\":[]}", "application/json"),
             )
             .expect(1)
             .mount(&server)
@@ -345,11 +371,17 @@ mod tests {
 
         let client = CloudApiClient::from_credentials_path(credentials_path).unwrap();
         let response = client
-            .execute(ApiRequest::new(reqwest::Method::GET, "/v1/models"))
+            .execute(ApiRequest::new(
+                reqwest::Method::GET,
+                "/v1/models?api_key=query-secret",
+            ))
             .await
             .unwrap();
 
         assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let rendered = format!("{response:?}");
+        assert!(!rendered.contains("query-secret"));
+        assert!(!rendered.contains("response-secret"));
         assert_eq!(
             response.into_response().text().await.unwrap(),
             "{\"data\":[]}"

@@ -51,7 +51,7 @@ bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
 
 ## 管理账户：`bitrouter cloud`
 
-每个叶子命令都支持 `--json` 输出原始响应；默认输出对单个资源采用 `systemctl` 风格的键值块，对列表采用紧凑表格。当服务器返回 `missing required scope: <s>` 的 403 时，CLI 会打印一条可直接粘贴的 `bitrouter cloud login --scope "<现有> <s>"` 提示。
+每个叶子命令都支持 `--json` 输出原始响应；默认输出对单个资源采用 `systemctl` 风格的键值块，对列表采用紧凑表格。当服务器返回 `missing required scope: <s>` 的 403 时，OAuth 用户会收到可直接粘贴的 `bitrouter cloud login --scope "<现有> <s>"` 提示；API-key 用户则会收到创建或选择具备该 scope 的 key 的提示。
 
 OAuth 凭证是 namespace-baked 的。API-key 凭证在工作区级管理路由中使用服务器的 `me` namespace 别名。`whoami` 会报告 `oauth` 或 `api_key`，但绝不打印凭证；API-key logout 只删除本地文件。
 

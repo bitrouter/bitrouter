@@ -24,7 +24,7 @@ use clap::{Subcommand, ValueEnum};
 
 use bitrouter_cloud_sdk::auth::commands::{LoginInputs, login, logout};
 use bitrouter_cloud_sdk::auth::credentials::{
-    CredentialKind, CredentialsStore, default_credentials_path,
+    CredentialKind, CredentialsStore, StoredCredential, default_credentials_path,
 };
 use bitrouter_cloud_sdk::management::types::{
     BudgetWindow as SdkBudgetWindow, PolicyKind as SdkPolicyKind,
@@ -37,7 +37,7 @@ use bitrouter_cloud_sdk::management::{
 use super::api::ApiArgs;
 
 /// `bitrouter cloud …`. All variants land in [`run`].
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
     /// `/v1/*` base URL the CLI will target.
@@ -1358,32 +1358,31 @@ fn print_error_hint(err: &SdkError) {
         } => {
             eprintln!();
             eprintln!("  This command requires the scope: {scope}");
-            if let Some(extended) = suggested_scope(scope) {
-                eprintln!("  Re-run `bitrouter cloud login --scope \"{extended}\"` to add it.");
-            } else {
-                eprintln!(
-                    "  Re-run `bitrouter cloud login --scope \"<your current scope> {scope}\"`."
-                );
-            }
+            let store = default_credentials_path()
+                .ok()
+                .and_then(|path| CredentialsStore::load(path).ok());
+            let credential = store.as_ref().and_then(CredentialsStore::current);
+            eprintln!("  {}", missing_scope_hint(scope, credential));
         }
         _ => {}
     }
 }
 
-/// Best-effort: read the locally stored scope and append `missing` to
-/// it, so the hint we print is copy-pasteable. Returns `None` when the
-/// credentials file is unreadable.
-fn suggested_scope(missing: &str) -> Option<String> {
-    let path = default_credentials_path().ok()?;
-    let store = CredentialsStore::load(&path).ok()?;
-    let current = store.current()?.scope()?.to_owned();
-    if current.split_whitespace().any(|s| s == missing) {
-        // Already present — probably the server is rejecting something
-        // we can't auto-fix. Don't suggest a duplicate.
-        Some(current)
-    } else {
-        Some(format!("{current} {missing}"))
+fn missing_scope_hint(missing: &str, credential: Option<&StoredCredential>) -> String {
+    if credential.is_some_and(|credential| credential.kind() == CredentialKind::ApiKey) {
+        return format!(
+            "Mint or select an API key with the `{missing}` scope, then run \
+             `bitrouter cloud login --api-key \"$BITROUTER_API_KEY\"`."
+        );
     }
+
+    let current = credential.and_then(StoredCredential::scope);
+    let extended = match current {
+        Some(scope) if scope.split_whitespace().any(|value| value == missing) => scope.to_owned(),
+        Some(scope) => format!("{scope} {missing}"),
+        None => format!("<your current scope> {missing}"),
+    };
+    format!("Re-run `bitrouter cloud login --scope \"{extended}\"` to add it.")
 }
 
 #[cfg(test)]
@@ -1392,7 +1391,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, Parser)]
+    #[derive(Parser)]
     struct CloudHarness {
         #[command(subcommand)]
         action: CloudAction,
@@ -1412,21 +1411,24 @@ mod tests {
             CloudAction::Login { api_key, .. } => {
                 assert_eq!(api_key.as_deref(), Some("brk_AAAAAAAAAAAAAAAA.secret"));
             }
-            other => panic!("expected login action, got {other:?}"),
+            _ => panic!("expected login action"),
         }
     }
 
     #[test]
     fn api_key_conflicts_with_oauth_customization() {
-        let error = CloudHarness::try_parse_from([
+        let parsed = CloudHarness::try_parse_from([
             "test",
             "login",
             "--api-key",
             "brk_AAAAAAAAAAAAAAAA.secret",
             "--client-id",
             "custom",
-        ])
-        .unwrap_err();
+        ]);
+        let error = match parsed {
+            Ok(_) => panic!("conflicting login flags must be rejected"),
+            Err(error) => error,
+        };
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
@@ -1441,7 +1443,23 @@ mod tests {
                 assert_eq!(args.endpoint, "/v1/models");
                 assert!(args.include);
             }
-            other => panic!("expected API action, got {other:?}"),
+            _ => panic!("expected API action"),
         }
+    }
+
+    #[test]
+    fn missing_scope_guidance_keeps_api_key_users_on_api_keys() {
+        let credential = bitrouter_cloud_sdk::auth::credentials::StoredCredential::api_key(
+            "brk_test.fixture".to_owned(),
+            "https://api.bitrouter.ai".to_owned(),
+        );
+
+        let hint = missing_scope_hint("keys:write", Some(&credential));
+
+        assert!(hint.contains("API key"));
+        assert!(hint.contains("keys:write"));
+        assert!(hint.contains("bitrouter cloud login --api-key"));
+        assert!(!hint.contains("--scope"));
+        assert!(!hint.contains("brk_test.fixture"));
     }
 }

@@ -16,7 +16,7 @@ use super::settings::{Settings, resolve_from_env};
 
 /// User-supplied flag values for `bitrouter cloud login` / `logout`.
 /// The CLI passes them straight through.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct LoginInputs {
     /// `--oauth-as <URL>`.
     pub authorization_server: Option<String>,
@@ -26,6 +26,17 @@ pub struct LoginInputs {
     pub scope: Option<String>,
     /// `--api-key <BRK_API_KEY>`.
     pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for LoginInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginInputs")
+            .field("authorization_server", &self.authorization_server)
+            .field("client_id", &self.client_id)
+            .field("scope", &self.scope)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Build a fresh reqwest client preconfigured with the bitrouter

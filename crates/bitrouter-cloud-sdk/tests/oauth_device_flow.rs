@@ -293,8 +293,11 @@ fn login_inputs_compiles_and_clones() {
         authorization_server: Some("https://example.com".into()),
         client_id: Some("cid".into()),
         scope: None,
-        api_key: None,
+        api_key: Some("brk_test.fixture".into()),
     };
+    let rendered = format!("{i:?}");
+    assert!(!rendered.contains("brk_test.fixture"));
+    assert!(rendered.contains("<redacted>"));
     let _ = i.clone();
 }
 

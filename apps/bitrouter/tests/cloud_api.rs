@@ -103,6 +103,26 @@ async fn api_key_login_and_models_request_share_credentials() {
     assert!(!login_stdout.contains(API_KEY));
     assert!(!login_stderr.contains(API_KEY));
 
+    let whoami = run_cli(data_home.path(), &["cloud", "whoami"], None);
+    assert!(
+        whoami.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&whoami.stderr)
+    );
+    assert!(String::from_utf8_lossy(&whoami.stdout).contains("\"authentication\": \"api_key\""));
+    assert!(
+        !whoami
+            .stdout
+            .windows(API_KEY.len())
+            .any(|value| value == API_KEY.as_bytes())
+    );
+    assert!(
+        !whoami
+            .stderr
+            .windows(API_KEY.len())
+            .any(|value| value == API_KEY.as_bytes())
+    );
+
     let models = run_cli(data_home.path(), &["cloud", "api", "/v1/models"], None);
 
     assert!(
@@ -115,10 +135,7 @@ async fn api_key_login_and_models_request_share_credentials() {
 }
 
 #[tokio::test]
-async fn generation_protocol_matrix_preserves_request_and_stream_bytes() {
-    let server = MockServer::start().await;
-    let data_home = TempDir::new().unwrap();
-    save_api_key(data_home.path(), &server.uri());
+async fn both_credential_types_cover_generation_protocol_matrix() {
     let request = b"{\n  \"model\": \"test/model\",\n  \"input\": \"hello\"\n}\n";
     let cases = [
         (
@@ -147,29 +164,41 @@ async fn generation_protocol_matrix_preserves_request_and_stream_bytes() {
             "text/event-stream",
         ),
     ];
-    for (endpoint, response, content_type) in cases {
-        Mock::given(method("POST"))
-            .and(path(endpoint))
-            .and(header("authorization", format!("Bearer {API_KEY}")))
-            .and(body_string(String::from_utf8(request.to_vec()).unwrap()))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(response, content_type))
-            .expect(1)
-            .mount(&server)
-            .await;
+    for oauth in [false, true] {
+        let server = MockServer::start().await;
+        let data_home = TempDir::new().unwrap();
+        let expected_bearer = if oauth {
+            save_oauth(data_home.path(), &server.uri());
+            "oauth-integration-token"
+        } else {
+            save_api_key(data_home.path(), &server.uri());
+            API_KEY
+        };
 
-        let output = run_cli(
-            data_home.path(),
-            &["cloud", "api", endpoint, "--input", "-"],
-            Some(request),
-        );
+        for (endpoint, response, content_type) in cases {
+            Mock::given(method("POST"))
+                .and(path(endpoint))
+                .and(header("authorization", format!("Bearer {expected_bearer}")))
+                .and(body_string(String::from_utf8(request.to_vec()).unwrap()))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(response, content_type))
+                .expect(1)
+                .mount(&server)
+                .await;
 
-        assert!(
-            output.status.success(),
-            "endpoint={endpoint} stderr={}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(output.stdout, response.as_bytes(), "endpoint={endpoint}");
-        assert!(output.stderr.is_empty());
+            let output = run_cli(
+                data_home.path(),
+                &["cloud", "api", endpoint, "--input", "-"],
+                Some(request),
+            );
+
+            assert!(
+                output.status.success(),
+                "oauth={oauth} endpoint={endpoint} stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, response.as_bytes(), "endpoint={endpoint}");
+            assert!(output.stderr.is_empty());
+        }
     }
 }
 

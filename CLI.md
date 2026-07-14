@@ -319,7 +319,7 @@ bitrouter key sign --user <id> --policy strict
 
 OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
-Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, the CLI prints a copy-pasteable re-login hint that appends the missing scope to your current set.
+Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, OAuth users receive a copy-pasteable re-login hint that appends the missing scope; API-key users are told to mint or select a key with that scope and log in with it.
 
 ### `bitrouter cloud api`
 
@@ -341,7 +341,7 @@ bitrouter cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
 | --- | --- |
 | `-X`, `--method` | Explicit HTTP method. Default is `GET`, or `POST` when fields or `--input` are present. |
 | `-H`, `--header` | Append a request header; repeat to send multiple values. A supplied `Authorization` overrides the stored bearer. |
-| `-f`, `--raw-field` | Add a string field. Supports `key[subkey]` and `key[]` nesting. |
+| `-f`, `--raw-field` | Add a string field. Supports `key[subkey]` and `key[]` nesting; `key[]` without `=` creates an empty array. |
 | `-F`, `--field` | Add a typed field. `true`, `false`, `null`, and integers become JSON types; `@file` and `@-` read a string value from a file or stdin. |
 | `--input` | Use exact file bytes (or stdin with `-`) as the request body. Fields become query parameters. |
 | `-i`, `--include` | Prepend the HTTP status line and response headers to stdout. |

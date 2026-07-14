@@ -98,7 +98,7 @@ OAuth 2.0 device-flow or non-interactive API-key sign-in against BitRouter Cloud
 |---|---|
 | `-X, --method METHOD` | Explicit method; implicit `GET`, or `POST` when fields/input are supplied. |
 | `-H, --header KEY:VALUE` | Repeatable request header. User `Authorization` overrides the stored bearer. |
-| `-f, --raw-field KEY=VALUE` | String JSON/query field with nested `key[sub]` / `key[]` grammar. |
+| `-f, --raw-field KEY=VALUE` | String JSON/query field with nested `key[sub]` / `key[]` grammar; bare `key[]` creates an empty array. |
 | `-F, --field KEY=VALUE` | Typed bool/null/integer field, or `@file` / `@-` string content. |
 | `--input FILE|-` | Exact request body; fields move to the query string. |
 | `-i, --include` | Status line + response headers before body. |
@@ -111,7 +111,7 @@ Side effect: when the credentials file exists, the local daemon auto-adds the `b
 
 ## BitRouter Cloud management (`bitrouter cloud …`)
 
-Typed wrappers over the `/v1/*` management API on the cloud. Requires either login form first. OAuth credentials use their baked namespace; API keys use `/v1/namespaces/me/*`. Every leaf accepts `--json` for raw response output; default is a `systemctl`-style key:value block (single resource) or a small table (lists). On a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint.
+Typed wrappers over the `/v1/*` management API on the cloud. Requires either login form first. OAuth credentials use their baked namespace; API keys use `/v1/namespaces/me/*`. Every leaf accepts `--json` for raw response output; default is a `systemctl`-style key:value block (single resource) or a small table (lists). On a 403 with `missing required scope: <s>`, OAuth users receive a copy-pasteable `--scope` re-login hint; API-key users are directed to a key with that scope.
 
 | Command | Effect |
 |---|---|

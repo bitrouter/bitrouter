@@ -18,6 +18,10 @@ bitrouter cloud whoami
 Both forms write `$XDG_DATA_HOME/bitrouter/account-credentials.json` with mode `0600` on Unix. `whoami` reports `authentication: oauth` or `authentication: api_key` without printing the bearer. API-key login performs no network request.
 
 <Callout type="warning">
+Pass API keys through an environment variable as shown above. A literal command-line key may be retained in shell history and visible to process-inspection tools.
+</Callout>
+
+<Callout type="warning">
 Pass only relative endpoints such as `/v1/models`. Absolute URLs, scheme-relative paths, and fragments are rejected; redirect following is disabled so the stored credential never leaves its login origin.
 </Callout>
 
@@ -132,7 +136,7 @@ bitrouter cloud api /v1/chat/completions --input chat.json > events.sse
 
 ## Build requests with fields
 
-`-f/--raw-field` always creates a string. `-F/--field` converts `true`, `false`, `null`, and integers to JSON values and reads `@file` or `@-` as a string. Bracket syntax builds nested objects and arrays:
+`-f/--raw-field` always creates a string. `-F/--field` converts `true`, `false`, `null`, and integers to JSON values and reads `@file` or `@-` as a string. Bracket syntax builds nested objects and arrays; `key[]` without `=` creates an empty array:
 
 ```bash
 bitrouter cloud api /v1/chat/completions \

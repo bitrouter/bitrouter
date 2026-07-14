@@ -18,6 +18,10 @@ bitrouter cloud whoami
 两种方式都会写入 `$XDG_DATA_HOME/bitrouter/account-credentials.json`，Unix 上权限为 `0600`。`whoami` 会报告 `authentication: oauth` 或 `authentication: api_key`，但不会打印 bearer。API-key 登录不发起网络请求。
 
 <Callout type="warning">
+请像上面的示例一样通过环境变量传递 API key。直接写在命令行中的 key 可能被 shell history 保留，也可能被进程检查工具看到。
+</Callout>
+
+<Callout type="warning">
 只传入 `/v1/models` 这样的相对端点。绝对 URL、scheme-relative 路径与 fragment 会被拒绝；redirect 跟随则被禁用，确保已存储凭证不会离开登录 origin。
 </Callout>
 
@@ -132,7 +136,7 @@ bitrouter cloud api /v1/chat/completions --input chat.json > events.sse
 
 ## 使用字段构造请求
 
-`-f/--raw-field` 始终创建字符串。`-F/--field` 会把 `true`、`false`、`null` 与整数转换为 JSON 值，并将 `@file` 或 `@-` 作为字符串读取。Bracket 语法可构造嵌套对象与数组：
+`-f/--raw-field` 始终创建字符串。`-F/--field` 会把 `true`、`false`、`null` 与整数转换为 JSON 值，并将 `@file` 或 `@-` 作为字符串读取。Bracket 语法可构造嵌套对象与数组；不带 `=` 的 `key[]` 会创建空数组：
 
 ```bash
 bitrouter cloud api /v1/chat/completions \

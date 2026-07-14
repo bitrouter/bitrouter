@@ -51,7 +51,7 @@ The command supports `-X/--method`, repeated `-H/--header`, `-f/--raw-field`, `-
 
 ## Manage your account: `bitrouter cloud`
 
-Every leaf accepts `--json` for raw response output; the default is a `systemctl`-style key:value block (single resource) or a small table (lists). When the server returns a 403 with `missing required scope: <s>`, the CLI prints a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint.
+Every leaf accepts `--json` for raw response output; the default is a `systemctl`-style key:value block (single resource) or a small table (lists). When the server returns a 403 with `missing required scope: <s>`, OAuth users receive a copy-pasteable `bitrouter cloud login --scope "<current> <s>"` hint; API-key users are told to mint or select a key with that scope.
 
 OAuth credentials are namespace-baked. API-key credentials use the server's `me` namespace alias for workspace-scoped management routes. `whoami` reports `oauth` or `api_key` without printing the credential; API-key logout only removes the local file.
 
