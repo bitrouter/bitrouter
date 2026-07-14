@@ -191,6 +191,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            chat_token_limit_field: None,
         }
     }
 
