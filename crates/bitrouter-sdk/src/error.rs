@@ -68,6 +68,14 @@ pub enum BitrouterError {
         retry_after: Option<u64>,
     },
 
+    /// 400 — an upstream provider rejected the request parameters.
+    #[error("upstream rejected the request")]
+    UpstreamBadRequest {
+        /// Internal diagnostic detail. Public HTTP/SSE responses use a fixed
+        /// safe message and never expose this value.
+        message: String,
+    },
+
     /// 502 — upstream provider returned an error.
     #[error("upstream error ({status}): {message}")]
     Upstream {
@@ -126,6 +134,7 @@ impl BitrouterError {
             Self::NotFound(_) => 404,
             Self::RateLimited { .. } => 429,
             Self::UpstreamRateLimited { .. } => 429,
+            Self::UpstreamBadRequest { .. } => 400,
             Self::Upstream { .. } => 502,
             Self::UpstreamInvalidResponse { .. } => 502,
             Self::UpstreamAuth { status, .. } => *status,
@@ -146,6 +155,7 @@ impl BitrouterError {
             Self::NotFound(_) => "not_found_error",
             Self::RateLimited { .. } => "rate_limit_error",
             Self::UpstreamRateLimited { .. } => "rate_limit_error",
+            Self::UpstreamBadRequest { .. } => "invalid_request_error",
             Self::Upstream { .. }
             | Self::UpstreamInvalidResponse { .. }
             | Self::UpstreamTimeout => "upstream_error",
@@ -167,6 +177,7 @@ impl BitrouterError {
             Self::NotFound(_) => "not_found",
             Self::RateLimited { .. } => "rate_limit_exceeded",
             Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
+            Self::UpstreamBadRequest { .. } => "upstream_bad_request",
             Self::Upstream { .. } => "upstream_bad_gateway",
             Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
             Self::UpstreamAuth { .. } => "upstream_auth_required",
@@ -199,6 +210,7 @@ impl BitrouterError {
             Self::NotFound(_) => ErrorKind::NotFound,
             Self::RateLimited { .. } => ErrorKind::RateLimited,
             Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
+            Self::UpstreamBadRequest { .. } => ErrorKind::UpstreamBadRequest,
             Self::Upstream { .. } => ErrorKind::Upstream,
             Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
@@ -223,6 +235,9 @@ impl BitrouterError {
             Self::RateLimited { .. } => "rate limited".to_string(),
             Self::UpstreamPaymentRequired => "upstream payment required".to_string(),
             Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
+            Self::UpstreamBadRequest { message } => {
+                format!("upstream rejected the request: {message}")
+            }
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
             }
@@ -252,6 +267,7 @@ impl BitrouterError {
     /// exposing only a stable summary at the public boundary.
     pub fn public_message(&self) -> String {
         match self {
+            Self::UpstreamBadRequest { .. } => "upstream rejected the request".to_string(),
             Self::Upstream { .. } => "upstream request failed".to_string(),
             Self::UpstreamInvalidResponse { .. } => {
                 "upstream returned an invalid response".to_string()
@@ -283,6 +299,8 @@ pub enum ErrorKind {
     RateLimited,
     /// 429 — all usable upstream routes are rate limited.
     UpstreamRateLimited,
+    /// 400 — an upstream provider rejected the request parameters.
+    UpstreamBadRequest,
     /// 502 — upstream provider error.
     Upstream,
     /// 502 — malformed success response from an upstream protocol.
@@ -327,6 +345,26 @@ pub struct ErrorEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_bad_request_error_contract() {
+        let error = BitrouterError::UpstreamBadRequest {
+            message: "provider secret".into(),
+        };
+
+        assert_eq!(error.status(), 400);
+        assert_eq!(error.error_type(), "invalid_request_error");
+        assert_eq!(error.error_code(), "upstream_bad_request");
+        assert_eq!(error.kind(), ErrorKind::UpstreamBadRequest);
+        assert_eq!(error.public_message(), "upstream rejected the request");
+        assert!(
+            error
+                .to_envelope()
+                .error
+                .message
+                .contains("provider secret")
+        );
+    }
 
     #[test]
     fn upstream_auth_status_and_type() {

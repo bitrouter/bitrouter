@@ -869,6 +869,12 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
                 response.headers_mut().insert(header::RETRY_AFTER, v);
             }
         }
+        BitrouterError::UpstreamBadRequest { .. } => {
+            response.headers_mut().insert(
+                header::HeaderName::from_static("x-bitrouter-error-source"),
+                header::HeaderValue::from_static("upstream"),
+            );
+        }
         BitrouterError::UpstreamRateLimited { retry_after } => {
             if let Some(secs) = retry_after
                 && let Ok(v) = header::HeaderValue::from_str(&secs.to_string())
@@ -1216,6 +1222,24 @@ mod tests {
         assert_eq!(value["error"]["type"], "rate_limit_error");
         assert_eq!(value["error"]["code"], "upstream_rate_limited");
         assert_eq!(value["error"]["message"], "upstream rate limited");
+    }
+
+    #[tokio::test]
+    async fn upstream_bad_request_has_safe_400_contract() {
+        let response = BitrouterError::UpstreamBadRequest {
+            message: "provider secret: max_tokens must be greater than one".into(),
+        }
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["x-bitrouter-error-source"], "upstream");
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert_eq!(value["error"]["code"], "upstream_bad_request");
+        assert_eq!(value["error"]["message"], "upstream rejected the request");
+        assert!(!value.to_string().contains("provider secret"));
     }
 
     #[tokio::test]
