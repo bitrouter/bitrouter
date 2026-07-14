@@ -30,6 +30,7 @@ pub mod policy;
 pub mod policy_lock;
 pub mod policy_table_router;
 pub mod reload;
+pub mod result_contract;
 pub mod skills;
 pub mod spawn;
 pub mod style;

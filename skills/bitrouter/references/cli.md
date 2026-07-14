@@ -55,6 +55,8 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 **NDJSON format** (for `acp prompt` / `spawn -p`): the **first** line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — for joining the session record to daemon cost/metering. Each update line is then a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` follows the session line. A fail-fast routing failure emits a single `{"type":"error","code":"daemon_unreachable"|"auth_required","via":…,"hint":…}` line instead, before any session is created.
 
+**Result contract** (`spawn -p --result-schema '<JSON Schema>'`, or `@path` to read it from a file; conflicts with `--no-wait`): the schema rides the subagent's prompt as an instruction to end the reply with a ```json fenced block. The reply's **last** ```json block (or a bare-JSON reply) is extracted and validated; on a missing/invalid result the subagent gets **one** repair re-prompt. The terminal line then carries the machine-consumable outcome — success: `{"type":"result","stop_reason":…,"result":{…},"schema_ok":true}`; failure after repair: `…,"result":null,"schema_ok":false,"raw":"<last reply text>"` (the orchestrator is never blocked). Bare `spawn -p` output is unchanged (no `result`/`schema_ok`/`raw` keys). A malformed schema fails fast before any session side effect.
+
 See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
 
 ## TUI
@@ -127,7 +129,7 @@ identical gateway env/args.
 | Command | Effect |
 |---|---|
 | `bitrouter launch --agent <claude\|codex> [--config PATH] [--base-url URL] [--no-install] [--no-start] [--check] -- <agent args...>` | Launch a coding-agent CLI's native TUI through BitRouter without editing agent config files. Claude uses child env overrides (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`); Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. Prints a one-line session spend summary to stderr on exit. |
-| `bitrouter spawn <agent> -p "<text>" [--no-wait] [session/routing flags]` | Spawn an ACP sub-agent, send one prompt, stream **NDJSON** to stdout, exit. `<agent>` is a catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `pi-acp`) or a configured `agents:` entry; a catalog id needs no config entry. |
+| `bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON\|@PATH] [session/routing flags]` | Spawn an ACP sub-agent, send one prompt, stream **NDJSON** to stdout, exit. `<agent>` is a catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `pi-acp`) or a configured `agents:` entry; a catalog id needs no config entry. `--result-schema` adds the machine-consumable result contract (see **Result contract** above). |
 | `bitrouter spawn <agent> --serve [--warm] [--idle-timeout SECS] [session/routing flags]` | Serve the sub-agent as a vanilla ACP Agent over stdio (for a GUI/manager). Same as `acp serve` with routing on. |
 | `bitrouter spawn <agent> --check [routing flags]` | Preflight harness resolution, the routing decision, and daemon reachability without launching anything. |
 

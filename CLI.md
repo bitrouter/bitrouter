@@ -223,7 +223,7 @@ After the wrapped agent exits, `launch` prints a one-line session spend summary 
 ### `bitrouter spawn`
 
 ```
-bitrouter spawn <agent> -p "<text>" [--no-wait] [routing/session flags]      # one prompt → NDJSON
+bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [routing/session flags]   # one prompt → NDJSON
 bitrouter spawn <agent> --serve [--warm] [--idle-timeout SECS] [flags]        # ACP over stdio
 bitrouter spawn <agent> --check [routing flags]                              # preflight only
 ```
@@ -233,6 +233,8 @@ Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a progra
 **Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--worktree`/`--rm-worktree`/`--no-transcript`/`--turn-timeout`).
 
 Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses with no gateway mechanism (`pi-acp`) and non-catalog agents warn and run direct.
+
+`--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
 
 In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line.
 

@@ -307,6 +307,18 @@ struct ResultLine<S: Serialize> {
     #[serde(rename = "type")]
     kind: &'static str,
     stop_reason: S,
+    /// Under `--result-schema`: the extracted, schema-valid result object —
+    /// or JSON `null` when extraction/validation failed after the one repair
+    /// re-prompt. Omitted entirely without the flag (byte-compatible).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<serde_json::Value>,
+    /// Under `--result-schema`: whether `result` satisfied the schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_ok: Option<bool>,
+    /// Under `--result-schema`, on failure only: the last reply's raw text so
+    /// the orchestrator is never blocked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw: Option<String>,
 }
 
 /// Write one NDJSON line (JSON + `\n`) to `out`.
@@ -704,7 +716,17 @@ pub async fn attach(_record_prefix: &str) -> Result<()> {
 /// When `no_wait` is true: shut down the session immediately after emitting
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
 /// persistent session should use `bitrouter acp serve` instead.
-pub async fn prompt<W>(ctx: SpawnContext<'_>, text: &str, no_wait: bool, out: &mut W) -> Result<()>
+///
+/// `contract` is the optional `--result-schema` contract (TUI_SPEC §4): its
+/// instruction rides the prompt, and the terminal `result` line gains
+/// `result`/`schema_ok` (+ `raw` on failure) fields.
+pub async fn prompt<W>(
+    ctx: SpawnContext<'_>,
+    text: &str,
+    no_wait: bool,
+    contract: Option<crate::result_contract::ResultContract>,
+    out: &mut W,
+) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
 {
@@ -782,7 +804,7 @@ where
         return Ok(());
     }
 
-    let outcome = prompt_wait(session, text, out).await;
+    let outcome = prompt_wait(session, text, contract, out).await;
     if let Some(exporter) = exporter {
         // Flush the span batch before exit; spans are lost otherwise.
         exporter.shutdown();
@@ -796,6 +818,7 @@ where
 async fn prompt_wait<W>(
     session: bitrouter_substrate::engine::Session,
     text: &str,
+    contract: Option<crate::result_contract::ResultContract>,
     out: &mut W,
 ) -> Result<()>
 where
@@ -803,7 +826,78 @@ where
 {
     // Subscribe to updates BEFORE prompting so no streamed update is missed.
     let mut updates = session.updates();
+    let task = match &contract {
+        // The contract clause rides the subagent's task prompt.
+        Some(c) => format!("{text}{}", c.instruction()),
+        None => text.to_string(),
+    };
+    let (response, reply) =
+        run_turn(&session, &mut updates, &task, contract.is_some(), out).await?;
 
+    // Extract + validate the machine-consumable result. On failure: ONE
+    // repair re-prompt, then `schema_ok:false` + raw text — the orchestrator
+    // is never blocked on a malformed reply.
+    let (response, result, schema_ok, raw) = match &contract {
+        None => (response, None, None, None),
+        Some(c) => match c.check(&reply) {
+            Ok(value) => (response, Some(value), Some(true), None),
+            Err(problem) => {
+                let (response, reply) = run_turn(
+                    &session,
+                    &mut updates,
+                    &c.repair_prompt(&problem),
+                    true,
+                    out,
+                )
+                .await?;
+                match c.check(&reply) {
+                    Ok(value) => (response, Some(value), Some(true), None),
+                    Err(_) => (
+                        response,
+                        Some(serde_json::Value::Null),
+                        Some(false),
+                        Some(reply),
+                    ),
+                }
+            }
+        },
+    };
+
+    // Emit the terminal result line. `response.stop_reason` is an ACP
+    // `StopReason` that serializes to its snake_case wire form (e.g.
+    // `"end_turn"`).
+    write_ndjson_line(
+        out,
+        &ResultLine {
+            kind: "result",
+            stop_reason: response.stop_reason,
+            result,
+            schema_ok,
+            raw,
+        },
+    )
+    .await?;
+
+    session
+        .shutdown()
+        .await
+        .context("shutting down acp session")?;
+    Ok(())
+}
+
+/// Drive one prompt turn: stream its updates to `out` (accumulating message
+/// text when `capture`), and return the typed response plus the reply text.
+async fn run_turn<W>(
+    session: &bitrouter_substrate::engine::Session,
+    updates: &mut (impl futures::Stream<Item = SessionUpdateKind> + Unpin),
+    text: &str,
+    capture: bool,
+    out: &mut W,
+) -> Result<(agent_client_protocol::schema::v1::PromptResponse, String)>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut reply = String::new();
     // Drive updates and the prompt concurrently. The loop returns the resolved
     // `PromptResponse` directly, so there is no `Option` to unwrap afterward.
     let response = {
@@ -817,38 +911,47 @@ where
                 result = &mut prompt_future => {
                     let response = result.context("acp prompt failed")?;
                     // Non-blocking drain of any already-buffered updates.
-                    drain_pending_updates(&mut updates, out).await?;
+                    loop {
+                        let maybe = tokio::select! {
+                            biased;
+                            v = updates.next() => v,
+                            _ = std::future::ready(()) => None,
+                        };
+                        match maybe {
+                            Some(update) => emit_update(&update, capture, &mut reply, out).await?,
+                            None => break,
+                        }
+                    }
                     break response;
                 }
 
                 maybe_update = updates.next() => {
                     if let Some(update) = maybe_update {
-                        // Emit the SessionUpdateKind directly; its own `type`
-                        // tag (e.g. "message_chunk") makes it self-describing.
-                        write_ndjson_line(out, &update).await?;
+                        emit_update(&update, capture, &mut reply, out).await?;
                     }
                 }
             }
         }
     };
+    Ok((response, reply))
+}
 
-    // Emit the terminal result line. `response.stop_reason` is an ACP
-    // `StopReason` that serializes to its snake_case wire form (e.g.
-    // `"end_turn"`).
-    write_ndjson_line(
-        out,
-        &ResultLine {
-            kind: "result",
-            stop_reason: response.stop_reason,
-        },
-    )
-    .await?;
-
-    session
-        .shutdown()
-        .await
-        .context("shutting down acp session")?;
-    Ok(())
+/// Emit one update as NDJSON, accumulating message text into `reply` when the
+/// result contract needs it. The `SessionUpdateKind`'s own `type` tag (e.g.
+/// `message_chunk`) makes the line self-describing.
+async fn emit_update<W>(
+    update: &SessionUpdateKind,
+    capture: bool,
+    reply: &mut String,
+    out: &mut W,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    if capture && let SessionUpdateKind::MessageChunk { text, .. } = update {
+        reply.push_str(text);
+    }
+    write_ndjson_line(out, update).await
 }
 
 // ── sessions ──────────────────────────────────────────────────────────────────
@@ -1066,32 +1169,4 @@ fn socket_dir() -> std::path::PathBuf {
 fn catalog_from_config(config: &Config) -> Result<ConfigAcpRoutingTable> {
     ConfigAcpRoutingTable::from_configs(config.agents.iter().map(|(k, v)| (k.clone(), v.clone())))
         .context("building acp routing table from config")
-}
-
-/// Non-blocking drain: write any updates immediately available in the broadcast
-/// buffer, then stop. Called after the prompt resolves to flush trailing updates.
-///
-/// Uses a biased `tokio::select!` where the first arm is `updates.next()` and
-/// the second is an always-ready no-op. With `biased`, the first arm wins when
-/// a value is immediately available; the second arm wins (returning `None`) when
-/// no update is buffered, ending the drain.
-async fn drain_pending_updates<W>(
-    updates: &mut (impl futures::Stream<Item = SessionUpdateKind> + Unpin),
-    out: &mut W,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    loop {
-        let maybe = tokio::select! {
-            biased;
-            v = updates.next() => v,
-            _ = std::future::ready(()) => None,
-        };
-        match maybe {
-            Some(update) => write_ndjson_line(out, &update).await?,
-            None => break,
-        }
-    }
-    Ok(())
 }

@@ -295,6 +295,17 @@ enum Command {
         /// (with `-p`) Return immediately after submitting the prompt.
         #[arg(long, requires = "prompt")]
         no_wait: bool,
+        /// (with `-p`) JSON Schema — inline JSON or `@path` — the subagent's
+        /// final reply must satisfy. The schema rides the prompt; the terminal
+        /// NDJSON `result` line gains `result`/`schema_ok` fields, with one
+        /// repair re-prompt on invalid output (then `schema_ok:false` + raw).
+        #[arg(
+            long,
+            value_name = "JSON|@PATH",
+            requires = "prompt",
+            conflicts_with = "no_wait"
+        )]
+        result_schema: Option<String>,
         /// (with `--serve`) Keep the session alive for reattach after the
         /// manager disconnects. Unix-only.
         #[arg(long, requires = "serve")]
@@ -1046,6 +1057,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             no_transcript,
             turn_timeout,
             no_wait,
+            result_schema,
             warm,
             idle_timeout,
             config,
@@ -1133,6 +1145,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     no_transcript,
                     turn_timeout,
                 );
+                // A malformed schema fails fast, before any session side effect.
+                let contract = result_schema
+                    .as_deref()
+                    .map(bitrouter::result_contract::ResultContract::from_flag)
+                    .transpose()?;
                 let mut stdout = tokio::io::stdout();
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
@@ -1141,7 +1158,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     options,
                     routing,
                 };
-                bitrouter::acp_cli::prompt(ctx, &text, no_wait, &mut stdout).await
+                bitrouter::acp_cli::prompt(ctx, &text, no_wait, contract, &mut stdout).await
             } else {
                 anyhow::bail!(
                     "spawn: choose a mode — `-p \"<prompt>\"` (NDJSON), \
@@ -2787,7 +2804,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 options,
                 routing,
             };
-            bitrouter::acp_cli::prompt(ctx, &text, no_wait, &mut stdout).await
+            bitrouter::acp_cli::prompt(ctx, &text, no_wait, None, &mut stdout).await
         }
         AcpCmd::Sessions => {
             let mut stdout = tokio::io::stdout();
