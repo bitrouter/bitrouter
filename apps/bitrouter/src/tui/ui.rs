@@ -162,7 +162,7 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
             (": (empty line)", "command palette"),
             ("Ctrl-A", "manager mode"),
             ("Ctrl-B", "broadcast mode"),
-            ("Ctrl-C", "quit"),
+            ("Ctrl-C", "interrupt the focused agent"),
         ],
         Mode::Agent => &[
             ("j / k / ↑ / ↓", "move the rail cursor"),
@@ -707,7 +707,9 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
 
 fn render_modebar(state: &AppState, frame: &mut Frame, area: Rect) {
     let hints = match state.mode {
-        Mode::Normal => "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c quit",
+        Mode::Normal => {
+            "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c interrupt agent"
+        }
         Mode::Agent => {
             "AGENT  j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · t attach · A tier · n new · x close · ? keys · Esc"
         }
