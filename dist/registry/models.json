@@ -1043,6 +1043,19 @@
               "text": 5.6
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "baidu/ernie-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 5.6
+            }
+          },
           "provider": "qianfan",
           "provider_model_id": "ernie-5.1"
         }
@@ -2703,6 +2716,21 @@
               "text": 1.2
             }
           },
+          "provider": "bitrouter",
+          "provider_model_id": "kuaishou/kat-coder-pro-v2"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.0,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
           "provider": "gmicloud",
           "provider_model_id": "kwaipilot/kat-coder-pro-v2"
         },
@@ -2738,6 +2766,19 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 2.95
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "meituan/longcat-2.0"
+        },
         {
           "api_protocol": "openai",
           "pricing": {
@@ -4591,6 +4632,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.25,
@@ -4715,6 +4761,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.075,
@@ -4851,6 +4902,11 @@
         },
         {
           "api_protocol": "openai",
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
@@ -4873,6 +4929,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
@@ -4964,6 +5025,11 @@
           "provider_model_id": "openai/gpt-5.6-luna"
         },
         {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-5.6-luna"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses"
@@ -4973,6 +5039,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "context_tiers": [
               {
@@ -5009,6 +5080,21 @@
             "tools"
           ],
           "provider": "openai-codex",
+          "provider_model_id": "gpt-5.6-luna"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "opencode-zen",
           "provider_model_id": "gpt-5.6-luna"
         },
         {
@@ -5065,6 +5151,11 @@
           "provider_model_id": "openai/gpt-5.6-sol"
         },
         {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-5.6-sol"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses"
@@ -5074,6 +5165,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "context_tiers": [
               {
@@ -5110,6 +5206,21 @@
             "tools"
           ],
           "provider": "openai-codex",
+          "provider_model_id": "gpt-5.6-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "opencode-zen",
           "provider_model_id": "gpt-5.6-sol"
         },
         {
@@ -5166,6 +5277,11 @@
           "provider_model_id": "openai/gpt-5.6-terra"
         },
         {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-5.6-terra"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses"
@@ -5175,6 +5291,11 @@
             "structured_outputs",
             "tools"
           ],
+          "compatibility": {
+            "chat_completions": {
+              "token_limit_field": "max_completion_tokens"
+            }
+          },
           "pricing": {
             "context_tiers": [
               {
@@ -5211,6 +5332,21 @@
             "tools"
           ],
           "provider": "openai-codex",
+          "provider_model_id": "gpt-5.6-terra"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "opencode-zen",
           "provider_model_id": "gpt-5.6-terra"
         },
         {

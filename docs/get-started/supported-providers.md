@@ -17,13 +17,13 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
 | `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 14 |
 | `azure` | Microsoft Azure | US | openai, responses | Per-token | 15 |
-| `bitrouter` | BitRouter | US | openai | Per-token | 54 |
+| `bitrouter` | BitRouter | US | openai | Per-token | 57 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
 | `cerebras` | Cerebras | US | openai | Per-token | 3 |
 | `chutes` | Chutes | US | openai | Per-token | 7 |
 | `claude-code` | Anthropic | US | anthropic | Subscription | 7 |
 | `deepseek` | DeepSeek | CN | anthropic, openai | Per-token | 2 |
-| `github-copilot` | GitHub | US | openai | Subscription | 14 |
+| `github-copilot` | GitHub | US | openai | Subscription | 17 |
 | `gmicloud` | GMI Cloud | US | openai | Per-token | 15 |
 | `google` | Google | US | google, openai | Per-token | 4 |
 | `google-ai` | Google | US | google, openai | Subscription | 3 |
@@ -36,7 +36,7 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `openai` | OpenAI | US | openai, responses | Per-token | 6 |
 | `openai-codex` | OpenAI | US | responses | Subscription | 6 |
 | `opencode-go` | OpenCode | US | openai | Subscription | 18 |
-| `opencode-zen` | OpenCode | US | openai | Per-token | 27 |
+| `opencode-zen` | OpenCode | US | openai | Per-token | 30 |
 | `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 56 |
 | `phala` | Phala | US | openai | Per-token | 5 |
 | `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 9 |

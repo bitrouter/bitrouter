@@ -24,13 +24,13 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `agent-proxy` is a stdio JSON-RPC bridge, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
 ## Config resolution
 
-All subcommands accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
+Local router subcommands that load a config accept an optional `-c / --config <path>` flag. When omitted the binary walks this order:
 
 1. `./bitrouter.yaml` in the current directory
 2. `$BITROUTER_HOME/bitrouter.yaml` — if the env var is set, the file must exist
@@ -193,19 +193,48 @@ bitrouter agents install claude-code
 
 Prints a YAML stub for the named catalog agent. Paste the output under `agents:` in `bitrouter.yaml`.
 
-### `bitrouter spawn`
+### `bitrouter acp`
 
 ```
-bitrouter spawn -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] -- <agent args…>
+bitrouter acp serve --agent <id> [--worktree <name>] [--warm] [-c <path>]
+bitrouter acp prompt --agent <id> [--worktree <name>] [-c <path>] <text>
+bitrouter acp sessions
+bitrouter acp attach <record>
 ```
 
-Launches a coding-agent harness (`-a claude` for Claude Code, `-a codex` for Codex CLI) as a child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. Claude Code gets child-process environment overrides (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`); Codex gets one-shot `-c` config overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter spawn -a claude -- -p "summarize" --dangerously-skip-permissions` or `bitrouter spawn -a codex -- --model openai/gpt-5-codex`.
+Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; with `--warm`, the session can be reattached with `acp attach`. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, route the agent's model calls through the daemon by default (`--direct` opts out).
+
+### `bitrouter launch`
+
+```
+bitrouter launch -a <agent> [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
+```
+
+Launches a coding-agent harness (`-a claude` for Claude Code, `-a codex` for Codex CLI) as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the *main orchestrator* surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`. Claude Code gets child-process environment overrides (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`); Codex gets one-shot `-c` config overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`). Following `cargo run`'s convention, everything after `--` is forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions` or `bitrouter launch -a codex -- --model openai/gpt-5-codex`.
 
 The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing agent binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines).
 
-When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `spawn` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
+When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `launch` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 
-After the wrapped agent exits, `spawn` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
+After the wrapped agent exits, `launch` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
+
+`bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
+
+### `bitrouter spawn`
+
+```
+bitrouter spawn <agent> -p "<text>" [--no-wait] [routing/session flags]      # one prompt → NDJSON
+bitrouter spawn <agent> --serve [--warm] [--idle-timeout SECS] [flags]        # ACP over stdio
+bitrouter spawn <agent> --check [routing flags]                              # preflight only
+```
+
+Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent, a GUI, or `bitrouter tui`). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `pi-acp`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
+
+**Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--worktree`/`--rm-worktree`/`--no-transcript`/`--turn-timeout`).
+
+Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses with no gateway mechanism (`pi-acp`) and non-catalog agents warn and run direct.
+
+In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line.
 
 ### `bitrouter key sign`
 

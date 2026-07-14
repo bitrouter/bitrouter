@@ -17,7 +17,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, serve};
@@ -32,6 +32,8 @@ use crate::language_model::stream::{SseFrame, SseKeepaliveStream};
 use crate::language_model::types::{ApiProtocol, PipelineRequest};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
+
+const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 
 /// Shared axum state.
 #[derive(Clone)]
@@ -399,23 +401,26 @@ async fn mcp_invoke_inner(
 /// proxies still surface them — but the body remains a JSON-RPC error object
 /// for the spec-aware client.
 fn mcp_pipeline_error_response(inbound_id: serde_json::Value, e: &BitrouterError) -> Response {
-    let (status, code) = match e {
-        BitrouterError::NotFound(_) => (axum::http::StatusCode::NOT_FOUND, -32601),
-        BitrouterError::BadRequest { .. } => (axum::http::StatusCode::BAD_REQUEST, -32602),
-        BitrouterError::Unauthorized(_) => (axum::http::StatusCode::UNAUTHORIZED, -32000),
-        BitrouterError::Forbidden(_) => (axum::http::StatusCode::FORBIDDEN, -32000),
-        BitrouterError::PaymentRequired(_) => (axum::http::StatusCode::PAYMENT_REQUIRED, -32000),
-        _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, -32603),
+    let status = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let code = match e {
+        BitrouterError::NotFound(_) => -32601,
+        BitrouterError::BadRequest { .. } => -32602,
+        BitrouterError::Unauthorized(_)
+        | BitrouterError::Forbidden(_)
+        | BitrouterError::PaymentRequired(_) => -32000,
+        _ => -32603,
     };
-    (
+    let mut response = (
         status,
         Json(serde_json::json!({
             "jsonrpc": "2.0",
             "id": inbound_id,
-            "error": { "code": code, "message": e.to_string() },
+            "error": { "code": code, "message": e.public_message() },
         })),
     )
-        .into_response()
+        .into_response();
+    apply_error_headers(&mut response, e);
+    response
 }
 
 /// True if the client opted into the SSE response variant.
@@ -477,7 +482,7 @@ fn sse_response(
                 let payload = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": &*inbound_id,
-                    "error": { "code": -32603, "message": e.to_string() },
+                    "error": { "code": -32603, "message": e.public_message() },
                 });
                 Ok(Event::default().data(payload.to_string()))
             }
@@ -636,11 +641,13 @@ async fn generate_content(
 /// reply back in the same inbound protocol.
 async fn handle(
     state: AppState,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     inbound: ApiProtocol,
     body: serde_json::Value,
     model_override: Option<String>,
 ) -> Response {
+    add_inbound_protocol_hint(&mut headers, &inbound);
+    let request_id = add_request_id_hint(&mut headers);
     let adapter = match inbound_adapter_for(&inbound) {
         Some(a) => a,
         None => {
@@ -677,6 +684,7 @@ async fn handle(
         CallerContext::anonymous()
     };
     let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
+    req.request_id = request_id;
     req.headers = headers;
     // Carry the inbound wire protocol so route resolution can prefer a native,
     // same-protocol upstream — a faithful round-trip instead of a lossy
@@ -704,6 +712,29 @@ async fn handle(
             Err(e) => e.into_response(),
         }
     }
+}
+
+fn add_inbound_protocol_hint(headers: &mut HeaderMap, inbound: &ApiProtocol) {
+    if let Ok(value) = HeaderValue::from_str(inbound.as_str()) {
+        headers.insert("x-bitrouter-inbound-protocol", value);
+    }
+}
+
+fn add_request_id_hint(headers: &mut HeaderMap) -> String {
+    if let Some(request_id) = headers
+        .get(BITROUTER_REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return request_id.to_string();
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
+    }
+    request_id
 }
 
 /// Build a `text/event-stream` response: pipe the canonical part stream through
@@ -794,48 +825,62 @@ impl IntoResponse for BitrouterError {
         // well-behaved API consumers expect. RFC 7235 §4.1 for
         // WWW-Authenticate, RFC 7231 §7.1.3 for Retry-After.
         let mut response = (status, body).into_response();
-        match &self {
-            BitrouterError::Unauthorized(_) => {
-                // RFC 7235 §3.1: a 401 MUST include a `WWW-Authenticate`
-                // header field containing at least one challenge applicable
-                // to the resource. BitRouter's primary credential is a virtual
-                // API key (`Authorization: Bearer <brvk_...>`).
-                if let Ok(v) = header::HeaderValue::from_str("Bearer realm=\"bitrouter\"") {
-                    response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
-                }
-            }
-            BitrouterError::PaymentRequired(_) => {
-                // 402 + WWW-Authenticate: our scheme name (`Bitrouter-MPP`)
-                // and params predate the mpp.dev finalised wire format and
-                // remain compatible with v0 clients ( will revisit
-                // alignment with <https://mpp.dev/protocol/http-402>).
-                if let Ok(v) = header::HeaderValue::from_str(
-                    "Bitrouter-MPP realm=\"bitrouter\", scheme=\"tempo-voucher\"",
-                ) {
-                    response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
-                }
-            }
-            BitrouterError::RateLimited {
-                retry_after: Some(secs),
-            } => {
-                if let Ok(v) = header::HeaderValue::from_str(&secs.to_string()) {
-                    response.headers_mut().insert(header::RETRY_AFTER, v);
-                }
-            }
-            BitrouterError::UpstreamRateLimited { retry_after } => {
-                if let Some(secs) = retry_after
-                    && let Ok(v) = header::HeaderValue::from_str(&secs.to_string())
-                {
-                    response.headers_mut().insert(header::RETRY_AFTER, v);
-                }
-                response.headers_mut().insert(
-                    header::HeaderName::from_static("x-bitrouter-error-source"),
-                    header::HeaderValue::from_static("upstream"),
-                );
-            }
-            _ => {}
-        }
+        apply_error_headers(&mut response, &self);
         response
+    }
+}
+
+fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
+    match error {
+        BitrouterError::Unauthorized(_) => {
+            // RFC 7235 §3.1: a 401 MUST include a `WWW-Authenticate`
+            // header field containing at least one challenge applicable
+            // to the resource. BitRouter's primary credential is a virtual
+            // API key (`Authorization: Bearer <brvk_...>`).
+            if let Ok(v) = header::HeaderValue::from_str("Bearer realm=\"bitrouter\"") {
+                response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
+            }
+        }
+        BitrouterError::PaymentRequired(_) => {
+            // 402 + WWW-Authenticate: our scheme name (`Bitrouter-MPP`)
+            // and params predate the mpp.dev finalised wire format and
+            // remain compatible with v0 clients ( will revisit
+            // alignment with <https://mpp.dev/protocol/http-402>).
+            if let Ok(v) = header::HeaderValue::from_str(
+                "Bitrouter-MPP realm=\"bitrouter\", scheme=\"tempo-voucher\"",
+            ) {
+                response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
+            }
+        }
+        BitrouterError::UpstreamAuth {
+            www_authenticate: Some(challenge),
+            ..
+        } => {
+            if let Ok(value) = header::HeaderValue::from_str(challenge) {
+                response
+                    .headers_mut()
+                    .insert(header::WWW_AUTHENTICATE, value);
+            }
+        }
+        BitrouterError::RateLimited {
+            retry_after: Some(secs),
+        } => {
+            if let Ok(v) = header::HeaderValue::from_str(&secs.to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, v);
+            }
+        }
+        BitrouterError::UpstreamRateLimited { retry_after } => {
+            if let Some(secs) = retry_after
+                && let Ok(v) = header::HeaderValue::from_str(&secs.to_string())
+            {
+                response.headers_mut().insert(header::RETRY_AFTER, v);
+            }
+            response.headers_mut().insert(
+                header::HeaderName::from_static("x-bitrouter-error-source"),
+                header::HeaderValue::from_static("upstream"),
+            );
+        }
+        _ => {}
     }
 }
 
@@ -855,6 +900,13 @@ mod tests {
     }
 
     fn test_state_with_executor(executor: Arc<dyn Executor>) -> AppState {
+        test_state_with_executor_and_server_tools(executor, false)
+    }
+
+    fn test_state_with_executor_and_server_tools(
+        executor: Arc<dyn Executor>,
+        enable_server_tools: bool,
+    ) -> AppState {
         let table = StaticRoutingTable::new();
         table.insert(
             "gpt-5.5",
@@ -873,6 +925,15 @@ mod tests {
         );
         let mut builder = PipelineBuilder::new();
         builder.routing_table(Arc::new(table)).executor(executor);
+        if enable_server_tools {
+            builder.server_tool_loop(Arc::new(
+                crate::language_model::server_tools::loop_controller::ServerToolLoop::new(
+                    crate::language_model::server_tools::toolset::ToolsetRegistry::new(Vec::new()),
+                    crate::language_model::server_tools::config::ServerToolLoopConfig::default(),
+                    Arc::new(crate::language_model::server_tools::approval::AllowAll),
+                ),
+            ));
+        }
         let pipeline = builder.build().unwrap();
         AppState {
             language_model: Arc::new(pipeline),
@@ -949,6 +1010,101 @@ mod tests {
         assert!(!String::from_utf8_lossy(&bytes).contains("secret"));
     }
 
+    #[tokio::test]
+    async fn mcp_preflight_rate_limit_keeps_status_headers_and_safe_message()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let response = mcp_pipeline_error_response(
+            serde_json::json!(7),
+            &BitrouterError::UpstreamRateLimited {
+                retry_after: Some(12),
+            },
+        );
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "12");
+        assert_eq!(response.headers()["x-bitrouter-error-source"], "upstream");
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(value["error"]["message"], "upstream rate limited");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mcp_preflight_upstream_diagnostics_are_not_exposed()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let response = mcp_pipeline_error_response(
+            serde_json::json!(7),
+            &BitrouterError::Upstream {
+                status: 502,
+                message: "provider secret stack trace".into(),
+            },
+        );
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(value["error"]["message"], "upstream request failed");
+        assert!(!String::from_utf8_lossy(&bytes).contains("secret"));
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_preflight_upstream_auth_preserves_valid_challenges() {
+        for status in [401, 403] {
+            let response = mcp_pipeline_error_response(
+                serde_json::json!(7),
+                &BitrouterError::UpstreamAuth {
+                    status,
+                    www_authenticate: Some(
+                        "Bearer realm=\"upstream\", scope=\"files:read\"".into(),
+                    ),
+                    required_scope: Some("files:read".into()),
+                },
+            );
+
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(
+                response.headers()[header::WWW_AUTHENTICATE],
+                "Bearer realm=\"upstream\", scope=\"files:read\""
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_preflight_upstream_auth_omits_malformed_challenge() {
+        let response = mcp_pipeline_error_response(
+            serde_json::json!(7),
+            &BitrouterError::UpstreamAuth {
+                status: 401,
+                www_authenticate: Some("Bearer\nsecret".into()),
+                required_scope: None,
+            },
+        );
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
+    }
+
+    #[tokio::test]
+    async fn mcp_midstream_upstream_diagnostics_are_not_exposed()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let stream = futures::stream::once(async {
+            Err(BitrouterError::Upstream {
+                status: 502,
+                message: "provider secret stack trace".into(),
+            })
+        })
+        .boxed();
+        let response = sse_response(serde_json::json!(7), stream);
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await?;
+        let body = String::from_utf8_lossy(&bytes);
+        assert!(body.contains("upstream request failed"));
+        assert!(!body.contains("secret"));
+        Ok(())
+    }
+
     #[test]
     fn unauthorized_emits_www_authenticate_bearer() {
         // RFC 7235 §3.1: 401 MUST include WWW-Authenticate.
@@ -989,6 +1145,59 @@ mod tests {
         assert!(
             response.headers().get(header::RETRY_AFTER).is_none(),
             "no Retry-After when the daemon doesn't know how long to wait"
+        );
+    }
+
+    #[test]
+    fn inbound_protocol_hint_is_added_for_prompt_transforms_and_observers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-protocol", "responses".parse().unwrap());
+
+        add_inbound_protocol_hint(&mut headers, &ApiProtocol::Messages);
+
+        assert_eq!(
+            headers
+                .get("x-bitrouter-inbound-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("messages")
+        );
+        assert_eq!(
+            headers
+                .get("x-bitrouter-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some("responses"),
+            "operator/client explicit protocol hint should remain available"
+        );
+    }
+
+    #[test]
+    fn request_id_hint_prefers_existing_capture_header_and_is_preserved() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-request-id", "bench-req-001".parse().unwrap());
+
+        let request_id = add_request_id_hint(&mut headers);
+
+        assert_eq!(request_id, "bench-req-001");
+        assert_eq!(
+            headers
+                .get("x-bitrouter-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("bench-req-001")
+        );
+    }
+
+    #[test]
+    fn request_id_hint_inserts_generated_id_when_missing() {
+        let mut headers = HeaderMap::new();
+
+        let request_id = add_request_id_hint(&mut headers);
+
+        assert!(!request_id.is_empty());
+        assert_eq!(
+            headers
+                .get("x-bitrouter-request-id")
+                .and_then(|v| v.to_str().ok()),
+            Some(request_id.as_str())
         );
     }
 
@@ -1044,5 +1253,42 @@ mod tests {
             Some("text/event-stream")
         );
         assert_eq!(response.headers()[header::RETRY_AFTER], "7");
+    }
+
+    #[tokio::test]
+    async fn streaming_preflight_rate_limit_with_server_tools_keeps_http_429()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let state = test_state_with_executor_and_server_tools(
+            Arc::new(MockExecutor::new(vec![MockResponse::Error(
+                BitrouterError::UpstreamRateLimited {
+                    retry_after: Some(7),
+                },
+            )])),
+            true,
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "model": "gpt-5.5",
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "stream": true
+                })
+                .to_string(),
+            ))?;
+        let response = build_router(state).oneshot(request).await?;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_ne!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(response.headers()[header::RETRY_AFTER], "7");
+        assert_eq!(response.headers()["x-bitrouter-error-source"], "upstream");
+        Ok(())
     }
 }

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 
 use super::credentials::Credentials;

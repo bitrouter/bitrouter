@@ -19,7 +19,6 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 |---|---|
 | `bitrouter route <model> [--config PATH]` | Resolve a model name through the routing table. Tries the running daemon first (live table), falls back to standalone config resolution. Prints the provider/service chain. |
 | `bitrouter models [--config PATH] [--provider ID]` | List every routable model the config exposes. Filter by provider. |
-| `bitrouter verify <model>` | L1 TEE-attestation check for a confidential model (NEAR AI): prints a per-check breakdown (GPU NRAS, Intel TDX DCAP quote, report_data binding, compose, event-log RTMR3 anchor, base measurements MRTD/RTMR0-2, policy pin, debug-disabled, TCB level) and a VERIFIED / UNVERIFIED verdict. Reads `NEAR_BASE`, `NEAR_KMS_ROOTS`, `NEAR_IMAGE_DIGESTS`/`NEAR_WORKLOAD_IDS` (≥1 pin required), `NEAR_BASE_MEASUREMENTS` (≥1 required — comma-separated hex of `MRTD‖RTMR0‖RTMR1‖RTMR2`, 192 bytes each; pins the firmware base registers the guest-extended RTMR3 sits above), and `NVIDIA_EAT_KEY_PEM` from the environment — the verifier refuses to run unpinned. The TCB floor requires an up-to-date platform by default; set `NEAR_TCB_ALLOWED_ADVISORIES` (comma-separated Intel advisory IDs, e.g. `INTEL-SA-00615`) to accept specific out-of-date microcode. |
 | `bitrouter providers list [--config PATH]` | Tab-aligned: `ID  MODELS  ACTIVE  API_BASE`. |
 | `bitrouter tools list [--config PATH]` | Enumerate tools advertised by every configured MCP server (one `tools/list` round-trip per server). |
 | `bitrouter tools status [--config PATH]` | Health-check each MCP server. Latency or error per row. |
@@ -31,12 +30,12 @@ Every subcommand the v1 binary actually exposes. Anything not listed here doesn'
 
 ## ACP sessions
 
-Per-session ACP substrate — one process = one session = one agent. Managers (GUI, AI agents, editors) spawn one process per session and drive it; orchestration is external to the substrate.
+Per-session ACP substrate — one process = one session = one agent. Managers (GUI, AI agents, editors) spawn one process per session and drive it; orchestration is external to the substrate. `bitrouter spawn <agent> --serve|-p` is the newer umbrella over these (same code path); `acp serve|prompt` remain as stable aliases. Both **route the sub-agent's LLM traffic through the daemon by default** — add `--direct` / `--base-url` / `--model` / `--no-start` (see "Harness launch & spawn").
 
 | Command | Effect |
 |---|---|
-| `bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--warm] [--idle-timeout SECS] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel` / `session/load`). `--warm` keeps the session alive after disconnect and accepts reattach on a per-session unix socket until `--idle-timeout` (default 1800s) elapses with no manager. Logs go to stderr; stdout carries ACP JSON-RPC. |
-| `bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--no-wait] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. |
+| `bitrouter acp serve --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--warm] [--idle-timeout SECS] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH]` | Run one session as a vanilla ACP Agent over **stdio** until the manager disconnects. Managers spawn this per session and drive standard ACP (`initialize` → `session/new` → `session/prompt` / `session/cancel` / `session/load`). `--warm` keeps the session alive after disconnect and accepts reattach on a per-session unix socket until `--idle-timeout` (default 1800s) elapses with no manager. Logs go to stderr; stdout carries ACP JSON-RPC. Routes the agent's model calls through the daemon by default (`--direct` opts out). |
+| `bitrouter acp prompt --agent <id> [--worktree <name>] [--rm-worktree] [--no-transcript] [--turn-timeout SECS] [--no-wait] [--direct] [--base-url URL] [--model ID] [--no-start] [--config PATH] <text>` | Launch a session, send one prompt, stream session updates to **stdout as NDJSON** (one JSON object per line), then exit. First line is the `session` correlation line (see below). Logs go to stderr. `--no-wait` submits and returns `{"type":"submitted"}` without streaming. Routes through the daemon by default (`--direct` opts out). |
 | `bitrouter acp attach <record>` | Reattach a terminal to a warm session by record id (or unique prefix): bridges stdio to the session's unix socket (same NDJSON JSON-RPC framing). Run `initialize` → `session/load` to replay the conversation, then continue live. Unix-only. |
 | `bitrouter acp sessions` | List the current repo's session records (`.bitrouter/sessions/*.json`), newest first: short record id, agent, status (`running` / `exited` / `dead` when the recorded pid no longer exists), age, worktree. |
 
@@ -54,7 +53,7 @@ Per-session ACP substrate — one process = one session = one agent. Managers (G
 
 **Turns**: `session/cancel` is session-scoped — it cancels the active turn upstream *and* flushes the queued backlog (queued prompts resolve `stop_reason: "cancelled"`). `--turn-timeout SECS` sets a per-turn deadline: on elapse the agent is asked to cancel cooperatively (3s grace) before the turn errors.
 
-**NDJSON format** (for `acp prompt`): each update line is a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` is emitted.
+**NDJSON format** (for `acp prompt` / `spawn -p`): the **first** line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — for joining the session record to daemon cost/metering. Each update line is then a self-describing JSON object with a `type` field (snake_case): `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage` (context-window occupancy: `used`, `size`, optional `cost`). The terminal line is `{"type":"result","stop_reason":"end_turn"}` (ACP wire spelling). In `--no-wait` mode only `{"type":"submitted"}` follows the session line. A fail-fast routing failure emits a single `{"type":"error","code":"daemon_unreachable"|"auth_required","via":…,"hint":…}` line instead, before any session is created.
 
 See `references/sessions.md` for the full per-session model (identity, turn queue, v1 limitations).
 
@@ -69,10 +68,15 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 
 | Command | Effect |
 |---|---|
-| `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, all built-in providers stubbed as `{}` so they auto-enable when their env var is set. |
-| `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, and the upstream-URL (SSRF) gate. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. |
-| `bitrouter providers use <id>` | **No-op** in v1 (kept for v0 compatibility). Prints a hint to edit `bitrouter.yaml` instead. |
-| `bitrouter policy create <id> [--dir DIR]` | Write a starter policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
+| `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, and common registry providers stubbed as `{}` so they can inherit registry defaults and auto-enable when their credential is available. |
+| `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. |
+| `bitrouter policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
+| `bitrouter policy init <name> --preset <preset> --economy <model> [--strong <model>] [--config PATH]` | Create or extend the deterministic `policy-lock.yaml`, bind the named policy to a preset, and leave programmatic writeback locked. The strong model is inferred from an existing preset when omitted. |
+| `bitrouter policy check|status [--config PATH]` | Cross-validate the main config and lock, or report the resolved path, semantic digest, writeback mode, policies, and preset bindings. |
+| `bitrouter policy show <name> [--config PATH]` | Print one validated effective policy. |
+| `bitrouter policy evolve [--apply] [--config PATH]` | Project policy-namespaced adequacy evidence into a deterministic candidate. Dry-run by default; `--apply` requires writeback to be unlocked. Existing routes are never overwritten or removed. |
+| `bitrouter policy lock|unlock [--config PATH]` | Forbid or permit programmatic replacement of `policy-lock.yaml`. Manual/Git edits and reload remain allowed while locked. |
+| `bitrouter policy reload [--config PATH] [--socket PATH]` | Hot-reload main config and policy lock through the existing daemon control socket. Invalid locks preserve the last-known-good runtime snapshot. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |
 
 ## Per-provider OAuth
@@ -111,11 +115,33 @@ Typed wrappers over the `/v1/*` management API on the cloud. Requires `bitrouter
 | `bitrouter cloud preset list/get/create/update/delete` | Typed sugar over preset-kind policies. |
 | `bitrouter cloud byok list/set/delete` | BYOK provider keys. `set` takes already-sealed ciphertext (`--ciphertext-b64` + `--kek-id` matching the cloud's current X25519 public key). Scope: `byok:read` / `byok:write`. |
 
-## Harness spawn
+## Harness launch & spawn
+
+Two verbs, split by role. `launch` runs a harness as an **interactive native
+TUI** (the human is the orchestrator); `spawn` runs an **ACP-compatible harness
+as a headless sub-agent** (a program is the orchestrator). Both route the
+harness's LLM traffic through the daemon, drawing per-harness routing knowledge
+from one shared catalog, so `launch claude` and `spawn claude-acp` inject
+identical gateway env/args.
 
 | Command | Effect |
 |---|---|
-| `bitrouter spawn --agent <claude\|codex> [--config PATH] [--base-url URL] -- <agent args...>` | Launch a coding-agent CLI through BitRouter without editing agent config files. Claude uses child env overrides; Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. After the agent exits, prints a one-line session spend summary to stderr (silent when nothing was recorded locally). |
+| `bitrouter launch --agent <claude\|codex> [--config PATH] [--base-url URL] [--no-install] [--no-start] [--check] -- <agent args...>` | Launch a coding-agent CLI's native TUI through BitRouter without editing agent config files. Claude uses child env overrides (`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`); Codex uses one-shot `-c` provider overrides with `wire_api="responses"`. Prints a one-line session spend summary to stderr on exit. |
+| `bitrouter spawn <agent> -p "<text>" [--no-wait] [session/routing flags]` | Spawn an ACP sub-agent, send one prompt, stream **NDJSON** to stdout, exit. `<agent>` is a catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `pi-acp`) or a configured `agents:` entry; a catalog id needs no config entry. |
+| `bitrouter spawn <agent> --serve [--warm] [--idle-timeout SECS] [session/routing flags]` | Serve the sub-agent as a vanilla ACP Agent over stdio (for a GUI/manager). Same as `acp serve` with routing on. |
+| `bitrouter spawn <agent> --check [routing flags]` | Preflight harness resolution, the routing decision, and daemon reachability without launching anything. |
+
+**Routing (default on)** for `spawn` and the `acp serve\|prompt` aliases:
+- `--direct` — do **not** route through the daemon; the harness uses its own provider auth.
+- `--model <id>` — pin the harness's model (its model env var, or `-c model=` for codex).
+- `--base-url <URL>` — override the gateway URL (else derived from `server.listen`).
+- `--no-start` — never auto-start a local daemon; fail fast if it's down.
+- Session flags (`--worktree`/`--rm-worktree`/`--no-transcript`/`--turn-timeout`) match `acp`.
+- Auth: routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (fine under `skip_auth: true`); under `skip_auth: false` a key is required or `spawn` fails fast with `auth_required`.
+- Fail-fast: if the daemon is unreachable (after auto-start) or auth is required and absent, `spawn` emits a single structured error **before** any session side effect — NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` in `-p` mode, stderr in `--serve` mode — and exits non-zero. Catalog harnesses that can't be routed (e.g. `pi-acp`) and non-catalog agents warn and run direct.
+- `bitrouter spawn --agent <claude\|codex> …` is a **deprecated alias** for `bitrouter launch` (prints a migration note).
+
+**`spawn -p` first line** is a `session` correlation line: `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when direct), so an orchestrator can join the session's record to the daemon's cost/metering. Then the normal NDJSON update stream follows.
 
 
 ## Unimplemented in v1.0

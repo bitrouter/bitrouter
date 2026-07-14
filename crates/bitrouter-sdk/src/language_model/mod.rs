@@ -67,6 +67,7 @@ pub mod routing;
 pub mod server_tools;
 pub mod settlement;
 pub mod stream;
+pub mod timing;
 pub mod types;
 
 #[cfg(test)]
@@ -83,7 +84,7 @@ pub use executor::{
 };
 pub use hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
-    PreRequestHook, RequestOutcome, RouteHook, StreamHook,
+    PreRequestHook, RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 pub use pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 pub use protocol::{
@@ -91,8 +92,8 @@ pub use protocol::{
     Transport, inbound_adapter_for, sanitize_model_name,
 };
 pub use routing::{
-    DefaultFallbackPolicy, FallbackPolicy, ModelInfo, RoutingPrefs, RoutingTable, SortOrder,
-    StaticRoutingTable,
+    DefaultFallbackPolicy, FallbackPolicy, ModelInfo, ModelResolution, ModelSelector, RoutingPrefs,
+    RoutingTable, SortOrder, StaticRoutingTable,
 };
 pub use settlement::{SettlementContext, SettlementRecorder};
 pub use stream::{

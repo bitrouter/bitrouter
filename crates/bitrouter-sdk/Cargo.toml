@@ -16,30 +16,23 @@ thiserror.workspace = true
 futures.workspace = true
 futures-core.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
-tokio-stream.workspace = true
 # `rt` feature: `tokio_util::task::TaskTracker`, used to run non-streaming
 # requests to completion after a client disconnect (see `Pipeline::execute_detached`).
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 http.workspace = true
 httpdate.workspace = true
-bytes.workspace = true
 pin-project-lite.workspace = true
 async-stream.workspace = true
 reqwest.workspace = true
 url.workspace = true
 eventsource-stream.workspace = true
-chrono.workspace = true
 uuid.workspace = true
-regex.workspace = true
-sha2.workspace = true
-base64.workspace = true
 schemars.workspace = true
 
 # `server` feature
 axum = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
-tower-http = { workspace = true, optional = true }
 
 # `config_file` feature
 serde-saphyr = { workspace = true, optional = true }
@@ -51,22 +44,17 @@ agent-client-protocol-schema = { workspace = true, optional = true }
 # <https://github.com/modelcontextprotocol/rust-sdk>
 rmcp = { workspace = true, optional = true }
 
-# Used ONLY to name rmcp 1.7's transport error type
-# (StreamableHttpError<reqwest::Error>) in the MCP auth-error downcast —
-# rmcp pins reqwest 0.13 while our own client stays on 0.12.
-rmcp-reqwest = { package = "reqwest", version = "0.13", default-features = false, optional = true }
-
 [features]
 default = []
 # axum HTTP server + SSE handlers + admin endpoints
-server = ["dep:axum", "dep:tower", "dep:tower-http", "tokio/signal"]
+server = ["dep:axum", "dep:tower", "tokio/signal"]
 # yaml config loading (serde-saphyr + tokio::fs)
 config_file = ["dep:serde-saphyr", "tokio/fs"]
 # rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
 # pure-routing pipeline. Without this feature the SDK still exposes
 # `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
 # can plug in a custom Executor without pulling rmcp.
-mcp = ["dep:rmcp", "dep:rmcp-reqwest", "tokio/process"]
+mcp = ["dep:rmcp", "tokio/process"]
 # `ConfigAcpRoutingTable` for the `acp` pure-routing pipeline.
 # Without this feature the SDK still exposes `acp::Pipeline`, hook traits,
 # and the `AcpTransport` enum, so a consumer can plug in a custom Executor.

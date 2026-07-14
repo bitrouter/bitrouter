@@ -1,0 +1,21 @@
+{
+  "id": "claude-code-opening-001",
+  "harness": "claude_code",
+  "protocol": "messages",
+  "headers": {
+    "anthropic-beta": "claude-code-20250219"
+  },
+  "raw_body": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 512,
+    "messages": [
+      {"role": "user", "content": "inspect this repo"}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "opening",
+    "baseline_fingerprint": "opening",
+    "confidence_min": 0.7
+  }
+}

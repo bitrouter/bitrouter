@@ -73,6 +73,9 @@ pub struct Assembled {
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
+    /// Live named routing policies loaded from `policy-lock.yaml`. The model
+    /// selector and daemon reloader share this last-known-good registry.
+    pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
     /// needs the concrete type to call
@@ -441,12 +444,53 @@ pub async fn build_app_with_path(
         .and_then(FusionAliasConfig::from_settings)
         .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
 
+    // Config-driven per-request model routing (`policy_table:`). The shared
+    // table is read by the ingress router (below) and, when online adequacy
+    // learning is enabled, by the adequacy observe hook. The ledger persists its
+    // escalation pins in the local db and warms its in-memory cache from it.
+    let policy_table = crate::policy_table_router::PolicyTable::from_config(&config.policy_table);
+    let adequacy_ledger = match &policy_table {
+        Some(_) if config.policy_table.adequacy.enabled => {
+            let store = crate::adequacy::store::AdequacyStore::new(db.clone());
+            Some(Arc::new(
+                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await,
+            ))
+        }
+        _ => None,
+    };
+    // The adequacy learner records the policy decision at ingress and folds it
+    // into the ledger from the always-run settlement path. That is more robust
+    // for streaming clients that drop the response body immediately after their
+    // final event: settlement still runs, so learning advances with metering.
+    let adequacy_pending = Arc::new(crate::adequacy::settlement::PendingAdequacyStore::default());
+    let policy_decision_recorder =
+        crate::workflow_state::decision::PolicyDecisionJsonlRecorder::from_env()
+            .map_err(anyhow::Error::from)?
+            .map(Arc::new);
+    if policy_decision_recorder.is_some() {
+        tracing::info!(
+            env = crate::workflow_state::decision::POLICY_DECISION_JSONL_ENV,
+            "policy decision JSONL recording enabled"
+        );
+    }
+    let policy_runtime = crate::policy_lock::PolicyRuntime::new(
+        config,
+        config_path,
+        db.clone(),
+        adequacy_pending.clone(),
+        policy_decision_recorder.clone(),
+    )
+    .await
+    .context("loading policy-lock.yaml")?;
+    let policy_runtime_for_selector = policy_runtime.clone();
+    let adequacy_settlement_pending = adequacy_pending.clone();
     let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
+            lm.model_selector(policy_runtime_for_selector);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
             // declaration (or the one the fusion alias injected) off the prompt
@@ -469,6 +513,14 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
+            // Online adequacy learning: use settlement as the source of truth so
+            // request completion, metering, and adequacy cannot diverge on
+            // streaming client-disconnect paths.
+            lm.settlement_recorder(
+                crate::adequacy::settlement::AdequacySettlementRecorder::new(
+                    adequacy_settlement_pending,
+                ),
+            );
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -506,6 +558,29 @@ pub async fn build_app_with_path(
     let app = app.prompt_transform(
         Arc::new(crate::claude_code::ClaudeCodeRouter) as Arc<dyn PromptTransform>
     );
+    // Config-driven per-request model routing (`policy_table:`): an ingress
+    // transform that fingerprints the agent-loop step and rewrites `prompt.model`
+    // to the tier the policy table assigns, enforcing the tool-use guardrail.
+    // Wired only when `policy_table.tiers` is non-empty. Registered LAST, after
+    // the fusion alias and the Claude Code router, so the routes they own win:
+    // the transform skips any already-`provider:`-routed model (the `claude-code:`
+    // subscription route) and any request carrying a bitrouter server-tool
+    // declaration (the `bitrouter/fusion` alias's injected tool).
+    let app = match policy_table {
+        Some(table) => {
+            let has_adequacy = adequacy_ledger.is_some();
+            let mut router =
+                crate::policy_table_router::PolicyTableRouter::new(table, adequacy_ledger);
+            if let Some(recorder) = policy_decision_recorder {
+                router = router.with_shared_decision_recorder(recorder);
+            }
+            if has_adequacy {
+                router = router.with_pending_adequacy_store(adequacy_pending);
+            }
+            app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
+        }
+        None => app,
+    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
@@ -528,6 +603,7 @@ pub async fn build_app_with_path(
         app,
         db,
         policy_store: policy_store_for_reload,
+        policy_runtime,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
         observe: observe_provider,

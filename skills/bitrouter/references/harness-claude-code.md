@@ -9,11 +9,11 @@ Wire Anthropic's Claude Code CLI to route its model calls through BitRouter at `
 - BitRouter installed (`bitrouter --version`). The daemon does **not** need to be pre-started for the `spawn` path — it auto-starts.
 - Claude Code installed and authenticated normally at least once.
 
-## Preferred launch path: `bitrouter spawn`
+## Preferred launch path: `bitrouter launch`
 
 ```bash
-bitrouter spawn -a claude
-bitrouter spawn -a claude -- -p "summarize this repo"
+bitrouter launch -a claude
+bitrouter launch -a claude -- -p "summarize this repo"
 ```
 
 Reversible, per-process, and config-file-free: `spawn` launches Claude Code as a child process with two environment overrides and never touches `~/.claude/settings.json`. When the local daemon is down, `spawn` auto-starts it and waits for readiness first. Everything after `--` is forwarded to `claude` verbatim. After the session exits, `spawn` prints a one-line spend summary for the wrapped run.
@@ -52,14 +52,14 @@ models:
 ## Verify
 
 ```bash
-bitrouter spawn -a claude -- --version     # binary + wiring sanity
-echo "say hi" | bitrouter spawn -a claude  # one-shot through the router
+bitrouter launch -a claude -- --version     # binary + wiring sanity
+echo "say hi" | bitrouter launch -a claude  # one-shot through the router
 tail -n 20 ~/.bitrouter/bitrouter.log      # daemon log should show /v1/messages traffic
 ```
 
 ## Agent plugin
 
-The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: the `/bitrouter` skill and the origin MCP server (with a cost footer on tool results) for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`. A session spend summary is printed by `bitrouter spawn` on exit (a spawn feature, independent of the plugin).
+The BitRouter agent plugin (repo root `.claude-plugin/`) layers onto this wiring for Claude Code users: the `/bitrouter` skill and the origin MCP server (with a cost footer on tool results) for in-session model arbitrage. Install via `/plugin marketplace add bitrouter/bitrouter` → `/plugin install bitrouter@bitrouter`. A session spend summary is printed by `bitrouter launch` on exit (a launch feature, independent of the plugin).
 
 ## Notes & gotchas
 

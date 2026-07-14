@@ -4,7 +4,7 @@ description: Bring your OpenRouter key into BitRouter — one aggregator key, hu
 sourceHash: 177d9a2dbc0eff17580a51b6a4fa1440253c8a787a604e413b84a60c32a659dd
 ---
 
-[OpenRouter](https://openrouter.ai) is an OpenAI-compatible aggregator that fronts hundreds of models behind one key. BitRouter has a built-in `openrouter` provider, so bringing your key in is a single block in `bitrouter.yaml` — and from there OpenRouter's catalog joins the rest of your [registry](/docs/concepts/models), with selection and fallback on top.
+[OpenRouter](https://openrouter.ai) is an OpenAI-compatible aggregator that fronts hundreds of models behind one key. BitRouter's registry includes an `openrouter` provider, so bringing your key in is a single block in `bitrouter.yaml` — and from there OpenRouter's catalog joins the rest of your [registry](/docs/concepts/models), with selection and fallback on top.
 
 <Callout type="info">
 **Migrating off OpenRouter entirely?** If you want to *replace* OpenRouter rather than route through it, see [Migrate from OpenRouter](/docs/guides/migrate-from-openrouter) — it's a base-URL-and-key swap.
@@ -17,7 +17,7 @@ sourceHash: 177d9a2dbc0eff17580a51b6a4fa1440253c8a787a604e413b84a60c32a659dd
 
 ## Add OpenRouter to BitRouter
 
-The `openrouter` provider ships with the right `api_base` and Bearer auth built in — you only supply the key and the models you want:
+The `openrouter` registry entry carries the right `api_base` and Bearer auth defaults — you only supply the key and the models you want:
 
 ```yaml
 # bitrouter.yaml

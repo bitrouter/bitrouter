@@ -350,6 +350,7 @@ impl StreamProcessor {
     /// upstream part so usage is never lost to a rewrite.
     pub async fn process_part(&mut self, part: StreamPart) -> Result<Vec<StreamPart>> {
         self.ctx.accumulated_usage.observe(&part);
+        self.ctx.observe_first_token(&part);
         self.ctx.parts_emitted += 1;
 
         let mut current = vec![part];
@@ -394,18 +395,18 @@ impl StreamProcessor {
     /// - If an authoritative `Usage` part was observed at any point, that
     ///   wins — covers both clean termination and disconnect *after* the
     ///   usage chunk.
-    /// - If the stream ended via [`StreamOutcome::ClientDisconnected`] before
-    ///   any `Usage` was seen, synthesise a usage from the disconnect
-    ///   estimate: `prompt_tokens` from the request prompt's char count
-    ///   (seeded into the accumulator at stream start) and `completion_tokens`
-    ///   from the observed delta text. The provider bills input tokens the
-    ///   moment it accepts the request, so prompt tokens are charged even when
-    ///   no output streamed before the hang-up; output is added when deltas
-    ///   were seen. Without this, a client could drain a long generation, hang
-    ///   up just before the trailing usage frame, and pay $0.
-    /// - Otherwise (clean error with no usage, or disconnect with neither a
-    ///   seeded prompt nor deltas), leave `final_usage` empty; settlement
-    ///   records the request as un-billable.
+    /// - If the stream completed cleanly or ended via
+    ///   [`StreamOutcome::ClientDisconnected`] before any `Usage` was seen,
+    ///   synthesise a usage estimate: `prompt_tokens` from the request prompt's
+    ///   char count (seeded into the accumulator at stream start) and
+    ///   `completion_tokens` from observed delta text. Some upstreams omit
+    ///   usage on successful streams; benchmark/cost accounting should be
+    ///   estimated rather than silently recorded as `0/0`. The provider bills
+    ///   input tokens the moment it accepts the request, so prompt tokens are
+    ///   charged even when no output streamed before a hang-up; output is added
+    ///   when deltas were seen.
+    /// - Otherwise (error with no usage, or no seeded prompt/deltas), leave
+    ///   `final_usage` empty; settlement records the request as un-billable.
     pub async fn finish(&mut self, outcome: StreamOutcome) -> &StreamContext {
         if self.ended {
             return &self.ctx;
@@ -416,24 +417,62 @@ impl StreamProcessor {
                 tracing::warn!(error = %e, "StreamHook::on_stream_end failed");
             }
         }
-        if let Some(usage) = self.ctx.accumulated_usage.finalized() {
-            self.ctx.final_usage = Some(usage);
-        } else if matches!(outcome, StreamOutcome::ClientDisconnected) {
+        let estimated_usage = || {
             let prompt_tokens = self.ctx.accumulated_usage.estimated_prompt_tokens();
             let completion_tokens = self.ctx.accumulated_usage.estimated_output_tokens();
             if prompt_tokens > 0 || completion_tokens > 0 {
-                tracing::warn!(
-                    request_id = %self.ctx.request_id,
-                    estimated_prompt_tokens = prompt_tokens,
-                    estimated_output_tokens = completion_tokens,
-                    "client disconnected mid-stream before upstream usage frame; billing estimated usage"
-                );
-                self.ctx.final_usage = Some(Usage {
+                Some(Usage {
                     prompt_tokens,
                     completion_tokens,
                     ..Default::default()
-                });
+                })
+            } else {
+                None
             }
+        };
+        if let Some(usage) = self.ctx.accumulated_usage.finalized() {
+            if usage == Usage::default()
+                && matches!(
+                    outcome,
+                    StreamOutcome::Completed | StreamOutcome::ClientDisconnected
+                )
+                && let Some(estimated) = estimated_usage()
+            {
+                tracing::debug!(
+                    request_id = %self.ctx.request_id,
+                    estimated_prompt_tokens = estimated.prompt_tokens,
+                    estimated_output_tokens = estimated.completion_tokens,
+                    "stream reported zero usage despite prompt/output evidence; billing estimated usage"
+                );
+                self.ctx.final_usage = Some(estimated);
+            } else {
+                self.ctx.final_usage = Some(usage);
+            }
+        } else if matches!(
+            outcome,
+            StreamOutcome::Completed | StreamOutcome::ClientDisconnected
+        ) && let Some(estimated) = estimated_usage()
+        {
+            match outcome {
+                StreamOutcome::ClientDisconnected => {
+                    tracing::warn!(
+                        request_id = %self.ctx.request_id,
+                        estimated_prompt_tokens = estimated.prompt_tokens,
+                        estimated_output_tokens = estimated.completion_tokens,
+                        "client disconnected mid-stream before upstream usage frame; billing estimated usage"
+                    );
+                }
+                StreamOutcome::Completed => {
+                    tracing::debug!(
+                        request_id = %self.ctx.request_id,
+                        estimated_prompt_tokens = estimated.prompt_tokens,
+                        estimated_output_tokens = estimated.completion_tokens,
+                        "stream completed without upstream usage frame; billing estimated usage"
+                    );
+                }
+                StreamOutcome::UpstreamError(_) | StreamOutcome::Aborted(_) => {}
+            }
+            self.ctx.final_usage = Some(estimated);
         }
         &self.ctx
     }
@@ -447,8 +486,81 @@ impl StreamProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller::CallerContext;
+    use crate::language_model::context::PipelineContext;
+    use crate::language_model::timing::FirstTokenKind;
     use crate::language_model::types::FinishReason;
+    use crate::language_model::types::{GenerationParams, Message, PipelineRequest, Prompt, Role};
     use futures::StreamExt;
+
+    fn timed_stream_context() -> StreamContext {
+        let prompt = Prompt {
+            model: "test-model".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "hello")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let mut ctx = PipelineContext::new(PipelineRequest::new(
+            "test-model",
+            CallerContext::local(),
+            prompt,
+        ));
+        ctx.set_stream_provider_started_at(std::time::Instant::now());
+        ctx.stream_context()
+    }
+
+    #[tokio::test]
+    async fn first_original_semantic_delta_sets_timing_once() {
+        let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
+
+        processor
+            .process_part(StreamPart::ResponseStarted { id: "r".into() })
+            .await
+            .unwrap();
+        processor
+            .process_part(StreamPart::ReasoningDelta {
+                text: "think".into(),
+            })
+            .await
+            .unwrap();
+        processor
+            .process_part(StreamPart::TextDelta {
+                text: "answer".into(),
+            })
+            .await
+            .unwrap();
+
+        let timing = processor
+            .context()
+            .first_token_timing()
+            .expect("first token timing");
+        assert_eq!(timing.kind, FirstTokenKind::Reasoning);
+        assert!(timing.latency_ms >= 1);
+    }
+
+    #[tokio::test]
+    async fn metadata_usage_and_terminal_parts_do_not_set_first_token_timing() {
+        let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
+
+        for part in [
+            StreamPart::ResponseStarted { id: "r".into() },
+            StreamPart::Usage {
+                usage: Usage::default(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ] {
+            processor.process_part(part).await.unwrap();
+        }
+
+        assert!(processor.context().first_token_timing().is_none());
+    }
 
     #[test]
     fn interest_matches_only_declared_kinds() {

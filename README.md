@@ -77,6 +77,12 @@ _All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero 
 
 **TL;DR** — OpenRouter is a cloud API marketplace for humans picking models. LiteLLM (Python), Portkey (TypeScript), and Bifrost (Go) are unified gateways — fast, OpenAI-compatible, guardrails included — but they route models. TensorZero (Rust) adds a production feedback loop, but optimizes the model itself, not the loop. BitRouter is the only one that treats models, tools, and agents as a single routable surface — a Rust-native gateway that cost-optimizes the whole production loop, with cross-protocol routing, MCP and ACP gateways, and guardrails out of the box.
 
+## Benchmarks
+
+Benchmark reports live in [`benchmarks/`](benchmarks/). In the first published run (Terminal-Bench 2.1, Codex + Kimi), adaptive routing replaced strong-model calls with a cheaper model: round r2 cut imputed cost **32.8%** versus a strong-only control at near-parity score, and the best round scored **82.95%** at 8.2% lower cost.
+
+The complete traces, messages, tool calls, usage, policy decisions, configs, and checksums are published in the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset. This is a mechanism study under a modified protocol, not a Terminal-Bench leaderboard submission; read the [experiment limitations](benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md#limitations) before citing the numbers.
+
 ## Install
 
 ```bash
@@ -166,17 +172,17 @@ Native desktop app for driving multi-agent loops — coming soon.
 
 ## Models & providers
 
-BitRouter routes to a *model*, not a provider. Each open-weight family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
+BitRouter routes to a *model*, not a provider. Each family below is served by many providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways (OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest route per call. **Bring your own key** to any of them, or use one **BitRouter Cloud** account with no keys at all.
 
-| Open model            | Lab      |
-| --------------------- | -------- |
-| DeepSeek V3.2 / V4    | DeepSeek |
-| Qwen3 / Qwen3-Coder   | Alibaba  |
-| Kimi K2               | Moonshot |
-| GLM-5 / 5.1           | Z.ai     |
-| MiniMax M2–M3         | MiniMax  |
-| MiMo V2               | Xiaomi   |
-| Step 3.5              | StepFun  |
+| Lab      | Latest models                    |
+| -------- | -------------------------------- |
+| DeepSeek | DeepSeek V4 Pro / Flash          |
+| Alibaba  | Qwen3.7 Max / Plus               |
+| Moonshot | Kimi K2.7 Code / K2.6            |
+| Z.ai     | GLM-5.2 / 5.1                    |
+| MiniMax  | MiniMax M3 / M2.7                |
+| Xiaomi   | MiMo V2.5 Pro / V2.5             |
+| StepFun  | Step 3.7 Flash / 3.5 Flash       |
 
 Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
 

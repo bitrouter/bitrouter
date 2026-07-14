@@ -15,8 +15,12 @@
 
 use axum_test::TestServer;
 use bitrouter::metering::entities::requests;
+use bitrouter::workflow_state::ir::ProtocolKind;
+use bitrouter::workflow_state::online::OnlineWorkflowState;
+use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
+use bitrouter_sdk::language_model::types::{Content, ProviderMetadata};
 use bitrouter_sdk::language_model::{GenerationParams, Message, PipelineRequest, Prompt, Role};
 use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -26,6 +30,10 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Stand up a wiremock upstream speaking Chat Completions.
 async fn mock_chat_completions_upstream() -> MockServer {
+    mock_chat_completions_upstream_with_content("hello from the mock upstream").await
+}
+
+async fn mock_chat_completions_upstream_with_content(content: &str) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -35,7 +43,7 @@ async fn mock_chat_completions_upstream() -> MockServer {
             "model": "test-model",
             "choices": [{
                 "index": 0,
-                "message": { "role": "assistant", "content": "hello from the mock upstream" },
+                "message": { "role": "assistant", "content": content },
                 "finish_reason": "stop",
             }],
             "usage": { "prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18 },
@@ -43,6 +51,87 @@ async fn mock_chat_completions_upstream() -> MockServer {
         .mount(&server)
         .await;
     server
+}
+
+async fn mock_streaming_chat_completions_upstream(model: &str) -> MockServer {
+    let server = MockServer::start().await;
+    let body = [
+        serde_json::json!({
+            "id": "chatcmpl-mock",
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "ok" },
+                "finish_reason": null,
+            }],
+        }),
+        serde_json::json!({
+            "id": "chatcmpl-mock",
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }],
+            "usage": { "prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18 },
+        }),
+    ]
+    .into_iter()
+    .map(|event| format!("data: {event}\n\n"))
+    .collect::<String>()
+        + "data: [DONE]\n\n";
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(body, "text/event-stream"),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+fn prompt_for_policy_key(messages: Vec<Message>) -> Prompt {
+    Prompt {
+        model: "router-entry".to_string(),
+        system: None,
+        system_provider_metadata: Default::default(),
+        messages,
+        tools: Vec::new(),
+        params: GenerationParams::default(),
+        response_format: None,
+        tool_choice: None,
+        stream: false,
+    }
+}
+
+fn assistant_calls_for_policy_key(tool: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![Content::ToolCall {
+            id: format!("call_{tool}"),
+            name: tool.to_string(),
+            arguments: "{}".to_string(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: ProviderMetadata::new(),
+        }],
+    }
+}
+
+fn workflow_key_for(messages: Vec<Message>) -> String {
+    let prompt = prompt_for_policy_key(messages);
+    OnlineWorkflowState::from_prompt(
+        &HeaderMap::new(),
+        &prompt,
+        None,
+        ProtocolKind::ChatCompletions,
+    )
+    .routing_key()
+    .to_string()
 }
 
 /// A config pointing one provider at the mock upstream, `skip_auth: true` and
@@ -189,6 +278,354 @@ async fn e2e_http_server_chat_completions_end_to_end() {
         text.contains("bitrouter-observe.otel"),
         "/metrics banner should point at the new config key; got:\n{text}"
     );
+}
+
+#[tokio::test]
+async fn workflow_state_policy_routes_by_ir_key() {
+    let strong = mock_chat_completions_upstream_with_content("strong").await;
+    let cheap = mock_chat_completions_upstream_with_content("cheap").await;
+    let opening_key = workflow_key_for(vec![Message::text(Role::User, "start")]);
+    let tool_followup_key = workflow_key_for(vec![
+        Message::text(Role::User, "fix"),
+        assistant_calls_for_policy_key("Bash"),
+    ]);
+
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  strong:
+    api_base: {strong_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: strong-model
+  cheap:
+    api_base: {cheap_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: cheap-model
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    capable: strong:strong-model
+    cheap_tool_safe: cheap:cheap-model
+  fingerprints:
+    "{opening_key}": capable
+    "{tool_followup_key}": cheap_tool_safe
+  default_tier: capable
+  tool_use_tier: capable
+  tool_safe_tiers:
+    - capable
+    - cheap_tool_safe
+"#,
+        strong_uri = strong.uri(),
+        cheap_uri = cheap.uri(),
+    );
+    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let server = TestServer::new(build_router(state));
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "router-entry",
+            "messages": [{ "role": "user", "content": "start" }],
+        }))
+        .await
+        .assert_status_ok();
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "router-entry",
+            "messages": [
+                { "role": "user", "content": "fix" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_Bash",
+                        "type": "function",
+                        "function": { "name": "Bash", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_Bash", "content": "done" }
+            ],
+        }))
+        .await
+        .assert_status_ok();
+
+    let strong_requests = strong.received_requests().await.unwrap_or_default();
+    let cheap_requests = cheap.received_requests().await.unwrap_or_default();
+    assert_eq!(strong_requests.len(), 1, "opening should route to strong");
+    assert_eq!(
+        cheap_requests.len(),
+        1,
+        "tool followup should route to cheap via workflow-state key"
+    );
+    let strong_body: Value = serde_json::from_slice(&strong_requests[0].body).unwrap();
+    let cheap_body: Value = serde_json::from_slice(&cheap_requests[0].body).unwrap();
+    assert_eq!(strong_body["model"], "strong-model");
+    assert_eq!(cheap_body["model"], "cheap-model");
+}
+
+#[tokio::test]
+async fn streaming_adequacy_settlement_also_persists_metering() {
+    use std::time::Duration;
+
+    let strong = mock_streaming_chat_completions_upstream("strong-model").await;
+    let cheap = mock_streaming_chat_completions_upstream("cheap-model").await;
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  strong:
+    api_base: {strong_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: strong-model
+  cheap:
+    api_base: {cheap_uri}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: cheap-model
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    capable: strong:strong-model
+    cheap: cheap:cheap-model
+  default_tier: capable
+  tool_use_tier: capable
+  tool_safe_tiers: [capable, cheap]
+  adequacy:
+    enabled: true
+    escalation_tier: capable
+    explore_enabled: true
+    explore_tier: cheap
+    explore_interval: 2
+    explore_threshold: 3
+"#,
+        strong_uri = strong.uri(),
+        cheap_uri = cheap.uri(),
+    );
+    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let server = TestServer::new(build_router(state));
+
+    let response = server
+        .post("/v1/chat/completions")
+        .add_header("x-bitrouter-request-id", "adequacy-metering-1")
+        .add_header("accept", "text/event-stream")
+        .json(&json!({
+            "model": "router-entry",
+            "stream": true,
+            "stream_options": { "include_usage": true },
+            "messages": [
+                { "role": "user", "content": "fix" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_Bash",
+                        "type": "function",
+                        "function": { "name": "Bash", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_Bash", "content": "done" }
+            ]
+        }))
+        .await;
+    response.assert_status_ok();
+    let _ = response.text();
+
+    for _ in 0..100 {
+        let row = requests::Entity::find()
+            .filter(requests::Column::RequestId.eq("adequacy-metering-1"))
+            .one(&assembled.db)
+            .await
+            .expect("metering query runs");
+        if let Some(row) = row {
+            assert_eq!(row.provider_id, "strong");
+            assert_eq!(row.prompt_tokens, 11);
+            assert_eq!(row.completion_tokens, 7);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("metering row did not persist after adequacy settlement");
+}
+
+#[tokio::test]
+async fn disconnected_stream_with_adequacy_also_persists_metering() {
+    use std::convert::Infallible;
+    use std::time::Duration;
+
+    use axum::Router;
+    use axum::body::{Body, Bytes};
+    use axum::response::Response;
+    use axum::routing::post;
+    use futures::StreamExt;
+
+    let upstream = Router::new().route(
+        "/chat/completions",
+        post(|| async {
+            let stream = futures::stream::unfold(0_u8, |state| async move {
+                match state {
+                    0 => Some((
+                        Ok::<_, Infallible>(Bytes::from_static(
+                            b"data: {\"id\":\"chatcmpl-mock\",\"object\":\"chat.completion.chunk\",\"model\":\"strong-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"working\"},\"finish_reason\":null}]}\n\n",
+                        )),
+                        1,
+                    )),
+                    1 => {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        Some((
+                            Ok::<_, Infallible>(Bytes::from_static(b"data: [DONE]\n\n")),
+                            2,
+                        ))
+                    }
+                    _ => None,
+                }
+            });
+            Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from_stream(stream))
+                .unwrap()
+        }),
+    );
+    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream_listener.local_addr().unwrap();
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(upstream_listener, upstream).await.unwrap();
+    });
+
+    let yaml = format!(
+        r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  mock:
+    api_base: http://{upstream_addr}
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: strong-model
+      - id: cheap-model
+policy_table:
+  key_strategy: workflow_state
+  tiers:
+    capable: mock:strong-model
+    cheap: mock:cheap-model
+  default_tier: capable
+  tool_use_tier: capable
+  tool_safe_tiers: [capable, cheap]
+  adequacy:
+    enabled: true
+    escalation_tier: capable
+    explore_enabled: true
+    explore_tier: cheap
+    explore_interval: 2
+    explore_threshold: 3
+"#,
+    );
+    let cfg = config::parse_with(&yaml, |_| None).expect("config parses");
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let daemon_addr = listener.local_addr().unwrap();
+    let daemon_task = tokio::spawn(async move {
+        axum::serve(listener, build_router(state)).await.unwrap();
+    });
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{daemon_addr}/v1/chat/completions"))
+        .header("x-bitrouter-request-id", "adequacy-metering-drop-1")
+        .json(&json!({
+            "model": "router-entry",
+            "stream": true,
+            "messages": [
+                { "role": "user", "content": "fix" },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_Bash",
+                        "type": "function",
+                        "function": { "name": "Bash", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_Bash", "content": "done" }
+            ]
+        }))
+        .send()
+        .await
+        .expect("request starts");
+    assert!(response.status().is_success());
+    let mut body = response.bytes_stream();
+    let first = tokio::time::timeout(Duration::from_secs(5), body.next())
+        .await
+        .expect("first SSE chunk arrives")
+        .expect("stream has a first chunk")
+        .expect("first chunk is readable");
+    assert!(String::from_utf8_lossy(&first).contains("working"));
+    drop(body);
+
+    for _ in 0..100 {
+        let row = requests::Entity::find()
+            .filter(requests::Column::RequestId.eq("adequacy-metering-drop-1"))
+            .one(&assembled.db)
+            .await
+            .expect("metering query runs");
+        if row.is_some() {
+            daemon_task.abort();
+            upstream_task.abort();
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    daemon_task.abort();
+    upstream_task.abort();
+    panic!("metering row did not persist after disconnected adequacy settlement");
 }
 
 #[tokio::test]
@@ -623,6 +1060,122 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     assert_eq!(json["jsonrpc"], "2.0");
     assert_eq!(json["id"], 1);
     assert_eq!(json["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
+    use async_trait::async_trait;
+    use bitrouter_sdk::App;
+    use bitrouter_sdk::language_model::types::{
+        ApiProtocol, AuthScheme, ExecutionResult, FinishReason, GenerateResult, RoutingTarget,
+        Usage,
+    };
+    use http::Request;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    struct EchoLmExecutor;
+    #[async_trait]
+    impl bitrouter_sdk::language_model::Executor for EchoLmExecutor {
+        async fn execute(
+            &self,
+            target: &RoutingTarget,
+            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
+        ) -> bitrouter_sdk::Result<ExecutionResult> {
+            Ok(ExecutionResult {
+                provider_id: target.provider_name.clone(),
+                model_id: target.service_id.clone(),
+                account_label: target.account_label.clone(),
+                result: GenerateResult {
+                    content: vec![Content::Text {
+                        text: "ok".to_string(),
+                        provider_metadata: ProviderMetadata::new(),
+                    }],
+                    usage: Some(Usage {
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        ..Default::default()
+                    }),
+                    finish_reason: Some(FinishReason::Stop),
+                    response_id: None,
+                    stop_details: None,
+                    provider_metadata: ProviderMetadata::new(),
+                },
+                latency_ms: 1,
+                generation_time_ms: 1,
+                server_tool_calls: Vec::new(),
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _target: &RoutingTarget,
+            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _ctx: &bitrouter_sdk::language_model::PipelineContext,
+        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
+            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+        }
+    }
+
+    let table = Arc::new(bitrouter_sdk::language_model::StaticRoutingTable::new());
+    table.insert(
+        "gpt-5.5",
+        vec![RoutingTarget {
+            provider_name: "mock".to_string(),
+            service_id: "gpt-5.5".to_string(),
+            api_base: "http://unused.invalid".to_string(),
+            api_key: "unused".to_string(),
+            api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: AuthScheme::Bearer,
+        }],
+    );
+
+    let app = App::builder()
+        .language_model(|lm| {
+            lm.routing_table(table.clone())
+                .executor(Arc::new(EchoLmExecutor));
+        })
+        .skip_auth(true)
+        .build()
+        .expect("app builds");
+    let state = AppState {
+        language_model: app.language_model().unwrap().clone(),
+        mcp: None,
+        skip_auth: true,
+        metrics_renderer: None,
+        prompt_transforms: Vec::new(),
+    };
+    let router = build_router(state);
+
+    let body = json!({
+        "model": "gpt-5.5",
+        "input": "say ok",
+        "stream": false
+    });
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .header("x-bitrouter-request-id", "bench-req-001")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["id"], "bench-req-001");
 }
 
 #[tokio::test]

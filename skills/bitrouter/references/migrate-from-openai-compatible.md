@@ -24,7 +24,7 @@ client = OpenAI(base_url="http://localhost:4356/v1", api_key="unused")
 client.chat.completions.create(model="openai/gpt-4o", messages=[...])
 ```
 
-That's it — the built-in `openai` provider auto-enabled when the env var was set.
+That's it — the registry-backed `openai` provider auto-enabled when the env var was set.
 
 ## B) Azure OpenAI
 

@@ -166,12 +166,29 @@ pub enum HopOutcome<'a> {
     Failed(&'a BitrouterError),
 }
 
+/// Terminal outcome of a streaming upstream response body.
+#[derive(Debug, Clone, Copy)]
+pub enum StreamHopOutcome<'a> {
+    /// The provider body reached EOF normally.
+    Completed,
+    /// The provider body yielded an error.
+    Failed(&'a BitrouterError),
+    /// The body was dropped before a terminal item/EOF was observed.
+    Dropped,
+}
+
 /// A cross-cutting, read-only observation hook. Invoked at every stage boundary
 /// (including the StreamHook stage). It returns no decision, cannot mutate data,
 /// and **errors / panics inside it never affect the request** — the pipeline
 /// swallows them.
 #[async_trait]
 pub trait ObserveHook: Send + Sync {
+    /// Called once when the pipeline accepts a request, before pre-request
+    /// checks run. Default: no-op.
+    async fn on_request_start(&self, _ctx: &PipelineContext) {
+        let _ = _ctx;
+    }
+
     /// Called after each non-streaming stage completes.
     async fn after_phase(&self, phase: Phase, ctx: &PipelineContext);
 
@@ -199,6 +216,18 @@ pub trait ObserveHook: Send + Sync {
         _outcome: HopOutcome<'_>,
     ) {
         let _ = (_ctx, _target, _outcome);
+    }
+
+    /// Called synchronously when a successfully opened provider stream body
+    /// ends. This boundary excludes later StreamHook and Settlement work.
+    fn on_stream_hop_end(
+        &self,
+        _request_id: &str,
+        _target: &RoutingTarget,
+        _outcome: StreamHopOutcome<'_>,
+        _duration_ms: u64,
+    ) {
+        let _ = (_request_id, _target, _outcome, _duration_ms);
     }
 
     /// Which stream part kinds this hook wants observed. Defaults to none.

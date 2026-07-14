@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.25](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.24...v1.0.0-alpha.25)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- Refresh Rust dependencies and MSRV ([#699](https://github.com/bitrouter/bitrouter/pull/699)) - ([f7ad755](https://github.com/bitrouter/bitrouter/commit/f7ad75509b5a7195f279f93dbcad0e66c52e0a60))
+
+
+## [1.0.0-alpha.24](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.23...v1.0.0-alpha.24)
+
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Preserve streaming preflight errors ([#696](https://github.com/bitrouter/bitrouter/pull/696)) - ([24d9ecf](https://github.com/bitrouter/bitrouter/commit/24d9ecf51ce4343c9d97e33a00dedf4e82cffbaf))
+- *(update)* Detect npm installs in self-updater ([#689](https://github.com/bitrouter/bitrouter/pull/689)) - ([0cb6ce2](https://github.com/bitrouter/bitrouter/commit/0cb6ce2f40284d169e16114bb2e0c59f577b07aa))
+- Record canonical stream timing and OTEL latency ([#697](https://github.com/bitrouter/bitrouter/pull/697)) - ([639ec9b](https://github.com/bitrouter/bitrouter/commit/639ec9b3ed9f0548102108d49699d99a34cb2740))
+
+
 ## [1.0.0-alpha.23](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.22...v1.0.0-alpha.23)
 
 

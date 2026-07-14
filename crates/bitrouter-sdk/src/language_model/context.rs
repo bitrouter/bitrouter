@@ -6,14 +6,16 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
+use crate::language_model::timing::{FirstTokenKind, FirstTokenTiming, elapsed_millis};
 use crate::language_model::types::{
     ApiProtocol, Content, ExecutionResult, PipelineRequest, PipelineResponse, Prompt,
-    RoutingTarget, Usage,
+    RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -67,6 +69,7 @@ pub struct PipelineContext {
     /// a native, same-protocol upstream. `None` when the request was built
     /// without a known inbound protocol.
     inbound_protocol: Option<ApiProtocol>,
+    request_started_at: Instant,
 
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
@@ -74,6 +77,9 @@ pub struct PipelineContext {
     /// The execution result (Stage 3). Stored here rather than moved out so
     /// Settlement can borrow it without an ownership fight.
     pub execution_result: Option<ExecutionResult>,
+    stream_provider_started_at: Option<Instant>,
+    first_token_timing: Option<FirstTokenTiming>,
+    finalized_request_latency_ms: Option<u64>,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -108,13 +114,96 @@ impl PipelineContext {
             headers: req.headers,
             prompt: req.prompt,
             inbound_protocol: req.inbound_protocol,
+            request_started_at: Instant::now(),
             route_chain: None,
             execution_result: None,
+            stream_provider_started_at: None,
+            first_token_timing: None,
+            finalized_request_latency_ms: None,
             metadata: HashMap::new(),
             extensions: Extensions::default(),
             events: EventBus::new(),
             outbound_trace_headers: Mutex::new(None),
         }
+    }
+
+    /// Fork the immutable request and accumulated hook state for a later
+    /// server-tool model turn. The fork keeps the original request identity,
+    /// headers, protocol, metadata, extensions, events, and resolved route;
+    /// only the evolving prompt and per-turn execution/trace state are fresh.
+    pub(crate) fn fork_for_prompt(&self, prompt: Prompt) -> Self {
+        Self {
+            request_id: self.request_id.clone(),
+            model: self.model.clone(),
+            caller: self.caller.clone(),
+            headers: self.headers.clone(),
+            prompt,
+            inbound_protocol: self.inbound_protocol.clone(),
+            request_started_at: self.request_started_at,
+            route_chain: self.route_chain.clone(),
+            execution_result: None,
+            stream_provider_started_at: None,
+            first_token_timing: None,
+            finalized_request_latency_ms: None,
+            metadata: self.metadata.clone(),
+            extensions: self.extensions.clone(),
+            events: self.events.clone(),
+            outbound_trace_headers: Mutex::new(None),
+        }
+    }
+
+    fn serving_target(&self) -> Option<RoutingTarget> {
+        let chain = self.route_chain.as_ref()?;
+        self.execution_result
+            .as_ref()
+            .and_then(|execution| {
+                chain.iter().find(|target| {
+                    target.provider_name == execution.provider_id
+                        && target.service_id == execution.model_id
+                        && target.account_label == execution.account_label
+                })
+            })
+            .or_else(|| chain.first())
+            .cloned()
+    }
+
+    pub(crate) fn set_stream_provider_started_at(&mut self, started_at: Instant) {
+        self.stream_provider_started_at = Some(started_at);
+    }
+
+    pub(crate) fn finalize_request_latency(&mut self) {
+        let latency_ms = elapsed_millis(self.request_started_at);
+        self.finalized_request_latency_ms = Some(latency_ms);
+        if let Some(result) = self.execution_result.as_mut() {
+            result.latency_ms = latency_ms;
+        }
+    }
+
+    /// End-to-end request time in milliseconds. Once settlement begins this is
+    /// the finalized value; before then it is the current elapsed duration.
+    pub fn request_latency_ms(&self) -> u64 {
+        self.finalized_request_latency_ms
+            .or_else(|| {
+                self.execution_result
+                    .as_ref()
+                    .map(|result| result.latency_ms)
+                    .filter(|latency| *latency > 0)
+            })
+            .unwrap_or_else(|| elapsed_millis(self.request_started_at))
+    }
+
+    pub(crate) fn finalize_stream_generation_time(&mut self) {
+        let Some(provider_started_at) = self.stream_provider_started_at else {
+            return;
+        };
+        if let Some(result) = self.execution_result.as_mut() {
+            result.generation_time_ms = elapsed_millis(provider_started_at);
+        }
+    }
+
+    /// The first semantic output timing captured for a streamed request.
+    pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
+        self.first_token_timing
     }
 
     /// Store outbound HTTP headers for the next upstream request. The
@@ -274,12 +363,11 @@ impl PipelineContext {
         &self.events
     }
 
-    /// Rough `char` count of the request prompt's text — system instruction
-    /// plus every message's text / reasoning content. Used to seed the
-    /// [`UsageAccumulator`] so a client disconnect *before* the upstream usage
-    /// frame can still estimate prompt tokens. Non-text parts (tool calls,
-    /// tool results) are skipped; they carry no user-visible prose and the
-    /// estimate only needs to beat `0` until the authoritative frame arrives.
+    /// Rough `char` count of model-visible prompt payloads — system instruction
+    /// plus message text, reasoning, tool call args, and tool results. Used to
+    /// seed the [`UsageAccumulator`] so a stream without an upstream usage frame
+    /// can still estimate prompt tokens. The estimate is deliberately rough but
+    /// should not collapse tool-heavy agent follow-up turns to `0`.
     fn prompt_text_chars(&self) -> u64 {
         let prompt = self.prompt();
         let mut chars = prompt
@@ -288,9 +376,7 @@ impl PipelineContext {
             .map_or(0u64, |s| s.chars().count() as u64);
         for message in &prompt.messages {
             for content in &message.content {
-                if let Content::Text { text, .. } | Content::Reasoning { text, .. } = content {
-                    chars = chars.saturating_add(text.chars().count() as u64);
-                }
+                chars = chars.saturating_add(prompt_content_chars(content));
             }
         }
         chars
@@ -298,7 +384,7 @@ impl PipelineContext {
 
     /// Borrow a `StreamContext` for the StreamHook stage.
     pub fn stream_context(&self) -> StreamContext {
-        let target = self.route_chain.as_ref().and_then(|c| c.first()).cloned();
+        let target = self.serving_target();
         StreamContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
@@ -306,6 +392,8 @@ impl PipelineContext {
             accumulated_usage: UsageAccumulator::with_prompt_chars(self.prompt_text_chars()),
             parts_emitted: 0,
             final_usage: None,
+            provider_started_at: self.stream_provider_started_at,
+            first_token_timing: self.first_token_timing,
             events: EventBus::new(),
             metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
@@ -320,6 +408,7 @@ impl PipelineContext {
         if let (Some(exec), Some(usage)) = (self.execution_result.as_mut(), stream.final_usage) {
             exec.result.usage = Some(usage);
         }
+        self.first_token_timing = stream.first_token_timing;
         self.events.merge_from(stream.events);
     }
 
@@ -327,7 +416,7 @@ impl PipelineContext {
     /// bus out (so recorders can inspect events emitted by earlier stages);
     /// `absorb_settlement` moves it back.
     pub fn settlement_context(&mut self) -> SettlementContext {
-        let target = self.route_chain.as_ref().and_then(|c| c.first()).cloned();
+        let target = self.serving_target();
         let exec = self.execution_result.as_ref();
         let usage = exec.and_then(|e| e.result.usage).unwrap_or_default();
         SettlementContext {
@@ -357,8 +446,10 @@ impl PipelineContext {
                 .map(|e| e.server_tool_calls.clone())
                 .unwrap_or_default(),
             streamed: false,
-            latency_ms: exec.map(|e| e.latency_ms).unwrap_or(0),
+            latency_ms: self.request_latency_ms(),
             generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
+            first_token_latency_ms: self.first_token_timing.map(|timing| timing.latency_ms),
+            first_token_kind: self.first_token_timing.map(|timing| timing.kind),
             error: None,
             events: std::mem::take(&mut self.events),
         }
@@ -389,6 +480,27 @@ impl PipelineContext {
     }
 }
 
+fn prompt_content_chars(content: &Content) -> u64 {
+    match content {
+        Content::Text { text, .. } | Content::Reasoning { text, .. } => text.chars().count() as u64,
+        Content::ToolCall {
+            name, arguments, ..
+        } => name
+            .chars()
+            .count()
+            .saturating_add(arguments.chars().count()) as u64,
+        Content::ToolResult {
+            tool_name, output, ..
+        } => tool_name
+            .as_deref()
+            .map_or(0u64, |name| name.chars().count() as u64)
+            .saturating_add(output.to_provider_string().chars().count() as u64),
+        other => serde_json::to_string(other)
+            .map(|value| value.chars().count() as u64)
+            .unwrap_or(0),
+    }
+}
+
 /// The StreamHook-stage view, borrowed from `PipelineContext`. Carries the
 /// mutable state that accrues while a stream is being consumed.
 pub struct StreamContext {
@@ -404,12 +516,35 @@ pub struct StreamContext {
     pub parts_emitted: u64,
     /// Usage finalised at `on_stream_end`, folded back into `PipelineContext`.
     pub final_usage: Option<Usage>,
+    provider_started_at: Option<Instant>,
+    first_token_timing: Option<FirstTokenTiming>,
     events: EventBus,
     metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
 }
 
 impl StreamContext {
+    pub(crate) fn observe_first_token(&mut self, part: &StreamPart) {
+        if self.first_token_timing.is_some() {
+            return;
+        }
+        let Some(provider_started_at) = self.provider_started_at else {
+            return;
+        };
+        let Some(kind) = FirstTokenKind::from_part(part) else {
+            return;
+        };
+        self.first_token_timing = Some(FirstTokenTiming {
+            latency_ms: elapsed_millis(provider_started_at),
+            kind,
+        });
+    }
+
+    /// The first semantic output timing captured so far.
+    pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
+        self.first_token_timing
+    }
+
     /// Emit a typed event from within the StreamHook stage.
     pub fn emit<E: PipelineEvent>(&mut self, event: E) {
         self.events.emit(event);
@@ -586,10 +721,12 @@ mod tests {
     }
 
     #[test]
-    fn prompt_token_estimate_ignores_non_text_content() {
-        // Only the system instruction is prose; the message's tool-call JSON
-        // args must not inflate the prompt-token estimate.
+    fn prompt_token_estimate_counts_tool_call_payloads() {
+        // Tool-call names and arguments are part of the model-visible prompt on
+        // follow-up turns, so estimated usage should not collapse them to zero.
         let system = "sys";
+        let tool_name = "get_weather";
+        let arguments = "{\"city\":\"London\"}";
         let prompt = Prompt {
             model: "gpt-5".into(),
             system: Some(system.into()),
@@ -598,8 +735,8 @@ mod tests {
                 role: Role::Assistant,
                 content: vec![Content::ToolCall {
                     id: "call_1".into(),
-                    name: "get_weather".into(),
-                    arguments: "{\"city\":\"a deliberately long value to be ignored\"}".into(),
+                    name: tool_name.into(),
+                    arguments: arguments.into(),
                     provider_executed: false,
                     dynamic: false,
                     provider_metadata: Default::default(),
@@ -613,9 +750,46 @@ mod tests {
         };
         let ctx = ctx_from_prompt(prompt);
         let sc = ctx.stream_context();
+        let expected_chars =
+            system.chars().count() + tool_name.chars().count() + arguments.chars().count();
         assert_eq!(
             sc.accumulated_usage.estimated_prompt_tokens(),
-            (system.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
+            (expected_chars as u64).div_ceil(CHARS_PER_TOKEN),
+        );
+    }
+
+    #[test]
+    fn prompt_token_estimate_counts_tool_result_output() {
+        let tool_name = "exec_command";
+        let output = "12345678";
+        let prompt = Prompt {
+            model: "gpt-5".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult {
+                    call_id: "call_1".into(),
+                    tool_name: Some(tool_name.into()),
+                    output: crate::language_model::types::ToolResultOutput::Text {
+                        value: output.into(),
+                    },
+                    dynamic: false,
+                    provider_metadata: Default::default(),
+                }],
+            }],
+            tools: vec![],
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: true,
+        };
+        let ctx = ctx_from_prompt(prompt);
+        let sc = ctx.stream_context();
+        let expected_chars = tool_name.chars().count() + output.chars().count();
+        assert_eq!(
+            sc.accumulated_usage.estimated_prompt_tokens(),
+            (expected_chars as u64).div_ceil(CHARS_PER_TOKEN),
         );
     }
 
@@ -659,6 +833,53 @@ mod tests {
             usage.completion_tokens,
             (delta.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
         );
+    }
+
+    #[tokio::test]
+    async fn completed_stream_without_usage_bills_prompt_and_estimated_output() {
+        let user = "12345678";
+        let ctx = ctx_from_prompt(prompt_with_text(None, user));
+        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
+
+        proc.process_part(StreamPart::TextDelta {
+            text: "abcdefgh".into(),
+        })
+        .await
+        .expect("text delta passes through with no hooks");
+        proc.finish(StreamOutcome::Completed).await;
+
+        let usage = proc
+            .context()
+            .final_usage
+            .expect("completed stream without upstream usage should fall back to estimates");
+        assert_eq!(usage.prompt_tokens, 2);
+        assert_eq!(usage.completion_tokens, 2);
+    }
+
+    #[tokio::test]
+    async fn completed_stream_with_zero_usage_bills_estimated_usage() {
+        let user = "12345678";
+        let ctx = ctx_from_prompt(prompt_with_text(None, user));
+        let mut proc = StreamProcessor::new(vec![], vec![], ctx.stream_context());
+
+        proc.process_part(StreamPart::TextDelta {
+            text: "abcdefgh".into(),
+        })
+        .await
+        .expect("text delta passes through with no hooks");
+        proc.process_part(StreamPart::Usage {
+            usage: Usage::default(),
+        })
+        .await
+        .expect("zero usage frame passes through with no hooks");
+        proc.finish(StreamOutcome::Completed).await;
+
+        let usage = proc
+            .context()
+            .final_usage
+            .expect("completed stream should have usage");
+        assert_eq!(usage.prompt_tokens, 2);
+        assert_eq!(usage.completion_tokens, 2);
     }
 
     #[tokio::test]

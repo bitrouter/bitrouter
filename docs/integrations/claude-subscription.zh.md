@@ -79,7 +79,7 @@ bitrouter observe status   # 遥测导出端点及其状态
 **4. 启动一个指向 BitRouter 的交互式 Claude Code 会话：**
 
 ```bash
-bitrouter spawn -a claude  # 交互式；结束后运行 `bitrouter stop`
+bitrouter launch -a claude  # 交互式；结束后运行 `bitrouter stop`
 ```
 
 真正的 Claude Code 流量——通过其 `anthropic-beta: claude-code-*` agent 画像标记识别——会被路由到你的订阅；其他流量则会流向你配置的其他供应商。遥测数据会归属到一个匿名的安装 id 下。*（可选：先运行 `bitrouter cloud login`，即可同时用你的 BitRouter Cloud 账号为非 Claude Code 模型提供服务。）*

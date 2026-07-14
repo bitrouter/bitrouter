@@ -18,7 +18,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 /// One PKCE pair: the secret the client keeps (`code_verifier`) and the

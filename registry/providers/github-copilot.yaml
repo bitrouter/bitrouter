@@ -51,6 +51,12 @@ models:
     provider_model_id: kimi-k2.7-code
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
+  - id: openai/gpt-5.6-luna
+    provider_model_id: gpt-5.6-luna
+  - id: openai/gpt-5.6-sol
+    provider_model_id: gpt-5.6-sol
+  - id: openai/gpt-5.6-terra
+    provider_model_id: gpt-5.6-terra
 status: active
 weight: 1
 community: false
