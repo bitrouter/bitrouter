@@ -8,7 +8,7 @@ BitRouter is **agent-native**: the primitives below assume the caller is an auto
 
 ## The ACP gateway — identity and dispatch
 
-Just as the MCP gateway lets an agent reach many tool servers, the **ACP gateway** handles the agent side: **agent identity, discovery, and task dispatch** across hosts. It's how an agent gets a place in the network, can be found, and can hand off or receive tasks — through the same single-endpoint model BitRouter uses everywhere.
+Just as the MCP gateway lets an agent reach many tool servers, the **ACP gateway** handles the agent side: **agent identity, discovery, and task dispatch**. It's how an agent hands off or receives tasks — through the same single-endpoint model BitRouter uses everywhere. Today it drives local sub-agents over stdio; cross-host discovery and dispatch across the network arrive with [ACP v2](https://agentclientprotocol.com/rfds/v2/overview).
 
 ## KYA — verifiable identity that can pay
 
