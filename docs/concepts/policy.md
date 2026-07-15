@@ -3,7 +3,7 @@ title: Policy
 description: The operator-owned spec that decides how a loop routes — deterministic, no LLM in the path, and off by default.
 ---
 
-A **policy** is the spec that decides how a loop routes. It's operator-owned config, not a model: the routing decision is deterministic, adds no LLM call to the path, and every deployment ships with it **off by default**. It's the "act" surface of BitRouter's [observe → evaluate → act](/docs/get-started/introduction) loop — the file an agent (or you) edits to spend a capable model only where it's earned and a cheaper one everywhere else.
+A **policy** is the spec that decides how a loop routes. It's operator-owned config, not a model: the routing decision is deterministic, adds no LLM call to the path, and every deployment ships with it **off by default**. It sits at the center of BitRouter's [act → observe → evaluate → learn](/docs/get-started/introduction) loop — the router **acts** on it, and **learning** writes back to it: the file an agent (or you) edits to spend a capable model only where it's earned and a cheaper one everywhere else.
 
 ## Preset-bound policy locks
 

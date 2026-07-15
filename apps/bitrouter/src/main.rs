@@ -50,8 +50,11 @@ struct Cli {
     #[arg(short = 'j', long, global = true, conflicts_with = "human")]
     json: bool,
     /// Render the human-readable view to stdout instead of JSON.
-    #[arg(short = 'H', long, global = true)]
+    #[arg(long, global = true)]
     human: bool,
+    /// Compatibility spelling for `--human` when placed before the subcommand.
+    #[arg(short = 'H', hide = true, conflicts_with = "json")]
+    human_short: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -935,11 +938,21 @@ async fn main() {
     // result (this match) goes to stdout in the selected format, so
     // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
     let cli = Cli::parse();
-    let output = bitrouter::output::Output::from_flags(cli.json, cli.human);
+    let raw_cloud_api = matches!(
+        &cli.command,
+        Command::Cloud {
+            action: bitrouter::cloud::cli::CloudAction::Api(_)
+        }
+    );
+    let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     match run(cli, &output).await {
         Ok(()) => {}
         Err(e) => {
-            let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
+            if raw_cloud_api {
+                eprintln!("error: {e:#}");
+            } else {
+                let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(&e));
+            }
             std::process::exit(1);
         }
     }
@@ -2515,6 +2528,7 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                         authorization_server: None,
                         client_id: None,
                         scope: None,
+                        api_key: None,
                     },
                     output.format(),
                 )
@@ -3052,6 +3066,29 @@ mod tests {
                 action: PolicyAction::Evolve { apply: true, .. }
             }
         ));
+    }
+
+    #[test]
+    fn cloud_api_owns_header_short_flag_in_full_command_tree() {
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "cloud",
+            "api",
+            "/v1/models",
+            "-H",
+            "X-Test: value",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Cloud {
+                action: bitrouter::cloud::cli::CloudAction::Api(args),
+            } => assert_eq!(args.headers, ["X-Test: value"]),
+            _ => panic!("expected cloud API command"),
+        }
+
+        let human = Cli::try_parse_from(["bitrouter", "-H", "cloud", "whoami"]).unwrap();
+        assert!(human.human_short);
     }
 
     #[tokio::test]

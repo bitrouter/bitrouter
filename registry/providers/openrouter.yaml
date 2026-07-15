@@ -347,46 +347,6 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
-  - id: inclusionai/ling-2.6-1t
-    provider_model_id: inclusionai/ling-2.6-1t
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.015
-      output_tokens:
-        text: 0.625
-  - id: inclusionai/ling-2.6-flash
-    provider_model_id: inclusionai/ling-2.6-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.01
-        cache_read: 0.002
-      output_tokens:
-        text: 0.03
-  - id: inclusionai/ring-2.6-1t
-    provider_model_id: inclusionai/ring-2.6-1t
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.015
-      output_tokens:
-        text: 0.625
-  - id: nex-agi/nex-n2-pro
-    provider_model_id: nex-agi/nex-n2-pro
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-        cache_read: 0.025
-      output_tokens:
-        text: 1
-  - id: nvidia/nemotron-3-ultra-550b-a55b
-    provider_model_id: nvidia/nemotron-3-ultra-550b-a55b
-    pricing:
-      input_tokens:
-        no_cache: 0.5
-        cache_read: 0.1
-      output_tokens:
-        text: 2.2
   - id: qwen/qwen3.5-122b-a10b
     provider_model_id: qwen/qwen3.5-122b-a10b
     pricing:
@@ -432,13 +392,6 @@ models:
         cache_read: 0.08
       output_tokens:
         text: 1.75
-  - id: mistralai/mistral-medium-3-5
-    provider_model_id: mistralai/mistral-medium-3-5
-    pricing:
-      input_tokens:
-        no_cache: 1.5
-      output_tokens:
-        text: 7.5
   - id: openai/gpt-5.6-luna
     provider_model_id: openai/gpt-5.6-luna
     pricing:
