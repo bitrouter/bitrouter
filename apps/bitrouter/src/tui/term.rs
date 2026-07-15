@@ -251,6 +251,9 @@ pub fn encode_key(key: &KeyEvent, mode: &TermMode) -> Option<Vec<u8>> {
             repeat_count: 1,
             key_is_down: true,
             raw: None,
+            // wezterm-input-types only has this field on Windows.
+            #[cfg(windows)]
+            win32_uni_char: None,
         };
         let encoded = event.encode_kitty(kitty_flags(mode));
         if !encoded.is_empty() {
