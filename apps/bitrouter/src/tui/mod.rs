@@ -47,6 +47,13 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     let base_repo = std::env::current_dir().context("resolving current directory")?;
     let ports = (cfg.worktrees.ports.from, cfg.worktrees.ports.to);
 
+    // Repoint stderr at `.bitrouter/tui.log` (Unix) BEFORE anything spawns:
+    // our own tracing and every stderr-inheriting agent child (a codex child
+    // failing to reach an MCP server logs rmcp ERRORs) would otherwise write
+    // over the raw-mode alternate screen.
+    let stderr_logged =
+        bitrouter_substrate::dotdir::redirect_stderr_to(&base_repo.join(".bitrouter/tui.log"));
+
     // ── Channel. The loop keeps `tx` to pump agents spawned later. ──
     let (tx, rx) = unbounded_channel::<Incoming>();
     let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
@@ -195,7 +202,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
 
     // ── Run; the loop owns full session teardown. The panic hook guarantees
     // the terminal is restored even if the loop panics mid-draw. ──
-    install_panic_restore(restore_terminal);
+    install_panic_restore(restore_terminal, stderr_logged);
     let mut terminal = setup_terminal().context("entering raw mode")?;
     let rt = Runtime {
         sessions,
@@ -760,11 +767,22 @@ fn write_out(bytes: &[u8]) {
 
 /// Chain `restore` in front of the current panic hook so a panic anywhere in
 /// the TUI (draw, reducer, an effect) restores the user's terminal before the
-/// default hook prints the message onto a readable screen.
-fn install_panic_restore(restore: fn()) {
+/// default hook prints the message onto a readable screen. With stderr
+/// redirected to the log (`stderr_logged`), the default hook's message would
+/// land there invisibly — echo a copy to the restored screen via stdout.
+fn install_panic_restore(restore: fn(), stderr_logged: bool) {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
+        if stderr_logged {
+            use std::io::Write;
+            let mut out = io::stdout();
+            let _ = writeln!(
+                out,
+                "bitrouter tui panicked: {info}\n(full log: .bitrouter/tui.log)"
+            );
+            let _ = out.flush();
+        }
         prev(info);
     }));
 }
@@ -1819,7 +1837,7 @@ mod tests {
     /// injected restore records instead of touching the real terminal.
     #[test]
     fn panic_hook_restores_terminal_before_reporting() {
-        super::install_panic_restore(mark_restored);
+        super::install_panic_restore(mark_restored, false);
         let joined = std::thread::spawn(|| {
             // Deliberate fault injection — the behavior under test is the
             // panic hook itself, so the thread must actually panic.
