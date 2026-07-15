@@ -69,6 +69,10 @@ pub struct BitrouterMcp {
     routing: Option<Arc<dyn RoutingQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
     human: Option<Arc<dyn HumanBridge>>,
+    /// The live-subagent cap the app enforces, sourced from the app (not
+    /// hardcoded here) so the instruction string can't drift from the real
+    /// `MAX_CONCURRENT_SUBAGENTS`.
+    subagent_cap: Option<usize>,
     cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
 }
@@ -423,9 +427,15 @@ impl BitrouterMcp {
                  `spawn_subagent` blocks and returns a summary; review with \
                  `subagent_diff`; `apply_subagent`/`merge_subagent` are human-gated \
                  unless the bridge was started with --allow-writes. Subagents don't \
-                 spawn subagents (delegation depth 1), and a spawn is rejected past a \
-                 6-subagent cap — integrate or close one before fanning out further.",
+                 spawn subagents (delegation depth 1), and a spawn is rejected past ",
             );
+            // The cap value is sourced from the app (`subagent_cap`) so this
+            // guidance can't drift from the enforced `MAX_CONCURRENT_SUBAGENTS`.
+            match self.subagent_cap {
+                Some(cap) => s.push_str(&format!("a {cap}-subagent cap")),
+                None => s.push_str("the concurrency cap"),
+            }
+            s.push_str(" — integrate or close one before fanning out further.");
         }
         if self.cost.is_some() {
             s.push_str(" Use `fleet_cost` to keep spend visible mid-session.");
@@ -464,6 +474,7 @@ pub struct Builder {
     routing: Option<Arc<dyn RoutingQuery>>,
     skills: Option<Arc<dyn SkillsQuery>>,
     human: Option<Arc<dyn HumanBridge>>,
+    subagent_cap: Option<usize>,
 }
 
 impl Builder {
@@ -510,6 +521,14 @@ impl Builder {
         self
     }
 
+    /// The live-subagent cap the app enforces. Sourced here (rather than
+    /// hardcoded in the crate) so the server instructions quote the real
+    /// `MAX_CONCURRENT_SUBAGENTS` and can't drift from it.
+    pub fn subagent_cap(mut self, cap: usize) -> Self {
+        self.subagent_cap = Some(cap);
+        self
+    }
+
     /// Compose the handler, merging each wired capability's router.
     pub fn build(self) -> BitrouterMcp {
         let mut router = ToolRouter::new();
@@ -538,6 +557,7 @@ impl Builder {
             routing: self.routing,
             skills: self.skills,
             human: self.human,
+            subagent_cap: self.subagent_cap,
             // The footer is attached later, transport-side, via
             // `with_cost_footer` (stdio only) — never through the builder.
             cost_footer: None,
@@ -949,16 +969,33 @@ mod tests {
         assert!(!public.contains("fleet_cost"), "no cost guidance: {public}");
 
         // The orchestrator profile restores the fleet guidance (spawn/review,
-        // human-gated apply/merge, the cap) plus the cost tool.
+        // human-gated apply/merge, the cap) plus the cost tool. The cap value
+        // is sourced from the app, so the instruction quotes exactly what was
+        // passed (no cross-crate magic number).
         let orchestrator = BitrouterMcp::builder()
             .completion(Arc::new(StubBackend))
             .fleet(Arc::new(StubFleet))
             .cost(Arc::new(StubCost))
+            .subagent_cap(4)
             .build()
             .instructions();
         assert!(orchestrator.contains("spawn_subagent"));
         assert!(orchestrator.contains("human-gated"));
         assert!(orchestrator.contains("fleet_cost"));
+        assert!(
+            orchestrator.contains("4-subagent cap"),
+            "cap is sourced from the app, not hardcoded: {orchestrator}"
+        );
+
+        // Without a cap value the fleet guidance stays generic — no invented
+        // number that could drift from the enforced cap.
+        let uncapped = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .fleet(Arc::new(StubFleet))
+            .build()
+            .instructions();
+        assert!(uncapped.contains("the concurrency cap"), "{uncapped}");
+        assert!(!uncapped.contains("6-subagent"), "no hardcoded 6: {uncapped}");
     }
 
     #[test]

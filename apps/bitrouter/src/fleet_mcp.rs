@@ -29,6 +29,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use bitrouter_mcp::capabilities::fleet::{Fleet, PromptArgs, SpawnArgs};
@@ -53,7 +54,11 @@ const MAX_DIFF_BYTES: usize = 64 * 1024;
 /// subagents; past this the orchestrator should integrate or close one
 /// (`merge_subagent` / `close_subagent`) before spawning more, rather than
 /// fan out unboundedly.
-const MAX_CONCURRENT_SUBAGENTS: usize = 6;
+///
+/// Public so the MCP server's instruction string can quote the real cap
+/// (`BitrouterMcp::builder().subagent_cap(..)`) instead of hardcoding a
+/// number that could drift from this one.
+pub const MAX_CONCURRENT_SUBAGENTS: usize = 6;
 
 /// One managed subagent: the live session plus its integration metadata.
 struct Subagent {
@@ -96,10 +101,16 @@ struct FleetInner {
     worktrees: WorktreesConfig,
     /// Human-granted write autonomy (`--allow-writes`).
     allow_writes: bool,
-    /// The live subagent registry plus in-flight spawn reservations, under one
-    /// lock. Also serializes integration: `apply`/`merge` hold this lock, so
-    /// branches integrate one at a time.
+    /// The live subagent registry, under one lock. Also serializes
+    /// integration: `apply`/`merge` hold this lock, so branches integrate one
+    /// at a time.
     registry: tokio::sync::Mutex<Registry>,
+    /// Slots claimed by spawns still launching (a claim is released either when
+    /// the subagent is inserted or when the reservation guard drops). Counted
+    /// against the cap alongside `registry.agents.len()`. An atomic (not a
+    /// registry field) so [`Reservation`]'s `Drop` can release a slot without
+    /// an async lock — that's what makes the reservation cancel-safe.
+    reserving: Arc<AtomicUsize>,
     /// Live link back to the hosting TUI over the fleet socket, when this
     /// bridge was launched under `bitrouter tui` (Unix): mirrors the fleet
     /// into the rail and routes gated permissions to the human's queue.
@@ -107,20 +118,53 @@ struct FleetInner {
     link: Option<Arc<TuiLink>>,
 }
 
-/// The subagent map plus the count of in-flight spawns that have reserved a
-/// slot but not yet inserted. Counting reservations against the cap — under the
-/// same lock as the map — is what stops N concurrent `spawn_subagent` calls
-/// from each passing the capacity check and overshooting
-/// [`MAX_CONCURRENT_SUBAGENTS`]: the check and the reservation are one critical
-/// section, and the reservation converts to a live entry (or is released) under
-/// that same lock.
+/// The live subagent map. Held under the fleet mutex; the spawn-reservation
+/// counter lives beside it on [`FleetInner`] (an atomic), and the capacity
+/// check reads both while holding this lock so N concurrent `spawn_subagent`
+/// calls can't each pass the check and overshoot [`MAX_CONCURRENT_SUBAGENTS`].
 #[derive(Default)]
 struct Registry {
     /// handle (record16) → subagent.
     agents: HashMap<String, Subagent>,
-    /// Slots claimed by spawns still launching (a claim is released either when
-    /// the subagent is inserted or when its launch fails).
-    reserving: usize,
+}
+
+/// RAII claim on one cap slot. Created (after the capacity check) under the
+/// fleet lock, which increments `reserving`; its `Drop` decrements again unless
+/// the reservation was [`commit`](Reservation::commit)ted — so a spawn future
+/// cancelled *between* the reservation and the registry insert can't leak a
+/// slot (PR-2 review finding 4: the release used to be a manual `reserving -=
+/// 1`, which a drop would skip).
+struct Reservation {
+    reserving: Arc<AtomicUsize>,
+    committed: bool,
+}
+
+impl Reservation {
+    /// Claim a slot: bump the reserving counter. The caller must already have
+    /// verified capacity under the fleet lock (and hold it across this call) so
+    /// the check-and-reserve is one critical section.
+    fn claim(reserving: Arc<AtomicUsize>) -> Self {
+        reserving.fetch_add(1, Ordering::SeqCst);
+        Self {
+            reserving,
+            committed: false,
+        }
+    }
+
+    /// Convert the reservation into a live registry entry: the caller has
+    /// already `fetch_sub`'d the counter under the lock alongside the insert, so
+    /// `Drop` must not decrement a second time.
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.reserving.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 }
 
 /// The bridge's end of the TUI fleet socket.
@@ -246,6 +290,7 @@ impl SubstrateFleet {
             worktrees,
             allow_writes,
             registry: tokio::sync::Mutex::new(Registry::default()),
+            reserving: Arc::new(AtomicUsize::new(0)),
             #[cfg(unix)]
             link,
         };
@@ -260,36 +305,32 @@ impl SubstrateFleet {
         // or closes before fanning out unboundedly (TUI_SPEC §5). Reserve a
         // slot atomically — the capacity check and the reservation are one
         // critical section — so N concurrent spawns can't all pass the check
-        // and overshoot. The reservation is consumed at insert time, or
-        // released here on a launch failure (never leaks a slot).
-        {
-            let mut reg = inner.registry.lock().await;
-            if reg.agents.len() + reg.reserving >= MAX_CONCURRENT_SUBAGENTS {
+        // and overshoot. The `Reservation` guard releases the slot on drop
+        // (including a cancelled spawn future), and `launch_and_register`
+        // commits it when the subagent is inserted — so a slot never leaks.
+        let reservation = {
+            let reg = inner.registry.lock().await;
+            if reg.agents.len() + inner.reserving.load(Ordering::SeqCst)
+                >= MAX_CONCURRENT_SUBAGENTS
+            {
                 anyhow::bail!(
                     "fleet at capacity: {MAX_CONCURRENT_SUBAGENTS} subagents already running. \
                      Integrate or close one (merge_subagent / apply_subagent / close_subagent) \
                      before spawning more."
                 );
             }
-            reg.reserving += 1;
-        }
-        let launched = self.launch_and_register(args).await;
+            Reservation::claim(Arc::clone(&inner.reserving))
+        };
+        // Launch under the guard: any failure (or a cancelled future) drops the
+        // reservation and releases the slot; success commits it inside
+        // `launch_and_register` alongside the registry insert.
         let Launched {
             handle,
             session,
             task,
             contract,
             bootstrap_skipped,
-        } = match launched {
-            Ok(v) => v,
-            Err(e) => {
-                // Launch failed before the subagent was inserted — release the
-                // slot we reserved. The port lease and half-built session drop
-                // on the `?`-unwind inside `launch_and_register` (no leak).
-                inner.registry.lock().await.reserving -= 1;
-                return Err(e);
-            }
-        };
+        } = self.launch_and_register(args, reservation).await?;
 
         let mut summary = self
             .run_blocking_turn(&handle, session, &task, contract)
@@ -303,12 +344,17 @@ impl SubstrateFleet {
         Ok(summary)
     }
 
-    /// Launch the subagent and register it, consuming the caller's reservation
-    /// (`reserving -= 1`) in the same critical section as the insert so the
-    /// live count never overshoots the cap. Any failure before the insert
-    /// returns `Err` with the reservation untouched — `do_spawn` releases it —
-    /// and the freshly-leased port / half-built session drop on the unwind.
-    async fn launch_and_register(&self, args: SpawnArgs) -> Result<Launched> {
+    /// Launch the subagent and register it, converting the caller's
+    /// `reservation` into a live entry (counter `fetch_sub` + insert, one
+    /// critical section) so the live count never overshoots the cap. Any
+    /// failure before the insert returns `Err` with the reservation still
+    /// armed — its `Drop` releases the slot — and the freshly-leased port /
+    /// half-built session drop on the unwind.
+    async fn launch_and_register(
+        &self,
+        args: SpawnArgs,
+        reservation: Reservation,
+    ) -> Result<Launched> {
         let inner = &self.inner;
         let isolate = args.worktree.unwrap_or(true);
         let contract = args
@@ -369,10 +415,12 @@ impl SubstrateFleet {
         let port_num = port.as_ref().map(|l| l.port());
         {
             let mut reg = inner.registry.lock().await;
-            // Convert the reservation into a live entry atomically: the count
-            // moves from `reserving` to `agents` under one lock, so a concurrent
-            // spawn never sees the slot double-counted or dropped.
-            reg.reserving -= 1;
+            // Convert the reservation into a live entry atomically: the slot
+            // moves from `reserving` to `agents` under one lock (release the
+            // counter, insert the agent, then `commit` so the guard's Drop
+            // won't double-release), so a concurrent spawn never sees the slot
+            // double-counted or dropped.
+            inner.reserving.fetch_sub(1, Ordering::SeqCst);
             reg.agents.insert(
                 handle.clone(),
                 Subagent {
@@ -385,6 +433,7 @@ impl SubstrateFleet {
                     state: "working",
                 },
             );
+            reservation.commit();
         }
         // Mirror the spawn into the hosting TUI's rail.
         #[cfg(unix)]
@@ -708,6 +757,20 @@ impl SubstrateFleet {
             "note": "no human is attached (headless bridge) — nothing was shown",
         }))
     }
+
+    /// Validate `handle` against the live registry before an escalation that
+    /// names it. `request_attach`/`request_review` reach the human about a
+    /// specific subagent, so an unknown/stale handle must be a `ToolError`
+    /// (like `subagent_status`/`subagent_diff`) rather than a silent
+    /// `{delivered:true}` for an agent that doesn't exist (PR-2 review
+    /// finding 1).
+    async fn ensure_handle(&self, handle: &str) -> Result<(), ToolError> {
+        if self.inner.registry.lock().await.agents.contains_key(handle) {
+            Ok(())
+        } else {
+            Err(ToolError::new(format!("no subagent with handle '{handle}'")))
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -723,6 +786,7 @@ impl bitrouter_mcp::capabilities::human::HumanBridge for SubstrateFleet {
     }
 
     async fn request_attach(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.ensure_handle(handle).await?;
         self.send_to_human(
             crate::fleet::BridgeMsg::RequestAttach {
                 handle: handle.to_string(),
@@ -733,6 +797,14 @@ impl bitrouter_mcp::capabilities::human::HumanBridge for SubstrateFleet {
     }
 
     async fn request_review(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.ensure_handle(handle).await?;
+        // NOTE (PR-2 review finding 2, documented descope): under `bitrouter
+        // tui` this mirrors the subagent into the human's review queue, but a
+        // *bridge-mirrored* subagent has no `rt.fleet.meta` entry there, so the
+        // queue's D/m/p verbs (load-diff / merge / apply) no-op on it. That's
+        // acceptable: review-queue actions on a bridge-mirrored subagent are
+        // advisory — the human drives merge/apply from the owning process (this
+        // bridge's `merge_subagent`/`apply_subagent`, or the orchestrator's).
         self.send_to_human(
             crate::fleet::BridgeMsg::RequestReview {
                 handle: handle.to_string(),
@@ -921,11 +993,11 @@ mod tests {
         assert!(granted.require_write_grant("merge_subagent").is_ok());
     }
 
-    /// Headless (no TUI socket): the human-bridge tools don't error — they
-    /// report that no human is attached, so a subagent hears "nobody's
-    /// watching" rather than a failure.
+    /// Headless (no TUI socket): `notify_human` (which names no subagent)
+    /// doesn't error — it reports that no human is attached, so a subagent
+    /// hears "nobody's watching" rather than a failure.
     #[tokio::test]
-    async fn human_bridge_reports_headless_without_a_tui_link() {
+    async fn notify_human_reports_headless_without_a_tui_link() {
         use bitrouter_mcp::capabilities::human::HumanBridge;
         let fleet = SubstrateFleet::connect(
             ConfigAcpRoutingTable::from_configs(std::iter::empty()).expect("empty catalog"),
@@ -934,18 +1006,36 @@ mod tests {
             false,
         )
         .await;
-        for out in [
-            fleet.notify("heads up").await.expect("notify ok"),
-            fleet.request_attach("abc123").await.expect("attach ok"),
-            fleet.request_review("abc123").await.expect("review ok"),
+        let out = fleet.notify("heads up").await.expect("notify ok");
+        assert_eq!(out["delivered"], false, "headless: nothing delivered: {out}");
+        assert!(
+            out["note"].as_str().is_some_and(|n| n.contains("no human")),
+            "explains why: {out}"
+        );
+    }
+
+    /// PR-2 review finding 1: `request_attach`/`request_review` name a specific
+    /// subagent, so a stale/unknown handle is a `ToolError` naming the bad
+    /// handle — not a silent ack for an agent that doesn't exist.
+    #[tokio::test]
+    async fn attach_and_review_reject_unknown_handles() {
+        use bitrouter_mcp::capabilities::human::HumanBridge;
+        let fleet = SubstrateFleet::connect(
+            ConfigAcpRoutingTable::from_configs(std::iter::empty()).expect("empty catalog"),
+            PathBuf::from("/tmp"),
+            WorktreesConfig::default(),
+            false,
+        )
+        .await;
+        for res in [
+            fleet.request_attach("ffffffffffffffff").await,
+            fleet.request_review("ffffffffffffffff").await,
         ] {
-            assert_eq!(
-                out["delivered"], false,
-                "headless: nothing delivered: {out}"
-            );
+            let err = res.expect_err("an unknown handle must error, not ack");
             assert!(
-                out["note"].as_str().is_some_and(|n| n.contains("no human")),
-                "explains why: {out}"
+                err.0.contains("ffffffffffffffff"),
+                "names the bad handle: {}",
+                err.0
             );
         }
     }
@@ -1080,6 +1170,14 @@ mod e2e_tests {
             diff.contains("made.txt") && diff.contains("+made"),
             "{diff}"
         );
+
+        // ── human bridge: a *live* handle passes validation (finding 1);
+        // headless, it reports delivered:false rather than erroring ──
+        {
+            use bitrouter_mcp::capabilities::human::HumanBridge;
+            let attach = fleet.request_attach(&handle).await.expect("live handle ok");
+            assert_eq!(attach["delivered"], false, "headless: {attach}");
+        }
 
         // ── merge (serialized, keeps history) ──
         let merged = fleet.do_merge(&handle).await.expect("merge");

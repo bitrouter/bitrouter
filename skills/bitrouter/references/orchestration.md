@@ -53,7 +53,7 @@ escalation** tools:
 | `skills_get(name)` | One skill's frontmatter + SKILL.md body — paste it into a `spawn_subagent` task to hand the subagent a skill. |
 | `notify_human(message)` | Post a one-line notice in the human's TUI. Headless (no TUI), it returns `{"delivered": false}` — no error. |
 | `request_attach(handle)` | Ask the human to attach to a subagent's pane and drive it. The subagent is flagged for attention in the rail. |
-| `request_review(handle)` | Flag a subagent's work into the human's review queue. |
+| `request_review(handle)` | Flag a subagent's work into the human's review queue. **Advisory when bridge-mirrored:** a subagent surfaced into the TUI over the fleet socket has no review-queue metadata there, so the queue's load-diff/merge/apply verbs no-op on it — the human drives integration from the owning process (this bridge's `merge_subagent`/`apply_subagent`, or the orchestrator). |
 
 ## Rules of engagement
 

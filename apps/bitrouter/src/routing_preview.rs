@@ -94,18 +94,15 @@ impl RoutingPreview {
             .await
             .with_context(|| format!("resolving model '{effective_model}'"))?;
 
-        // The registry's per-token rates for the top hop, when priced.
+        // The registry's per-token rates for the top hop, when priced. Surfaces
+        // the base bracket *and* any higher context tiers (PR-2 review finding
+        // 3: reporting only the base rates was misleading for tiered models —
+        // long-context requests bill at the steeper bracket).
         let estimated_cost = chain
             .first()
             .and_then(|t| self.pricing.resolve(&t.provider_name, &t.service_id))
             .filter(|p| !p.is_unconfigured())
-            .map(|p| {
-                serde_json::json!({
-                    "input_micro_usd_per_token": p.input_micro_usd_per_token,
-                    "output_micro_usd_per_token": p.output_micro_usd_per_token,
-                    "note": "per-token rates from the registry; multiply by expected token counts",
-                })
-            });
+            .map(|p| pricing_json(&p));
 
         Ok(serde_json::json!({
             "requested_model": args.model,
@@ -122,6 +119,38 @@ impl RoutingPreview {
             "estimated_cost": estimated_cost,
         }))
     }
+}
+
+/// The estimated-cost JSON for the top hop: the base per-token rates plus, for
+/// tiered models, the higher long-context brackets so the preview isn't
+/// misleading (PR-2 review finding 3). Each bracket applies to the whole
+/// request once its input size crosses `above_input_tokens` (a step function).
+fn pricing_json(p: &crate::metering::pricing::ModelPricing) -> serde_json::Value {
+    let mut cost = serde_json::json!({
+        "input_micro_usd_per_token": p.input_micro_usd_per_token,
+        "output_micro_usd_per_token": p.output_micro_usd_per_token,
+        "note": "base-bracket per-token rates from the registry; multiply by expected token counts",
+    });
+    if !p.context_tiers.is_empty() {
+        cost["context_tiers"] = serde_json::Value::Array(
+            p.context_tiers
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "above_input_tokens": t.above_input_tokens,
+                        "input_micro_usd_per_token": t.input_micro_usd_per_token,
+                        "output_micro_usd_per_token": t.output_micro_usd_per_token,
+                    })
+                })
+                .collect(),
+        );
+        cost["note"] = serde_json::json!(
+            "base-bracket per-token rates from the registry; context_tiers lists steeper \
+             long-context brackets — each applies to the whole request once its input tokens \
+             exceed above_input_tokens. Multiply by expected token counts."
+        );
+    }
+    cost
 }
 
 /// The informative, secret-free subset of a [`PolicyDecision`].
@@ -184,6 +213,36 @@ mod tests {
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0]["provider"], "demo");
         assert_eq!(chain[0]["service_id"], "demo-model");
+    }
+
+    #[test]
+    fn pricing_json_surfaces_context_tiers() {
+        use crate::metering::pricing::{ContextTier, ModelPricing};
+        // Flat pricing: no `context_tiers` key, base note.
+        let flat = pricing_json(&ModelPricing::new(1.0, 2.0));
+        assert!(flat.get("context_tiers").is_none(), "flat: {flat}");
+        assert_eq!(flat["input_micro_usd_per_token"], 1.0);
+
+        // Tiered pricing: the higher bracket is surfaced (PR-2 finding 3), so a
+        // long-context model's preview isn't misleading.
+        let tiered = ModelPricing {
+            input_micro_usd_per_token: Some(1.0),
+            output_micro_usd_per_token: Some(2.0),
+            context_tiers: vec![ContextTier {
+                above_input_tokens: 200_000,
+                input_micro_usd_per_token: Some(2.0),
+                output_micro_usd_per_token: Some(4.0),
+            }],
+        };
+        let out = pricing_json(&tiered);
+        let tiers = out["context_tiers"].as_array().expect("tiers present");
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0]["above_input_tokens"], 200_000);
+        assert_eq!(tiers[0]["input_micro_usd_per_token"], 2.0);
+        assert!(
+            out["note"].as_str().is_some_and(|n| n.contains("context_tiers")),
+            "note explains the brackets: {out}"
+        );
     }
 
     #[tokio::test]

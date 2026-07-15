@@ -28,38 +28,54 @@ impl InstalledSkills {
 #[async_trait::async_trait]
 impl SkillsQuery for InstalledSkills {
     async fn search(&self, query: &str) -> Result<serde_json::Value, ToolError> {
+        // `discover_all_skills` walks the filesystem synchronously; run it off
+        // the async runtime so a large skills tree can't stall the reactor
+        // (PR-2 review finding 6).
+        let root = self.root.clone();
         let needle = query.to_lowercase();
-        let skills: Vec<serde_json::Value> = discover_all_skills(&self.root)
-            .into_iter()
-            .filter(|(_, fm)| {
-                fm.name.to_lowercase().contains(&needle)
-                    || fm.description.to_lowercase().contains(&needle)
-            })
-            .map(|(path, fm)| {
-                serde_json::json!({
-                    "name": fm.name,
-                    "description": fm.description,
-                    "path": path.display().to_string(),
+        let skills = tokio::task::spawn_blocking(move || {
+            discover_all_skills(&root)
+                .into_iter()
+                .filter(|(_, fm)| {
+                    fm.name.to_lowercase().contains(&needle)
+                        || fm.description.to_lowercase().contains(&needle)
                 })
-            })
-            .collect();
+                .map(|(path, fm)| {
+                    serde_json::json!({
+                        "name": fm.name,
+                        "description": fm.description,
+                        "path": path.display().to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|e| ToolError::new(format!("skills discovery task failed: {e}")))?;
         Ok(serde_json::json!({ "skills": skills }))
     }
 
     async fn get(&self, name: &str) -> Result<serde_json::Value, ToolError> {
-        let (path, fm) = discover_all_skills(&self.root)
-            .into_iter()
-            .find(|(_, fm)| fm.name == name)
-            .ok_or_else(|| ToolError::new(format!("no installed skill named '{name}'")))?;
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| ToolError::new(format!("reading {}: {e}", path.display())))?;
-        Ok(serde_json::json!({
-            "name": fm.name,
-            "description": fm.description,
-            "metadata": fm.metadata,
-            "path": path.display().to_string(),
-            "body": skill_body(&content),
-        }))
+        // Both the walk and the `read_to_string` are blocking fs work — do them
+        // on the blocking pool (PR-2 review finding 6).
+        let root = self.root.clone();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (path, fm) = discover_all_skills(&root)
+                .into_iter()
+                .find(|(_, fm)| fm.name == name)
+                .ok_or_else(|| ToolError::new(format!("no installed skill named '{name}'")))?;
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| ToolError::new(format!("reading {}: {e}", path.display())))?;
+            Ok(serde_json::json!({
+                "name": fm.name,
+                "description": fm.description,
+                "metadata": fm.metadata,
+                "path": path.display().to_string(),
+                "body": skill_body(&content),
+            }))
+        })
+        .await
+        .map_err(|e| ToolError::new(format!("skills fetch task failed: {e}")))?
     }
 }
 

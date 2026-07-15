@@ -1614,6 +1614,9 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                     .cost(std::sync::Arc::new(MeteringCost::new(source)))
                     .routing(routing)
                     .skills(skills)
+                    // Source the cap value from the app so the instructions
+                    // quote the real cap (no cross-crate magic number).
+                    .subagent_cap(bitrouter::fleet_mcp::MAX_CONCURRENT_SUBAGENTS)
                     .build();
                 // No `complete`/`status` cost footer here (unlike the public
                 // stdio path): the orchestrator profile carries the richer
