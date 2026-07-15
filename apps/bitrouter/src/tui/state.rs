@@ -1336,7 +1336,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     effects.push(Effect::Prompt {
                         record_id: record_id.clone(),
                         text: format!(
-                            "The verification checks failed in your worktree. Fix the failures                              and make the checks pass.\n\nCheck output:\n{output}"
+                            "The verification checks failed in your worktree. Fix the failures and make the checks pass.\n\nCheck output:\n{output}"
                         ),
                     });
                 } else {

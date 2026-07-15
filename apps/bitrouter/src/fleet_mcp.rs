@@ -43,6 +43,20 @@ const MAX_REPLY_BYTES: usize = 32 * 1024;
 /// Diff text beyond this is truncated with a note.
 const MAX_DIFF_BYTES: usize = 64 * 1024;
 
+/// Truncate `s` to at most `max` bytes without splitting a UTF-8 character —
+/// a raw `String::truncate` at a fixed byte offset panics mid-character
+/// (agent replies and diffs routinely carry multibyte text).
+fn truncate_utf8(s: &mut String, max: usize) {
+    if s.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
 /// One managed subagent: the live session plus its integration metadata.
 struct Subagent {
     session: Arc<Session>,
@@ -373,7 +387,7 @@ impl FleetMcp {
         };
         let mut reply = reply;
         if reply.len() > MAX_REPLY_BYTES {
-            reply.truncate(MAX_REPLY_BYTES);
+            truncate_utf8(&mut reply, MAX_REPLY_BYTES);
             reply.push_str("\n… (truncated)");
         }
         let mut summary = serde_json::json!({
@@ -447,7 +461,7 @@ impl FleetMcp {
             diff.push_str(&untracked);
         }
         if diff.len() > MAX_DIFF_BYTES {
-            diff.truncate(MAX_DIFF_BYTES);
+            truncate_utf8(&mut diff, MAX_DIFF_BYTES);
             diff.push_str("\n… (truncated)");
         }
         if diff.trim().is_empty() {
@@ -528,22 +542,48 @@ impl FleetMcp {
     }
 
     async fn do_close(&self, handle: &str) -> Result<serde_json::Value> {
-        let sub = {
-            let mut agents = self.inner.agents.lock().await;
-            agents
-                .remove(handle)
-                .with_context(|| format!("no subagent with handle '{handle}'"))?
+        // Hold the registry lock across the sole-owner check: `do_prompt`
+        // clones the session `Arc` under this same lock, so nothing can grab
+        // a clone between the check and the removal.
+        let mut agents = self.inner.agents.lock().await;
+        let sub = agents
+            .remove(handle)
+            .with_context(|| format!("no subagent with handle '{handle}'"))?;
+        let Subagent {
+            session,
+            agent_id,
+            worktree,
+            branch,
+            base_ref,
+            port,
+            state,
+        } = sub;
+        let only = match Arc::try_unwrap(session) {
+            Ok(only) => only,
+            Err(session) => {
+                // A turn is in flight — put the entry back; removing it here
+                // would orphan the child process and its worktree lease.
+                agents.insert(
+                    handle.to_string(),
+                    Subagent {
+                        session,
+                        agent_id,
+                        worktree,
+                        branch,
+                        base_ref,
+                        port,
+                        state,
+                    },
+                );
+                anyhow::bail!(
+                    "subagent '{handle}' still has a turn in flight — wait for it to finish"
+                );
+            }
         };
-        let worktree = sub.worktree.clone();
-        match Arc::try_unwrap(sub.session) {
-            Ok(only) => only
-                .shutdown()
-                .await
-                .context("shutting down the subagent session")?,
-            Err(_) => anyhow::bail!(
-                "subagent '{handle}' still has a turn in flight — wait for it to finish"
-            ),
-        }
+        drop(agents);
+        only.shutdown()
+            .await
+            .context("shutting down the subagent session")?;
         Ok(serde_json::json!({
             "handle": handle,
             "closed": true,
@@ -795,6 +835,27 @@ mod tests {
         assert_eq!(branch_tag("claude-acp"), "claude-acp");
         assert_eq!(branch_tag("my agent/v2"), "my-agent-v2");
         assert_eq!(branch_tag("gpt_4.1"), "gpt_4.1");
+    }
+
+    #[test]
+    fn truncate_utf8_never_splits_a_character() {
+        // '界' is 3 bytes; a cap landing mid-character must back off to the
+        // previous boundary instead of panicking.
+        let mut s = "ab界界".to_string(); // bytes: a(1) b(1) 界(3) 界(3)
+        truncate_utf8(&mut s, 4);
+        assert_eq!(s, "ab");
+
+        let mut exact = "ab界界".to_string();
+        truncate_utf8(&mut exact, 5);
+        assert_eq!(exact, "ab界");
+
+        let mut short = "ab".to_string();
+        truncate_utf8(&mut short, 5);
+        assert_eq!(short, "ab", "under the cap is untouched");
+
+        let mut all_wide = "界".to_string();
+        truncate_utf8(&mut all_wide, 2);
+        assert_eq!(all_wide, "", "backs off to empty rather than panicking");
     }
 }
 

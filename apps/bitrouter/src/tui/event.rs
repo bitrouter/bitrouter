@@ -176,6 +176,11 @@ pub enum Incoming {
         record_id: String,
         pending: Box<PendingPermission>,
     },
+    /// Surface the next queued permission for `record_id` — sent loop-side
+    /// after a resolve pops the previous front of the queue.
+    PermissionNext {
+        record_id: String,
+    },
     TurnEnded {
         record_id: String,
         stop_reason: StopReason,

@@ -496,6 +496,18 @@ static KITTY_PUSHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
+    // Any failure past this point returns `Err` (the panic hook never fires),
+    // so undo raw mode here or the user's shell is left with no echo.
+    match setup_after_raw() {
+        Ok(terminal) => Ok(terminal),
+        Err(e) => {
+            let _ = disable_raw_mode();
+            Err(e)
+        }
+    }
+}
+
+fn setup_after_raw() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut out = io::stdout();
     execute!(
         out,
@@ -588,7 +600,11 @@ type PromptTasks = HashMap<String, Vec<tokio::task::JoinHandle<()>>>;
 /// bundled so the function stays under clippy's `too_many_arguments` threshold.
 struct Runtime<'a> {
     sessions: HashMap<String, Arc<Session>>,
-    pending: HashMap<String, bitrouter_substrate::up::PendingPermission>,
+    /// Per-session FIFO of unresolved permission requests. Only the front is
+    /// on screen; the rest wait their turn — a second request arriving while
+    /// one is displayed must queue, never silently deny the first.
+    pending:
+        HashMap<String, std::collections::VecDeque<bitrouter_substrate::up::PendingPermission>>,
     prompt_tasks: PromptTasks,
     spawner: Spawner<'a>,
     fleet: Fleet,
@@ -724,6 +740,11 @@ async fn event_loop(
         // Convert the next input/pumped item into a pure AppEvent.
         let app_event: Option<AppEvent> = tokio::select! {
             maybe_key = keys.next() => match maybe_key {
+                // Windows delivers a Release event for every keystroke (and
+                // kitty terminals can too); only Press/Repeat may reach the
+                // reducer or every key fires twice.
+                Some(Ok(CtEvent::Key(k)))
+                    if k.kind == crossterm::event::KeyEventKind::Release => None,
                 Some(Ok(CtEvent::Key(k))) => Some(AppEvent::Key(k)),
                 // Wheel scroll pages the focused pane's scrollback.
                 Some(Ok(CtEvent::Mouse(m))) => match m.kind {
@@ -811,19 +832,23 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
         } => {
             if rt.sessions.contains_key(&record_id) {
                 // Stash the handle; hand the reducer display-only data.
-                let ev = AppEvent::Permission {
-                    record_id: record_id.clone(),
-                    title: p.tool_call.fields.title.clone().unwrap_or_default(),
-                    diff: perm_diff(&p),
-                    options: perm_options(&p),
-                    risk: crate::risk::classify(&p.tool_call.fields, &rt.spawner.base_repo),
-                };
-                rt.pending.insert(record_id, *p);
-                Some(ev)
+                // Queue behind any request already on screen — resolving the
+                // front surfaces the next (`Incoming::PermissionNext`).
+                let queue = rt.pending.entry(record_id.clone()).or_default();
+                queue.push_back(*p);
+                if queue.len() > 1 {
+                    return None;
+                }
+                let front = queue.front()?;
+                Some(perm_event(&record_id, front, &rt.spawner.base_repo))
             } else {
                 // Pane already closed; dropping `p` denies the request.
                 None
             }
+        }
+        Incoming::PermissionNext { record_id } => {
+            let front = rt.pending.get(&record_id)?.front()?;
+            Some(perm_event(&record_id, front, &rt.spawner.base_repo))
         }
         Incoming::TurnEnded {
             record_id,
@@ -916,11 +941,27 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
         }
         Effect::ResolvePermission { record_id, outcome } => {
-            if let Some(p) = rt.pending.remove(&record_id) {
-                // Map the reducer's y/a/n outcome onto the exact option the
-                // upstream offered (validated `optionId`, per ACP).
-                let selected = bitrouter_substrate::translate::select_option(outcome, &p.options);
-                p.resolve(selected);
+            let mut emptied = false;
+            if let Some(queue) = rt.pending.get_mut(&record_id) {
+                if let Some(p) = queue.pop_front() {
+                    // Map the reducer's y/a/n outcome onto the exact option
+                    // the upstream offered (validated `optionId`, per ACP).
+                    let selected =
+                        bitrouter_substrate::translate::select_option(outcome, &p.options);
+                    p.resolve(selected);
+                }
+                emptied = queue.is_empty();
+                if !emptied {
+                    // Another request queued while this one was on screen —
+                    // route it through the channel so it surfaces as a fresh
+                    // display event on the next loop pass.
+                    let _ = rt.spawner.tx.send(Incoming::PermissionNext {
+                        record_id: record_id.clone(),
+                    });
+                }
+            }
+            if emptied {
+                rt.pending.remove(&record_id);
             }
         }
         Effect::SpawnAgent { agent_id } => {
@@ -1192,8 +1233,14 @@ async fn inspect_worktree(record_id: &str, meta: &WorkMeta, checks: &[String]) -
                 text.push_str(&String::from_utf8_lossy(&out.stdout));
                 text.push_str(&String::from_utf8_lossy(&out.stderr));
                 // Keep the tail — that's where test failures summarize.
+                // Step forward to a char boundary: check output can carry
+                // multibyte text, and slicing mid-character panics.
                 if text.len() > 4000 {
-                    text = format!("…{}", &text[text.len() - 4000..]);
+                    let mut start = text.len() - 4000;
+                    while !text.is_char_boundary(start) {
+                        start += 1;
+                    }
+                    text = format!("…{}", &text[start..]);
                 }
                 return Some(Incoming::ChecksFailed {
                     record_id: record_id.to_string(),
@@ -1289,6 +1336,22 @@ async fn shutdown_session(sess: Arc<Session>) {
 
 /// Extract the first structured diff from a permission's tool-call content,
 /// ready for the TUI's line-diff renderer.
+/// Build the reducer's display-only permission event for one pending request
+/// (the resolvable handle stays loop-side in `rt.pending`).
+fn perm_event(
+    record_id: &str,
+    p: &bitrouter_substrate::up::PendingPermission,
+    base_repo: &std::path::Path,
+) -> AppEvent {
+    AppEvent::Permission {
+        record_id: record_id.to_string(),
+        title: p.tool_call.fields.title.clone().unwrap_or_default(),
+        diff: perm_diff(p),
+        options: perm_options(p),
+        risk: crate::risk::classify(&p.tool_call.fields, base_repo),
+    }
+}
+
 fn perm_diff(p: &bitrouter_substrate::up::PendingPermission) -> Option<DiffData> {
     use agent_client_protocol::schema::v1::ToolCallContent;
     p.tool_call
