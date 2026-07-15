@@ -115,13 +115,19 @@ impl EscalationState {
     }
 }
 
+/// How long to wait for the orchestrator's answer to an escalated permission
+/// before giving up. A client that accepts the `elicitation/create` but never
+/// responds must not stall the subagent's permission loop forever; on timeout
+/// the request errors → `None` → the caller falls back to deny.
+const ESCALATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Issue the server→client `elicitation/create` and map the response to a
 /// decision. Isolated so the rmcp-elicitation coupling lives in one place.
 ///
 /// Capability-gated by the caller ([`EscalationState::escalate`]); no shipping
 /// harness declares the capability yet, so this is not exercised against a live
-/// client. A transport error, a declined form, or a cancelled dialog all map to
-/// `Deny` / `None` — the escalation never fails *open*.
+/// client. A transport error, a timeout, a declined form, or a cancelled dialog
+/// all map to `Deny` / `None` — the escalation never fails *open*.
 async fn escalate_via_elicitation(
     peer: &Peer<RoleServer>,
     req: &EscalationRequest,
@@ -143,12 +149,18 @@ async fn escalate_via_elicitation(
         "Subagent {} requests a high-risk action: {}. Approve?",
         req.subagent, req.tool_title
     );
+    // Bounded: a client that accepts the request but never answers must not
+    // stall the subagent's permission loop forever. Timeout → Err → `None` →
+    // the caller falls back to deny.
     let result = peer
-        .create_elicitation(ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message,
-            requested_schema: schema,
-        })
+        .create_elicitation_with_timeout(
+            ElicitRequestParams::FormElicitationParams {
+                meta: None,
+                message,
+                requested_schema: schema,
+            },
+            Some(ESCALATION_TIMEOUT),
+        )
         .await
         .ok()?;
     match result.action {

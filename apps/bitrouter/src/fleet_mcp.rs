@@ -70,15 +70,29 @@ const MAX_DIFF_BYTES: usize = 64 * 1024;
 /// number that could drift from this one.
 pub const MAX_CONCURRENT_SUBAGENTS: usize = 6;
 
+/// The outcome of reading the machine-wide spend the budget ceiling enforces
+/// against. Distinguishes a known total (a fresh/empty database reads as
+/// `Known(0)`) from an unreadable one — the ceiling **fails closed** on
+/// [`SpendReading::Unavailable`] rather than silently treating an unreadable
+/// database as `$0`, which would let spawns bypass the budget.
+pub enum SpendReading {
+    /// A known machine-wide spend total in micro-USD (`0` for an empty/absent
+    /// database — a fresh install legitimately hasn't spent anything).
+    Known(u64),
+    /// A metering database is configured but couldn't be read (config, path,
+    /// connection, or query error). Spend is unknown, so the ceiling refuses.
+    Unavailable,
+}
+
 /// Reads the machine-wide spend figure the budget ceiling enforces against.
 /// App-side so `bitrouter-mcp` stays storage-agnostic; a metering-backed impl
 /// ([`MeteringSpend`]) and a test stub both satisfy it.
 #[async_trait::async_trait]
 pub trait SpendSnapshot: Send + Sync {
-    /// Current machine-wide spend in micro-USD, or `None` when the metering
-    /// database is unavailable (the caller treats that as `$0` spent so far, so
-    /// an empty database never blocks the first spawn).
-    async fn spent_micro_usd(&self) -> Option<u64>;
+    /// Today's machine-wide spend as a [`SpendReading`]: `Known(micro_usd)`
+    /// when readable (an absent/empty database reads as `Known(0)`), or
+    /// `Unavailable` when a configured database can't be read.
+    async fn spent_micro_usd(&self) -> SpendReading;
 }
 
 /// [`SpendSnapshot`] over the local metering database — the same read-side the
@@ -97,11 +111,19 @@ impl MeteringSpend {
 
 #[async_trait::async_trait]
 impl SpendSnapshot for MeteringSpend {
-    async fn spent_micro_usd(&self) -> Option<u64> {
+    async fn spent_micro_usd(&self) -> SpendReading {
+        use crate::metering::reader::ReadSide;
         use crate::metering::store::TimeWindow;
-        let store = crate::metering::reader::open_readonly(&self.source).await?;
-        let today = store.spend_summary(TimeWindow::Today).await.ok()?;
-        Some(today.spend_micro_usd)
+        match crate::metering::reader::read_side(&self.source).await {
+            // A fresh install with no database has legitimately spent nothing.
+            ReadSide::Absent => SpendReading::Known(0),
+            // Configured but unreadable → fail closed (don't guess $0).
+            ReadSide::Unavailable => SpendReading::Unavailable,
+            ReadSide::Store(store) => match store.spend_summary(TimeWindow::Today).await {
+                Ok(today) => SpendReading::Known(today.spend_micro_usd),
+                Err(_) => SpendReading::Unavailable,
+            },
+        }
     }
 }
 
@@ -126,10 +148,22 @@ impl BudgetCeiling {
     }
 
     /// `Ok(())` when a spawn/prompt may proceed; an actionable `Err` when
-    /// today's machine-wide spend has reached the ceiling. A metering database
-    /// that isn't readable yet counts as `$0` spent (never blocks).
+    /// today's machine-wide spend has reached the ceiling, or when spend can't
+    /// be read at all. An **absent** metering database (fresh install) counts as
+    /// `$0` and never blocks; an **unreadable** one (config/permission/
+    /// corruption) **fails closed** — a ceiling that silently read an unreadable
+    /// database as `$0` would let an orchestrator spend clean past it.
     async fn check(&self) -> Result<()> {
-        let spent = self.spend.spent_micro_usd().await.unwrap_or(0);
+        let spent = match self.spend.spent_micro_usd().await {
+            SpendReading::Known(spent) => spent,
+            SpendReading::Unavailable => anyhow::bail!(
+                "budget ceiling {} is set, but today's machine-wide spend can't be read from \
+                 the metering database — refusing to spawn/prompt rather than risk spending \
+                 past the ceiling. Check the metering database (path/permissions), or restart \
+                 the bridge without --budget-usd.",
+                crate::metering::fmt_usd(self.ceiling_micro_usd),
+            ),
+        };
         if spent >= self.ceiling_micro_usd {
             anyhow::bail!(
                 "budget ceiling {} reached; current spend {} — raise it with --budget-usd, or \
@@ -143,13 +177,22 @@ impl BudgetCeiling {
 }
 
 /// Convert a `--budget-usd` dollar amount to micro-USD, rejecting a
-/// non-positive or non-finite ceiling — a `<= 0` / NaN budget would refuse
+/// non-positive, non-finite, or sub-micro ceiling — any of which would refuse
 /// every spawn, which is never what the operator meant.
 pub fn budget_usd_to_micro(usd: f64) -> Result<u64> {
     if !usd.is_finite() || usd <= 0.0 {
         anyhow::bail!("--budget-usd must be a positive dollar amount (got {usd})");
     }
-    Ok((usd * 1_000_000.0).round() as u64)
+    let micro = (usd * 1_000_000.0).round() as u64;
+    if micro == 0 {
+        // A positive-but-sub-micro amount (e.g. 0.0000004) rounds to a $0
+        // ceiling, which would refuse every spawn — reject it like `<= 0`.
+        anyhow::bail!(
+            "--budget-usd {usd} rounds to a $0 ceiling (below one micro-USD) and would refuse \
+             every spawn; use at least $0.000001."
+        );
+    }
+    Ok(micro)
 }
 
 /// A [`SpendSnapshot`] whose reported spend is settable at runtime — the test
@@ -174,8 +217,8 @@ impl StubSpend {
 #[cfg(test)]
 #[async_trait::async_trait]
 impl SpendSnapshot for StubSpend {
-    async fn spent_micro_usd(&self) -> Option<u64> {
-        Some(self.0.load(Ordering::SeqCst))
+    async fn spent_micro_usd(&self) -> SpendReading {
+        SpendReading::Known(self.0.load(Ordering::SeqCst))
     }
 }
 
@@ -1237,12 +1280,16 @@ mod tests {
     }
 
     #[test]
-    fn budget_usd_to_micro_scales_and_rejects_nonpositive() {
+    fn budget_usd_to_micro_scales_and_rejects_unusable() {
         assert_eq!(budget_usd_to_micro(2.5).expect("scales"), 2_500_000);
         assert_eq!(budget_usd_to_micro(0.000_001).expect("rounds"), 1);
         assert!(
             budget_usd_to_micro(0.0).is_err(),
             "$0 would block every spawn"
+        );
+        assert!(
+            budget_usd_to_micro(0.000_000_4).is_err(),
+            "a sub-micro amount rounds to a $0 ceiling → every spawn blocked"
         );
         assert!(budget_usd_to_micro(-1.0).is_err());
         assert!(budget_usd_to_micro(f64::NAN).is_err());
@@ -1264,21 +1311,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn budget_ceiling_treats_unreadable_metering_as_zero_spent() {
-        // A metering database that returns `None` counts as $0 spent, so the
-        // first spawn is never blocked by a cold database.
-        struct NoData;
+    async fn budget_ceiling_fails_closed_when_spend_is_unreadable() {
+        // A configured-but-unreadable metering database must REFUSE the spawn,
+        // not silently proceed as if $0 were spent — otherwise the ceiling is a
+        // no-op whenever the bridge can't read the DB (permissions/corruption),
+        // and an orchestrator could spend clean past it.
+        struct Unreadable;
         #[async_trait::async_trait]
-        impl SpendSnapshot for NoData {
-            async fn spent_micro_usd(&self) -> Option<u64> {
-                None
+        impl SpendSnapshot for Unreadable {
+            async fn spent_micro_usd(&self) -> SpendReading {
+                SpendReading::Unavailable
             }
         }
-        let budget = BudgetCeiling::new(1_000_000, Arc::new(NoData));
-        budget
+        let budget = BudgetCeiling::new(1_000_000, Arc::new(Unreadable));
+        let err = budget
             .check()
             .await
-            .expect("no data → treated as $0, proceed");
+            .expect_err("unreadable spend must fail closed, not proceed");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("can't be read"),
+            "explains why it refused: {msg}"
+        );
+        assert!(msg.contains("--budget-usd"), "actionable: {msg}");
+
+        // But a fresh/empty database reads as `Known(0)` — legitimately $0, so
+        // the first spawn is never blocked by a cold database.
+        let fresh = BudgetCeiling::new(1_000_000, StubSpend::new(0));
+        fresh
+            .check()
+            .await
+            .expect("an empty database reads as $0 and never blocks the first spawn");
     }
 }
 
