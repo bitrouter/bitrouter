@@ -473,13 +473,17 @@ env/args overlay through `LaunchOptions` (the apps layer computes it; the
 substrate stays routing-agnostic); (c) route all credential choice through
 the single §5.4 resolver. (a) and (b) are required for §5 anyway.
 
-## 11. MCP follow-up (out of scope, direction locked)
+## 11. MCP follow-up (shipped — names as landed)
 
-`bitrouter mcp serve` later gains `spawn_subagent` / `prompt_session` /
-`session_status` tools over the same launch path, adding what CLI/NDJSON
-cannot: relaying sub-agent permission requests to the orchestrator as tool
-results instead of headless deny-all. Nothing in v1 may assume the caller is
-a shell (hence the structured `session` NDJSON line, not stderr prose).
+**Shipped** as `bitrouter mcp serve --backend fleet` (TUI_SPEC §4): the tools
+landed as `spawn_subagent` / `prompt_subagent` / `subagent_status` /
+`subagent_diff` / `apply_subagent` / `merge_subagent` / `close_subagent` over
+the same launch path. Permission relaying landed with a different escalation
+home than sketched here: instead of tool-result relays to the orchestrator,
+a TUI-linked bridge routes gated requests to the **human's decision queue**
+over the fleet socket (TUI_SPEC §5); a headless bridge auto-denies high risk,
+logged. Nothing in v1 may assume the caller is a shell (hence the structured
+`session` NDJSON line, not stderr prose).
 
 ## 12. Migration & lockstep checklist
 

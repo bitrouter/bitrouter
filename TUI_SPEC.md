@@ -123,6 +123,18 @@ already built) as the single source of truth for the fleet.
 global singleton that restarts routinely (`update --restart`, config reload) and holds
 provider keys, none of which should touch — or be able to kill — N warm agent children.
 
+> **Shipped deviation (2026-07-14, fleet-socket round): the daemon does not exist
+> yet.** The fleet is split across the TUI's in-process registry and the MCP bridge
+> subprocess, but the two are no longer blind to each other: shared mechanics live in
+> `apps/bitrouter/src/fleet.rs` (branch naming, git integration verbs, and a
+> **cross-process `PORT` pool** — lease files under `.bitrouter/ports/`), and a
+> TUI-hosted **fleet socket** (`.bitrouter/fleet-tui.sock`, Unix; injected via
+> `BITROUTER_FLEET_TUI_SOCK`) lets a TUI-launched bridge mirror its subagents into the
+> rail and route gated permissions to the human's decision queue (§5). Subagents still
+> die with their owning process — the daemon remains the plan for detach/orphan
+> recovery, and it will wrap the shared module + socket protocol rather than reconcile
+> two implementations.
+
 **This reversal is real substrate work, not "assembling primitives."** The substrate is
 per-process today: one session per process, a hardcoded `pid: std::process::id()` in the
 record, and warm-session/`acp attach` serving exactly one session per socket. A fleet host
@@ -203,6 +215,7 @@ the high-stakes case (driving one agent) is the *easy* case (fullscreen passthro
 | Orchestrator | PTY (wezterm-term), native TUI | always — the primary surface |
 | ACP subagent — monitor | bitrouter, from ACP events (§8) | default glanceable view |
 | ACP subagent — attached | PTY (wezterm-term), native TUI | on `attach`, to drive it |
+| MCP-bridge subagent — mirror | bitrouter, from fleet-socket events (§2 note) | orchestrator-spawned; monitor + decision queue only |
 | Non-ACP agent | PTY (wezterm-term) + inferred status (§10) | the "any CLI agent" fallback |
 
 ---
@@ -217,17 +230,14 @@ decision queue, risk-tiering, and review gates *real* rather than inferred.
 **The orchestrator drives via MCP tools.** A new MCP tool namespace (the deferred "MCP
 spawn tools" from `SPAWN_SPEC.md`) exposes the fleet to the orchestrator harness:
 
-| Tool | Effect |
+| Tool (shipped names) | Effect |
 |---|---|
-| `spawn(agent, task, worktree?)` | launch an ACP subagent on an isolated worktree; returns a handle |
-| `send(handle, text)` | prompt a running subagent |
-| `status(handle?)` | fleet or per-agent state snapshot |
-| `diff(handle)` | the subagent's branch diff vs. base |
-| `apply(handle)` / `merge(handle)` | integrate its work (§7) |
-| `close(handle)` | tear down (worktree retained until merged/discarded, §6) |
-
-(Reconcile these names with SPAWN_SPEC §11's direction — `spawn_subagent`/`prompt_session`/
-`session_status` — in one pass; the roles are the same.)
+| `spawn_subagent(agent, task, worktree?, result_schema?)` | launch an ACP subagent on an isolated worktree; blocks and returns the turn summary |
+| `prompt_subagent(handle, text)` | prompt a running subagent |
+| `subagent_status(handle?)` | fleet or per-agent state snapshot |
+| `subagent_diff(handle)` | the subagent's branch diff vs. base |
+| `apply_subagent(handle)` / `merge_subagent(handle)` | integrate its work (§7); human-gated (`--allow-writes`) |
+| `close_subagent(handle)` | tear down (worktree retained until merged/discarded, §6) |
 
 **Model the contract on MCP Tasks, capability-gated.** MCP's Tasks extension
 (`working / input_required / completed / failed / cancelled`, with `input_required`
@@ -269,8 +279,10 @@ knows *what* the agent wants and *how risky* it is (not just "a pane is blocked"
 
 **Escalation homes (both, one state machine):**
 - **v1 default → the global view.** A subagent's gated permission surfaces in the rail's
-  decision queue; the human resolves it there. The orchestrator's `collect`/`status`
-  reports `blocked_on_human`.
+  decision queue; the human resolves it there. *(Shipped for both fleet halves: TUI
+  spawns natively, and MCP-bridge spawns over the fleet socket — bridge subagents
+  appear as mirror monitor panes whose high-risk requests ride the same queue. A
+  headless bridge still auto-denies high risk, logged.)*
 - **Forward-compat → the orchestrator conversation.** When harnesses adopt MCP Tasks
   `input_required`, the same pending can route back to the orchestrator to reason about
   or relay to the human.
@@ -306,11 +318,12 @@ may **perform** one only under an explicit autonomy tier you granted — never b
 
 ## 6. Isolation (worktree-per-subagent)
 
-**Fixes a real correctness bug.** Today spawned agents launch with
-`LaunchOptions::default()` → `worktree: None` (`apps/bitrouter/src/tui/mod.rs`), so N
-subagents share the base repo working directory and clobber each other's uncommitted
-files — the exact failure every parallel-agent tool exists to prevent (Claude Code issue
-#55724). **Every subagent gets its own worktree + branch, by default.**
+**Fixes a real correctness bug** *(fixed — B1 shipped)*. Pre-B1, spawned agents launched
+with `LaunchOptions::default()` → `worktree: None`, so N subagents shared the base repo
+working directory and clobbered each other's uncommitted files — the exact failure every
+parallel-agent tool exists to prevent (Claude Code issue #55724). **Every subagent gets
+its own worktree + branch, by default** (shipped: `apps/bitrouter/src/fleet.rs`
+`worktree_spec`, used by both the TUI and the MCP bridge).
 
 **Migration (the default is a *flip*).** `spawn` is opt-in `--worktree` today, and
 `Session::open()` lets the manager's `cwd` win when no worktree is set — so the flip is
@@ -323,6 +336,9 @@ Three costs, solved as first-class concerns (not afterthoughts):
   per-worktree bootstrap step (copy/symlink/install) runs on creation. It **executes shell
   on worktree creation** — treat it as a code-execution surface: config-declared, shown to
   the human on first use, and gated under the same autonomy discipline as agent permissions.
+  *(Shipped: the TUI confirms on first spawn; a TUI-linked MCP bridge gates on that same
+  approval over the fleet socket, noting a skipped hook in the spawn summary; a headless
+  bridge treats the config author's wiring as the standing grant.)*
 - **Per-agent port allocation.** Assign each subagent a `$PORT` from a pool (uzi's trick)
   so N dev servers don't collide; surface the URL in the roster row.
 - **Cleanup gated on merged-or-discarded.** Never auto-delete a worktree on close — that
@@ -337,7 +353,8 @@ Container-per-agent is a deferred opt-in tier (Sculptor model) for untrusted wor
 The deferred v1 Phase 5, now first-class — and **less blocked than v1 claimed.** The
 "turn complete/idle" signal it needs already flows: `Session::prompt()` returns a
 `PromptResponse` with a typed `stop_reason` (`crates/bitrouter-substrate/src/engine.rs`).
-v1's TUI discards it (`apps/bitrouter/src/tui/mod.rs`). Capture it.
+v1's TUI discarded it; the shipped TUI captures it (a clean `EndTurn` with a non-empty
+diff feeds the review queue).
 
 **Review queue.** A subagent whose turn ends `EndTurn` with a non-empty diff surfaces in
 the rail head as **ready to review**. Writes are **human-gated by default** (§5) — the
@@ -350,7 +367,9 @@ orchestrator may *request* them but performs them only under a granted autonomy 
 
 **Serialized integration (merge queue semantics).** Never merge N branches optimistically.
 Integrate one at a time against `base + already-merged`, re-running checks — the fix for
-"green in isolation, broken together." Model on GitHub's merge-queue.
+"green in isolation, broken together." Model on GitHub's merge-queue. *(Shipped as a
+single background integration worker — one merge/apply at a time, off the event loop;
+**re-running checks against the advanced base is still open**.)*
 
 **Per-worker verification gates.** Model on goose's `retry.checks`: a subagent can carry
 shell success-checks (`cargo test`, `cargo clippy`) that must pass before it is "ready to
@@ -369,10 +388,11 @@ exist; the fleet plumbing does not.
 Two rendering paths, by pane kind:
 
 ### 8a. PTY panes (orchestrator, attached subagents, non-ACP agents)
-Rendered by the **`TerminalBackend` trait**, default impl = **wezterm-term** (§11). The
-backend owns VT parsing, the cell grid, scrollback, images, hyperlinks, **and input
-encoding**. bitrouter feeds PTY bytes and draws the cell grid into the pane `Rect`. No
-bitrouter line-rendering here — the harness renders itself.
+Rendered by the **`TerminalBackend` trait** — shipped impl = alacritty grid + wezterm
+encoders, per the §11 implementation note. The backend owns VT parsing, the cell grid,
+scrollback, **and input encoding** (keys and bracketed paste). bitrouter feeds PTY
+bytes and draws the cell grid into the pane `Rect`. No bitrouter line-rendering here —
+the harness renders itself.
 
 ### 8b. ACP-event panes (subagent monitors)
 Rendered by bitrouter from typed `SessionUpdateKind` into `Line` types — v1's model, but
@@ -407,9 +427,12 @@ implementation; **AGPL — reimplement, don't copy**):
 - **Input routing — zellij "locked mode," not a heavy prefix.** When a pane is focused,
   bitrouter intercepts **exactly one leader key**; everything else passes through
   untouched — including **`Ctrl-C` → interrupt the focused agent** (NOT quit; a change
-  from v1 where Ctrl-C quits globally) and `Ctrl-A` (readline). Put the leader in the
-  **Kitty-keyboard keyspace** (enabled on the outer terminal via crossterm) so it cannot
-  collide with any legacy binding; fall back to a zellij-style toggle when unavailable.
+  from v1 where Ctrl-C quits globally).
+  > **Shipped deviation:** the leader is plain **`Ctrl-A`** (tmux/screen muscle
+  > memory; the §3 sidebars bind `Ctrl-A N` etc.), so an inner readline/emacs
+  > `Ctrl-A` does NOT reach the child — type `Home` inside the pane instead. The
+  > original idea here (a kitty-keyspace leader that collides with nothing, legacy
+  > fallback toggle) remains open as a possible upgrade; it never shipped.
 - **Input encoding — offload to the backend.** wezterm-term encodes key/mouse → the
   inner PTY's expected bytes, tracking the inner app's kbd mode (kitty flags; `Ctrl+J` →
   raw `\n` unless `REPORT_ALL_KEYS`). This is the herdr #106 class of bug; owning it is
@@ -448,7 +471,9 @@ it.
 
 ## 11. Backend & dependency decision
 
-**`TerminalBackend` trait, default = `wezterm-term`.** Rationale (decided in review):
+**`TerminalBackend` trait, default = `wezterm-term`** *(as decided; the shipped default
+became the alacritty grid + wezterm encoders — see the implementation note below)*.
+Rationale (decided in review):
 
 - ACP structure is the spine, so bitrouter needs a **rendering core under its existing
   session-owning substrate** — not a competing multiplexer. wezterm-term owns nothing; the
@@ -621,7 +646,9 @@ worktree default-flip has a migration story and the bootstrap hook is gated (§6
 orchestrator-dies-with-the-TUI asymmetry is named (§2); the Windows detach gap is scoped
 (§11).
 
-**Still genuinely open (smaller):** exact fleet-tool names (reconcile with SPAWN_SPEC §11);
-whether `AllowThread` policy is per-agent or per-fleet; the fleet daemon's idle-shutdown
-default.
+**Still genuinely open (smaller):** whether `AllowThread` policy is per-agent or
+per-fleet; the fleet daemon's idle-shutdown default. *(Closed since: fleet-tool names
+shipped as `spawn_subagent`/`prompt_subagent`/`subagent_status`/`subagent_diff`/
+`apply_subagent`/`merge_subagent`/`close_subagent` — the §4 table and SPAWN_SPEC §11
+should be read with these names.)*
 ```
