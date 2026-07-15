@@ -162,6 +162,10 @@ impl StubSpend {
     fn new(micro: u64) -> Arc<Self> {
         Arc::new(Self(std::sync::atomic::AtomicU64::new(micro)))
     }
+    // Only the unix-gated `e2e_tests` module flips the spend mid-run; on
+    // non-unix that module is `cfg`'d out, so gate the setter to match — an
+    // ungated `set` would be dead code (and `-D warnings`) on Windows.
+    #[cfg(unix)]
     fn set(&self, micro: u64) {
         self.0.store(micro, Ordering::SeqCst);
     }
