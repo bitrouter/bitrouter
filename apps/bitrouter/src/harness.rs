@@ -253,7 +253,9 @@ impl Harness {
     /// traffic through `base_url`, authenticating with `auth` (already
     /// resolved by precedence — see [`resolve_gateway_auth`]). `model` pins
     /// the model when the harness supports it. Returns an empty overlay for
-    /// an [`Unroutable`](Routing::Unroutable) harness (the caller warns).
+    /// harnesses env/args can't route ([`OpencodeConfig`](Routing::OpencodeConfig)
+    /// / [`PiConfigDir`](Routing::PiConfigDir) / [`OwnAuth`](Routing::OwnAuth)
+    /// — the caller warns and runs direct; see [`env_args_routable`](Self::env_args_routable)).
     pub fn routing_overlay(
         &self,
         base_url: &str,
