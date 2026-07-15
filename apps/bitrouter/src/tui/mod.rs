@@ -59,6 +59,16 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     let fleet_store = bitrouter_substrate::fleet::FleetStore::new(&base_repo);
     let previous_fleet = fleet_store.load().await;
 
+    // The fleet socket (Unix): MCP bridge subprocesses connect back through
+    // it so orchestrator-spawned subagents appear in the rail and their
+    // gated permissions reach the human's decision queue (TUI_SPEC §2/§5).
+    #[cfg(unix)]
+    let fleet_sock = start_fleet_listener(&base_repo, tx.clone());
+    #[cfg(unix)]
+    let fleet_sock_path = fleet_sock.as_ref().map(|s| s.0.clone());
+    #[cfg(not(unix))]
+    let fleet_sock_path: Option<std::path::PathBuf> = None;
+
     // The daemon's advertised model ids (best-effort): fills the synthesized
     // provider catalogs for the config-routed orchestrators (opencode, pi).
     let models = fetch_models(&cfg.server.listen).await;
@@ -83,11 +93,14 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         }
         let (record_id, pane, pty_pane) = launch_orchestrator(
             h,
-            &base_url,
-            &base_repo,
+            &OrchestratorCtx {
+                base_url: &base_url,
+                base_repo: &base_repo,
+                model,
+                models: &models,
+                fleet_sock: fleet_sock_path.as_deref(),
+            },
             tx.clone(),
-            model,
-            &models,
             "orchestrator",
         )?;
         ptys.insert(record_id, pty_pane);
@@ -190,6 +203,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
             gateway_base: base_url,
             models,
             model: model.map(str::to_string),
+            fleet_sock: fleet_sock_path,
             tx,
         },
         fleet: Fleet {
@@ -198,6 +212,14 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
             meta: HashMap::new(),
             checks: cfg.worktrees.checks.clone(),
         },
+        #[cfg(unix)]
+        bridges: HashMap::new(),
+        #[cfg(unix)]
+        bridge_agents: HashMap::new(),
+        #[cfg(unix)]
+        bridge_perms: HashMap::new(),
+        #[cfg(unix)]
+        _fleet_sock: fleet_sock,
         ptys,
         notify: notify::NotifyPath::detect(),
         fleet_store,
@@ -359,19 +381,33 @@ fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_
     }
 }
 
+/// Everything a `launch_orchestrator` call needs beyond the harness and the
+/// pane's record id.
+struct OrchestratorCtx<'a> {
+    base_url: &'a str,
+    base_repo: &'a std::path::Path,
+    model: Option<&'a str>,
+    models: &'a [String],
+    fleet_sock: Option<&'a std::path::Path>,
+}
+
 /// Launch the orchestrator: the harness's interactive binary on a PTY, its
 /// LLM traffic routed through the daemon (same overlay as `bitrouter launch`)
 /// and the fleet MCP bridge injected — where the harness has an MCP
 /// mechanism — so it can spawn/manage subagents (TUI_SPEC §2's data flow).
 fn launch_orchestrator(
     h: &'static crate::harness::Harness,
-    base_url: &str,
-    base_repo: &std::path::Path,
+    ctx: &OrchestratorCtx<'_>,
     tx: UnboundedSender<Incoming>,
-    model: Option<&str>,
-    models: &[String],
     record_id: &str,
 ) -> Result<(String, PaneState, pty::PtyPane)> {
+    let OrchestratorCtx {
+        base_url,
+        base_repo,
+        model,
+        models,
+        fleet_sock,
+    } = *ctx;
     let Some(binary) = h.interactive_binary else {
         anyhow::bail!("harness '{}' has no interactive binary", h.id);
     };
@@ -399,6 +435,16 @@ fn launch_orchestrator(
         )
         .with_context(|| format!("assembling the '{}' orchestrator overlay", h.id))?;
     let args = overlay.args.clone();
+    // The fleet-socket path rides the PTY env: the harness inherits it, and
+    // so does the `bitrouter mcp serve --backend fleet` subprocess it spawns,
+    // which connects back through it.
+    let mut env = overlay.env.clone();
+    if let Some(sock) = fleet_sock {
+        env.push((
+            crate::fleet::TUI_SOCK_ENV.to_string(),
+            sock.display().to_string(),
+        ));
+    }
 
     // Sized properly on the first draw (the pane rect is recorded and the
     // loop resizes + SIGWINCHes the child).
@@ -407,7 +453,7 @@ fn launch_orchestrator(
         &pty::PtyLaunch {
             command: binary,
             args: &args,
-            env: &overlay.env,
+            env: &env,
             cwd: base_repo,
         },
         80,
@@ -421,6 +467,89 @@ fn launch_orchestrator(
     pane_state.harness = "pty".to_string();
     pane_state.model = model.map(str::to_string);
     Ok((record_id.to_string(), pane_state, pane))
+}
+
+/// Removes the fleet socket file when the TUI exits (any path — Drop).
+#[cfg(unix)]
+struct SockCleanup(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for SockCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Bind the per-repo fleet socket and pump bridge connections into the
+/// loop's channel: each accepted connection surfaces as `BridgeConnected`
+/// (carrying the write half), each NDJSON line as `Incoming::Bridge`, EOF as
+/// `BridgeGone`. `None` (with a log line) when binding fails — the TUI still
+/// runs; bridges then fall back to their headless auto-policy.
+#[cfg(unix)]
+fn start_fleet_listener(
+    base_repo: &std::path::Path,
+    tx: UnboundedSender<Incoming>,
+) -> Option<SockCleanup> {
+    let path = crate::fleet::tui_sock_path(base_repo);
+    // A previous unclean exit leaves the file; the bind below re-creates it.
+    let _ = std::fs::remove_file(&path);
+    let listener = match tokio::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "fleet socket bind failed");
+            return None;
+        }
+    };
+    tokio::spawn(async move {
+        let mut seq = 0u64;
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            seq += 1;
+            let conn = seq;
+            let (read, write) = stream.into_split();
+            if tx
+                .send(Incoming::BridgeConnected {
+                    conn,
+                    writer: write,
+                })
+                .is_err()
+            {
+                break; // loop gone — stop accepting
+            }
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                use tokio::io::AsyncBufReadExt;
+                let mut lines = tokio::io::BufReader::new(read).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    match serde_json::from_str::<crate::fleet::BridgeMsg>(&line) {
+                        Ok(msg) => {
+                            if tx.send(Incoming::Bridge { conn, msg }).is_err() {
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "unparseable fleet bridge message")
+                        }
+                    }
+                }
+                let _ = tx.send(Incoming::BridgeGone { conn });
+            });
+        }
+    });
+    Some(SockCleanup(path))
+}
+
+/// Write one NDJSON `TuiMsg` to a bridge connection (best-effort — a dead
+/// bridge's messages are moot).
+#[cfg(unix)]
+async fn bridge_write(writer: &mut tokio::net::unix::OwnedWriteHalf, msg: &crate::fleet::TuiMsg) {
+    use tokio::io::AsyncWriteExt;
+    if let Ok(mut line) = serde_json::to_string(msg) {
+        line.push('\n');
+        let _ = writer.write_all(line.as_bytes()).await;
+    }
 }
 
 /// The fleet MCP bridge as a stdio server spec: this binary running
@@ -578,6 +707,10 @@ struct Spawner<'a> {
     models: Vec<String>,
     /// The `--model` pin the manager launched with — new sessions inherit it.
     model: Option<String>,
+    /// The fleet socket path, injected into every orchestrator PTY's env so
+    /// its MCP bridge subprocess can connect back (Unix; `None` elsewhere or
+    /// when binding failed).
+    fleet_sock: Option<std::path::PathBuf>,
     tx: UnboundedSender<Incoming>,
 }
 
@@ -597,6 +730,18 @@ struct Runtime<'a> {
     prompt_tasks: PromptTasks,
     spawner: Spawner<'a>,
     fleet: Fleet,
+    /// Fleet-socket state (Unix): connected MCP bridges by connection id,
+    /// their mirror panes, and their in-flight permission requests
+    /// (`record_id → (conn, bridge-local id)`).
+    #[cfg(unix)]
+    bridges: HashMap<u64, tokio::net::unix::OwnedWriteHalf>,
+    #[cfg(unix)]
+    bridge_agents: HashMap<String, u64>,
+    #[cfg(unix)]
+    bridge_perms: HashMap<String, (u64, u64)>,
+    /// Removes the fleet socket file at drop (Unix).
+    #[cfg(unix)]
+    _fleet_sock: Option<SockCleanup>,
     /// Live PTY panes by record id: the orchestrator (when `--agent` named a
     /// native harness) plus any interactive attaches (TUI_SPEC §13-B4).
     ptys: HashMap<String, pty::PtyPane>,
@@ -881,6 +1026,81 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
         }
         Incoming::PtyExited { record_id } => Some(AppEvent::Exited { record_id }),
         Incoming::ServeStatus { ok } => Some(AppEvent::ServeStatus { ok }),
+        #[cfg(unix)]
+        Incoming::BridgeConnected { conn, writer } => {
+            rt.bridges.insert(conn, writer);
+            Some(AppEvent::BridgeConnected { conn })
+        }
+        #[cfg(unix)]
+        Incoming::Bridge { conn, msg } => match msg {
+            crate::fleet::BridgeMsg::Spawned {
+                handle,
+                agent,
+                port,
+            } => {
+                let record_id = format!("mcp:{handle}");
+                rt.bridge_agents.insert(record_id.clone(), conn);
+                Some(AppEvent::BridgeSpawned {
+                    record_id,
+                    agent_id: agent,
+                    port,
+                })
+            }
+            crate::fleet::BridgeMsg::State { handle, state } => Some(AppEvent::BridgeState {
+                record_id: format!("mcp:{handle}"),
+                state,
+            }),
+            crate::fleet::BridgeMsg::Closed { handle } => {
+                let record_id = format!("mcp:{handle}");
+                rt.bridge_agents.remove(&record_id);
+                rt.bridge_perms.remove(&record_id);
+                Some(AppEvent::Exited { record_id })
+            }
+            crate::fleet::BridgeMsg::Permission {
+                id,
+                handle,
+                title,
+                diff,
+                options,
+            } => {
+                let record_id = format!("mcp:{handle}");
+                rt.bridge_perms.insert(record_id.clone(), (conn, id));
+                Some(AppEvent::Permission {
+                    record_id,
+                    title,
+                    diff: diff.map(|d| DiffData {
+                        path: d.path,
+                        old: d.old,
+                        new: d.new,
+                    }),
+                    options: options
+                        .into_iter()
+                        .map(|o| PermOption {
+                            outcome: crate::fleet::outcome_from_str(&o.outcome),
+                            label: o.label,
+                        })
+                        .collect(),
+                    // The bridge auto-allows low risk itself; only gated
+                    // (high-risk) requests reach the human.
+                    risk: crate::risk::Risk::High,
+                })
+            }
+        },
+        #[cfg(unix)]
+        Incoming::BridgeGone { conn } => {
+            rt.bridges.remove(&conn);
+            let record_ids: Vec<String> = rt
+                .bridge_agents
+                .iter()
+                .filter(|(_, c)| **c == conn)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &record_ids {
+                rt.bridge_agents.remove(id);
+                rt.bridge_perms.remove(id);
+            }
+            Some(AppEvent::BridgeGone { record_ids })
+        }
     }
 }
 
@@ -951,6 +1171,21 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
             if emptied {
                 rt.pending.remove(&record_id);
+            }
+            // A bridge subagent's pending resolves over the fleet socket —
+            // the owning bridge holds the real handle.
+            #[cfg(unix)]
+            if let Some((conn, id)) = rt.bridge_perms.remove(&record_id)
+                && let Some(writer) = rt.bridges.get_mut(&conn)
+            {
+                bridge_write(
+                    writer,
+                    &crate::fleet::TuiMsg::Resolve {
+                        id,
+                        outcome: crate::fleet::outcome_str(outcome).to_string(),
+                    },
+                )
+                .await;
             }
         }
         Effect::SpawnAgent { agent_id } => {
@@ -1035,11 +1270,14 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             let model = rt.spawner.model.clone();
             match launch_orchestrator(
                 h,
-                &rt.spawner.gateway_base,
-                &rt.spawner.base_repo,
+                &OrchestratorCtx {
+                    base_url: &rt.spawner.gateway_base,
+                    base_repo: &rt.spawner.base_repo,
+                    model: model.as_deref(),
+                    models: &rt.spawner.models,
+                    fleet_sock: rt.spawner.fleet_sock.as_deref(),
+                },
                 rt.spawner.tx.clone(),
-                model.as_deref(),
-                &rt.spawner.models,
                 &record_id,
             ) {
                 Ok((rid, _, pty_pane)) => {
@@ -1188,6 +1426,21 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     ok,
                 },
             );
+        }
+        #[cfg(unix)]
+        Effect::BridgeHello {
+            conn,
+            bootstrap_approved,
+        } => {
+            if let Some(writer) = rt.bridges.get_mut(&conn) {
+                bridge_write(writer, &crate::fleet::TuiMsg::Hello { bootstrap_approved }).await;
+            }
+        }
+        #[cfg(unix)]
+        Effect::BridgeBootstrapApproved => {
+            for writer in rt.bridges.values_mut() {
+                bridge_write(writer, &crate::fleet::TuiMsg::BootstrapApproved).await;
+            }
         }
     }
 }

@@ -556,7 +556,9 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
                     let view = pty.iter().find(|v| &v.record_id == rid);
                     render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
                 }
-                crate::tui::state::PaneKind::Acp => {
+                // Mirror panes (orchestrator-spawned, MCP) render like ACP
+                // monitors: bitrouter-drawn lines, no PTY grid.
+                crate::tui::state::PaneKind::Acp | crate::tui::state::PaneKind::Mirror => {
                     render_pane(pane, slot, slot == focus, nc, frame, *rect)
                 }
             }

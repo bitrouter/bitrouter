@@ -118,6 +118,26 @@ pub enum AppEvent {
     /// `Ctrl-C` — which interrupts the focused agent in NORMAL mode — this
     /// always tears down.
     ForceQuit,
+    /// An MCP fleet bridge connected over the fleet socket (Unix only). The
+    /// reducer answers with a `BridgeHello` carrying standing policy.
+    #[cfg(unix)]
+    BridgeConnected { conn: u64 },
+    /// A subagent the orchestrator spawned via the MCP bridge: mirror it
+    /// into the rail as a monitor pane (visible fleet, one roster).
+    #[cfg(unix)]
+    BridgeSpawned {
+        record_id: String,
+        agent_id: String,
+        port: Option<u16>,
+    },
+    /// A bridge subagent's Task-shaped state changed
+    /// (`working`/`completed`/`failed`).
+    #[cfg(unix)]
+    BridgeState { record_id: String, state: String },
+    /// A bridge connection closed: its mirror panes go dead (their pendings
+    /// are already denied bridge-side by the dropped stream).
+    #[cfg(unix)]
+    BridgeGone { record_ids: Vec<String> },
 }
 
 /// Side effect the loop performs after a reduce. Keeps `reduce` pure.
@@ -163,6 +183,12 @@ pub enum Effect {
     Merge { record_id: String },
     /// Apply the agent's diff onto the base working tree, uncommitted.
     Apply { record_id: String },
+    /// Answer a bridge's connect with the TUI's standing policy state.
+    #[cfg(unix)]
+    BridgeHello { conn: u64, bootstrap_approved: bool },
+    /// Tell every connected bridge the human approved the bootstrap hook.
+    #[cfg(unix)]
+    BridgeBootstrapApproved,
 }
 
 /// The channel message the loop receives. Carries the real `PendingPermission`
@@ -218,5 +244,23 @@ pub enum Incoming {
     /// A background daemon-reachability probe completed.
     ServeStatus {
         ok: bool,
+    },
+    /// An MCP fleet bridge connected on the fleet socket; the loop keeps the
+    /// write half for `BridgeHello`/`Resolve` replies.
+    #[cfg(unix)]
+    BridgeConnected {
+        conn: u64,
+        writer: tokio::net::unix::OwnedWriteHalf,
+    },
+    /// One parsed NDJSON message from bridge connection `conn`.
+    #[cfg(unix)]
+    Bridge {
+        conn: u64,
+        msg: crate::fleet::BridgeMsg,
+    },
+    /// Bridge connection `conn` closed (EOF on its read half).
+    #[cfg(unix)]
+    BridgeGone {
+        conn: u64,
     },
 }

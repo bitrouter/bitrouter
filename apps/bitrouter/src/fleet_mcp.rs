@@ -16,8 +16,11 @@
 //! and `merge_subagent` integrate a subagent's work into the base repository
 //! and therefore refuse unless the human started the bridge with
 //! `--allow-writes` — an explicit autonomy grant. Subagent permission
-//! requests are auto-resolved by risk: reversible + in-worktree allows,
-//! everything else denies (logged, never silent).
+//! requests are auto-resolved by risk: reversible + in-worktree allows;
+//! everything else escalates to the hosting TUI's decision queue when this
+//! bridge runs under `bitrouter tui` (it connects back over the fleet
+//! socket, mirroring its subagents into the rail), and denies when headless
+//! (logged, never silent).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,6 +37,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
+use crate::fleet::truncate_utf8;
 use crate::result_contract::ResultContract;
 use crate::risk::Risk;
 
@@ -42,20 +46,6 @@ use crate::risk::Risk;
 const MAX_REPLY_BYTES: usize = 32 * 1024;
 /// Diff text beyond this is truncated with a note.
 const MAX_DIFF_BYTES: usize = 64 * 1024;
-
-/// Truncate `s` to at most `max` bytes without splitting a UTF-8 character —
-/// a raw `String::truncate` at a fixed byte offset panics mid-character
-/// (agent replies and diffs routinely carry multibyte text).
-fn truncate_utf8(s: &mut String, max: usize) {
-    if s.len() <= max {
-        return;
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s.truncate(end);
-}
 
 /// One managed subagent: the live session plus its integration metadata.
 struct Subagent {
@@ -90,6 +80,112 @@ struct FleetInner {
     /// handle (record16) → subagent. Also serializes integration: `apply`/
     /// `merge` hold this lock, so branches integrate one at a time.
     agents: tokio::sync::Mutex<HashMap<String, Subagent>>,
+    /// Live link back to the hosting TUI over the fleet socket, when this
+    /// bridge was launched under `bitrouter tui` (Unix): mirrors the fleet
+    /// into the rail and routes gated permissions to the human's queue.
+    #[cfg(unix)]
+    link: Option<Arc<TuiLink>>,
+}
+
+/// The bridge's end of the TUI fleet socket.
+#[cfg(unix)]
+struct TuiLink {
+    writer: tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>,
+    /// Standing policy from `TuiMsg::Hello` / `BootstrapApproved`: whether
+    /// the human approved the worktree bootstrap hook.
+    bootstrap_approved: std::sync::atomic::AtomicBool,
+    /// In-flight permission requests awaiting the human, by bridge-local id.
+    pending: tokio::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<String>>>,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(unix)]
+impl TuiLink {
+    /// Connect to the TUI's fleet socket and start the reader that routes
+    /// `TuiMsg`s (policy updates, permission resolutions) back in.
+    async fn connect(path: &str) -> Option<Arc<Self>> {
+        let stream = match tokio::net::UnixStream::connect(path).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, path, "fleet TUI socket connect failed");
+                return None;
+            }
+        };
+        let (read, write) = stream.into_split();
+        let link = Arc::new(TuiLink {
+            writer: tokio::sync::Mutex::new(write),
+            bootstrap_approved: std::sync::atomic::AtomicBool::new(false),
+            pending: tokio::sync::Mutex::new(HashMap::new()),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        });
+        let reader_link = Arc::clone(&link);
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                match serde_json::from_str::<crate::fleet::TuiMsg>(&line) {
+                    Ok(crate::fleet::TuiMsg::Hello { bootstrap_approved }) => {
+                        reader_link
+                            .bootstrap_approved
+                            .store(bootstrap_approved, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Ok(crate::fleet::TuiMsg::BootstrapApproved) => {
+                        reader_link
+                            .bootstrap_approved
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Ok(crate::fleet::TuiMsg::Resolve { id, outcome }) => {
+                        if let Some(sender) = reader_link.pending.lock().await.remove(&id) {
+                            let _ = sender.send(outcome);
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "unparseable fleet TUI message"),
+                }
+            }
+            // Socket closed (TUI exited): every waiting permission denies.
+            reader_link.pending.lock().await.clear();
+        });
+        Some(link)
+    }
+
+    /// Send one NDJSON message (best-effort).
+    async fn send(&self, msg: &crate::fleet::BridgeMsg) {
+        use tokio::io::AsyncWriteExt;
+        if let Ok(mut line) = serde_json::to_string(msg) {
+            line.push('\n');
+            let _ = self.writer.lock().await.write_all(line.as_bytes()).await;
+        }
+    }
+
+    /// Route a gated permission to the human's decision queue and await the
+    /// resolution. `None` when the link died first (the caller denies).
+    async fn request_permission(
+        &self,
+        handle: &str,
+        pending: &bitrouter_substrate::up::PendingPermission,
+    ) -> Option<bitrouter_substrate::translate::PermissionOutcome> {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.pending.lock().await.insert(id, sender);
+        let title = pending
+            .tool_call
+            .fields
+            .title
+            .clone()
+            .unwrap_or_else(|| "(unnamed)".to_string());
+        self.send(&crate::fleet::BridgeMsg::Permission {
+            id,
+            handle: handle.to_string(),
+            title,
+            diff: crate::fleet::wire_diff(pending),
+            options: crate::fleet::wire_options(pending),
+        })
+        .await;
+        let outcome = receiver.await.ok()?;
+        Some(crate::fleet::outcome_from_str(&outcome))
+    }
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -143,9 +239,21 @@ impl FleetMcp {
                 worktrees,
                 allow_writes,
                 agents: tokio::sync::Mutex::new(HashMap::new()),
+                #[cfg(unix)]
+                link: None,
             }),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Attach the TUI fleet-socket link (must run before the server is
+    /// cloned — the inner state is shared from then on).
+    #[cfg(unix)]
+    fn with_link(mut self, link: Option<Arc<TuiLink>>) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.link = link;
+        }
+        self
     }
 
     #[tool(
@@ -270,12 +378,22 @@ impl FleetMcp {
             (inner.worktrees.ports.from, inner.worktrees.ports.to),
         );
         let tag = crate::fleet::branch_tag(&args.agent);
+        // The bootstrap hook executes shell on worktree creation. Linked to
+        // a TUI, it runs only after the human's first-use approval there
+        // (same discipline as TUI spawns); headless, the config author's
+        // wiring of this bridge is the standing grant.
+        let bootstrap_cmd = isolate.then(|| inner.worktrees.bootstrap.clone()).flatten();
+        #[cfg(unix)]
+        let bootstrap_gated = inner.link.as_ref().is_some_and(|l| {
+            !l.bootstrap_approved
+                .load(std::sync::atomic::Ordering::SeqCst)
+        });
+        #[cfg(not(unix))]
+        let bootstrap_gated = false;
+        let bootstrap_skipped = bootstrap_gated && bootstrap_cmd.is_some();
         let options = LaunchOptions {
             worktree: isolate.then(|| crate::fleet::worktree_spec(&tag)),
-            // Config-declared bootstrap: the human authored it and granted
-            // this bridge by wiring it into the orchestrator — that is the
-            // first-use approval for this surface.
-            worktree_bootstrap: isolate.then(|| inner.worktrees.bootstrap.clone()).flatten(),
+            worktree_bootstrap: if bootstrap_gated { None } else { bootstrap_cmd },
             env: crate::fleet::port_env(port.as_ref().map(|l| l.port())),
             ..Default::default()
         };
@@ -298,9 +416,10 @@ impl FleetMcp {
         let session = Arc::new(session);
 
         // Auto-policy: reversible + in-worktree allows; everything else
-        // denies. Logged, never silent — there is no human in this loop.
-        spawn_auto_policy(&session, inner.base_repo.clone(), handle.clone());
+        // escalates to the linked TUI's decision queue, or denies headless.
+        spawn_auto_policy(inner, &session, handle.clone());
 
+        let port_num = port.as_ref().map(|l| l.port());
         {
             let mut agents = inner.agents.lock().await;
             agents.insert(
@@ -316,10 +435,28 @@ impl FleetMcp {
                 },
             );
         }
+        // Mirror the spawn into the hosting TUI's rail.
+        #[cfg(unix)]
+        if let Some(link) = &inner.link {
+            link.send(&crate::fleet::BridgeMsg::Spawned {
+                handle: handle.clone(),
+                agent: args.agent.clone(),
+                port: port_num,
+            })
+            .await;
+        }
+        #[cfg(not(unix))]
+        let _ = port_num;
 
-        let summary = self
+        let mut summary = self
             .run_blocking_turn(&handle, session, &args.task, contract)
             .await?;
+        if bootstrap_skipped {
+            summary["bootstrap"] = serde_json::json!(
+                "skipped — the worktree bootstrap hook isn't approved in the TUI yet \
+                 (the human approves it on their first spawn there)"
+            );
+        }
         Ok(summary)
     }
 
@@ -405,6 +542,14 @@ impl FleetMcp {
     async fn set_state(&self, handle: &str, state: &'static str) {
         if let Some(sub) = self.inner.agents.lock().await.get_mut(handle) {
             sub.state = state;
+        }
+        #[cfg(unix)]
+        if let Some(link) = &self.inner.link {
+            link.send(&crate::fleet::BridgeMsg::State {
+                handle: handle.to_string(),
+                state: state.to_string(),
+            })
+            .await;
         }
     }
 
@@ -570,6 +715,13 @@ impl FleetMcp {
         only.shutdown()
             .await
             .context("shutting down the subagent session")?;
+        #[cfg(unix)]
+        if let Some(link) = &self.inner.link {
+            link.send(&crate::fleet::BridgeMsg::Closed {
+                handle: handle.to_string(),
+            })
+            .await;
+        }
         Ok(serde_json::json!({
             "handle": handle,
             "closed": true,
@@ -579,10 +731,15 @@ impl FleetMcp {
 }
 
 /// Consume a subagent's permission stream with the risk auto-policy:
-/// reversible + in-worktree ⇒ allow-once; everything else ⇒ deny. Every
-/// decision is logged to stderr (never silent).
-fn spawn_auto_policy(session: &Arc<Session>, workroot: PathBuf, handle: String) {
+/// reversible + in-worktree ⇒ allow-once; everything else escalates to the
+/// hosting TUI's decision queue when this bridge is linked (TUI_SPEC §5's
+/// escalation home), and denies when headless. Every decision is logged to
+/// stderr (never silent).
+fn spawn_auto_policy(inner: &Arc<FleetInner>, session: &Arc<Session>, handle: String) {
     let mut perms = session.permissions();
+    let workroot = inner.base_repo.clone();
+    #[cfg(unix)]
+    let link = inner.link.clone();
     tokio::spawn(async move {
         while let Some(pending) = perms.next().await {
             let title = pending
@@ -598,6 +755,27 @@ fn spawn_auto_policy(session: &Arc<Session>, workroot: PathBuf, handle: String) 
                     pending.resolve(selected);
                 }
                 Risk::High => {
+                    #[cfg(unix)]
+                    if let Some(link) = &link {
+                        match link.request_permission(&handle, &pending).await {
+                            Some(outcome) => {
+                                tracing::info!(
+                                    subagent = %handle, tool = %title, outcome = ?outcome,
+                                    "resolved by the human (TUI decision queue)"
+                                );
+                                let selected = select_option(outcome, &pending.options);
+                                pending.resolve(selected);
+                            }
+                            None => {
+                                tracing::warn!(
+                                    subagent = %handle, tool = %title,
+                                    "TUI link lost — denied (high risk)"
+                                );
+                                drop(pending);
+                            }
+                        }
+                        continue;
+                    }
                     tracing::warn!(subagent = %handle, tool = %title, "denied (high risk, no human in the loop)");
                     drop(pending); // dropping resolves as the reject option
                 }
@@ -695,6 +873,14 @@ pub async fn serve_stdio(
 ) -> Result<()> {
     use rmcp::ServiceExt;
     let server = FleetMcp::new(catalog, base_repo, worktrees, allow_writes);
+    // Launched under `bitrouter tui`? Connect back over its fleet socket so
+    // the fleet mirrors into the rail and gated permissions reach the
+    // human's decision queue instead of the headless deny.
+    #[cfg(unix)]
+    let server = match std::env::var(crate::fleet::TUI_SOCK_ENV) {
+        Ok(path) => server.with_link(TuiLink::connect(&path).await),
+        Err(_) => server,
+    };
     let service = server.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -726,27 +912,6 @@ mod tests {
             true,
         );
         assert!(granted.require_write_grant("merge_subagent").is_ok());
-    }
-
-    #[test]
-    fn truncate_utf8_never_splits_a_character() {
-        // '界' is 3 bytes; a cap landing mid-character must back off to the
-        // previous boundary instead of panicking.
-        let mut s = "ab界界".to_string(); // bytes: a(1) b(1) 界(3) 界(3)
-        truncate_utf8(&mut s, 4);
-        assert_eq!(s, "ab");
-
-        let mut exact = "ab界界".to_string();
-        truncate_utf8(&mut exact, 5);
-        assert_eq!(exact, "ab界");
-
-        let mut short = "ab".to_string();
-        truncate_utf8(&mut short, 5);
-        assert_eq!(short, "ab", "under the cap is untouched");
-
-        let mut all_wide = "界".to_string();
-        truncate_utf8(&mut all_wide, 2);
-        assert_eq!(all_wide, "", "backs off to empty rather than panicking");
     }
 }
 
@@ -916,5 +1081,58 @@ mod e2e_tests {
             "applied changes are uncommitted in the base working tree"
         );
         fleet.do_close(&handle).await.expect("close");
+    }
+
+    /// The TUI fleet-socket link: handshake policy lands in the flag, and
+    /// bridge → TUI messages arrive as parseable NDJSON.
+    #[tokio::test]
+    async fn tui_link_handshake_and_ndjson_round_trip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fleet-tui.sock");
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
+        let link = TuiLink::connect(path.to_str().expect("utf8 path"))
+            .await
+            .expect("connect");
+        let (mut stream, _) = listener.accept().await.expect("accept");
+
+        // TUI → bridge: Hello flips the bootstrap policy flag.
+        use tokio::io::AsyncWriteExt;
+        stream
+            .write_all(b"{\"type\":\"hello\",\"bootstrap_approved\":true}\n")
+            .await
+            .expect("write hello");
+        let mut approved = false;
+        for _ in 0..100 {
+            if link
+                .bootstrap_approved
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                approved = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(approved, "Hello's policy reaches the flag");
+
+        // Bridge → TUI: a State message arrives as one parseable line.
+        link.send(&crate::fleet::BridgeMsg::State {
+            handle: "abc123".into(),
+            state: "working".into(),
+        })
+        .await;
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(stream).lines();
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("no timeout")
+            .expect("read")
+            .expect("one line");
+        match serde_json::from_str::<crate::fleet::BridgeMsg>(&line).expect("parse") {
+            crate::fleet::BridgeMsg::State { handle, state } => {
+                assert_eq!(handle, "abc123");
+                assert_eq!(state, "working");
+            }
+            other => panic!("wrong message: {other:?}"),
+        }
     }
 }

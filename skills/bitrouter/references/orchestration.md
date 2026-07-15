@@ -55,17 +55,22 @@ through the proxy.
   the grant, *request* integration: tell the human which handle is ready and
   let them merge from the `bitrouter tui` review queue (or rerun the bridge
   with the grant). Never ask for the grant on the human's behalf.
-- **Permissions are auto-policied.** A subagent's reversible, in-worktree
-  actions (reads, searches, edits under the repo) auto-allow; deletes,
-  command execution, network access, and out-of-tree writes are **denied**
-  (there is no human in this loop). Every decision is logged to stderr. If a
-  task genuinely needs command execution, run it under the human-supervised
-  `bitrouter tui` instead.
+- **Permissions are auto-policied, escalating to the human when possible.**
+  A subagent's reversible, in-worktree actions (reads, searches, edits under
+  the repo) auto-allow. Higher-risk actions (deletes, command execution,
+  network access, out-of-tree writes) **escalate to the human's decision
+  queue** when the bridge runs under `bitrouter tui` — the tool call waits
+  for their y/a/n — and are **denied** when the bridge is headless (no human
+  in the loop). Every decision is logged to stderr. Under the TUI your
+  subagents also appear in its rail as monitor panes.
 - **Worktree hygiene.** Each subagent gets a `PORT` from `worktrees.ports`
-  (default 3100–3199) and the `worktrees.bootstrap` hook runs in each fresh
-  worktree (config-declared; it executes shell). Closed subagents leave
-  their worktrees behind — tell the human what is merged and what can be
-  discarded (`git worktree remove`).
+  (default 3100–3199; leases are shared with the TUI's fleet, so ports never
+  collide across the two). The `worktrees.bootstrap` hook (config-declared;
+  it executes shell) runs in each fresh worktree — under `bitrouter tui`
+  only after the human's first-use approval there (a skipped hook is noted
+  in the spawn summary as `bootstrap`); headless, wiring the bridge is the
+  standing grant. Closed subagents leave their worktrees behind — tell the
+  human what is merged and what can be discarded (`git worktree remove`).
 
 ## Headless one-shots (no bridge)
 

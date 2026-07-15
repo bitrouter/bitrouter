@@ -9,6 +9,158 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bitrouter_substrate::translate::PermissionOutcome;
+use bitrouter_substrate::up::PendingPermission;
+
+/// Env var carrying the TUI's fleet-socket path. The TUI injects it into the
+/// orchestrator's PTY environment; the MCP bridge subprocess (spawned by the
+/// harness, which inherits that environment) connects back through it.
+pub const TUI_SOCK_ENV: &str = "BITROUTER_FLEET_TUI_SOCK";
+
+/// The per-repo fleet socket the TUI listens on (Unix only).
+pub fn tui_sock_path(base_repo: &Path) -> PathBuf {
+    base_repo.join(".bitrouter").join("fleet-tui.sock")
+}
+
+/// Truncate `s` to at most `max` bytes without splitting a UTF-8 character —
+/// a raw `String::truncate` at a fixed byte offset panics mid-character.
+pub fn truncate_utf8(s: &mut String, max: usize) {
+    if s.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
+/// One NDJSON message the MCP bridge sends the TUI over the fleet socket:
+/// fleet mirroring (spawned/state/closed) plus gated permission requests the
+/// bridge won't auto-resolve — those go to the human's decision queue
+/// (TUI_SPEC §5's escalation home) instead of the old silent high-risk deny.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BridgeMsg {
+    Spawned {
+        handle: String,
+        agent: String,
+        port: Option<u16>,
+    },
+    /// Task-shaped state change: `working` / `completed` / `failed`.
+    State {
+        handle: String,
+        state: String,
+    },
+    Closed {
+        handle: String,
+    },
+    Permission {
+        /// Bridge-local id the TUI echoes back in `TuiMsg::Resolve`.
+        id: u64,
+        handle: String,
+        title: String,
+        diff: Option<WireDiff>,
+        options: Vec<WireOption>,
+    },
+}
+
+/// One NDJSON message the TUI sends the bridge.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TuiMsg {
+    /// Handshake: the TUI's standing policy state at connect time.
+    Hello { bootstrap_approved: bool },
+    /// The human approved the worktree bootstrap hook (first-use confirm).
+    BootstrapApproved,
+    /// The human resolved permission `id` (`allow_once`/`allow_always`/`deny`).
+    Resolve { id: u64, outcome: String },
+}
+
+/// A permission's file diff, reduced to wire data (both texts capped).
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct WireDiff {
+    pub path: String,
+    pub old: String,
+    pub new: String,
+}
+
+/// A permission option, reduced to display label + outcome keyword.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct WireOption {
+    pub label: String,
+    pub outcome: String,
+}
+
+/// Cap per side of a wire diff — big enough to review, small enough to
+/// never stall the socket.
+const WIRE_DIFF_CAP: usize = 64 * 1024;
+
+/// Extract a pending permission's diff as wire data, texts capped.
+pub fn wire_diff(p: &PendingPermission) -> Option<WireDiff> {
+    use agent_client_protocol::schema::v1::ToolCallContent;
+    p.tool_call
+        .fields
+        .content
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .find_map(|c| match c {
+            ToolCallContent::Diff(d) => {
+                let mut old = d.old_text.clone().unwrap_or_default();
+                let mut new = d.new_text.clone();
+                truncate_utf8(&mut old, WIRE_DIFF_CAP);
+                truncate_utf8(&mut new, WIRE_DIFF_CAP);
+                Some(WireDiff {
+                    path: d.path.display().to_string(),
+                    old,
+                    new,
+                })
+            }
+            _ => None,
+        })
+}
+
+/// Map a pending permission's options to display data, matching the TUI's
+/// y/a/n handling (allow-once / allow-always / deny).
+pub fn wire_options(p: &PendingPermission) -> Vec<WireOption> {
+    use agent_client_protocol::schema::v1::PermissionOptionKind;
+    p.options
+        .iter()
+        .map(|o| {
+            let (outcome, label) = match o.kind {
+                PermissionOptionKind::AllowOnce => (PermissionOutcome::AllowOnce, "allow"),
+                PermissionOptionKind::AllowAlways => {
+                    (PermissionOutcome::AllowAlways, "allow always")
+                }
+                // Any reject/unknown kind maps to Deny — the TUI offers y/a/n.
+                _ => (PermissionOutcome::Deny, "deny"),
+            };
+            WireOption {
+                label: label.to_string(),
+                outcome: outcome_str(outcome).to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Wire keyword for an outcome (`TuiMsg::Resolve` / `WireOption`).
+pub fn outcome_str(o: PermissionOutcome) -> &'static str {
+    match o {
+        PermissionOutcome::AllowOnce => "allow_once",
+        PermissionOutcome::AllowAlways => "allow_always",
+        PermissionOutcome::Deny => "deny",
+    }
+}
+
+/// Parse a wire outcome keyword; anything unrecognized denies (fail-closed).
+pub fn outcome_from_str(s: &str) -> PermissionOutcome {
+    match s {
+        "allow_once" => PermissionOutcome::AllowOnce,
+        "allow_always" => PermissionOutcome::AllowAlways,
+        _ => PermissionOutcome::Deny,
+    }
+}
 
 /// Branch-safe agent tag: keep `[A-Za-z0-9._]`, everything else becomes `-`.
 pub fn branch_tag(agent_id: &str) -> String {
@@ -250,10 +402,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bridge_messages_round_trip_as_ndjson() {
+        let msg = BridgeMsg::Permission {
+            id: 7,
+            handle: "abc123".into(),
+            title: "WRITE src/x.rs".into(),
+            diff: Some(WireDiff {
+                path: "src/x.rs".into(),
+                old: "a".into(),
+                new: "b".into(),
+            }),
+            options: vec![WireOption {
+                label: "allow".into(),
+                outcome: "allow_once".into(),
+            }],
+        };
+        let line = serde_json::to_string(&msg).expect("serialize");
+        assert!(!line.contains('\n'), "NDJSON: one line per message");
+        match serde_json::from_str::<BridgeMsg>(&line).expect("parse") {
+            BridgeMsg::Permission { id, options, .. } => {
+                assert_eq!(id, 7);
+                assert_eq!(options[0].outcome, "allow_once");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        let resolve = TuiMsg::Resolve {
+            id: 7,
+            outcome: outcome_str(outcome_from_str("allow_always")).to_string(),
+        };
+        let line = serde_json::to_string(&resolve).expect("serialize");
+        assert!(line.contains("allow_always"));
+    }
+
+    #[test]
+    fn unknown_wire_outcome_fails_closed_to_deny() {
+        assert_eq!(outcome_from_str("nonsense"), PermissionOutcome::Deny);
+        assert_eq!(outcome_from_str("allow_once"), PermissionOutcome::AllowOnce);
+    }
+
+    #[test]
     fn branch_tag_sanitizes_for_git_ref_names() {
         assert_eq!(branch_tag("claude-acp"), "claude-acp");
         assert_eq!(branch_tag("my agent/v2"), "my-agent-v2");
         assert_eq!(branch_tag("gpt_4.1"), "gpt_4.1");
+    }
+
+    #[test]
+    fn truncate_utf8_never_splits_a_character() {
+        // '界' is 3 bytes; a cap landing mid-character must back off to the
+        // previous boundary instead of panicking.
+        let mut s = "ab界界".to_string(); // bytes: a(1) b(1) 界(3) 界(3)
+        truncate_utf8(&mut s, 4);
+        assert_eq!(s, "ab");
+
+        let mut exact = "ab界界".to_string();
+        truncate_utf8(&mut exact, 5);
+        assert_eq!(exact, "ab界");
+
+        let mut short = "ab".to_string();
+        truncate_utf8(&mut short, 5);
+        assert_eq!(short, "ab", "under the cap is untouched");
+
+        let mut all_wide = "界".to_string();
+        truncate_utf8(&mut all_wide, 2);
+        assert_eq!(all_wide, "", "backs off to empty rather than panicking");
     }
 
     #[test]

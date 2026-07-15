@@ -332,6 +332,11 @@ pub enum PaneKind {
     /// A native harness on a PTY (the orchestrator) — rendered by the
     /// terminal backend; keys pass through except the leader.
     Pty,
+    /// A monitor mirror of a subagent the orchestrator spawned via the MCP
+    /// bridge (another process owns the session). Display + decision queue
+    /// only: it can't be prompted, attached, or closed from here — the
+    /// orchestrator steers it.
+    Mirror,
 }
 
 /// One agent pane's state.
@@ -849,7 +854,7 @@ impl AppState {
     /// the sessions panel ([`sessions_list`](Self::sessions_list)).
     pub fn roster(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.agents.len())
-            .filter(|&i| self.agents[i].kind == PaneKind::Acp)
+            .filter(|&i| matches!(self.agents[i].kind, PaneKind::Acp | PaneKind::Mirror))
             .filter(|&i| !self.queue_only || self.agents[i].pending.is_some())
             .collect();
         order.sort_by_key(|&i| {
@@ -1211,6 +1216,14 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         });
                     }
                 }
+            } else {
+                // No pane to surface it in (closed in the arrival race):
+                // deny explicitly rather than strand the requester waiting
+                // on an answer that can never come.
+                effects.push(Effect::ResolvePermission {
+                    record_id: record_id.clone(),
+                    outcome: PermissionOutcome::Deny,
+                });
             }
             effects
         }
@@ -1228,6 +1241,77 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             // A just-spawned agent is what you want to look at: open it solo.
             state.detail = DetailLayout::solo(record_id.clone());
             state.notice = None;
+            Vec::new()
+        }
+        // ── MCP fleet bridge (Unix): the orchestrator's subagents mirror
+        // into the rail; their gated permissions ride the same decision
+        // queue as TUI-spawned agents. ──
+        #[cfg(unix)]
+        AppEvent::BridgeConnected { conn } => {
+            vec![Effect::BridgeHello {
+                conn: *conn,
+                bootstrap_approved: state.bootstrap_decision == Some(true),
+            }]
+        }
+        #[cfg(unix)]
+        AppEvent::BridgeSpawned {
+            record_id,
+            agent_id,
+            port,
+        } => {
+            let mut pane = PaneState::new(record_id.clone(), agent_id.clone());
+            pane.kind = PaneKind::Mirror;
+            pane.harness = "mcp".to_string();
+            pane.port = *port;
+            // A bridge spawn blocks on its first turn — it starts working.
+            pane.turn_active = true;
+            pane.push(Line::Note(
+                "spawned by the orchestrator (MCP) — monitor only; steer it there".into(),
+            ));
+            state.agents.push(pane);
+            // Unlike a human-initiated spawn, don't steal the detail focus:
+            // the human is mid-conversation with the orchestrator.
+            Vec::new()
+        }
+        #[cfg(unix)]
+        AppEvent::BridgeState {
+            record_id,
+            state: s,
+        } => {
+            if let Some(pane) = state.pane_by_id_mut(record_id) {
+                match s.as_str() {
+                    "working" => {
+                        pane.turn_active = true;
+                        pane.done = false;
+                    }
+                    "failed" => {
+                        pane.turn_active = false;
+                        pane.attention = true;
+                        pane.push_external(Line::Error("turn failed (see orchestrator)".into()));
+                    }
+                    // `completed` (or anything else): done-unseen, decaying
+                    // on view like any finished turn.
+                    _ => {
+                        pane.turn_active = false;
+                        pane.done = true;
+                    }
+                }
+            }
+            Vec::new()
+        }
+        #[cfg(unix)]
+        AppEvent::BridgeGone { record_ids } => {
+            for id in record_ids {
+                if let Some(pane) = state.pane_by_id_mut(id) {
+                    pane.exited = true;
+                    pane.turn_active = false;
+                    // The bridge side already denied its pendings when the
+                    // stream dropped.
+                    pane.pending = None;
+                    pane.push_external(Line::Note("bridge disconnected".into()));
+                }
+            }
+            state.clamp_rail_cursor();
             Vec::new()
         }
         AppEvent::AgentSpawnFailed { agent_id, error } => {
@@ -1396,7 +1480,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 return Vec::new();
             };
             match pane.kind {
-                PaneKind::Acp => {
+                PaneKind::Acp | PaneKind::Mirror => {
                     if *up {
                         pane.scroll_page_up();
                     } else {
@@ -1461,6 +1545,9 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                             key: *key,
                         }],
                         PaneKind::Acp => vec![Effect::CancelTurn { record_id }],
+                        // The orchestrator owns a mirror's turn — nothing
+                        // to interrupt from here.
+                        PaneKind::Mirror => Vec::new(),
                     };
                 }
                 state.should_quit = true;
@@ -1571,6 +1658,19 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 record_id: focus_id,
                 outcome,
             }];
+        }
+        return Vec::new();
+    }
+
+    // A focused mirror pane can't be prompted — the orchestrator owns that
+    // session (its composer is hidden; don't type into an invisible input).
+    if state.focused().is_some_and(|p| p.kind == PaneKind::Mirror) {
+        if key.code == KeyCode::Char(':') && state.input.is_empty() {
+            state.palette = Some(PaletteState::default());
+            state.mode = Mode::Command;
+        } else {
+            state.notice =
+                Some("orchestrator-managed subagent — steer it from the orchestrator".into());
         }
         return Vec::new();
     }
@@ -1833,11 +1933,18 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
         }
         // Cycle the cursor agent's autonomy tier (capital A — lowercase `a`
-        // grants allow-always on a pending row).
+        // grants allow-always on a pending row). Mirror panes keep their
+        // autonomy in the owning bridge — cycling here would be a lie.
         KeyCode::Char('A') if state.panel == Panel::Subagents => {
             if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
                 && let Some(pane) = state.pane_by_id_mut(&id)
             {
+                if pane.kind == PaneKind::Mirror {
+                    state.notice = Some(
+                        "orchestrator-managed subagent — its policy lives in the bridge".into(),
+                    );
+                    return Vec::new();
+                }
                 pane.autonomy = pane.autonomy.next();
                 let label = pane.autonomy.label();
                 pane.push(Line::AutoResolved(format!("autonomy set to {label}")));
@@ -1845,8 +1952,18 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         // Close the active panel's cursor pane (an attach pane close = detach).
-        KeyCode::Char('x') => match state.panel_selected().map(|p| p.record_id.clone()) {
-            Some(id) => close_agent_by_id(state, &id),
+        // A *live* mirror stays: another process owns that session, and
+        // removing the pane would orphan its future permission requests.
+        KeyCode::Char('x') => match state
+            .panel_selected()
+            .map(|p| (p.record_id.clone(), p.kind, p.exited))
+        {
+            Some((_, PaneKind::Mirror, false)) => {
+                state.notice =
+                    Some("orchestrator-managed subagent — close it there (close_subagent)".into());
+                Vec::new()
+            }
+            Some((id, _, _)) => close_agent_by_id(state, &id),
             None => Vec::new(),
         },
         _ => Vec::new(),
@@ -2183,10 +2300,17 @@ fn reduce_key_confirm(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         KeyCode::Char(c @ ('y' | 'n')) => {
             state.bootstrap_decision = Some(c == 'y');
             state.mode = Mode::Normal;
-            match state.confirm_agent.take() {
-                Some(agent_id) => vec![Effect::SpawnAgent { agent_id }],
-                None => Vec::new(),
+            let mut effects = Vec::new();
+            // The approval is fleet policy: connected MCP bridges gate their
+            // own bootstrap runs on it too.
+            #[cfg(unix)]
+            if c == 'y' {
+                effects.push(Effect::BridgeBootstrapApproved);
             }
+            if let Some(agent_id) = state.confirm_agent.take() {
+                effects.push(Effect::SpawnAgent { agent_id });
+            }
+            effects
         }
         KeyCode::Esc => {
             state.confirm_agent = None;
@@ -2225,9 +2349,14 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
+        // Select all *promptable* agents. PTY sessions and MCP mirrors have
+        // no ACP session behind `Effect::Prompt` — including them would
+        // silently drop the message and strand a fake spinner.
         KeyCode::Char('a') => {
             for p in state.agents.iter_mut() {
-                p.selected = true;
+                if p.kind == PaneKind::Acp {
+                    p.selected = true;
+                }
             }
             Vec::new()
         }
@@ -2242,7 +2371,7 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
             let mut effects = Vec::new();
             for p in state.agents.iter_mut() {
-                if p.selected {
+                if p.selected && p.kind == PaneKind::Acp {
                     p.push_external(Line::UserPrompt(text.clone()));
                     p.turn_active = true;
                     p.review = None;
@@ -3956,6 +4085,19 @@ mod tests {
         let mut st = picker_with_bootstrap();
         reduce(&mut st, &press(KeyCode::Enter));
         let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        // The grant also broadcasts to connected MCP bridges (Unix), then
+        // releases the pending spawn.
+        #[cfg(unix)]
+        assert_eq!(
+            fx,
+            vec![
+                Effect::BridgeBootstrapApproved,
+                Effect::SpawnAgent {
+                    agent_id: "fake".into()
+                }
+            ]
+        );
+        #[cfg(not(unix))]
         assert_eq!(
             fx,
             vec![Effect::SpawnAgent {
@@ -4870,5 +5012,204 @@ mod tests {
         st.agents[1].review = Some((1, 2, 3));
         st.agents[2].done = true;
         assert_eq!(st.title_badge(), "bitrouter ⚠1 ◆1 ◉1");
+    }
+
+    // ── MCP fleet bridge mirroring (Unix). ──
+
+    #[cfg(unix)]
+    fn spawn_mirror(st: &mut AppState) {
+        reduce(
+            st,
+            &AppEvent::BridgeSpawned {
+                record_id: "mcp:abc123".into(),
+                agent_id: "codex-acp".into(),
+                port: Some(3111),
+            },
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_spawn_mirrors_into_the_rail_without_stealing_focus() {
+        let mut st = AppState::new(pane());
+        st.detail = DetailLayout::solo("rec-1".into());
+        spawn_mirror(&mut st);
+        let mirror = st.agents.iter().find(|p| p.record_id == "mcp:abc123");
+        let mirror = mirror.expect("mirror pane created");
+        assert_eq!(mirror.kind, PaneKind::Mirror);
+        assert!(mirror.turn_active, "a bridge spawn starts working");
+        assert!(
+            st.roster()
+                .iter()
+                .any(|&i| st.agents[i].record_id == "mcp:abc123"),
+            "mirror appears in the subagents roster"
+        );
+        assert_eq!(
+            st.detail.shown,
+            vec!["rec-1".to_string()],
+            "the human's detail focus is untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_permission_rides_the_decision_queue() {
+        let mut st = AppState::new(pane());
+        spawn_mirror(&mut st);
+        reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "mcp:abc123".into(),
+                title: "rm -rf build".into(),
+                diff: None,
+                options: allow_deny(),
+                risk: Risk::High,
+            },
+        );
+        let mirror = st
+            .agents
+            .iter()
+            .find(|p| p.record_id == "mcp:abc123")
+            .expect("mirror pane");
+        assert!(mirror.pending.is_some(), "gated request reaches the queue");
+        // Resolve from the rail like any other agent.
+        st.mode = Mode::Agent;
+        st.panel = Panel::Subagents;
+        let order = st.roster();
+        let pos = order
+            .iter()
+            .position(|&i| st.agents[i].record_id == "mcp:abc123")
+            .expect("mirror row");
+        st.rail_cursor = pos;
+        let effects = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert!(
+            effects.contains(&Effect::ResolvePermission {
+                record_id: "mcp:abc123".into(),
+                outcome: PermissionOutcome::AllowOnce,
+            }),
+            "resolution flows through the normal effect: {effects:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_mirror_refuses_close_and_prompt() {
+        let mut st = AppState::new(pane());
+        spawn_mirror(&mut st);
+        // `x` on the live mirror row: refused with guidance.
+        st.mode = Mode::Agent;
+        st.panel = Panel::Subagents;
+        let order = st.roster();
+        let pos = order
+            .iter()
+            .position(|&i| st.agents[i].record_id == "mcp:abc123")
+            .expect("mirror row");
+        st.rail_cursor = pos;
+        let effects = reduce(&mut st, &press(KeyCode::Char('x')));
+        assert!(effects.is_empty(), "no CloseAgent for a live mirror");
+        assert!(
+            st.agents.iter().any(|p| p.record_id == "mcp:abc123"),
+            "mirror pane retained"
+        );
+        assert!(
+            st.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("close_subagent"))
+        );
+        // Typing at a focused mirror doesn't feed an invisible composer.
+        st.mode = Mode::Normal;
+        st.detail = DetailLayout::solo("mcp:abc123".into());
+        reduce(&mut st, &press(KeyCode::Char('h')));
+        assert!(st.input.is_empty(), "no hidden composer input");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_state_and_disconnect_update_the_mirror() {
+        let mut st = AppState::new(pane());
+        spawn_mirror(&mut st);
+        reduce(
+            &mut st,
+            &AppEvent::BridgeState {
+                record_id: "mcp:abc123".into(),
+                state: "completed".into(),
+            },
+        );
+        {
+            let mirror = st
+                .agents
+                .iter()
+                .find(|p| p.record_id == "mcp:abc123")
+                .expect("mirror");
+            assert!(!mirror.turn_active);
+            assert!(mirror.done, "completed = done-unseen");
+        }
+        reduce(
+            &mut st,
+            &AppEvent::BridgeGone {
+                record_ids: vec!["mcp:abc123".into()],
+            },
+        );
+        let mirror = st
+            .agents
+            .iter()
+            .find(|p| p.record_id == "mcp:abc123")
+            .expect("mirror");
+        assert!(mirror.exited, "disconnect marks the mirror dead");
+        assert!(mirror.pending.is_none());
+    }
+
+    #[test]
+    fn broadcast_select_all_targets_only_promptable_acp_panes() {
+        let mut st = AppState::new(pane());
+        let mut pty = PaneState::new("session-1".into(), "claude".into());
+        pty.kind = PaneKind::Pty;
+        st.agents.push(pty);
+        st.mode = Mode::Broadcast;
+        reduce(&mut st, &press(KeyCode::Char('a')));
+        // 'a' both selects agents and types into the broadcast input; only
+        // the selection matters here.
+        st.broadcast_input = "status?".into();
+        let effects = reduce(&mut st, &press(KeyCode::Enter));
+        assert_eq!(
+            effects,
+            vec![Effect::Prompt {
+                record_id: "rec-1".into(),
+                text: "status?".into(),
+            }],
+            "PTY sessions get no silent no-op prompt"
+        );
+        let pty = st
+            .agents
+            .iter()
+            .find(|p| p.record_id == "session-1")
+            .expect("pty pane");
+        assert!(
+            !pty.turn_active,
+            "no fake working spinner on a pane that got nothing"
+        );
+    }
+
+    #[test]
+    fn paneless_permission_denies_instead_of_stranding() {
+        let mut st = AppState::new(pane());
+        let effects = reduce(
+            &mut st,
+            &AppEvent::Permission {
+                record_id: "ghost".into(),
+                title: "WRITE".into(),
+                diff: None,
+                options: allow_deny(),
+                risk: Risk::High,
+            },
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::ResolvePermission {
+                record_id: "ghost".into(),
+                outcome: PermissionOutcome::Deny,
+            }],
+            "a request with no pane to show it in must deny, not hang"
+        );
     }
 }
