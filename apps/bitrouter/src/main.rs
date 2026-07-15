@@ -1600,6 +1600,10 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                     .fleet(std::sync::Arc::new(fleet))
                     .cost(std::sync::Arc::new(MeteringCost::new(source)))
                     .build();
+                // No `complete`/`status` cost footer here (unlike the public
+                // stdio path): the orchestrator profile carries the richer
+                // `fleet_cost` tool, so the per-result footer would be
+                // redundant. Intentional asymmetry.
                 return bitrouter_mcp::server::serve_stdio(server, None).await;
             }
             if allow_writes {

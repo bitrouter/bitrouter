@@ -71,6 +71,19 @@ struct Subagent {
     state: &'static str,
 }
 
+/// A freshly launched-and-registered subagent, handed back to `do_spawn` so it
+/// can run the opening turn. The reservation has already been consumed and the
+/// subagent inserted by the time this is returned.
+struct Launched {
+    handle: String,
+    session: Arc<Session>,
+    /// The opening task prompt (moved out of `SpawnArgs`).
+    task: String,
+    contract: Option<ResultContract>,
+    /// Whether the bootstrap hook was skipped (surfaced in the spawn summary).
+    bootstrap_skipped: bool,
+}
+
 /// The substrate-backed fleet: a registry of worktree-isolated ACP subagents.
 /// Injected into `bitrouter-mcp`'s orchestrator profile as the `Fleet` port.
 pub struct SubstrateFleet {
@@ -83,14 +96,31 @@ struct FleetInner {
     worktrees: WorktreesConfig,
     /// Human-granted write autonomy (`--allow-writes`).
     allow_writes: bool,
-    /// handle (record16) → subagent. Also serializes integration: `apply`/
-    /// `merge` hold this lock, so branches integrate one at a time.
-    agents: tokio::sync::Mutex<HashMap<String, Subagent>>,
+    /// The live subagent registry plus in-flight spawn reservations, under one
+    /// lock. Also serializes integration: `apply`/`merge` hold this lock, so
+    /// branches integrate one at a time.
+    registry: tokio::sync::Mutex<Registry>,
     /// Live link back to the hosting TUI over the fleet socket, when this
     /// bridge was launched under `bitrouter tui` (Unix): mirrors the fleet
     /// into the rail and routes gated permissions to the human's queue.
     #[cfg(unix)]
     link: Option<Arc<TuiLink>>,
+}
+
+/// The subagent map plus the count of in-flight spawns that have reserved a
+/// slot but not yet inserted. Counting reservations against the cap — under the
+/// same lock as the map — is what stops N concurrent `spawn_subagent` calls
+/// from each passing the capacity check and overshooting
+/// [`MAX_CONCURRENT_SUBAGENTS`]: the check and the reservation are one critical
+/// section, and the reservation converts to a live entry (or is released) under
+/// that same lock.
+#[derive(Default)]
+struct Registry {
+    /// handle (record16) → subagent.
+    agents: HashMap<String, Subagent>,
+    /// Slots claimed by spawns still launching (a claim is released either when
+    /// the subagent is inserted or when its launch fails).
+    reserving: usize,
 }
 
 /// The bridge's end of the TUI fleet socket.
@@ -215,7 +245,7 @@ impl SubstrateFleet {
             base_repo,
             worktrees,
             allow_writes,
-            agents: tokio::sync::Mutex::new(HashMap::new()),
+            registry: tokio::sync::Mutex::new(Registry::default()),
             #[cfg(unix)]
             link,
         };
@@ -227,17 +257,59 @@ impl SubstrateFleet {
     async fn do_spawn(&self, args: SpawnArgs) -> Result<serde_json::Value> {
         let inner = &self.inner;
         // Circuit breaker: cap the live fleet so the orchestrator integrates
-        // or closes before fanning out unboundedly (TUI_SPEC §5).
+        // or closes before fanning out unboundedly (TUI_SPEC §5). Reserve a
+        // slot atomically — the capacity check and the reservation are one
+        // critical section — so N concurrent spawns can't all pass the check
+        // and overshoot. The reservation is consumed at insert time, or
+        // released here on a launch failure (never leaks a slot).
         {
-            let agents = inner.agents.lock().await;
-            if agents.len() >= MAX_CONCURRENT_SUBAGENTS {
+            let mut reg = inner.registry.lock().await;
+            if reg.agents.len() + reg.reserving >= MAX_CONCURRENT_SUBAGENTS {
                 anyhow::bail!(
                     "fleet at capacity: {MAX_CONCURRENT_SUBAGENTS} subagents already running. \
                      Integrate or close one (merge_subagent / apply_subagent / close_subagent) \
                      before spawning more."
                 );
             }
+            reg.reserving += 1;
         }
+        let launched = self.launch_and_register(args).await;
+        let Launched {
+            handle,
+            session,
+            task,
+            contract,
+            bootstrap_skipped,
+        } = match launched {
+            Ok(v) => v,
+            Err(e) => {
+                // Launch failed before the subagent was inserted — release the
+                // slot we reserved. The port lease and half-built session drop
+                // on the `?`-unwind inside `launch_and_register` (no leak).
+                inner.registry.lock().await.reserving -= 1;
+                return Err(e);
+            }
+        };
+
+        let mut summary = self
+            .run_blocking_turn(&handle, session, &task, contract)
+            .await?;
+        if bootstrap_skipped {
+            summary["bootstrap"] = serde_json::json!(
+                "skipped — the worktree bootstrap hook isn't approved in the TUI yet \
+                 (the human approves it on their first spawn there)"
+            );
+        }
+        Ok(summary)
+    }
+
+    /// Launch the subagent and register it, consuming the caller's reservation
+    /// (`reserving -= 1`) in the same critical section as the insert so the
+    /// live count never overshoots the cap. Any failure before the insert
+    /// returns `Err` with the reservation untouched — `do_spawn` releases it —
+    /// and the freshly-leased port / half-built session drop on the unwind.
+    async fn launch_and_register(&self, args: SpawnArgs) -> Result<Launched> {
+        let inner = &self.inner;
         let isolate = args.worktree.unwrap_or(true);
         let contract = args
             .result_schema
@@ -296,8 +368,12 @@ impl SubstrateFleet {
 
         let port_num = port.as_ref().map(|l| l.port());
         {
-            let mut agents = inner.agents.lock().await;
-            agents.insert(
+            let mut reg = inner.registry.lock().await;
+            // Convert the reservation into a live entry atomically: the count
+            // moves from `reserving` to `agents` under one lock, so a concurrent
+            // spawn never sees the slot double-counted or dropped.
+            reg.reserving -= 1;
+            reg.agents.insert(
                 handle.clone(),
                 Subagent {
                     session: Arc::clone(&session),
@@ -323,22 +399,20 @@ impl SubstrateFleet {
         #[cfg(not(unix))]
         let _ = port_num;
 
-        let mut summary = self
-            .run_blocking_turn(&handle, session, &args.task, contract)
-            .await?;
-        if bootstrap_skipped {
-            summary["bootstrap"] = serde_json::json!(
-                "skipped — the worktree bootstrap hook isn't approved in the TUI yet \
-                 (the human approves it on their first spawn there)"
-            );
-        }
-        Ok(summary)
+        Ok(Launched {
+            handle,
+            session,
+            task: args.task,
+            contract,
+            bootstrap_skipped,
+        })
     }
 
     async fn do_prompt(&self, args: PromptArgs) -> Result<serde_json::Value> {
         let session = {
-            let mut agents = self.inner.agents.lock().await;
-            let sub = agents
+            let mut reg = self.inner.registry.lock().await;
+            let sub = reg
+                .agents
                 .get_mut(&args.handle)
                 .with_context(|| format!("no subagent with handle '{}'", args.handle))?;
             sub.state = "working";
@@ -415,7 +489,7 @@ impl SubstrateFleet {
     }
 
     async fn set_state(&self, handle: &str, state: &'static str) {
-        if let Some(sub) = self.inner.agents.lock().await.get_mut(handle) {
+        if let Some(sub) = self.inner.registry.lock().await.agents.get_mut(handle) {
             sub.state = state;
         }
         #[cfg(unix)]
@@ -433,8 +507,9 @@ impl SubstrateFleet {
         &self,
         handle: &str,
     ) -> Result<(String, Option<PathBuf>, Option<String>, String, Option<u16>)> {
-        let agents = self.inner.agents.lock().await;
-        let sub = agents
+        let reg = self.inner.registry.lock().await;
+        let sub = reg
+            .agents
             .get(handle)
             .with_context(|| format!("no subagent with handle '{handle}'"))?;
         Ok((
@@ -447,17 +522,18 @@ impl SubstrateFleet {
     }
 
     async fn do_status(&self, handle: Option<&str>) -> Result<serde_json::Value> {
-        let agents = self.inner.agents.lock().await;
+        let reg = self.inner.registry.lock().await;
         match handle {
             Some(h) => {
-                let sub = agents
+                let sub = reg
+                    .agents
                     .get(h)
                     .with_context(|| format!("no subagent with handle '{h}'"))?;
                 Ok(snapshot(h, sub).await)
             }
             None => {
                 let mut fleet = Vec::new();
-                for (h, sub) in agents.iter() {
+                for (h, sub) in reg.agents.iter() {
                     fleet.push(snapshot(h, sub).await);
                 }
                 Ok(serde_json::json!({ "fleet": fleet }))
@@ -503,8 +579,9 @@ impl SubstrateFleet {
         self.require_write_grant("apply_subagent")?;
         // Holding the registry lock serializes integration (merge-queue
         // semantics: one branch lands at a time).
-        let agents = self.inner.agents.lock().await;
-        let sub = agents
+        let reg = self.inner.registry.lock().await;
+        let sub = reg
+            .agents
             .get(handle)
             .with_context(|| format!("no subagent with handle '{handle}'"))?;
         let wt = sub
@@ -523,8 +600,9 @@ impl SubstrateFleet {
 
     async fn do_merge(&self, handle: &str) -> Result<serde_json::Value> {
         self.require_write_grant("merge_subagent")?;
-        let agents = self.inner.agents.lock().await;
-        let sub = agents
+        let reg = self.inner.registry.lock().await;
+        let sub = reg
+            .agents
             .get(handle)
             .with_context(|| format!("no subagent with handle '{handle}'"))?;
         let wt = sub
@@ -551,8 +629,9 @@ impl SubstrateFleet {
         // Hold the registry lock across the sole-owner check: `do_prompt`
         // clones the session `Arc` under this same lock, so nothing can grab
         // a clone between the check and the removal.
-        let mut agents = self.inner.agents.lock().await;
-        let sub = agents
+        let mut reg = self.inner.registry.lock().await;
+        let sub = reg
+            .agents
             .remove(handle)
             .with_context(|| format!("no subagent with handle '{handle}'"))?;
         let Subagent {
@@ -569,7 +648,7 @@ impl SubstrateFleet {
             Err(session) => {
                 // A turn is in flight — put the entry back; removing it here
                 // would orphan the child process and its worktree lease.
-                agents.insert(
+                reg.agents.insert(
                     handle.to_string(),
                     Subagent {
                         session,
@@ -586,7 +665,7 @@ impl SubstrateFleet {
                 );
             }
         };
-        drop(agents);
+        drop(reg);
         only.shutdown()
             .await
             .context("shutting down the subagent session")?;
@@ -1032,6 +1111,83 @@ mod e2e_tests {
         for handle in &handles {
             fleet.do_close(handle).await.expect("close");
         }
+    }
+
+    /// The concurrency guard on the cap: firing more spawns than the cap all at
+    /// once must admit exactly the cap and reject the rest — the check and the
+    /// reservation are one critical section, so racing spawns can't overshoot.
+    /// The rejected spawns bail before leasing a port or launching a child, so
+    /// nothing leaks.
+    #[tokio::test]
+    async fn concurrent_spawns_do_not_overshoot_the_cap() {
+        let repo = init_repo();
+        let fleet = Arc::new(
+            SubstrateFleet::connect(
+                catalog_from("idle", IDLE_STUB),
+                repo.path().to_path_buf(),
+                WorktreesConfig::default(),
+                false,
+            )
+            .await,
+        );
+        // Fire more spawns than the cap, all at once (worktree=false keeps the
+        // test light; the race is between the capacity check and the insert).
+        let overshoot = 2usize;
+        let mut tasks = Vec::new();
+        for i in 0..MAX_CONCURRENT_SUBAGENTS + overshoot {
+            let fleet = Arc::clone(&fleet);
+            tasks.push(tokio::spawn(async move {
+                fleet
+                    .do_spawn(SpawnArgs {
+                        agent: "idle".into(),
+                        task: format!("task {i}"),
+                        worktree: Some(false),
+                        result_schema: None,
+                    })
+                    .await
+            }));
+        }
+        let mut admitted = Vec::new();
+        let mut rejected = 0usize;
+        for task in tasks {
+            match task.await.expect("join") {
+                Ok(summary) => {
+                    admitted.push(summary["handle"].as_str().expect("handle").to_string())
+                }
+                Err(e) => {
+                    assert!(
+                        format!("{e:#}").contains("capacity"),
+                        "reject reason: {e:#}"
+                    );
+                    rejected += 1;
+                }
+            }
+        }
+        assert_eq!(
+            admitted.len(),
+            MAX_CONCURRENT_SUBAGENTS,
+            "exactly the cap is admitted (no overshoot)"
+        );
+        assert_eq!(rejected, overshoot, "the excess spawns are all rejected");
+
+        // The reservation accounting reconciled: the fleet is exactly full (no
+        // phantom slot lost to a never-released reservation).
+        let status = fleet.do_status(None).await.expect("status");
+        assert_eq!(
+            status["fleet"].as_array().expect("fleet array").len(),
+            MAX_CONCURRENT_SUBAGENTS
+        );
+
+        // No port leases leaked: rejected spawns bail before `reserve_port`,
+        // and each closed subagent drops its lease.
+        for handle in &admitted {
+            fleet.do_close(handle).await.expect("close");
+        }
+        let ports_dir = repo.path().join(".bitrouter").join("ports");
+        let leaked: Vec<_> = std::fs::read_dir(&ports_dir)
+            .map(|rd| rd.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(leaked.is_empty(), "no port leases leaked: {leaked:?}");
     }
 
     /// The TUI fleet-socket link: handshake policy lands in the flag, and

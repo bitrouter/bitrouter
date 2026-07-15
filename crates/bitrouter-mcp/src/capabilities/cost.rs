@@ -4,9 +4,10 @@
 
 use crate::error::ToolError;
 
-/// A point-in-time spend snapshot for the orchestrating session. Returns
-/// pre-built JSON (today's spend, request count, all-time totals) — the crate
-/// never touches the metering database itself.
+/// A point-in-time spend snapshot from the local metering database
+/// (machine-wide, not scoped to one session). Returns pre-built JSON (today's
+/// spend, request count, all-time totals) — the crate never touches the
+/// metering database itself.
 #[async_trait::async_trait]
 pub trait CostQuery: Send + Sync {
     /// The current spend snapshot.

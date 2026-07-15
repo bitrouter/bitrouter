@@ -25,17 +25,23 @@ repo), so they inherit your process identity instead of an unauthenticated
 HTTP path. Run `bitrouter serve` alongside so subagents' LLM calls route
 through the proxy.
 
+The `fleet` profile is the **union**: the fleet tools below **plus** the
+completion tools (`complete` / `list_models` / `status`, routed to the local
+daemon) **plus** `fleet_cost`. So the one bridge lets you both delegate and run
+your own completions / check spend without a second MCP server.
+
 ## Tools
 
 | Tool | Effect |
 |---|---|
-| `spawn_subagent(agent, task, worktree?, result_schema?)` | Launch an ACP subagent on an isolated worktree + branch (`bitrouter/<agent>-<record16>`, based on the repo's HEAD at spawn), send `task`, **block until the turn ends**. Returns `{handle, agent, state, stop_reason, reply, worktree, branch, port, diff_stat}` — plus `result`/`schema_ok` when `result_schema` (a JSON Schema object) was given (one repair re-prompt on invalid output, then `schema_ok:false`). `worktree:false` opts out for read-only investigation. |
+| `spawn_subagent(agent, task, worktree?, result_schema?)` | Launch an ACP subagent on an isolated worktree + branch (`bitrouter/<agent>-<record16>`, based on the repo's HEAD at spawn), send `task`, **block until the turn ends**. Returns `{handle, agent, state, stop_reason, reply, worktree, branch, port, diff_stat}` — plus `result`/`schema_ok` when `result_schema` (a JSON Schema object) was given (one repair re-prompt on invalid output, then `schema_ok:false`). `worktree:false` opts out for read-only investigation. **Rejected at capacity** — see the cap below. |
 | `prompt_subagent(handle, text)` | Follow-up prompt (e.g. review feedback); same blocking summary. |
 | `subagent_status(handle?)` | One agent or the whole fleet: state (`working`/`completed`/`failed`), worktree, branch, diff stat. |
 | `subagent_diff(handle)` | Full diff vs the spawn base (committed + uncommitted; untracked files listed; truncated at 64 KiB). |
 | `apply_subagent(handle)` | Apply the diff onto the base working tree **uncommitted**. **Human-gated** — see below. |
 | `merge_subagent(handle)` | Merge the branch, keeping history; requires the subagent to have committed (clean worktree). Serialized: one integration at a time. **Human-gated.** |
 | `close_subagent(handle)` | Shut the subagent down. Its worktree is **retained** (cleanup is gated on merged-or-discarded, never automatic). |
+| `fleet_cost()` | BitRouter spend snapshot from the local metering database (machine-wide, not per-session): today's spend + request count and all-time totals. Keeps in-session model arbitrage cost-visible. |
 
 ## Rules of engagement
 
@@ -47,6 +53,10 @@ through the proxy.
   subsystem in scope, say what "done" means, and — when you need structured
   data back — pass `result_schema` instead of parsing prose.
 - **Depth 1.** Subagents do not spawn subagents.
+- **Mind the cap.** At most **6** subagents run concurrently per bridge. A
+  `spawn_subagent` past the cap is **rejected** with an actionable message —
+  `merge_subagent`/`apply_subagent`/`close_subagent` one before spawning more.
+  A healthy fleet is ~2–6; a disciplined review gate beats fanning out wide.
 - **Review before integrating.** Read `subagent_diff` (or have the human
   review in `bitrouter tui`). Rejection loop: `prompt_subagent` with your
   feedback — the subagent addresses it in the same worktree.

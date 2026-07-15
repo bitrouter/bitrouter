@@ -256,9 +256,9 @@ impl BitrouterMcp {
 #[tool_router(router = cost_router)]
 impl BitrouterMcp {
     #[tool(
-        description = "BitRouter spend snapshot for this session: today's spend and request \
-                       count plus all-time totals. Keeps in-session model arbitrage \
-                       cost-visible."
+        description = "BitRouter spend snapshot from the local metering database (machine-wide, \
+                       not scoped to one session): today's spend and request count plus all-time \
+                       totals. Keeps in-session model arbitrage cost-visible."
     )]
     async fn fleet_cost(&self) -> Result<CallToolResult, McpError> {
         Ok(json_tool_result(self.cost()?.snapshot().await))
@@ -309,6 +309,32 @@ impl BitrouterMcp {
         let footer = self.cost_footer.as_ref()?;
         footer.line().await.map(ContentBlock::text)
     }
+
+    /// Server instructions, composed from the wired capabilities. The public
+    /// profile gets only the completion base; the orchestrator profile adds the
+    /// fleet / cost guidance the old `FleetMcp::get_info` carried, so a client
+    /// is told about the tools it can actually call (and the human-gating of
+    /// apply/merge).
+    fn instructions(&self) -> String {
+        let mut s = String::from(
+            "BitRouter origin MCP server. Use `list_models` to discover routable \
+             models, `complete` to run a completion, `status` for health/credits.",
+        );
+        if self.fleet.is_some() {
+            s.push_str(
+                " Fleet: spawn and manage worktree-isolated ACP subagents. \
+                 `spawn_subagent` blocks and returns a summary; review with \
+                 `subagent_diff`; `apply_subagent`/`merge_subagent` are human-gated \
+                 unless the bridge was started with --allow-writes. Subagents don't \
+                 spawn subagents (delegation depth 1), and a spawn is rejected past a \
+                 6-subagent cap — integrate or close one before fanning out further.",
+            );
+        }
+        if self.cost.is_some() {
+            s.push_str(" Use `fleet_cost` to keep spend visible mid-session.");
+        }
+        s
+    }
 }
 
 /// Assembles a [`BitrouterMcp`] from the capabilities the caller wires. Each
@@ -319,7 +345,6 @@ pub struct Builder {
     backend: Option<Arc<dyn Backend>>,
     fleet: Option<Arc<dyn Fleet>>,
     cost: Option<Arc<dyn CostQuery>>,
-    cost_footer: Option<Arc<dyn CostFooter>>,
 }
 
 impl Builder {
@@ -335,12 +360,6 @@ impl Builder {
         self
     }
 
-    /// Wire completion against BitRouter Cloud at `url` with `auth`.
-    pub fn completion_cloud(mut self, url: &str, auth: CloudAuth) -> Self {
-        self.backend = Some(Arc::new(CloudBackend::new(url, auth)));
-        self
-    }
-
     /// Wire the fleet capability (spawn/manage subagents).
     pub fn fleet(mut self, fleet: Arc<dyn Fleet>) -> Self {
         self.fleet = Some(fleet);
@@ -350,12 +369,6 @@ impl Builder {
     /// Wire the cost capability (the `fleet_cost` tool).
     pub fn cost(mut self, cost: Arc<dyn CostQuery>) -> Self {
         self.cost = Some(cost);
-        self
-    }
-
-    /// Attach the completion result footer (stdio spend annotation).
-    pub fn cost_footer(mut self, footer: Arc<dyn CostFooter>) -> Self {
-        self.cost_footer = Some(footer);
         self
     }
 
@@ -375,7 +388,9 @@ impl Builder {
             backend: self.backend,
             fleet: self.fleet,
             cost: self.cost,
-            cost_footer: self.cost_footer,
+            // The footer is attached later, transport-side, via
+            // `with_cost_footer` (stdio only) — never through the builder.
+            cost_footer: None,
             tool_router: router,
         }
     }
@@ -384,11 +399,8 @@ impl Builder {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BitrouterMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "BitRouter origin MCP server. Use `list_models` to discover routable \
-                 models, `complete` to run a completion, `status` for health/credits."
-                .to_string(),
-        )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(self.instructions())
     }
 }
 
@@ -736,6 +748,34 @@ mod tests {
             .cost(Arc::new(StubCost))
             .build();
         assert_eq!(tool_names(&server).len(), 11);
+    }
+
+    #[test]
+    fn instructions_reflect_the_wired_capabilities() {
+        // The public profile advertises only the completion base — no fleet or
+        // cost guidance a completion-only client couldn't act on.
+        let public = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .build()
+            .instructions();
+        assert!(public.contains("list_models"));
+        assert!(
+            !public.contains("spawn_subagent"),
+            "no fleet guidance: {public}"
+        );
+        assert!(!public.contains("fleet_cost"), "no cost guidance: {public}");
+
+        // The orchestrator profile restores the fleet guidance (spawn/review,
+        // human-gated apply/merge, the cap) plus the cost tool.
+        let orchestrator = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .fleet(Arc::new(StubFleet))
+            .cost(Arc::new(StubCost))
+            .build()
+            .instructions();
+        assert!(orchestrator.contains("spawn_subagent"));
+        assert!(orchestrator.contains("human-gated"));
+        assert!(orchestrator.contains("fleet_cost"));
     }
 
     #[test]
