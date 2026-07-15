@@ -189,6 +189,10 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         state.notice = Some(notice);
     }
 
+    // The single integration worker: merges/applies land one at a time,
+    // off the event loop (the UI stays live during a slow git operation).
+    let (integrate_tx, integrate_task) = start_integrator(base_repo.clone(), tx.clone());
+
     // ── Run; the loop owns full session teardown. The panic hook guarantees
     // the terminal is restored even if the loop panics mid-draw. ──
     install_panic_restore(restore_terminal);
@@ -226,6 +230,8 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         session_seq: 0,
         listen: cfg.server.listen.clone(),
         last_fleet: None,
+        integrate_tx: Some(integrate_tx),
+        integrate_task: Some(integrate_task),
     };
     let result = event_loop(&mut terminal, state, rx, rt).await;
     restore_terminal();
@@ -251,6 +257,68 @@ struct WorkMeta {
     branch: String,
     /// The base repo `HEAD` at spawn — the diff/merge base.
     base_ref: String,
+}
+
+/// One queued base-repo integration.
+enum IntKind {
+    Merge,
+    Apply,
+}
+
+/// A merge/apply job for the integration worker.
+struct IntegrationJob {
+    record_id: String,
+    meta: WorkMeta,
+    kind: IntKind,
+}
+
+/// Start the single integration worker: jobs run **one at a time**
+/// (merge-queue semantics — never two integrations racing the base repo)
+/// while the event loop stays live; each outcome returns as
+/// `Incoming::OpDone`. Closing the returned sender drains the queue and
+/// ends the worker.
+fn start_integrator(
+    base_repo: std::path::PathBuf,
+    tx: UnboundedSender<Incoming>,
+) -> (UnboundedSender<IntegrationJob>, tokio::task::JoinHandle<()>) {
+    let (jtx, mut jrx) = unbounded_channel::<IntegrationJob>();
+    let handle = tokio::spawn(async move {
+        while let Some(job) = jrx.recv().await {
+            let (message, ok) = match job.kind {
+                IntKind::Merge => match crate::fleet::merge_branch(
+                    &base_repo,
+                    &job.meta.worktree,
+                    &job.meta.branch,
+                    "ask the agent to commit, or use p (apply)",
+                )
+                .await
+                {
+                    Ok(()) => (format!("merged {}", job.meta.branch), true),
+                    Err(e) => (format!("merge failed: {e:#}"), false),
+                },
+                IntKind::Apply => match crate::fleet::apply_diff(
+                    &base_repo,
+                    &job.meta.worktree,
+                    &job.meta.base_ref,
+                )
+                .await
+                {
+                    Ok(()) => (
+                        "applied to the base working tree (uncommitted — you write the commit)"
+                            .to_string(),
+                        true,
+                    ),
+                    Err(e) => (format!("apply failed: {e:#}"), false),
+                },
+            };
+            let _ = tx.send(Incoming::OpDone {
+                record_id: job.record_id,
+                message,
+                ok,
+            });
+        }
+    });
+    (jtx, handle)
 }
 
 /// Terse harness tag for a pane header / roster meta line. Invocation
@@ -758,6 +826,12 @@ struct Runtime<'a> {
     listen: String,
     /// The last snapshot written (unstamped), for change detection.
     last_fleet: Option<bitrouter_substrate::fleet::FleetState>,
+    /// Queue into the single integration worker (`None` once cleanup closed
+    /// it). One worker = one integration at a time, off the event loop.
+    integrate_tx: Option<UnboundedSender<IntegrationJob>>,
+    /// The worker's handle; cleanup closes the queue and awaits it so a
+    /// quit never kills git mid-merge.
+    integrate_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Build the (unstamped) durable snapshot of the manager's current state.
@@ -1026,6 +1100,53 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
         }
         Incoming::PtyExited { record_id } => Some(AppEvent::Exited { record_id }),
         Incoming::ServeStatus { ok } => Some(AppEvent::ServeStatus { ok }),
+        Incoming::Spawned {
+            agent_id,
+            session,
+            lease,
+            tag,
+            base_ref,
+        } => {
+            let sess = *session;
+            let rid = sess.state().record_id.clone();
+            // Integration metadata: where the work lives, on which branch,
+            // against which base — feeds the review queue.
+            if let Some(wt) = sess.worktree_path() {
+                let handle = crate::fleet::record16(&rid);
+                rt.fleet.meta.insert(
+                    rid.clone(),
+                    WorkMeta {
+                        worktree: wt.to_path_buf(),
+                        branch: format!("bitrouter/{tag}-{handle}"),
+                        base_ref,
+                    },
+                );
+            }
+            let port = lease.as_ref().map(|l| l.port());
+            let sess = Arc::new(sess);
+            rt.sessions.insert(rid.clone(), Arc::clone(&sess));
+            if let Some(lease) = lease {
+                rt.fleet.leases.insert(rid.clone(), lease);
+            }
+            pump::spawn(sess, rid.clone(), rt.spawner.tx.clone());
+            Some(AppEvent::AgentSpawned {
+                record_id: rid,
+                agent_id,
+                port,
+            })
+        }
+        Incoming::SpawnFailed { agent_id, error } => {
+            Some(AppEvent::AgentSpawnFailed { agent_id, error })
+        }
+        Incoming::OpDone {
+            record_id,
+            message,
+            ok,
+        } => Some(AppEvent::OpDone {
+            record_id,
+            message,
+            ok,
+        }),
         #[cfg(unix)]
         Incoming::BridgeConnected { conn, writer } => {
             rt.bridges.insert(conn, writer);
@@ -1195,6 +1316,10 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             // a PORT from the pool, and — when the human approved it — the
             // bootstrap hook. Worktrees are retained on close: cleanup is
             // gated on merged-or-discarded, never automatic.
+            //
+            // The launch runs in the background: worktree creation plus the
+            // bootstrap hook (an `npm install` is normal) must not freeze
+            // the loop. Results return as `Incoming::Spawned`/`SpawnFailed`.
             let tag = crate::fleet::branch_tag(&agent_id);
             let lease = crate::fleet::reserve_port(&rt.spawner.base_repo, rt.fleet.ports);
             let port = lease.as_ref().map(|l| l.port());
@@ -1207,58 +1332,38 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 env: crate::fleet::port_env(port),
                 ..Default::default()
             };
-            match Session::launch(
-                rt.spawner.catalog,
-                &agent_id,
-                rt.spawner.base_repo.clone(),
-                options,
-            )
-            .await
-            {
-                Ok(sess) => {
-                    let rid = sess.state().record_id.clone();
-                    // Integration metadata: where the work lives, on which
-                    // branch, against which base — feeds the review queue.
-                    if let Some(wt) = sess.worktree_path() {
-                        let handle = crate::fleet::record16(&rid);
-                        let base_ref = crate::fleet::base_head(&rt.spawner.base_repo).await;
-                        rt.fleet.meta.insert(
-                            rid.clone(),
-                            WorkMeta {
-                                worktree: wt.to_path_buf(),
-                                branch: format!("bitrouter/{tag}-{handle}"),
-                                base_ref,
-                            },
-                        );
-                    }
-                    let sess = Arc::new(sess);
-                    rt.sessions.insert(rid.clone(), Arc::clone(&sess));
-                    if let Some(lease) = lease {
-                        rt.fleet.leases.insert(rid.clone(), lease);
-                    }
-                    pump::spawn(sess, rid.clone(), rt.spawner.tx.clone());
-                    let _ = reduce(
-                        state,
-                        &AppEvent::AgentSpawned {
-                            record_id: rid,
+            let catalog = (*rt.spawner.catalog).clone();
+            let base_repo = rt.spawner.base_repo.clone();
+            let tx = rt.spawner.tx.clone();
+            tokio::spawn(async move {
+                match Session::launch(&catalog, &agent_id, base_repo.clone(), options).await {
+                    Ok(sess) => {
+                        let base_ref = crate::fleet::base_head(&base_repo).await;
+                        if let Err(unsent) = tx.send(Incoming::Spawned {
                             agent_id,
-                            port,
-                        },
-                    );
-                }
-                Err(e) => {
-                    // The full error chain goes to the log; the reducer
-                    // flattens it into the one-line mode-bar notice.
-                    tracing::warn!(agent = %agent_id, error = %format!("{e:#}"), "subagent spawn failed");
-                    let _ = reduce(
-                        state,
-                        &AppEvent::AgentSpawnFailed {
+                            session: Box::new(sess),
+                            lease,
+                            tag,
+                            base_ref,
+                        }) {
+                            // The loop quit while we were launching: don't
+                            // leak the agent child.
+                            if let Incoming::Spawned { session, .. } = unsent.0 {
+                                let _ = session.shutdown().await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // The full error chain goes to the log; the reducer
+                        // flattens it into the one-line mode-bar notice.
+                        tracing::warn!(agent = %agent_id, error = %format!("{e:#}"), "subagent spawn failed");
+                        let _ = tx.send(Incoming::SpawnFailed {
                             agent_id,
                             error: format!("{e:#}"),
-                        },
-                    );
+                        });
+                    }
                 }
-            }
+            });
         }
         Effect::SpawnSession { binary } => {
             let Some(h) = crate::harness::by_interactive_binary(&binary) else {
@@ -1376,56 +1481,32 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             });
         }
         Effect::Merge { record_id } => {
-            // Serialized integration: awaited inline, so one merge lands at a
-            // time (merge-queue semantics).
+            // Queued into the single integration worker: one merge lands at
+            // a time (merge-queue semantics) without freezing the loop.
             let Some(meta) = rt.fleet.meta.get(&record_id).cloned() else {
                 state.notice = Some("no worktree to merge".into());
                 return;
             };
-            let result = crate::fleet::merge_branch(
-                &rt.spawner.base_repo,
-                &meta.worktree,
-                &meta.branch,
-                "ask the agent to commit, or use p (apply)",
-            )
-            .await;
-            let (message, ok) = match result {
-                Ok(()) => (format!("merged {}", meta.branch), true),
-                Err(e) => (format!("merge failed: {e:#}"), false),
-            };
-            let _ = reduce(
-                state,
-                &AppEvent::OpDone {
+            if let Some(tx) = &rt.integrate_tx {
+                let _ = tx.send(IntegrationJob {
                     record_id,
-                    message,
-                    ok,
-                },
-            );
+                    meta,
+                    kind: IntKind::Merge,
+                });
+            }
         }
         Effect::Apply { record_id } => {
             let Some(meta) = rt.fleet.meta.get(&record_id).cloned() else {
                 state.notice = Some("no worktree to apply from".into());
                 return;
             };
-            let result =
-                crate::fleet::apply_diff(&rt.spawner.base_repo, &meta.worktree, &meta.base_ref)
-                    .await;
-            let (message, ok) = match result {
-                Ok(()) => (
-                    "applied to the base working tree (uncommitted — you write the commit)"
-                        .to_string(),
-                    true,
-                ),
-                Err(e) => (format!("apply failed: {e:#}"), false),
-            };
-            let _ = reduce(
-                state,
-                &AppEvent::OpDone {
+            if let Some(tx) = &rt.integrate_tx {
+                let _ = tx.send(IntegrationJob {
                     record_id,
-                    message,
-                    ok,
-                },
-            );
+                    meta,
+                    kind: IntKind::Apply,
+                });
+            }
         }
         #[cfg(unix)]
         Effect::BridgeHello {
@@ -1520,6 +1601,13 @@ async fn abort_prompt_tasks(tasks: &mut PromptTasks) {
 /// Deny in the substrate), and shut down every session. Called on every
 /// loop-exit path.
 async fn cleanup(rt: &mut Runtime<'_>) {
+    // Let queued integrations land before teardown: closing the queue ends
+    // the worker after it drains — never kill git mid-merge. Bounded so a
+    // hung git can't wedge shutdown.
+    drop(rt.integrate_tx.take());
+    if let Some(worker) = rt.integrate_task.take() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), worker).await;
+    }
     for pane in rt.ptys.values_mut() {
         // PTY children die with the TUI (§2's named asymmetry) — the
         // harness's own --resume/session files are their continuity story,

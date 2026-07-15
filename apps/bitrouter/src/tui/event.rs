@@ -245,6 +245,28 @@ pub enum Incoming {
     ServeStatus {
         ok: bool,
     },
+    /// A background `Effect::SpawnAgent` launch succeeded: the loop takes
+    /// ownership of the session and its fleet resources.
+    Spawned {
+        agent_id: String,
+        session: Box<bitrouter_substrate::engine::Session>,
+        lease: Option<crate::fleet::PortLease>,
+        /// Branch-safe agent tag (names the branch with the record16).
+        tag: String,
+        /// The base repo `HEAD` at spawn — the diff/merge base.
+        base_ref: String,
+    },
+    /// A background `Effect::SpawnAgent` launch failed.
+    SpawnFailed {
+        agent_id: String,
+        error: String,
+    },
+    /// A background integration (merge/apply) finished.
+    OpDone {
+        record_id: String,
+        message: String,
+        ok: bool,
+    },
     /// An MCP fleet bridge connected on the fleet socket; the loop keeps the
     /// write half for `BridgeHello`/`Resolve` replies.
     #[cfg(unix)]

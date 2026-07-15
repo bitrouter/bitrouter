@@ -1797,7 +1797,14 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
         {
             match state.rail_selected().map(|p| p.record_id.clone()) {
-                Some(id) => vec![Effect::Merge { record_id: id }],
+                Some(id) => {
+                    if let Some(pane) = state.pane_by_id_mut(&id) {
+                        // Integrations queue one at a time in the background;
+                        // the outcome lands as an OpDone line.
+                        pane.push_external(Line::Note("merging in the background…".into()));
+                    }
+                    vec![Effect::Merge { record_id: id }]
+                }
                 None => Vec::new(),
             }
         }
@@ -1806,7 +1813,12 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
         {
             match state.rail_selected().map(|p| p.record_id.clone()) {
-                Some(id) => vec![Effect::Apply { record_id: id }],
+                Some(id) => {
+                    if let Some(pane) = state.pane_by_id_mut(&id) {
+                        pane.push_external(Line::Note("applying in the background…".into()));
+                    }
+                    vec![Effect::Apply { record_id: id }]
+                }
                 None => Vec::new(),
             }
         }
@@ -2289,6 +2301,9 @@ fn request_spawn(state: &mut AppState, agent_id: String) -> Vec<Effect> {
         state.mode = Mode::Confirm;
         return Vec::new();
     }
+    // The launch runs in the background (worktree + bootstrap can be slow);
+    // the notice bridges the gap until AgentSpawned/AgentSpawnFailed lands.
+    state.notice = Some(format!("spawning {agent_id}…"));
     vec![Effect::SpawnAgent { agent_id }]
 }
 
@@ -2308,6 +2323,7 @@ fn reduce_key_confirm(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 effects.push(Effect::BridgeBootstrapApproved);
             }
             if let Some(agent_id) = state.confirm_agent.take() {
+                state.notice = Some(format!("spawning {agent_id}…"));
                 effects.push(Effect::SpawnAgent { agent_id });
             }
             effects
