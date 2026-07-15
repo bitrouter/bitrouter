@@ -684,6 +684,65 @@ impl SubstrateFleet {
     }
 }
 
+impl SubstrateFleet {
+    /// Deliver a human-facing message over the TUI fleet socket, returning a
+    /// `delivered` JSON ack. When headless (no TUI attached), return a note
+    /// that no human is watching instead of erroring — a subagent with no human
+    /// in the loop should hear that, not a failure. Best-effort like the fleet
+    /// mirror messages: a dropped socket is not the orchestrator's problem.
+    async fn send_to_human(
+        &self,
+        msg: crate::fleet::BridgeMsg,
+        delivered: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        #[cfg(unix)]
+        if let Some(link) = &self.inner.link {
+            link.send(&msg).await;
+            let mut out = delivered;
+            out["delivered"] = serde_json::json!(true);
+            return Ok(out);
+        }
+        let _ = (&msg, &delivered);
+        Ok(serde_json::json!({
+            "delivered": false,
+            "note": "no human is attached (headless bridge) — nothing was shown",
+        }))
+    }
+}
+
+#[async_trait::async_trait]
+impl bitrouter_mcp::capabilities::human::HumanBridge for SubstrateFleet {
+    async fn notify(&self, message: &str) -> Result<serde_json::Value, ToolError> {
+        self.send_to_human(
+            crate::fleet::BridgeMsg::Notify {
+                message: message.to_string(),
+            },
+            serde_json::json!({ "notice": message }),
+        )
+        .await
+    }
+
+    async fn request_attach(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.send_to_human(
+            crate::fleet::BridgeMsg::RequestAttach {
+                handle: handle.to_string(),
+            },
+            serde_json::json!({ "requested": "attach", "handle": handle }),
+        )
+        .await
+    }
+
+    async fn request_review(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.send_to_human(
+            crate::fleet::BridgeMsg::RequestReview {
+                handle: handle.to_string(),
+            },
+            serde_json::json!({ "requested": "review", "handle": handle }),
+        )
+        .await
+    }
+}
+
 /// Map an adapter error into the crate's substrate-free carrier (`{e:#}`
 /// keeps anyhow's context chain).
 fn to_tool_error(e: anyhow::Error) -> ToolError {
@@ -860,6 +919,35 @@ mod tests {
         )
         .await;
         assert!(granted.require_write_grant("merge_subagent").is_ok());
+    }
+
+    /// Headless (no TUI socket): the human-bridge tools don't error — they
+    /// report that no human is attached, so a subagent hears "nobody's
+    /// watching" rather than a failure.
+    #[tokio::test]
+    async fn human_bridge_reports_headless_without_a_tui_link() {
+        use bitrouter_mcp::capabilities::human::HumanBridge;
+        let fleet = SubstrateFleet::connect(
+            ConfigAcpRoutingTable::from_configs(std::iter::empty()).expect("empty catalog"),
+            PathBuf::from("/tmp"),
+            WorktreesConfig::default(),
+            false,
+        )
+        .await;
+        for out in [
+            fleet.notify("heads up").await.expect("notify ok"),
+            fleet.request_attach("abc123").await.expect("attach ok"),
+            fleet.request_review("abc123").await.expect("review ok"),
+        ] {
+            assert_eq!(
+                out["delivered"], false,
+                "headless: nothing delivered: {out}"
+            );
+            assert!(
+                out["note"].as_str().is_some_and(|n| n.contains("no human")),
+                "explains why: {out}"
+            );
+        }
     }
 }
 

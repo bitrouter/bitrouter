@@ -43,6 +43,18 @@ your own completions / check spend without a second MCP server.
 | `close_subagent(handle)` | Shut the subagent down. Its worktree is **retained** (cleanup is gated on merged-or-discarded, never automatic). |
 | `fleet_cost()` | BitRouter spend snapshot from the local metering database (machine-wide, not per-session): today's spend + request count and all-time totals. Keeps in-session model arbitrage cost-visible. |
 
+The `fleet` profile also carries **read-only introspection** and **human
+escalation** tools:
+
+| Tool | Effect |
+|---|---|
+| `route_preview(model, prompt?)` | Preview how BitRouter would route `model` (with the opening `prompt`, if given): the policy decision, the resolved provider fallback chain, and the registry's per-token rates for the top hop. Nothing is sent upstream. Use it to pick a model/tier before delegating. |
+| `skills_search(query)` | Installed skills whose name/description match `query` (`{name, description, path}`). |
+| `skills_get(name)` | One skill's frontmatter + SKILL.md body — paste it into a `spawn_subagent` task to hand the subagent a skill. |
+| `notify_human(message)` | Post a one-line notice in the human's TUI. Headless (no TUI), it returns `{"delivered": false}` — no error. |
+| `request_attach(handle)` | Ask the human to attach to a subagent's pane and drive it. The subagent is flagged for attention in the rail. |
+| `request_review(handle)` | Flag a subagent's work into the human's review queue. |
+
 ## Rules of engagement
 
 - **Delegate, don't relay.** Spawn for tasks that are isolated and

@@ -1314,6 +1314,47 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.clamp_rail_cursor();
             Vec::new()
         }
+        // ── Human-bridge escalations from the orchestrator: reuse the existing
+        // notice + attention + review-queue affordances (no new UI). ──
+        #[cfg(unix)]
+        AppEvent::BridgeNotify { message } => {
+            state.notice = Some(one_line(message));
+            Vec::new()
+        }
+        #[cfg(unix)]
+        AppEvent::BridgeRequestAttach { record_id } => {
+            // Surface as an actionable rail item: mark the subagent for
+            // attention (lifting it in the roster) and note the ask. The human
+            // drives the attach — a mirror pane is monitor-only.
+            let name = if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.attention = true;
+                pane.push_external(Line::Note(
+                    "the orchestrator asks you to attach and drive this subagent".into(),
+                ));
+                pane.agent_id.clone()
+            } else {
+                record_id.clone()
+            };
+            state.notice = Some(one_line(&format!("attach requested: {name}")));
+            Vec::new()
+        }
+        #[cfg(unix)]
+        AppEvent::BridgeRequestReview { record_id } => {
+            // Flag into the review queue via the same `review` affordance a
+            // finished turn uses; the diff stat is unknown here, so 0/0/0.
+            let name = if let Some(pane) = state.pane_by_id_mut(record_id) {
+                pane.review = Some((0, 0, 0));
+                pane.attention = true;
+                pane.push_external(Line::Note(
+                    "the orchestrator flagged this subagent's work for your review".into(),
+                ));
+                pane.agent_id.clone()
+            } else {
+                record_id.clone()
+            };
+            state.notice = Some(one_line(&format!("review requested: {name}")));
+            Vec::new()
+        }
         AppEvent::AgentSpawnFailed { agent_id, error } => {
             // The mode bar is one line: a multi-line upstream error (JSON-RPC
             // bodies…) must flatten or everything after the first newline is
@@ -2577,6 +2618,58 @@ mod tests {
         st.agents.push(PaneState::new("r1".into(), "a1".into()));
         st.agents.push(PaneState::new("r2".into(), "a2".into()));
         st
+    }
+
+    /// The human-bridge escalations reuse the notice / attention / review-queue
+    /// affordances rather than a new UI subsystem.
+    #[cfg(unix)]
+    #[test]
+    fn human_bridge_events_reuse_notice_attention_and_review() {
+        let mut st = AppState::new(PaneState::new("mcp:h1".into(), "codex-acp".into()));
+        let find = |st: &AppState| {
+            st.agents
+                .iter()
+                .find(|p| p.record_id == "mcp:h1")
+                .expect("mirror pane")
+                .clone()
+        };
+
+        // notify → a status-bar notice; the pane is untouched.
+        reduce(
+            &mut st,
+            &AppEvent::BridgeNotify {
+                message: "heads up".into(),
+            },
+        );
+        assert_eq!(st.notice.as_deref(), Some("heads up"));
+
+        // request_attach → the pane needs attention; the notice names the agent.
+        reduce(
+            &mut st,
+            &AppEvent::BridgeRequestAttach {
+                record_id: "mcp:h1".into(),
+            },
+        );
+        assert!(find(&st).attention, "attach lifts the pane in the roster");
+        assert!(
+            st.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("codex-acp")),
+            "notice names the agent: {:?}",
+            st.notice
+        );
+
+        // request_review → the pane enters the review queue.
+        reduce(
+            &mut st,
+            &AppEvent::BridgeRequestReview {
+                record_id: "mcp:h1".into(),
+            },
+        );
+        assert!(
+            find(&st).review.is_some(),
+            "review flags the pane into the queue"
+        );
     }
 
     // ── Scrollback paging. ──

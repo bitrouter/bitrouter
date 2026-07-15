@@ -17,6 +17,9 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler,
 use crate::backend::{Backend, CallerAuth, CompleteRequest};
 use crate::capabilities::cost::CostQuery;
 use crate::capabilities::fleet::{Fleet, HandleArgs, PromptArgs, SpawnArgs, StatusArgs};
+use crate::capabilities::human::{HumanBridge, HumanHandleArgs, NotifyArgs};
+use crate::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
+use crate::capabilities::skills::{SkillsGetArgs, SkillsQuery, SkillsSearchArgs};
 use crate::error::ToolError;
 
 /// Extract the caller's bearer from MCP request extensions. The streamable-HTTP
@@ -63,6 +66,9 @@ pub struct BitrouterMcp {
     backend: Option<Arc<dyn Backend>>,
     fleet: Option<Arc<dyn Fleet>>,
     cost: Option<Arc<dyn CostQuery>>,
+    routing: Option<Arc<dyn RoutingQuery>>,
+    skills: Option<Arc<dyn SkillsQuery>>,
+    human: Option<Arc<dyn HumanBridge>>,
     cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
 }
@@ -265,6 +271,73 @@ impl BitrouterMcp {
     }
 }
 
+// ── the orchestrator profile's routing slice (guarded on `self.routing`) ──
+#[tool_router(router = routing_router)]
+impl BitrouterMcp {
+    #[tool(
+        description = "Preview how BitRouter would route a model/prompt: resolved provider(s), \
+                       policy decision, and estimated cost. Read-only — nothing is sent upstream."
+    )]
+    async fn route_preview(
+        &self,
+        Parameters(args): Parameters<RoutePreviewArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(json_tool_result(self.routing()?.preview(args).await))
+    }
+}
+
+// ── the orchestrator profile's skills slice (guarded on `self.skills`) ──
+#[tool_router(router = skills_router)]
+impl BitrouterMcp {
+    #[tool(description = "Search installed BitRouter skills by name/description.")]
+    async fn skills_search(
+        &self,
+        Parameters(args): Parameters<SkillsSearchArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(json_tool_result(self.skills()?.search(&args.query).await))
+    }
+
+    #[tool(description = "Fetch a skill's frontmatter + body so you can hand it to a subagent.")]
+    async fn skills_get(
+        &self,
+        Parameters(args): Parameters<SkillsGetArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(json_tool_result(self.skills()?.get(&args.name).await))
+    }
+}
+
+// ── the orchestrator profile's human-bridge slice (guarded on `self.human`) ──
+#[tool_router(router = human_router)]
+impl BitrouterMcp {
+    #[tool(description = "Send the supervising human a one-line notice in the TUI.")]
+    async fn notify_human(
+        &self,
+        Parameters(args): Parameters<NotifyArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(json_tool_result(self.human()?.notify(&args.message).await))
+    }
+
+    #[tool(description = "Ask the human to attach to a subagent's pane to drive it directly.")]
+    async fn request_attach(
+        &self,
+        Parameters(args): Parameters<HumanHandleArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(json_tool_result(
+            self.human()?.request_attach(&args.handle).await,
+        ))
+    }
+
+    #[tool(description = "Flag a subagent's work for the human's review queue.")]
+    async fn request_review(
+        &self,
+        Parameters(args): Parameters<HumanHandleArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        Ok(json_tool_result(
+            self.human()?.request_review(&args.handle).await,
+        ))
+    }
+}
+
 impl BitrouterMcp {
     /// Start assembling a handler. `build()` merges only the routers whose
     /// capability was wired.
@@ -303,6 +376,30 @@ impl BitrouterMcp {
             .ok_or_else(|| McpError::internal_error("cost capability not wired", None))
     }
 
+    /// The routing port, or a wired-capability error (unreachable in practice —
+    /// the routing router is merged only when it is `Some`).
+    fn routing(&self) -> Result<&Arc<dyn RoutingQuery>, McpError> {
+        self.routing
+            .as_ref()
+            .ok_or_else(|| McpError::internal_error("routing capability not wired", None))
+    }
+
+    /// The skills port, or a wired-capability error (unreachable in practice —
+    /// the skills router is merged only when it is `Some`).
+    fn skills(&self) -> Result<&Arc<dyn SkillsQuery>, McpError> {
+        self.skills
+            .as_ref()
+            .ok_or_else(|| McpError::internal_error("skills capability not wired", None))
+    }
+
+    /// The human-bridge port, or a wired-capability error (unreachable in
+    /// practice — the human router is merged only when it is `Some`).
+    fn human(&self) -> Result<&Arc<dyn HumanBridge>, McpError> {
+        self.human
+            .as_ref()
+            .ok_or_else(|| McpError::internal_error("human bridge not wired", None))
+    }
+
     /// The extra content item for a successful result, when a footer is
     /// attached and has something to say.
     async fn footer_content(&self) -> Option<ContentBlock> {
@@ -333,6 +430,25 @@ impl BitrouterMcp {
         if self.cost.is_some() {
             s.push_str(" Use `fleet_cost` to keep spend visible mid-session.");
         }
+        if self.routing.is_some() {
+            s.push_str(
+                " `route_preview` shows how a model/prompt would route (provider chain, \
+                 policy decision, cost estimate) without sending anything.",
+            );
+        }
+        if self.skills.is_some() {
+            s.push_str(
+                " `skills_search` / `skills_get` browse installed skills to hand one to a \
+                 subagent.",
+            );
+        }
+        if self.human.is_some() {
+            s.push_str(
+                " Reach the supervising human with `notify_human` (a one-line notice), \
+                 `request_attach` (ask them to drive a subagent), or `request_review` \
+                 (flag work for their review queue).",
+            );
+        }
         s
     }
 }
@@ -345,6 +461,9 @@ pub struct Builder {
     backend: Option<Arc<dyn Backend>>,
     fleet: Option<Arc<dyn Fleet>>,
     cost: Option<Arc<dyn CostQuery>>,
+    routing: Option<Arc<dyn RoutingQuery>>,
+    skills: Option<Arc<dyn SkillsQuery>>,
+    human: Option<Arc<dyn HumanBridge>>,
 }
 
 impl Builder {
@@ -372,6 +491,25 @@ impl Builder {
         self
     }
 
+    /// Wire the routing-introspection capability (the `route_preview` tool).
+    pub fn routing(mut self, routing: Arc<dyn RoutingQuery>) -> Self {
+        self.routing = Some(routing);
+        self
+    }
+
+    /// Wire the skills-introspection capability (`skills_search`/`skills_get`).
+    pub fn skills(mut self, skills: Arc<dyn SkillsQuery>) -> Self {
+        self.skills = Some(skills);
+        self
+    }
+
+    /// Wire the human-escalation capability (`notify_human`/`request_attach`/
+    /// `request_review`).
+    pub fn human(mut self, human: Arc<dyn HumanBridge>) -> Self {
+        self.human = Some(human);
+        self
+    }
+
     /// Compose the handler, merging each wired capability's router.
     pub fn build(self) -> BitrouterMcp {
         let mut router = ToolRouter::new();
@@ -384,10 +522,22 @@ impl Builder {
         if self.cost.is_some() {
             router += BitrouterMcp::cost_router();
         }
+        if self.routing.is_some() {
+            router += BitrouterMcp::routing_router();
+        }
+        if self.skills.is_some() {
+            router += BitrouterMcp::skills_router();
+        }
+        if self.human.is_some() {
+            router += BitrouterMcp::human_router();
+        }
         BitrouterMcp {
             backend: self.backend,
             fleet: self.fleet,
             cost: self.cost,
+            routing: self.routing,
+            skills: self.skills,
+            human: self.human,
             // The footer is attached later, transport-side, via
             // `with_cost_footer` (stdio only) — never through the builder.
             cost_footer: None,
@@ -669,6 +819,39 @@ mod tests {
         }
     }
 
+    struct StubRouting;
+    #[async_trait::async_trait]
+    impl RoutingQuery for StubRouting {
+        async fn preview(&self, _: RoutePreviewArgs) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({"provider_chain": []}))
+        }
+    }
+
+    struct StubSkills;
+    #[async_trait::async_trait]
+    impl SkillsQuery for StubSkills {
+        async fn search(&self, _: &str) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({"skills": []}))
+        }
+        async fn get(&self, _: &str) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({"name": "stub"}))
+        }
+    }
+
+    struct StubHuman;
+    #[async_trait::async_trait]
+    impl HumanBridge for StubHuman {
+        async fn notify(&self, _: &str) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({"delivered": true}))
+        }
+        async fn request_attach(&self, _: &str) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({"delivered": true}))
+        }
+        async fn request_review(&self, _: &str) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({"delivered": true}))
+        }
+    }
+
     fn tool_names(server: &BitrouterMcp) -> Vec<String> {
         let mut names: Vec<String> = server
             .tool_router
@@ -776,6 +959,82 @@ mod tests {
         assert!(orchestrator.contains("spawn_subagent"));
         assert!(orchestrator.contains("human-gated"));
         assert!(orchestrator.contains("fleet_cost"));
+    }
+
+    #[test]
+    fn tier2_capabilities_add_their_tools() {
+        let server = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .routing(Arc::new(StubRouting))
+            .skills(Arc::new(StubSkills))
+            .human(Arc::new(StubHuman))
+            .build();
+        let names = tool_names(&server);
+        for tool in [
+            "route_preview",
+            "skills_search",
+            "skills_get",
+            "notify_human",
+            "request_attach",
+            "request_review",
+        ] {
+            assert!(
+                names.contains(&tool.to_string()),
+                "tier-2 profile advertises `{tool}`: {names:?}"
+            );
+        }
+        // completion (3) + routing (1) + skills (2) + human (3) = 9.
+        assert_eq!(names.len(), 9);
+    }
+
+    #[test]
+    fn public_profile_excludes_tier2_tools() {
+        // The safety boundary extends to the tier-2 introspection / escalation
+        // tools: a completion-only client must not see them.
+        let server = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .build();
+        let names = tool_names(&server);
+        for hidden in [
+            "route_preview",
+            "skills_search",
+            "skills_get",
+            "notify_human",
+            "request_attach",
+            "request_review",
+        ] {
+            assert!(
+                !names.contains(&hidden.to_string()),
+                "public profile must not advertise `{hidden}`: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tier2_instructions_are_gated_on_wiring() {
+        let public = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .build()
+            .instructions();
+        for absent in ["route_preview", "skills_search", "notify_human"] {
+            assert!(
+                !public.contains(absent),
+                "public omits `{absent}`: {public}"
+            );
+        }
+        let wired = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .routing(Arc::new(StubRouting))
+            .skills(Arc::new(StubSkills))
+            .human(Arc::new(StubHuman))
+            .build()
+            .instructions();
+        for present in ["route_preview", "skills_search", "notify_human"] {
+            assert!(
+                wired.contains(present),
+                "wired mentions `{present}`: {wired}"
+            );
+        }
     }
 
     #[test]

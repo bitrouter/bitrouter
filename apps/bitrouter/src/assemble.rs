@@ -966,7 +966,7 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
     Ok(appliers)
 }
 
-fn build_pricing_table(config: &Config) -> PricingTable {
+pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
     let mut table = PricingTable::new();
     for (provider_id, provider) in &config.providers {
         for model in &provider.models {

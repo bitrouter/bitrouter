@@ -142,6 +142,18 @@ pub enum AppEvent {
     /// are already denied bridge-side by the dropped stream).
     #[cfg(unix)]
     BridgeGone { record_ids: Vec<String> },
+    /// The orchestrator's `notify_human`: a one-line notice, unattached to any
+    /// subagent.
+    #[cfg(unix)]
+    BridgeNotify { message: String },
+    /// The orchestrator's `request_attach`: surface the named subagent as
+    /// needing attention (the human drives the attach — mirrors are read-only).
+    #[cfg(unix)]
+    BridgeRequestAttach { record_id: String },
+    /// The orchestrator's `request_review`: flag the subagent's work into the
+    /// review queue.
+    #[cfg(unix)]
+    BridgeRequestReview { record_id: String },
 }
 
 /// Side effect the loop performs after a reduce. Keeps `reduce` pure.

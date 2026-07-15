@@ -18,7 +18,7 @@ Starts the origin MCP server.
 | Flag | Default | Description |
 |---|---|---|
 | `--transport` | `stdio` | `stdio` or `http` |
-| `--backend` | *(derived)* | `local`, `cloud`, or `fleet`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon) plus the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`) plus `fleet_cost`. It is **stdio-only** |
+| `--backend` | *(derived)* | `local`, `cloud`, or `fleet`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon), the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`), `fleet_cost`, the routing-preview tool (`route_preview`), the skills tools (`skills_search`/`skills_get`), and the human-bridge tools (`notify_human`/`request_attach`/`request_review`). It is **stdio-only** |
 | `--allow-writes` | off | (`fleet` only) grant the orchestrator write autonomy: `apply_subagent`/`merge_subagent` may integrate into the base repo. Off = writes are human-gated |
 | `--local-url` | `http://127.0.0.1:4356` | Root URL of the local BitRouter daemon |
 | `--cloud-url` | `https://api.bitrouter.ai` | Root URL of BitRouter Cloud |

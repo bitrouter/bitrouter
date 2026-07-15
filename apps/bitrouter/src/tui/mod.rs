@@ -1231,6 +1231,17 @@ fn convert_incoming(incoming: Incoming, rt: &mut Runtime<'_>) -> Option<AppEvent
                     risk: crate::risk::Risk::High,
                 })
             }
+            crate::fleet::BridgeMsg::Notify { message } => Some(AppEvent::BridgeNotify { message }),
+            crate::fleet::BridgeMsg::RequestAttach { handle } => {
+                Some(AppEvent::BridgeRequestAttach {
+                    record_id: format!("mcp:{handle}"),
+                })
+            }
+            crate::fleet::BridgeMsg::RequestReview { handle } => {
+                Some(AppEvent::BridgeRequestReview {
+                    record_id: format!("mcp:{handle}"),
+                })
+            }
         },
         #[cfg(unix)]
         Incoming::BridgeGone { conn } => {

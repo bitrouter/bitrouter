@@ -63,6 +63,21 @@ pub enum BridgeMsg {
         diff: Option<WireDiff>,
         options: Vec<WireOption>,
     },
+    /// The orchestrator's `notify_human`: a one-line notice for the human,
+    /// unattached to any subagent.
+    Notify {
+        message: String,
+    },
+    /// The orchestrator's `request_attach`: ask the human to attach to a
+    /// subagent's pane and drive it.
+    RequestAttach {
+        handle: String,
+    },
+    /// The orchestrator's `request_review`: flag a subagent's work for the
+    /// human's review queue.
+    RequestReview {
+        handle: String,
+    },
 }
 
 /// One NDJSON message the TUI sends the bridge.
@@ -432,6 +447,36 @@ mod tests {
         };
         let line = serde_json::to_string(&resolve).expect("serialize");
         assert!(line.contains("allow_always"));
+    }
+
+    #[test]
+    fn human_bridge_messages_round_trip_as_ndjson() {
+        for msg in [
+            BridgeMsg::Notify {
+                message: "heads up".into(),
+            },
+            BridgeMsg::RequestAttach {
+                handle: "abc123".into(),
+            },
+            BridgeMsg::RequestReview {
+                handle: "abc123".into(),
+            },
+        ] {
+            let line = serde_json::to_string(&msg).expect("serialize");
+            assert!(!line.contains('\n'), "NDJSON: one line per message");
+            // snake_case tag, so the TUI's serde parse matches.
+            match msg {
+                BridgeMsg::Notify { .. } => assert!(line.contains("\"type\":\"notify\"")),
+                BridgeMsg::RequestAttach { .. } => {
+                    assert!(line.contains("\"type\":\"request_attach\""))
+                }
+                BridgeMsg::RequestReview { .. } => {
+                    assert!(line.contains("\"type\":\"request_review\""))
+                }
+                _ => unreachable!(),
+            }
+            serde_json::from_str::<BridgeMsg>(&line).expect("parse");
+        }
     }
 
     #[test]

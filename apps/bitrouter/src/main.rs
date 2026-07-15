@@ -1585,20 +1585,35 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 )
                 .context("building acp catalog from config.agents")?;
                 let base_repo = std::env::current_dir().context("resolving current directory")?;
-                let fleet = bitrouter::fleet_mcp::SubstrateFleet::connect(
-                    catalog,
-                    base_repo,
-                    cfg.worktrees.clone(),
-                    allow_writes,
-                )
-                .await;
+                let routing =
+                    std::sync::Arc::new(bitrouter::routing_preview::RoutingPreview::new(&cfg));
+                let skills = std::sync::Arc::new(bitrouter::skills_query::InstalledSkills::new(
+                    base_repo.clone(),
+                ));
+                // One `SubstrateFleet` backs both the `Fleet` and `HumanBridge`
+                // ports (the human bridge rides the same fleet socket).
+                let fleet = std::sync::Arc::new(
+                    bitrouter::fleet_mcp::SubstrateFleet::connect(
+                        catalog,
+                        base_repo,
+                        cfg.worktrees.clone(),
+                        allow_writes,
+                    )
+                    .await,
+                );
                 // The orchestrator profile is the union — completion + fleet +
-                // cost, stdio-only. Completion routes to the same local daemon
-                // the TUI runs; cost reads the shared metering database.
+                // cost + the tier-2 introspection/escalation ports, stdio-only.
+                // Completion routes to the same local daemon the TUI runs; cost
+                // reads the shared metering database; routing/skills read the
+                // config + installed skills; the human bridge rides the fleet
+                // socket.
                 let server = bitrouter_mcp::server::BitrouterMcp::builder()
                     .completion_local(&local_url)
-                    .fleet(std::sync::Arc::new(fleet))
+                    .fleet(fleet.clone())
+                    .human(fleet)
                     .cost(std::sync::Arc::new(MeteringCost::new(source)))
+                    .routing(routing)
+                    .skills(skills)
                     .build();
                 // No `complete`/`status` cost footer here (unlike the public
                 // stdio path): the orchestrator profile carries the richer
