@@ -7,7 +7,8 @@
 [![Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/G3zVrZDa5C)
 [![Hugging Face](https://img.shields.io/badge/Hugging_Face-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/BitRouterAI)
 [![Docs](https://img.shields.io/badge/Docs-bitrouter.ai-green)](https://bitrouter.ai)
-[![Benchmarks](https://img.shields.io/badge/Benchmarks-reports-orange)](benchmarks/)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/company/bitrouterai/?viewAsMember=true)
+[![Book a call](https://img.shields.io/badge/Book_a_call-founders-000000?logo=cal.com&logoColor=white)](https://cal.com/kelsenliu)
 
 **The self-improving LLM router that optimize your agentic workflows with every runs, works with any harnesses, any models, any loops.**
 
@@ -21,7 +22,7 @@ Cost is live today — latency and accuracy are next.
 An agentic loop consumes three things. Other routers govern only the first. BitRouter makes all three routable, observable, and governed:
 
 - **Models** — route LLM calls across providers, accounts, and wire protocols: OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini. *(the classic router, cross-protocol — any request format to any upstream, and back)*
-- **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints. *(The skills gateway folds into the MCP gateway once the [MCP skills extension](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) reaches production.)*
+- **Capabilities** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources instead of hardcoded endpoints. *(The skills gateway folds into the MCP gateway once the [MCP skills extension](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) reaches production.)*
 - **Agents** — an **ACP gateway**: sub-agents become first-class routable primitives, so a task can go to the sub-agent that best fits the loop's objective — just as a call routes to the best-fit model. *(Local sub-agents over stdio today; remote gateways arrive with [ACP v2](https://agentclientprotocol.com/rfds/v2/overview).)*
 
 Optimizing a loop isn't just model selection — it's choosing the model, the tool, and the sub-agent that best serve the loop's objective at every step that gets it to its goal.
@@ -66,9 +67,9 @@ _All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero 
 
 ## What BitRouter is not
 
-- **Not an inference provider** — it serves no weights and hosts no GPUs; it sits in front of the providers you already use.
-- **Not an agent framework or harness** — it runs *under* Claude Code, Codex, and the rest, not instead of them.
-- **Not a hard dependency** — it's a local proxy behind one env var; unset the var and your stack is untouched.
+- **Not a static gateway** — it doesn't just forward calls to a fixed route; it runs an act → observe → evaluate → learn loop that keeps tightening the route as it runs.
+- **Not an orchestration framework** — it doesn't define your agent's control flow, steps, or state; it routes the calls, tools, and sub-agents your loop already makes.
+- **Not an agent harness** — it runs *under* Claude Code, Codex, and the rest, not instead of them.
 
 ## Install
 
@@ -186,8 +187,6 @@ BitRouter routes to a *model*, not a provider. Each family below is served by ma
 
 Plus every frontier model from OpenAI, Anthropic, Google, and xAI — over your own keys, a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex), or BitRouter Cloud. Full catalog in the [registry/](registry/).
 
-**Want to add a provider?** Open an issue or submit a PR. **Interested in a first-party integration?** Email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu).
-
 ## Harness integrations
 
 Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out of the box — set `OPENAI_BASE_URL=http://localhost:4356/v1` and you're done. The following harnesses are tested and supported:
@@ -201,8 +200,6 @@ Any agent runtime that speaks OpenAI or Anthropic APIs works with BitRouter out 
 | OpenClaw       | ✅     | Native plugin — [bitrouter-openclaw](https://github.com/bitrouter/bitrouter-openclaw)      |
 | Pi-Agent       | ✅     | [Model configuration guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md) |
 
-**Building an open-source agent?** Reach out at [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu) — we offer **up to 50% off** for you and your community.
-
 The full provider and harness catalog lives in [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features
@@ -214,6 +211,12 @@ Beyond the gateways above, the production controls for running agents unattended
 - **Per-agent spend caps + loop guards** to contain runaway cost
 - **Injection + output guardrails** at the router, before requests leave your network
 - **Zero-config auto-detection** + custom OpenAI-/Anthropic-compatible providers
+
+## Talk to founders
+
+**[Try BitRouter Cloud →](https://cloud.bitrouter.ai)** or reach out directly:
+
+Want a first-party provider integration, or building an open-source agent/harness? Email [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai) or [book a meeting](https://cal.com/kelsenliu) — open-source builders get **up to 50% off** for you and your community.
 
 ## Development
 
