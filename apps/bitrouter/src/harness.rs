@@ -100,6 +100,22 @@ pub enum Routing {
     /// CLI flag. Interactive facet only; headless spawn launches direct
     /// with a note.
     PiConfigDir,
+    /// Home-dir synthesis (hermes): routing synthesizes a `config.yaml`
+    /// (`model.provider: custom` + a loopback `base_url` — hermes trusts
+    /// loopback custom endpoints) in a per-launch dir, points `HERMES_HOME`
+    /// at it, and passes the credential via `CUSTOM_API_KEY`. The same file
+    /// carries the default model and `mcp_servers` (fleet bridge).
+    /// Interactive facet only; headless spawn launches direct with a note
+    /// (hermes then uses the user's own `~/.hermes` provider).
+    HermesHome,
+    /// Profile-dir synthesis (openclaw): the interactive facet synthesizes
+    /// an isolated profile (`OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`)
+    /// whose `openclaw.json` declares a `bitrouter` custom provider and
+    /// default model, and runs the embedded runtime (`tui --local`). The
+    /// ACP facet (`openclaw acp`) bridges into the user's running gateway,
+    /// which owns model routing — headless spawn launches direct with a
+    /// note.
+    OpenclawProfile,
     /// No gateway redirection, by design: the harness IS a subscription
     /// client whose session the daemon itself borrows as a provider (grok →
     /// `supergrok`, agy → `google-ai`) — routing it through the daemon would
@@ -204,6 +220,26 @@ pub const CATALOG: &[Harness] = &[
         routing: Routing::PiConfigDir,
     },
     Harness {
+        id: "hermes-acp",
+        description: "Nous Research's Hermes Agent via its native `hermes acp`",
+        project_url: "https://github.com/NousResearch/hermes-agent",
+        acp_command: Some("hermes"),
+        acp_args: &["acp"],
+        package_marker: "hermes",
+        interactive_binary: Some("hermes"),
+        routing: Routing::HermesHome,
+    },
+    Harness {
+        id: "openclaw",
+        description: "OpenClaw assistant via its gateway ACP bridge `openclaw acp`",
+        project_url: "https://github.com/openclaw/openclaw",
+        acp_command: Some("openclaw"),
+        acp_args: &["acp"],
+        package_marker: "openclaw",
+        interactive_binary: Some("openclaw"),
+        routing: Routing::OpenclawProfile,
+    },
+    Harness {
         id: "grok",
         description: "xAI's Grok CLI (interactive only; own SuperGrok auth)",
         project_url: "https://x.ai/",
@@ -289,9 +325,11 @@ impl Harness {
             // Config-synthesis harnesses have no pure env/args overlay —
             // callers that can't synthesize launch direct (and say so) —
             // and own-auth harnesses are never redirected at all.
-            Routing::OpencodeConfig | Routing::PiConfigDir | Routing::OwnAuth => {
-                RoutingOverlay::default()
-            }
+            Routing::OpencodeConfig
+            | Routing::PiConfigDir
+            | Routing::HermesHome
+            | Routing::OpenclawProfile
+            | Routing::OwnAuth => RoutingOverlay::default(),
         }
     }
 
@@ -321,7 +359,11 @@ impl Harness {
         match self.routing {
             Routing::Env { model_env, .. } => model_env.is_some(),
             Routing::CodexArgs => true,
-            Routing::OpencodeConfig | Routing::PiConfigDir | Routing::OwnAuth => false,
+            Routing::OpencodeConfig
+            | Routing::PiConfigDir
+            | Routing::HermesHome
+            | Routing::OpenclawProfile
+            | Routing::OwnAuth => false,
         }
     }
 
@@ -448,6 +490,109 @@ impl Harness {
                 Ok(RoutingOverlay {
                     env: vec![("PI_CODING_AGENT_DIR".to_string(), dir.display().to_string())],
                     args,
+                })
+            }
+            // hermes: synthesize an isolated `HERMES_HOME` whose config.yaml
+            // routes via a `custom` loopback provider (hermes trusts loopback
+            // custom endpoints) and carries the fleet MCP server; the
+            // credential rides `CUSTOM_API_KEY`. The file is written as JSON
+            // — hermes parses config.yaml with a YAML 1.2 loader, and JSON
+            // is a YAML subset — so no YAML serializer dependency is needed.
+            "hermes-acp" => {
+                let dir = state_dir.join("hermes");
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                let default = model
+                    .map(str::to_string)
+                    .or_else(|| catalog.first().cloned());
+                let mut config = serde_json::json!({
+                    "model": {
+                        "provider": "custom",
+                        "base_url": v1_base_url(base_url),
+                    }
+                });
+                if let Some(default) = default {
+                    config["model"]["default"] = serde_json::Value::String(default);
+                }
+                if let Some(mcp) = mcp {
+                    config["mcp_servers"] = serde_json::json!({
+                        &mcp.name: { "command": mcp.command, "args": mcp.args }
+                    });
+                }
+                std::fs::write(
+                    dir.join("config.yaml"),
+                    serde_json::to_string_pretty(&config)?,
+                )
+                .context("writing hermes config.yaml")?;
+                Ok(RoutingOverlay {
+                    env: vec![
+                        ("HERMES_HOME".to_string(), dir.display().to_string()),
+                        ("CUSTOM_API_KEY".to_string(), auth.to_string()),
+                    ],
+                    args: Vec::new(),
+                })
+            }
+            // openclaw: synthesize an isolated profile (state dir + config)
+            // whose `openclaw.json` declares a `bitrouter` custom provider,
+            // and run the embedded local runtime (`tui --local` — no gateway
+            // needed). Model entries need the full schema (name/cost/window)
+            // or config validation rejects the file. No MCP injection yet —
+            // openclaw's MCP surface is gateway-scoped.
+            "openclaw" => {
+                let dir = state_dir.join("openclaw");
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                let ids: Vec<&str> = model
+                    .into_iter()
+                    .chain(catalog.iter().map(String::as_str))
+                    .collect();
+                let models: Vec<serde_json::Value> = ids
+                    .iter()
+                    .map(|id| {
+                        serde_json::json!({
+                            "id": id,
+                            "name": id,
+                            "reasoning": false,
+                            "input": ["text"],
+                            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+                            "contextWindow": 200000,
+                            "maxTokens": 8192,
+                        })
+                    })
+                    .collect();
+                let mut config = serde_json::json!({
+                    "gateway": { "mode": "local" },
+                    "models": {
+                        "mode": "merge",
+                        "providers": {
+                            "bitrouter": {
+                                "baseUrl": v1_base_url(base_url),
+                                "apiKey": auth,
+                                "api": "openai-completions",
+                                "models": models,
+                            }
+                        }
+                    }
+                });
+                if let Some(default) = ids.first() {
+                    config["agents"] = serde_json::json!({
+                        "defaults": { "model": format!("bitrouter/{default}") }
+                    });
+                }
+                std::fs::write(
+                    dir.join("openclaw.json"),
+                    serde_json::to_string_pretty(&config)?,
+                )
+                .context("writing openclaw.json")?;
+                Ok(RoutingOverlay {
+                    env: vec![
+                        ("OPENCLAW_STATE_DIR".to_string(), dir.display().to_string()),
+                        (
+                            "OPENCLAW_CONFIG_PATH".to_string(),
+                            dir.join("openclaw.json").display().to_string(),
+                        ),
+                    ],
+                    args: vec!["tui".to_string(), "--local".to_string()],
                 })
             }
             // Own-auth harnesses (grok, agy): no redirection, no MCP
@@ -631,6 +776,8 @@ mod tests {
         assert_eq!(by_interactive_binary("codex").unwrap().id, "codex-acp");
         assert_eq!(by_interactive_binary("opencode").unwrap().id, "opencode");
         assert_eq!(by_interactive_binary("pi").unwrap().id, "pi-acp");
+        assert_eq!(by_interactive_binary("hermes").unwrap().id, "hermes-acp");
+        assert_eq!(by_interactive_binary("openclaw").unwrap().id, "openclaw");
         assert_eq!(by_interactive_binary("grok").unwrap().id, "grok");
         assert_eq!(by_interactive_binary("agy").unwrap().id, "antigravity");
         assert!(by_interactive_binary("gemini").is_none());
@@ -874,6 +1021,77 @@ mod tests {
             "{:?}",
             o.args
         );
+    }
+
+    #[test]
+    fn hermes_orchestrator_overlay_synthesizes_home_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let h = by_id("hermes-acp").unwrap();
+        let o = h
+            .orchestrator_overlay(
+                "http://127.0.0.1:4356",
+                "tok",
+                Some("supergrok:grok-4.5"),
+                &[],
+                Some(&mcp()),
+                dir.path(),
+            )
+            .expect("overlay");
+        assert!(o.args.is_empty(), "hermes routes purely by config");
+        let env: std::collections::HashMap<_, _> = o.env.iter().cloned().collect();
+        assert_eq!(env["CUSTOM_API_KEY"], "tok");
+        let home = std::path::PathBuf::from(&env["HERMES_HOME"]);
+        // JSON body in config.yaml — YAML 1.2 parses JSON, no yaml dep needed.
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(home.join("config.yaml")).expect("read"))
+                .expect("json");
+        assert_eq!(config["model"]["provider"], "custom");
+        assert_eq!(config["model"]["base_url"], "http://127.0.0.1:4356/v1");
+        assert_eq!(config["model"]["default"], "supergrok:grok-4.5");
+        assert_eq!(
+            config["mcp_servers"]["bitrouter_fleet"]["command"],
+            "/bin/bitrouter"
+        );
+    }
+
+    #[test]
+    fn openclaw_orchestrator_overlay_synthesizes_profile() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let h = by_id("openclaw").unwrap();
+        let o = h
+            .orchestrator_overlay(
+                "http://127.0.0.1:4356",
+                "tok",
+                Some("supergrok:grok-4.5"),
+                &["x-ai/grok-4.5".to_string()],
+                None,
+                dir.path(),
+            )
+            .expect("overlay");
+        assert_eq!(
+            o.args,
+            vec!["tui".to_string(), "--local".to_string()],
+            "embedded runtime, no gateway"
+        );
+        let env: std::collections::HashMap<_, _> = o.env.iter().cloned().collect();
+        let config: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&env["OPENCLAW_CONFIG_PATH"]).expect("read"),
+        )
+        .expect("json");
+        let provider = &config["models"]["providers"]["bitrouter"];
+        assert_eq!(provider["baseUrl"], "http://127.0.0.1:4356/v1");
+        assert_eq!(provider["apiKey"], "tok");
+        assert_eq!(provider["api"], "openai-completions");
+        // Full model entries (config validation rejects bare ids), pinned
+        // model first and default.
+        assert_eq!(provider["models"][0]["id"], "supergrok:grok-4.5");
+        assert_eq!(provider["models"][1]["id"], "x-ai/grok-4.5");
+        assert!(provider["models"][0]["cost"].is_object());
+        assert_eq!(
+            config["agents"]["defaults"]["model"],
+            "bitrouter/supergrok:grok-4.5"
+        );
+        assert!(env.contains_key("OPENCLAW_STATE_DIR"));
     }
 
     #[test]

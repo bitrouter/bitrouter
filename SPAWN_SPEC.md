@@ -345,6 +345,23 @@ it ships as a fast-follow. Until then pi spawns with a
 > sessions the daemon borrows as providers (`supergrok` / `google-ai`), so
 > redirecting them would loop back to the same backend — they launch with
 > their own auth and `--model` forwards natively.
+>
+> **Shipped 2026-07-14, two more config-synthesis harnesses**: `hermes-acp`
+> (Nous Hermes Agent — native `hermes acp`, ACP v1 with loadSession;
+> `Routing::HermesHome` synthesizes a `HERMES_HOME/config.yaml` with a
+> loopback `custom` provider — hermes trusts loopback custom endpoints —
+> plus `mcp_servers:` fleet injection, credential via `CUSTOM_API_KEY`) and
+> `openclaw` (OpenClaw's gateway ACP bridge `openclaw acp`;
+> `Routing::OpenclawProfile` synthesizes an isolated profile —
+> `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`, `openclaw.json` with a
+> `bitrouter` provider — and the interactive facet runs the embedded
+> runtime `tui --local`; the ACP facet auto-starts the profile's gateway,
+> which **outlives the spawn** — a daemon, by openclaw's design). Headless
+> spawn: direct-with-note like opencode/pi; exporting the synthesized env
+> manually routes both (verified live: `pong` through the daemon in all
+> four facets). OpenClaw caveat: gateway sessions are workspace-scoped via
+> `agents add --workspace`, not process-cwd-scoped — per-worktree agent
+> provisioning is the follow-up for review-queue isolation.
 
 ### 6.5 ACP-native gateway auth (noted for phase 2)
 

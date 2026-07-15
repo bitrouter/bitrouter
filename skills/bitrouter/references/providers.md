@@ -367,7 +367,7 @@ agents:
       args: ["-y", "pi-acp@latest"]   # spawns `pi --mode rpc`; needs `pi` on PATH
 ```
 
-The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, and `pi-acp`, plus the interactive-only `grok` and `antigravity` (no ACP adapter — orchestrator/`launch` surfaces only, own auth).
+The bundled catalog ids are `claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp` (Nous Hermes Agent — native `hermes acp`), and `openclaw` (OpenClaw's gateway ACP bridge `openclaw acp`; auto-starts the profile's gateway), plus the interactive-only `grok` and `antigravity` (no ACP adapter — orchestrator/`launch` surfaces only, own auth).
 `pi-acp` wraps the [`pi`](https://github.com/earendil-works/pi) coding agent — install
 it (`npm i -g @earendil-works/pi-coding-agent`) and point pi at BitRouter with the
 `@bitrouter/pi` provider so pi's own model calls route back through the daemon.
