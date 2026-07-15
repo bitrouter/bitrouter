@@ -150,12 +150,15 @@ extra panes."
 > orchestrator PTY session as `binary` over a dim model line; `Ctrl-A N` spawns more,
 > `[`/`]` moves the AGENT cursor between panels), **subagents right** (the
 > actionability-sorted roster, restyled herdr-minimal: dim lowercase headers, per-row
-> `state · harness` meta line, no boxed titles). Palette `toggle sessions` /
-> `toggle subagents` collapse either side; sidebars are **content-aware** (an
-> empty panel folds unless the AGENT cursor is on it) and narrow terminals
-> auto-collapse (left < 90 cols, right < 70). The **composer renders only
-> where typing can land** (ACP focus / BROADCAST — a focused PTY pane's rows
-> go back to the terminal), and the mode bar became a **global status bar**:
+> `state · harness` meta line, no boxed titles). **Sidebars run the full
+> terminal height**; the center column stacks detail + composer + status bar
+> (the bar is center-width, per the wireframe). Palette `toggle sessions` /
+> `toggle subagents` collapse either side; when both sidebars don't fit
+> beside a ~48-col center they fold one at a time (AGENT-cursor panel wins,
+> then the panel with content, then the rail by default) — with room, both
+> show even when empty. The **composer renders only where typing can land**
+> (ACP focus / BROADCAST — a focused PTY pane's rows go back to the
+> terminal), and the mode bar became an always-visible **global status bar**:
 > hints left (notices claim the zone and decay ~8s; hints truncate before the
 > right zone drops), fleet state right (⚠◆●◉ counts, session count, summed
 > cost, live `serve ●/✗` dot re-probed every ~5s).

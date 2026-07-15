@@ -20,13 +20,11 @@ const RAIL_WIDTH: u16 = 28;
 /// Sessions-panel (left sidebar) width: a binary name + a dim model line.
 const SESSIONS_WIDTH: u16 = 24;
 
-/// Below this terminal width the sessions sidebar auto-collapses so the
-/// center PTY keeps a usable column count; below `RAIL_MIN_WIDTH` the
-/// subagents sidebar folds too (the title badge + status bar still signal).
-/// Sidebars are also content-aware: an empty panel folds regardless of
-/// width (unless the AGENT cursor lives there), giving its columns back.
-const SESSIONS_MIN_WIDTH: u16 = 90;
-const RAIL_MIN_WIDTH: u16 = 70;
+/// The center column (the agent-native TUI) never shrinks below this: when
+/// both sidebars don't fit beside it, they fold one at a time — the AGENT
+/// cursor's panel wins, then the panel with content, then the subagents
+/// rail by default. User collapse (palette toggles) always wins over all.
+const CENTER_MIN_WIDTH: u16 = 48;
 
 /// A PTY pane's rendered grid for this frame, produced loop-side from its
 /// terminal backend (state stays pure — the emulator lives with the loop).
@@ -40,6 +38,57 @@ pub struct PtyView {
 /// reducer uses it to page the scrollback by exactly one screen.
 pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let area = frame.area();
+    // Columns split FIRST: the sidebars run the full terminal height, and
+    // the center column owns everything that belongs to the agent pane —
+    // detail viewport, composer, and the always-visible status bar (its
+    // width is the center's, per the accepted wireframe).
+    //
+    // Which sidebars show: user collapse always wins; when both fit beside
+    // a usable center they both show (even empty — an empty panel is an
+    // affordance, not noise); when space is tight the AGENT-cursor panel
+    // wins, then the panel that has content, then the subagents rail.
+    let rail_w = RAIL_WIDTH.min(area.width / 3);
+    let sessions_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
+    let rail_active = (state.mode == Mode::Agent && state.panel == Panel::Subagents)
+        || state.mode == Mode::Broadcast;
+    let sessions_allowed = !state.sessions_collapsed;
+    let rail_allowed = !state.subagents_collapsed;
+    let sessions_content = !state.sessions_list().is_empty();
+    let rail_content = state
+        .agents
+        .iter()
+        .any(|p| p.kind == crate::tui::state::PaneKind::Acp);
+    let fits_both = area.width >= SESSIONS_WIDTH + rail_w + CENTER_MIN_WIDTH;
+    let (show_sessions, show_rail) = if fits_both {
+        (sessions_allowed, rail_allowed)
+    } else {
+        // One sidebar at most.
+        let prefer_sessions = sessions_allowed
+            && (sessions_active || (!rail_active && sessions_content && !rail_content));
+        if prefer_sessions && area.width >= SESSIONS_WIDTH + CENTER_MIN_WIDTH {
+            (true, false)
+        } else if rail_allowed && area.width >= rail_w + CENTER_MIN_WIDTH {
+            (false, true)
+        } else if sessions_allowed && area.width >= SESSIONS_WIDTH + CENTER_MIN_WIDTH {
+            (true, false)
+        } else {
+            (false, false)
+        }
+    };
+    let mut constraints = Vec::new();
+    if show_sessions {
+        constraints.push(Constraint::Length(SESSIONS_WIDTH));
+    }
+    constraints.push(Constraint::Min(1));
+    if show_rail {
+        constraints.push(Constraint::Length(rail_w));
+    }
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
+        .split(area);
+
+    // The center column: detail over (optional) composer over status bar.
     // The composer renders only when it can receive input — a focused ACP
     // pane (typed prompts) or BROADCAST composition. A focused PTY pane owns
     // the keyboard (locked-mode passthrough), so its rows go back to the
@@ -55,55 +104,23 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         state.input.split('\n').count()
     }
     .clamp(1, 5) as u16;
-    let mut row_constraints = vec![Constraint::Min(1)]; // sidebars + detail
+    let mut row_constraints = vec![Constraint::Min(1)]; // detail viewport
     if composer {
         row_constraints.push(Constraint::Length(input_lines + 2)); // composer (+ borders)
     }
     row_constraints.push(Constraint::Length(1)); // status bar
+    let center = cols[if show_sessions { 1 } else { 0 }];
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints(row_constraints)
-        .split(area);
-    // Sidebars (sessions left, subagents right) are collapsible — by the
-    // user (palette toggles), automatically on narrow terminals (the center
-    // PTY keeps a usable column count), and by content: an empty panel gives
-    // its columns back unless the AGENT cursor lives there.
-    let sessions_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
-    let rail_active = (state.mode == Mode::Agent && state.panel == Panel::Subagents)
-        || state.mode == Mode::Broadcast;
-    let show_sessions = !state.sessions_collapsed
-        && area.width >= SESSIONS_MIN_WIDTH
-        && (!state.sessions_list().is_empty() || sessions_active);
-    let show_rail = !state.subagents_collapsed
-        && area.width >= RAIL_MIN_WIDTH
-        && (state
-            .agents
-            .iter()
-            .any(|p| p.kind == crate::tui::state::PaneKind::Acp)
-            || rail_active);
-    // Narrow terminals get a proportional rail instead of a fixed one.
-    let rail_w = RAIL_WIDTH.min(rows[0].width / 3);
-    let mut constraints = Vec::new();
-    if show_sessions {
-        constraints.push(Constraint::Length(SESSIONS_WIDTH));
-    }
-    constraints.push(Constraint::Min(1));
-    if show_rail {
-        constraints.push(Constraint::Length(rail_w));
-    }
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(constraints)
-        .split(rows[0]);
+        .split(center);
 
-    let mut col = 0;
     if show_sessions {
-        render_sessions(state, frame, cols[col]);
-        col += 1;
+        render_sessions(state, frame, cols[0]);
     }
-    render_detail(state, pty, frame, cols[col]);
+    render_detail(state, pty, frame, rows[0]);
     if show_rail {
-        render_rail(state, frame, cols[col + 1]);
+        render_rail(state, frame, cols[cols.len() - 1]);
     }
     if composer {
         render_input(state, frame, rows[1]);
@@ -1092,11 +1109,16 @@ mod tests {
     }
 
     #[test]
-    fn sessions_panel_folds_when_no_sessions_exist() {
-        // agents3 is pure-ACP: even on a wide terminal the sessions sidebar
-        // gives its columns back.
+    fn empty_sessions_panel_shows_when_wide_folds_when_tight() {
+        // agents3 is pure-ACP. Wide: both sidebars fit — the empty sessions
+        // panel is an affordance, not noise.
         let text = draw(&mut agents3(), 130, 30);
-        assert!(!text.contains("sessions"), "empty sessions panel folds");
+        assert!(text.contains("N new session"), "affordance on wide: {text}");
+        // Tight: one sidebar at most — the panel with content (the rail)
+        // wins and the empty sessions panel gives its columns back.
+        let text = draw(&mut agents3(), 90, 30);
+        assert!(!text.contains("N new session"), "empty panel folds");
+        assert!(text.contains("subagents"), "content panel survives");
     }
 
     #[test]
@@ -1109,7 +1131,7 @@ mod tests {
             split: crate::tui::state::Split::H,
             focus: 0,
         };
-        let text = draw(&mut st, 100, 24);
+        let text = draw(&mut st, 140, 24);
         assert!(!text.contains("› "), "no idle prompt under a PTY pane");
         assert!(
             text.contains("keys go to the orchestrator"),
@@ -1121,7 +1143,7 @@ mod tests {
             split: crate::tui::state::Split::H,
             focus: 0,
         };
-        let text = draw(&mut st, 100, 24);
+        let text = draw(&mut st, 140, 24);
         assert!(text.contains("› "), "composer for the ACP pane");
     }
 
@@ -1594,14 +1616,11 @@ mod tests {
             split: crate::tui::state::Split::H,
             focus: 0,
         };
-        // An empty rail folds away entirely (content-aware collapse)…
-        let text = draw(&mut st, 80, 24);
-        assert!(!text.contains("subagents"), "empty rail folds");
-        assert!(text.contains("no agent shown"), "detail placeholder");
-        // …but stays open with a placeholder while the AGENT cursor is on it.
-        st.mode = Mode::Agent;
+        // Tight width, nothing anywhere: the default (subagents) panel keeps
+        // its placeholder as the one visible affordance.
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("(no subagents)"), "rail placeholder");
+        assert!(text.contains("no agent shown"), "detail placeholder");
     }
 
     #[test]
