@@ -50,7 +50,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     // ── Channel. The loop keeps `tx` to pump agents spawned later. ──
     let (tx, rx) = unbounded_channel::<Incoming>();
     let mut sessions: HashMap<String, Arc<Session>> = HashMap::new();
-    let mut port_alloc: HashMap<String, u16> = HashMap::new();
+    let mut port_leases: crate::fleet::PortLeases = HashMap::new();
     let mut ptys: HashMap<String, pty::PtyPane> = HashMap::new();
 
     // The manager's durable memory (`.bitrouter/fleet-state.json`) and the
@@ -97,14 +97,15 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         // Runs in the base repo (worktree strictly opt-in via --worktree)
         // but still draws a fleet PORT. Worktrees are retained on close;
         // transcripts stay on (LaunchOptions default). ──
-        let initial_port = alloc_port(ports, &HashMap::new());
+        let initial_lease = crate::fleet::reserve_port(&base_repo, ports);
+        let initial_port = initial_lease.as_ref().map(|l| l.port());
         let options = bitrouter_substrate::engine::LaunchOptions {
             worktree: worktree.map(|name| bitrouter_substrate::worktree::WorktreeSpec {
                 name: name.to_string(),
                 branch: None,
                 remove_on_shutdown: false,
             }),
-            env: port_env(initial_port),
+            env: crate::fleet::port_env(initial_port),
             ..Default::default()
         };
         let session = Session::launch(&catalog, agent_id, base_repo.clone(), options)
@@ -114,8 +115,8 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         let session = Arc::new(session);
         pump::spawn(Arc::clone(&session), record_id.clone(), tx.clone());
         sessions.insert(record_id.clone(), session);
-        if let Some(p) = initial_port {
-            port_alloc.insert(record_id.clone(), p);
+        if let Some(lease) = initial_lease {
+            port_leases.insert(record_id.clone(), lease);
         }
         let mut pane = PaneState::new(record_id, agent_id.to_string());
         pane.port = initial_port;
@@ -193,7 +194,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         },
         fleet: Fleet {
             ports,
-            port_alloc,
+            leases: port_leases,
             meta: HashMap::new(),
             checks: cfg.worktrees.checks.clone(),
         },
@@ -213,8 +214,8 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
 struct Fleet {
     /// The inclusive `PORT` pool (`worktrees.ports`).
     ports: (u16, u16),
-    /// record_id → allocated port; freed when the agent closes.
-    port_alloc: HashMap<String, u16>,
+    /// record_id → cross-process port lease; dropping frees the port.
+    leases: crate::fleet::PortLeases,
     /// record_id → integration metadata for worktree-isolated agents.
     meta: HashMap<String, WorkMeta>,
     /// Verification checks run in the worktree before "ready to review".
@@ -228,18 +229,6 @@ struct WorkMeta {
     branch: String,
     /// The base repo `HEAD` at spawn — the diff/merge base.
     base_ref: String,
-}
-
-/// Lowest port in the inclusive pool not currently allocated; `None` when the
-/// pool is exhausted (the agent then simply gets no `PORT`).
-fn alloc_port(range: (u16, u16), allocated: &HashMap<String, u16>) -> Option<u16> {
-    (range.0..=range.1).find(|p| !allocated.values().any(|used| used == p))
-}
-
-/// The `PORT` env overlay for a launch, when a port was allocated.
-fn port_env(port: Option<u16>) -> Vec<(String, String)> {
-    port.map(|p| vec![("PORT".to_string(), p.to_string())])
-        .unwrap_or_default()
 }
 
 /// Terse harness tag for a pane header / roster meta line. Invocation
@@ -971,19 +960,16 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             // a PORT from the pool, and — when the human approved it — the
             // bootstrap hook. Worktrees are retained on close: cleanup is
             // gated on merged-or-discarded, never automatic.
-            let tag = crate::fleet_mcp::branch_tag(&agent_id);
-            let port = alloc_port(rt.fleet.ports, &rt.fleet.port_alloc);
+            let tag = crate::fleet::branch_tag(&agent_id);
+            let lease = crate::fleet::reserve_port(&rt.spawner.base_repo, rt.fleet.ports);
+            let port = lease.as_ref().map(|l| l.port());
             let options = bitrouter_substrate::engine::LaunchOptions {
-                worktree: Some(bitrouter_substrate::worktree::WorktreeSpec {
-                    name: format!("{tag}-{{record16}}"),
-                    branch: Some(format!("bitrouter/{tag}-{{record16}}")),
-                    remove_on_shutdown: false,
-                }),
+                worktree: Some(crate::fleet::worktree_spec(&tag)),
                 worktree_bootstrap: match state.bootstrap_decision {
                     Some(true) => state.bootstrap_cmd.clone(),
                     _ => None,
                 },
-                env: port_env(port),
+                env: crate::fleet::port_env(port),
                 ..Default::default()
             };
             match Session::launch(
@@ -999,14 +985,8 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     // Integration metadata: where the work lives, on which
                     // branch, against which base — feeds the review queue.
                     if let Some(wt) = sess.worktree_path() {
-                        let handle: String = rid.chars().filter(|c| *c != '-').take(16).collect();
-                        let base_ref = crate::fleet_mcp::git_stdout(
-                            &rt.spawner.base_repo,
-                            &["rev-parse", "HEAD"],
-                        )
-                        .await
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_default();
+                        let handle = crate::fleet::record16(&rid);
+                        let base_ref = crate::fleet::base_head(&rt.spawner.base_repo).await;
                         rt.fleet.meta.insert(
                             rid.clone(),
                             WorkMeta {
@@ -1018,8 +998,8 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     }
                     let sess = Arc::new(sess);
                     rt.sessions.insert(rid.clone(), Arc::clone(&sess));
-                    if let Some(p) = port {
-                        rt.fleet.port_alloc.insert(rid.clone(), p);
+                    if let Some(lease) = lease {
+                        rt.fleet.leases.insert(rid.clone(), lease);
                     }
                     pump::spawn(sess, rid.clone(), rt.spawner.tx.clone());
                     let _ = reduce(
@@ -1093,7 +1073,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 return;
             }
             rt.pending.remove(&record_id);
-            rt.fleet.port_alloc.remove(&record_id);
+            rt.fleet.leases.remove(&record_id); // drop releases the port
             rt.fleet.meta.remove(&record_id);
             if let Some(handles) = rt.prompt_tasks.remove(&record_id) {
                 for handle in handles {
@@ -1147,16 +1127,13 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             };
             let tx = rt.spawner.tx.clone();
             tokio::spawn(async move {
-                let text =
-                    match crate::fleet_mcp::git_stdout(&meta.worktree, &["diff", &meta.base_ref])
-                        .await
-                    {
-                        Ok(t) if t.trim().is_empty() => {
-                            "(no changes vs the spawn base)".to_string()
-                        }
-                        Ok(t) => t,
-                        Err(e) => format!("diff failed: {e:#}"),
-                    };
+                let text = match crate::fleet::git_stdout(&meta.worktree, &["diff", &meta.base_ref])
+                    .await
+                {
+                    Ok(t) if t.trim().is_empty() => "(no changes vs the spawn base)".to_string(),
+                    Ok(t) => t,
+                    Err(e) => format!("diff failed: {e:#}"),
+                };
                 let _ = tx.send(Incoming::DiffLoaded { record_id, text });
             });
         }
@@ -1167,7 +1144,13 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 state.notice = Some("no worktree to merge".into());
                 return;
             };
-            let result = merge_worktree(&rt.spawner.base_repo, &meta).await;
+            let result = crate::fleet::merge_branch(
+                &rt.spawner.base_repo,
+                &meta.worktree,
+                &meta.branch,
+                "ask the agent to commit, or use p (apply)",
+            )
+            .await;
             let (message, ok) = match result {
                 Ok(()) => (format!("merged {}", meta.branch), true),
                 Err(e) => (format!("merge failed: {e:#}"), false),
@@ -1186,7 +1169,9 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 state.notice = Some("no worktree to apply from".into());
                 return;
             };
-            let result = apply_worktree(&rt.spawner.base_repo, &meta).await;
+            let result =
+                crate::fleet::apply_diff(&rt.spawner.base_repo, &meta.worktree, &meta.base_ref)
+                    .await;
             let (message, ok) = match result {
                 Ok(()) => (
                     "applied to the base working tree (uncommitted — you write the commit)"
@@ -1210,7 +1195,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
 /// Diff-stat the worktree and run the verification checks; `None` when the
 /// diff is empty (nothing to review).
 async fn inspect_worktree(record_id: &str, meta: &WorkMeta, checks: &[String]) -> Option<Incoming> {
-    let stat = crate::fleet_mcp::diff_stat(&meta.worktree, &meta.base_ref).await?;
+    let stat = crate::fleet::diff_stat(&meta.worktree, &meta.base_ref).await?;
     let files = stat["files"].as_u64().unwrap_or(0);
     if files == 0 {
         return None; // no work — stays idle, not review
@@ -1266,29 +1251,6 @@ failed to run: {e}"
     })
 }
 
-/// Merge the agent's branch into the base repo, keeping history. Requires the
-/// agent to have committed its work (a dirty worktree fails with guidance).
-async fn merge_worktree(base_repo: &std::path::Path, meta: &WorkMeta) -> Result<()> {
-    let dirty = crate::fleet_mcp::git_stdout(&meta.worktree, &["status", "--porcelain"]).await?;
-    if !dirty.trim().is_empty() {
-        anyhow::bail!(
-            "the worktree has uncommitted changes — ask the agent to commit, or use p (apply)"
-        );
-    }
-    let msg = format!("merge {}", meta.branch);
-    crate::fleet_mcp::git_ok(base_repo, &["merge", "--no-ff", "-m", &msg, &meta.branch]).await
-}
-
-/// Apply the agent's diff onto the base working tree, uncommitted.
-async fn apply_worktree(base_repo: &std::path::Path, meta: &WorkMeta) -> Result<()> {
-    let patch =
-        crate::fleet_mcp::git_stdout(&meta.worktree, &["diff", "--binary", &meta.base_ref]).await?;
-    if patch.trim().is_empty() {
-        anyhow::bail!("nothing to apply: the diff vs the spawn base is empty");
-    }
-    crate::fleet_mcp::git_apply(base_repo, &patch).await
-}
-
 /// Abort and await every in-flight prompt task (across all sessions) so their
 /// `Arc<Session>` clones are released before teardown takes sole ownership.
 async fn abort_prompt_tasks(tasks: &mut PromptTasks) {
@@ -1314,6 +1276,8 @@ async fn cleanup(rt: &mut Runtime<'_>) {
     abort_prompt_tasks(&mut rt.prompt_tasks).await;
     // Dropping a PendingPermission defaults it to Deny in the substrate.
     rt.pending.clear();
+    // Dropping the leases frees the ports for the next fleet.
+    rt.fleet.leases.clear();
     for (_, sess) in rt.sessions.drain() {
         shutdown_session(sess).await;
     }
@@ -1465,23 +1429,6 @@ mod tests {
         assert_eq!(mcp.name, "bitrouter_fleet");
         assert_eq!(mcp.args, vec!["mcp", "serve", "--backend", "fleet"]);
         assert!(!mcp.command.is_empty());
-    }
-
-    #[test]
-    fn alloc_port_takes_lowest_free_and_exhausts_cleanly() {
-        let mut allocated = std::collections::HashMap::new();
-        assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3100));
-        allocated.insert("r0".to_string(), 3100);
-        assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3101));
-        allocated.insert("r1".to_string(), 3101);
-        assert_eq!(
-            super::alloc_port((3100, 3101), &allocated),
-            None,
-            "an exhausted pool allocates nothing rather than colliding"
-        );
-        // Closing an agent frees its port for the next spawn.
-        allocated.remove("r0");
-        assert_eq!(super::alloc_port((3100, 3101), &allocated), Some(3100));
     }
 
     #[tokio::test]

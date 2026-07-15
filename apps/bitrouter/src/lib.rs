@@ -22,6 +22,7 @@ pub mod commands;
 pub mod daemon;
 pub mod db;
 pub mod error_report;
+pub mod fleet;
 pub mod fleet_mcp;
 pub mod harness;
 pub mod metering;

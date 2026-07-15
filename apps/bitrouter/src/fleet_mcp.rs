@@ -65,7 +65,8 @@ struct Subagent {
     branch: Option<String>,
     /// The base repo `HEAD` commit at spawn — the diff/merge base.
     base_ref: String,
-    port: Option<u16>,
+    /// Cross-process `PORT` claim; dropping the lease frees the port.
+    port: Option<crate::fleet::PortLease>,
     /// Task-shaped state: `working` while a turn is in flight, then
     /// `completed`/`failed` (MCP Tasks vocabulary, adopted internally now so
     /// the wire protocol is a capability flag later, not a rewrite).
@@ -261,31 +262,24 @@ impl FleetMcp {
             .map(|schema| ResultContract::from_flag(&schema.to_string()))
             .transpose()?;
 
-        let port = {
-            let agents = inner.agents.lock().await;
-            let used: Vec<u16> = agents.values().filter_map(|a| a.port).collect();
-            (inner.worktrees.ports.from..=inner.worktrees.ports.to).find(|p| !used.contains(p))
-        };
-        let tag = branch_tag(&args.agent);
+        // Lease-file pool: atomic across the TUI's fleet and every bridge
+        // subprocess, and across two concurrent spawn_subagent calls (the
+        // old registry scan raced between the scan and the insert).
+        let port = crate::fleet::reserve_port(
+            &inner.base_repo,
+            (inner.worktrees.ports.from, inner.worktrees.ports.to),
+        );
+        let tag = crate::fleet::branch_tag(&args.agent);
         let options = LaunchOptions {
-            worktree: isolate.then(|| bitrouter_substrate::worktree::WorktreeSpec {
-                name: format!("{tag}-{{record16}}"),
-                branch: Some(format!("bitrouter/{tag}-{{record16}}")),
-                remove_on_shutdown: false,
-            }),
+            worktree: isolate.then(|| crate::fleet::worktree_spec(&tag)),
             // Config-declared bootstrap: the human authored it and granted
             // this bridge by wiring it into the orchestrator — that is the
             // first-use approval for this surface.
             worktree_bootstrap: isolate.then(|| inner.worktrees.bootstrap.clone()).flatten(),
-            env: port
-                .map(|p| vec![("PORT".to_string(), p.to_string())])
-                .unwrap_or_default(),
+            env: crate::fleet::port_env(port.as_ref().map(|l| l.port())),
             ..Default::default()
         };
-        let base_ref = git_stdout(&inner.base_repo, &["rev-parse", "HEAD"])
-            .await
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+        let base_ref = crate::fleet::base_head(&inner.base_repo).await;
 
         let session = Session::launch(
             &inner.catalog,
@@ -296,7 +290,7 @@ impl FleetMcp {
         .await
         .with_context(|| format!("launching acp subagent '{}'", args.agent))?;
         let record_id = session.state().record_id.clone();
-        let handle: String = record_id.chars().filter(|c| *c != '-').take(16).collect();
+        let handle = crate::fleet::record16(&record_id);
         let worktree = session.worktree_path().map(PathBuf::from);
         let branch = worktree
             .is_some()
@@ -382,7 +376,7 @@ impl FleetMcp {
 
         let (agent_id, worktree, branch, base_ref, port) = self.meta(handle).await?;
         let diff_stat = match &worktree {
-            Some(wt) => diff_stat(wt, &base_ref).await,
+            Some(wt) => crate::fleet::diff_stat(wt, &base_ref).await,
             None => None,
         };
         let mut reply = reply;
@@ -428,7 +422,7 @@ impl FleetMcp {
             sub.worktree.clone(),
             sub.branch.clone(),
             sub.base_ref.clone(),
-            sub.port,
+            sub.port.as_ref().map(|l| l.port()),
         ))
     }
 
@@ -454,8 +448,9 @@ impl FleetMcp {
     async fn do_diff(&self, handle: &str) -> Result<String> {
         let (_, worktree, _, base_ref, _) = self.meta(handle).await?;
         let wt = worktree.context("subagent has no worktree (spawned with worktree=false)")?;
-        let mut diff = git_stdout(&wt, &["diff", &base_ref]).await?;
-        let untracked = git_stdout(&wt, &["ls-files", "--others", "--exclude-standard"]).await?;
+        let mut diff = crate::fleet::git_stdout(&wt, &["diff", &base_ref]).await?;
+        let untracked =
+            crate::fleet::git_stdout(&wt, &["ls-files", "--others", "--exclude-standard"]).await?;
         if !untracked.trim().is_empty() {
             diff.push_str("\n# untracked files:\n");
             diff.push_str(&untracked);
@@ -496,11 +491,7 @@ impl FleetMcp {
             .worktree
             .as_ref()
             .context("subagent has no worktree to apply from")?;
-        let patch = git_stdout(wt, &["diff", "--binary", &sub.base_ref]).await?;
-        if patch.trim().is_empty() {
-            anyhow::bail!("nothing to apply: the subagent's diff vs its spawn base is empty");
-        }
-        git_apply(&self.inner.base_repo, &patch)
+        crate::fleet::apply_diff(&self.inner.base_repo, wt, &sub.base_ref)
             .await
             .context("applying the subagent's diff onto the base working tree")?;
         Ok(serde_json::json!({
@@ -521,17 +512,12 @@ impl FleetMcp {
             .as_ref()
             .context("subagent has no worktree to merge")?;
         let branch = sub.branch.as_ref().context("subagent has no branch")?;
-        let dirty = git_stdout(wt, &["status", "--porcelain"]).await?;
-        if !dirty.trim().is_empty() {
-            anyhow::bail!(
-                "the subagent's worktree has uncommitted changes — have it commit its work \
-                 (prompt_subagent), or use apply_subagent to stage the diff uncommitted"
-            );
-        }
-        let msg = format!("merge {branch}");
-        git_ok(
+        crate::fleet::merge_branch(
             &self.inner.base_repo,
-            &["merge", "--no-ff", "-m", &msg, branch],
+            wt,
+            branch,
+            "have it commit its work (prompt_subagent), or use apply_subagent to stage \
+             the diff uncommitted",
         )
         .await
         .context("merging the subagent's branch (resolve conflicts in the base repo)")?;
@@ -669,100 +655,12 @@ async fn snapshot(handle: &str, sub: &Subagent) -> serde_json::Value {
         "state": sub.state,
         "worktree": sub.worktree,
         "branch": sub.branch,
-        "port": sub.port,
+        "port": sub.port.as_ref().map(|l| l.port()),
         "diff_stat": match &sub.worktree {
-            Some(wt) => diff_stat(wt, &sub.base_ref).await,
+            Some(wt) => crate::fleet::diff_stat(wt, &sub.base_ref).await,
             None => None,
         },
     })
-}
-
-/// `+adds/-dels/files` over the worktree vs its spawn base (tracked changes).
-pub(crate) async fn diff_stat(
-    worktree: &std::path::Path,
-    base_ref: &str,
-) -> Option<serde_json::Value> {
-    let numstat = git_stdout(worktree, &["diff", "--numstat", base_ref])
-        .await
-        .ok()?;
-    let (mut adds, mut dels, mut files) = (0u64, 0u64, 0u64);
-    for line in numstat.lines() {
-        let mut parts = line.split_whitespace();
-        let a = parts.next()?.parse::<u64>().unwrap_or(0);
-        let d = parts.next()?.parse::<u64>().unwrap_or(0);
-        adds += a;
-        dels += d;
-        files += 1;
-    }
-    Some(serde_json::json!({ "files": files, "adds": adds, "dels": dels }))
-}
-
-/// Branch-safe agent tag: keep `[A-Za-z0-9._]`, everything else becomes `-`.
-/// Shared with the TUI's fleet spawns.
-pub(crate) fn branch_tag(agent_id: &str) -> String {
-    agent_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-/// Run git in `dir`, capturing stdout; errors carry stderr.
-pub(crate) async fn git_stdout(dir: &std::path::Path, args: &[&str]) -> Result<String> {
-    let out = tokio::process::Command::new("git")
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .await
-        .with_context(|| format!("spawning `git {}`", args.join(" ")))?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "`git {}` failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// Run git in `dir` for effect only.
-pub(crate) async fn git_ok(dir: &std::path::Path, args: &[&str]) -> Result<()> {
-    git_stdout(dir, args).await.map(|_| ())
-}
-
-/// `git apply` the patch text onto `dir`'s working tree (3-way for context
-/// drift; fails clean on conflicts).
-pub(crate) async fn git_apply(dir: &std::path::Path, patch: &str) -> Result<()> {
-    use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new("git")
-        .current_dir(dir)
-        .args(["apply", "--3way"])
-        .stdin(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("spawning `git apply`")?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(patch.as_bytes())
-            .await
-            .context("writing patch to `git apply`")?;
-    }
-    let out = child
-        .wait_with_output()
-        .await
-        .context("waiting for `git apply`")?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "`git apply` failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
 }
 
 /// Serialize `value` into a successful tool result.
@@ -828,13 +726,6 @@ mod tests {
             true,
         );
         assert!(granted.require_write_grant("merge_subagent").is_ok());
-    }
-
-    #[test]
-    fn branch_tag_sanitizes_for_git_ref_names() {
-        assert_eq!(branch_tag("claude-acp"), "claude-acp");
-        assert_eq!(branch_tag("my agent/v2"), "my-agent-v2");
-        assert_eq!(branch_tag("gpt_4.1"), "gpt_4.1");
     }
 
     #[test]
