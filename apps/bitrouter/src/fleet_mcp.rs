@@ -2,7 +2,7 @@
 //! `bitrouter mcp serve --backend fleet` (TUI_SPEC §4).
 //!
 //! The MCP handler and every tool schema live in `bitrouter-mcp`; this module
-//! implements that crate's [`Fleet`](bitrouter_mcp::capabilities::fleet::Fleet)
+//! implements that crate's [`Fleet`]
 //! port against `bitrouter_substrate`. All substrate-coupled behavior stays
 //! here so the crate never depends on the substrate.
 //!

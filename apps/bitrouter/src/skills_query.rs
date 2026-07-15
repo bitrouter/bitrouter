@@ -2,7 +2,7 @@
 //! profile's `skills_search` / `skills_get` tools (TUI_SPEC §4, PR-2 B2).
 //!
 //! Implements `bitrouter-mcp`'s
-//! [`SkillsQuery`](bitrouter_mcp::capabilities::skills::SkillsQuery) port over
+//! [`SkillsQuery`] port over
 //! the installed-skills root, using `bitrouter_skills`' discovery. Read-only.
 
 use std::path::PathBuf;

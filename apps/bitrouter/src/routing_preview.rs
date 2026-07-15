@@ -2,7 +2,7 @@
 //! `route_preview` tool (TUI_SPEC §4, PR-2 B1).
 //!
 //! Implements `bitrouter-mcp`'s
-//! [`RoutingQuery`](bitrouter_mcp::capabilities::routing::RoutingQuery) port by
+//! [`RoutingQuery`] port by
 //! replaying BitRouter's *real* routing over a probe prompt — the policy-table
 //! decision, the resolved provider fallback chain, and the registry's per-token
 //! rates for the top hop. Read-only: nothing is sent upstream, and the
