@@ -21,10 +21,17 @@
 //! integrate a subagent's work into the base repository and therefore refuse
 //! unless the human started the bridge with `--allow-writes` — an explicit
 //! autonomy grant. Subagent permission requests are auto-resolved by risk:
-//! reversible + in-worktree allows; everything else escalates to the hosting
-//! TUI's decision queue when this bridge runs under `bitrouter tui` (it
-//! connects back over the fleet socket, mirroring its subagents into the
-//! rail), and denies when headless (logged, never silent).
+//! reversible + in-worktree allows; everything else escalates in
+//! escalation-home priority (TUI_SPEC §5): the orchestrator conversation via a
+//! **capability-gated** Tasks `elicitation/create` when the connecting client
+//! declared it (forward-compat — no shipping harness does yet, so this is off
+//! by default; see `bitrouter_mcp::capabilities::escalation`), otherwise the
+//! hosting TUI's decision queue when this bridge runs under `bitrouter tui` (it
+//! connects back over the fleet socket, mirroring its subagents into the rail),
+//! and denies when headless (logged, never silent).
+//!
+//! A spend circuit breaker (`--budget-usd`, TUI_SPEC §5) refuses `spawn`/
+//! `prompt` once today's machine-wide spend reaches the ceiling.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,6 +39,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
+use bitrouter_mcp::capabilities::escalation::{
+    EscalationDecision, EscalationRequest, EscalationState,
+};
 use bitrouter_mcp::capabilities::fleet::{Fleet, PromptArgs, SpawnArgs};
 use bitrouter_mcp::error::ToolError;
 use bitrouter_sdk::acp::ConfigAcpRoutingTable;
@@ -59,6 +69,111 @@ const MAX_DIFF_BYTES: usize = 64 * 1024;
 /// (`BitrouterMcp::builder().subagent_cap(..)`) instead of hardcoding a
 /// number that could drift from this one.
 pub const MAX_CONCURRENT_SUBAGENTS: usize = 6;
+
+/// Reads the machine-wide spend figure the budget ceiling enforces against.
+/// App-side so `bitrouter-mcp` stays storage-agnostic; a metering-backed impl
+/// ([`MeteringSpend`]) and a test stub both satisfy it.
+#[async_trait::async_trait]
+pub trait SpendSnapshot: Send + Sync {
+    /// Current machine-wide spend in micro-USD, or `None` when the metering
+    /// database is unavailable (the caller treats that as `$0` spent so far, so
+    /// an empty database never blocks the first spawn).
+    async fn spent_micro_usd(&self) -> Option<u64>;
+}
+
+/// [`SpendSnapshot`] over the local metering database — the same read-side the
+/// `fleet_cost` tool uses. Reports **today's** machine-wide spend (UTC day),
+/// which is the figure the budget ceiling is enforced and reported against.
+pub struct MeteringSpend {
+    source: crate::paths::ConfigSource,
+}
+
+impl MeteringSpend {
+    /// Read spend from the metering database resolved by `source`.
+    pub fn new(source: crate::paths::ConfigSource) -> Self {
+        Self { source }
+    }
+}
+
+#[async_trait::async_trait]
+impl SpendSnapshot for MeteringSpend {
+    async fn spent_micro_usd(&self) -> Option<u64> {
+        use crate::metering::store::TimeWindow;
+        let store = crate::metering::reader::open_readonly(&self.source).await?;
+        let today = store.spend_summary(TimeWindow::Today).await.ok()?;
+        Some(today.spend_micro_usd)
+    }
+}
+
+/// The spend circuit breaker (TUI_SPEC §5): a machine-wide spend ceiling that
+/// `spawn_subagent` / `prompt_subagent` refuse past, so an orchestrator can't
+/// burn through an unbounded budget in one window. The enforced figure is
+/// **today's machine-wide spend** (the same `fleet_cost.today` value) — it is
+/// *not* scoped to this session, so other spend today counts against it, and a
+/// new UTC day is the natural "fresh window".
+pub struct BudgetCeiling {
+    ceiling_micro_usd: u64,
+    spend: Arc<dyn SpendSnapshot>,
+}
+
+impl BudgetCeiling {
+    /// A ceiling of `ceiling_micro_usd`, enforced against `spend`.
+    pub fn new(ceiling_micro_usd: u64, spend: Arc<dyn SpendSnapshot>) -> Self {
+        Self {
+            ceiling_micro_usd,
+            spend,
+        }
+    }
+
+    /// `Ok(())` when a spawn/prompt may proceed; an actionable `Err` when
+    /// today's machine-wide spend has reached the ceiling. A metering database
+    /// that isn't readable yet counts as `$0` spent (never blocks).
+    async fn check(&self) -> Result<()> {
+        let spent = self.spend.spent_micro_usd().await.unwrap_or(0);
+        if spent >= self.ceiling_micro_usd {
+            anyhow::bail!(
+                "budget ceiling {} reached; current spend {} — raise it with --budget-usd, or \
+                 start a fresh window (the ceiling applies to today's machine-wide spend).",
+                crate::metering::fmt_usd(self.ceiling_micro_usd),
+                crate::metering::fmt_usd(spent),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Convert a `--budget-usd` dollar amount to micro-USD, rejecting a
+/// non-positive or non-finite ceiling — a `<= 0` / NaN budget would refuse
+/// every spawn, which is never what the operator meant.
+pub fn budget_usd_to_micro(usd: f64) -> Result<u64> {
+    if !usd.is_finite() || usd <= 0.0 {
+        anyhow::bail!("--budget-usd must be a positive dollar amount (got {usd})");
+    }
+    Ok((usd * 1_000_000.0).round() as u64)
+}
+
+/// A [`SpendSnapshot`] whose reported spend is settable at runtime — the test
+/// double for the budget circuit breaker (no metering database needed).
+#[cfg(test)]
+struct StubSpend(std::sync::atomic::AtomicU64);
+
+#[cfg(test)]
+impl StubSpend {
+    fn new(micro: u64) -> Arc<Self> {
+        Arc::new(Self(std::sync::atomic::AtomicU64::new(micro)))
+    }
+    fn set(&self, micro: u64) {
+        self.0.store(micro, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl SpendSnapshot for StubSpend {
+    async fn spent_micro_usd(&self) -> Option<u64> {
+        Some(self.0.load(Ordering::SeqCst))
+    }
+}
 
 /// One managed subagent: the live session plus its integration metadata.
 struct Subagent {
@@ -101,6 +216,14 @@ struct FleetInner {
     worktrees: WorktreesConfig,
     /// Human-granted write autonomy (`--allow-writes`).
     allow_writes: bool,
+    /// Optional spend circuit breaker (`--budget-usd`). `None` = unlimited.
+    budget: Option<BudgetCeiling>,
+    /// Shared escalation seam (capability-gated Tasks elicitation). Populated
+    /// handler-side at the first fleet tool call; read from the permission path
+    /// to decide whether a gated permission routes to the orchestrator
+    /// conversation instead of the human-bridge / deny fallback. `None` when the
+    /// seam isn't wired (default behavior unchanged).
+    escalation: Option<Arc<EscalationState>>,
     /// The live subagent registry, under one lock. Also serializes
     /// integration: `apply`/`merge` hold this lock, so branches integrate one
     /// at a time.
@@ -278,6 +401,8 @@ impl SubstrateFleet {
         base_repo: PathBuf,
         worktrees: WorktreesConfig,
         allow_writes: bool,
+        budget: Option<BudgetCeiling>,
+        escalation: Option<Arc<EscalationState>>,
     ) -> Self {
         #[cfg(unix)]
         let link = match std::env::var(crate::fleet::TUI_SOCK_ENV) {
@@ -289,6 +414,8 @@ impl SubstrateFleet {
             base_repo,
             worktrees,
             allow_writes,
+            budget,
+            escalation,
             registry: tokio::sync::Mutex::new(Registry::default()),
             reserving: Arc::new(AtomicUsize::new(0)),
             #[cfg(unix)]
@@ -301,6 +428,12 @@ impl SubstrateFleet {
 
     async fn do_spawn(&self, args: SpawnArgs) -> Result<serde_json::Value> {
         let inner = &self.inner;
+        // Spend circuit breaker (TUI_SPEC §5): refuse to launch once the
+        // machine-wide budget ceiling is reached. Checked before reserving a
+        // slot so an over-budget spawn does no work at all.
+        if let Some(budget) = &inner.budget {
+            budget.check().await?;
+        }
         // Circuit breaker: cap the live fleet so the orchestrator integrates
         // or closes before fanning out unboundedly (TUI_SPEC §5). Reserve a
         // slot atomically — the capacity check and the reservation are one
@@ -310,8 +443,7 @@ impl SubstrateFleet {
         // commits it when the subagent is inserted — so a slot never leaks.
         let reservation = {
             let reg = inner.registry.lock().await;
-            if reg.agents.len() + inner.reserving.load(Ordering::SeqCst)
-                >= MAX_CONCURRENT_SUBAGENTS
+            if reg.agents.len() + inner.reserving.load(Ordering::SeqCst) >= MAX_CONCURRENT_SUBAGENTS
             {
                 anyhow::bail!(
                     "fleet at capacity: {MAX_CONCURRENT_SUBAGENTS} subagents already running. \
@@ -458,6 +590,10 @@ impl SubstrateFleet {
     }
 
     async fn do_prompt(&self, args: PromptArgs) -> Result<serde_json::Value> {
+        // A prompt turn also spends, so it honors the same ceiling as spawn.
+        if let Some(budget) = &self.inner.budget {
+            budget.check().await?;
+        }
         let session = {
             let mut reg = self.inner.registry.lock().await;
             let sub = reg
@@ -768,7 +904,9 @@ impl SubstrateFleet {
         if self.inner.registry.lock().await.agents.contains_key(handle) {
             Ok(())
         } else {
-            Err(ToolError::new(format!("no subagent with handle '{handle}'")))
+            Err(ToolError::new(format!(
+                "no subagent with handle '{handle}'"
+            )))
         }
     }
 }
@@ -853,13 +991,17 @@ impl Fleet for SubstrateFleet {
 }
 
 /// Consume a subagent's permission stream with the risk auto-policy:
-/// reversible + in-worktree ⇒ allow-once; everything else escalates to the
-/// hosting TUI's decision queue when this bridge is linked (TUI_SPEC §5's
-/// escalation home), and denies when headless. Every decision is logged to
-/// stderr (never silent).
+/// reversible + in-worktree ⇒ allow-once; everything else, in escalation-home
+/// priority (TUI_SPEC §5): (1) the orchestrator conversation via a
+/// capability-gated Tasks `elicitation/create`, when the connecting client
+/// declared it — forward-compat, off for every shipping harness today;
+/// (2) otherwise the hosting TUI's decision queue when this bridge is linked;
+/// (3) otherwise deny (headless, no human in the loop). Every decision is
+/// logged to stderr (never silent).
 fn spawn_auto_policy(inner: &Arc<FleetInner>, session: &Arc<Session>, handle: String) {
     let mut perms = session.permissions();
     let workroot = inner.base_repo.clone();
+    let escalation = inner.escalation.clone();
     #[cfg(unix)]
     let link = inner.link.clone();
     tokio::spawn(async move {
@@ -877,6 +1019,44 @@ fn spawn_auto_policy(inner: &Arc<FleetInner>, session: &Arc<Session>, handle: St
                     pending.resolve(selected);
                 }
                 Risk::High => {
+                    // (1) Capability-gated escalation to the orchestrator
+                    // conversation. `escalate` returns `None` unless a client
+                    // declared the Tasks/elicitation capability (none do yet),
+                    // so this falls through to the existing path by default.
+                    if let Some(escalation) = &escalation
+                        && escalation.can_escalate()
+                    {
+                        let decision = escalation
+                            .escalate(EscalationRequest {
+                                subagent: handle.clone(),
+                                tool_title: title.clone(),
+                            })
+                            .await;
+                        match decision {
+                            Some(EscalationDecision::Allow) => {
+                                tracing::info!(
+                                    subagent = %handle, tool = %title,
+                                    "allowed by the orchestrator conversation (elicitation)"
+                                );
+                                let selected =
+                                    select_option(PermissionOutcome::AllowOnce, &pending.options);
+                                pending.resolve(selected);
+                                continue;
+                            }
+                            Some(EscalationDecision::Deny) => {
+                                tracing::info!(
+                                    subagent = %handle, tool = %title,
+                                    "denied by the orchestrator conversation (elicitation)"
+                                );
+                                drop(pending);
+                                continue;
+                            }
+                            // Round-trip failed — fall through to the existing
+                            // path rather than fail open.
+                            None => {}
+                        }
+                    }
+                    // (2) The hosting TUI's decision queue, when linked.
                     #[cfg(unix)]
                     if let Some(link) = &link {
                         match link.request_permission(&handle, &pending).await {
@@ -898,6 +1078,7 @@ fn spawn_auto_policy(inner: &Arc<FleetInner>, session: &Arc<Session>, handle: St
                         }
                         continue;
                     }
+                    // (3) Headless: deny.
                     tracing::warn!(subagent = %handle, tool = %title, "denied (high risk, no human in the loop)");
                     drop(pending); // dropping resolves as the reject option
                 }
@@ -974,6 +1155,8 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
         let err = fleet
@@ -988,6 +1171,8 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             true,
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
         assert!(granted.require_write_grant("merge_subagent").is_ok());
@@ -1004,10 +1189,15 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
         let out = fleet.notify("heads up").await.expect("notify ok");
-        assert_eq!(out["delivered"], false, "headless: nothing delivered: {out}");
+        assert_eq!(
+            out["delivered"], false,
+            "headless: nothing delivered: {out}"
+        );
         assert!(
             out["note"].as_str().is_some_and(|n| n.contains("no human")),
             "explains why: {out}"
@@ -1025,6 +1215,8 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
         for res in [
@@ -1038,6 +1230,51 @@ mod tests {
                 err.0
             );
         }
+    }
+
+    #[test]
+    fn budget_usd_to_micro_scales_and_rejects_nonpositive() {
+        assert_eq!(budget_usd_to_micro(2.5).expect("scales"), 2_500_000);
+        assert_eq!(budget_usd_to_micro(0.000_001).expect("rounds"), 1);
+        assert!(
+            budget_usd_to_micro(0.0).is_err(),
+            "$0 would block every spawn"
+        );
+        assert!(budget_usd_to_micro(-1.0).is_err());
+        assert!(budget_usd_to_micro(f64::NAN).is_err());
+        assert!(budget_usd_to_micro(f64::INFINITY).is_err());
+    }
+
+    #[tokio::test]
+    async fn budget_ceiling_allows_under_and_refuses_at_or_over() {
+        // $3 spent against a $10 ceiling → proceed.
+        let under = BudgetCeiling::new(10_000_000, StubSpend::new(3_000_000));
+        under.check().await.expect("under budget proceeds");
+
+        // At the ceiling → refuse with an actionable message (>= is over-budget).
+        let at = BudgetCeiling::new(10_000_000, StubSpend::new(10_000_000));
+        let err = at.check().await.expect_err("at the ceiling refuses");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("budget ceiling"), "names the breaker: {msg}");
+        assert!(msg.contains("--budget-usd"), "actionable: {msg}");
+    }
+
+    #[tokio::test]
+    async fn budget_ceiling_treats_unreadable_metering_as_zero_spent() {
+        // A metering database that returns `None` counts as $0 spent, so the
+        // first spawn is never blocked by a cold database.
+        struct NoData;
+        #[async_trait::async_trait]
+        impl SpendSnapshot for NoData {
+            async fn spent_micro_usd(&self) -> Option<u64> {
+                None
+            }
+        }
+        let budget = BudgetCeiling::new(1_000_000, Arc::new(NoData));
+        budget
+            .check()
+            .await
+            .expect("no data → treated as $0, proceed");
     }
 }
 
@@ -1131,6 +1368,8 @@ mod e2e_tests {
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             true, // write autonomy granted for this test
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
 
@@ -1209,6 +1448,8 @@ mod e2e_tests {
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             true,
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
         let summary = fleet
@@ -1248,6 +1489,8 @@ mod e2e_tests {
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             false,
+            None, // no budget ceiling in this test
+            None, // no escalation seam in this test
         )
         .await;
         // Fill the fleet to the cap (no worktrees: keep the test light).
@@ -1313,6 +1556,8 @@ mod e2e_tests {
                 repo.path().to_path_buf(),
                 WorktreesConfig::default(),
                 false,
+                None, // no budget ceiling in this test
+                None, // no escalation seam in this test
             )
             .await,
         );
@@ -1427,5 +1672,99 @@ mod e2e_tests {
             }
             other => panic!("wrong message: {other:?}"),
         }
+    }
+
+    /// The budget circuit breaker (TUI_SPEC §5 / PR-3 B1): a spawn/prompt under
+    /// the ceiling proceeds; once today's spend reaches it, both are refused
+    /// (actionable) and no new session is launched.
+    #[tokio::test]
+    async fn budget_ceiling_gates_spawn_and_prompt() {
+        let repo = init_repo();
+        let spend = StubSpend::new(0);
+        let fleet = SubstrateFleet::connect(
+            catalog_from("idle", IDLE_STUB),
+            repo.path().to_path_buf(),
+            WorktreesConfig::default(),
+            false,
+            Some(BudgetCeiling::new(10_000_000, spend.clone())),
+            None, // no escalation seam in this test
+        )
+        .await;
+
+        // Under budget ($0 of $10): spawn proceeds.
+        let summary = fleet
+            .do_spawn(SpawnArgs {
+                agent: "idle".into(),
+                task: "noop".into(),
+                worktree: Some(false),
+                result_schema: None,
+            })
+            .await
+            .expect("under budget spawns");
+        let handle = summary["handle"].as_str().expect("handle").to_string();
+
+        // Reach the ceiling: the next spawn AND a follow-up prompt are refused.
+        spend.set(10_000_000);
+        let spawn_err = fleet
+            .do_spawn(SpawnArgs {
+                agent: "idle".into(),
+                task: "one too many".into(),
+                worktree: Some(false),
+                result_schema: None,
+            })
+            .await
+            .expect_err("over-budget spawn is refused");
+        assert!(
+            format!("{spawn_err:#}").contains("budget ceiling"),
+            "actionable: {spawn_err:#}"
+        );
+        let prompt_err = fleet
+            .do_prompt(PromptArgs {
+                handle: handle.clone(),
+                text: "again".into(),
+            })
+            .await
+            .expect_err("over-budget prompt is refused");
+        assert!(
+            format!("{prompt_err:#}").contains("budget ceiling"),
+            "actionable: {prompt_err:#}"
+        );
+
+        // The refused spawn launched nothing: still exactly one live subagent.
+        let fleet_snap = fleet.do_status(None).await.expect("status");
+        assert_eq!(
+            fleet_snap["fleet"].as_array().expect("fleet array").len(),
+            1,
+            "over-budget spawn did not launch a session"
+        );
+        fleet.do_close(&handle).await.expect("close");
+    }
+
+    /// Unlimited by default: no `--budget-usd` means no ceiling ever blocks.
+    #[tokio::test]
+    async fn unlimited_budget_default_never_blocks() {
+        let repo = init_repo();
+        let fleet = SubstrateFleet::connect(
+            catalog_from("idle", IDLE_STUB),
+            repo.path().to_path_buf(),
+            WorktreesConfig::default(),
+            false,
+            None, // no ceiling
+            None, // no escalation seam in this test
+        )
+        .await;
+        let summary = fleet
+            .do_spawn(SpawnArgs {
+                agent: "idle".into(),
+                task: "noop".into(),
+                worktree: Some(false),
+                result_schema: None,
+            })
+            .await
+            .expect("no ceiling → spawns");
+        fleet
+            .do_close(summary["handle"].as_str().expect("handle"))
+            .await
+            .expect("close");
     }
 }

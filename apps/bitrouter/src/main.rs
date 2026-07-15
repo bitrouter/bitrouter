@@ -527,6 +527,11 @@ enum McpAction {
         /// Off by default — writes are human-gated.
         #[arg(long)]
         allow_writes: bool,
+        /// (fleet backend only) Spend ceiling in USD. spawn_subagent/
+        /// prompt_subagent refuse once today's machine-wide spend reaches it.
+        /// Unset = unlimited.
+        #[arg(long)]
+        budget_usd: Option<f64>,
     },
     /// Write/print the client config block.
     Install {
@@ -1507,11 +1512,17 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
 /// orchestrator can weigh spend against progress mid-session. No substrate.
 struct MeteringCost {
     source: bitrouter::paths::ConfigSource,
+    /// The `--budget-usd` ceiling in micro-USD, surfaced as `budget_usd` /
+    /// `remaining_usd` so the orchestrator can self-pace. `None` = unlimited.
+    budget_micro_usd: Option<u64>,
 }
 
 impl MeteringCost {
-    fn new(source: bitrouter::paths::ConfigSource) -> Self {
-        Self { source }
+    fn new(source: bitrouter::paths::ConfigSource, budget_micro_usd: Option<u64>) -> Self {
+        Self {
+            source,
+            budget_micro_usd,
+        }
     }
 }
 
@@ -1541,7 +1552,7 @@ impl bitrouter_mcp::capabilities::cost::CostQuery for MeteringCost {
             .map_err(|e| {
                 bitrouter_mcp::error::ToolError::new(format!("reading total spend: {e}"))
             })?;
-        Ok(serde_json::json!({
+        let mut snapshot = serde_json::json!({
             "today": {
                 "spend_micro_usd": today.spend_micro_usd,
                 "spend_usd": bitrouter::metering::fmt_usd(today.spend_micro_usd),
@@ -1552,8 +1563,36 @@ impl bitrouter_mcp::capabilities::cost::CostQuery for MeteringCost {
                 "spend_usd": bitrouter::metering::fmt_usd(total.spend_micro_usd),
                 "requests": total.requests,
             },
-        }))
+        });
+        // Surface the spend ceiling (TUI_SPEC §5) so the orchestrator can
+        // self-pace. Enforced against the same `today` figure in `SubstrateFleet`.
+        if let Some(ceiling) = self.budget_micro_usd {
+            let remaining = ceiling.saturating_sub(today.spend_micro_usd);
+            snapshot["budget"] = serde_json::json!({
+                "budget_micro_usd": ceiling,
+                "budget_usd": bitrouter::metering::fmt_usd(ceiling),
+                "remaining_micro_usd": remaining,
+                "remaining_usd": bitrouter::metering::fmt_usd(remaining),
+                "over_budget": today.spend_micro_usd >= ceiling,
+                "note": "ceiling applies to today's machine-wide spend; spawn/prompt refuse once reached",
+            });
+        }
+        Ok(snapshot)
     }
+}
+
+/// The fleet-only `mcp serve` flags that were set on a non-fleet backend, so
+/// the caller can print an "ignored" note for each (mirroring `--allow-writes`).
+/// Returned rather than printed inline so the applicability rule is unit-testable.
+fn non_fleet_flag_notes(allow_writes: bool, budget_usd: Option<f64>) -> Vec<&'static str> {
+    let mut notes = Vec::new();
+    if allow_writes {
+        notes.push("--allow-writes");
+    }
+    if budget_usd.is_some() {
+        notes.push("--budget-usd");
+    }
+    notes
 }
 
 async fn mcp_cmd(action: McpAction) -> Result<()> {
@@ -1566,6 +1605,7 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             token,
             bind,
             allow_writes,
+            budget_usd,
         } => {
             // The fleet bridge is a different server (subagent tools over the
             // substrate), not a completion backend — and stdio-only: its
@@ -1590,6 +1630,26 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 let skills = std::sync::Arc::new(bitrouter::skills_query::InstalledSkills::new(
                     base_repo.clone(),
                 ));
+                // Spend circuit breaker (TUI_SPEC §5). The ceiling is enforced
+                // (in `SubstrateFleet`) and displayed (in `fleet_cost`) against
+                // the same figure — today's machine-wide spend — so both agree.
+                let budget_micro_usd = budget_usd
+                    .map(bitrouter::fleet_mcp::budget_usd_to_micro)
+                    .transpose()?;
+                let budget = budget_micro_usd.map(|micro| {
+                    bitrouter::fleet_mcp::BudgetCeiling::new(
+                        micro,
+                        std::sync::Arc::new(bitrouter::fleet_mcp::MeteringSpend::new(
+                            source.clone(),
+                        )),
+                    )
+                });
+                // Capability-gated Tasks elicitation seam (PR-3 B2): one shared
+                // state, populated handler-side at the first fleet tool call
+                // (client capability + peer) and read app-side from the
+                // permission path. Off for every client that hasn't declared
+                // the capability — default escalation behavior is unchanged.
+                let escalation = bitrouter_mcp::capabilities::escalation::EscalationState::new();
                 // One `SubstrateFleet` backs both the `Fleet` and `HumanBridge`
                 // ports (the human bridge rides the same fleet socket).
                 let fleet = std::sync::Arc::new(
@@ -1598,6 +1658,8 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                         base_repo,
                         cfg.worktrees.clone(),
                         allow_writes,
+                        budget,
+                        Some(escalation.clone()),
                     )
                     .await,
                 );
@@ -1611,12 +1673,18 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                     .completion_local(&local_url)
                     .fleet(fleet.clone())
                     .human(fleet)
-                    .cost(std::sync::Arc::new(MeteringCost::new(source)))
+                    .cost(std::sync::Arc::new(MeteringCost::new(
+                        source,
+                        budget_micro_usd,
+                    )))
                     .routing(routing)
                     .skills(skills)
                     // Source the cap value from the app so the instructions
                     // quote the real cap (no cross-crate magic number).
                     .subagent_cap(bitrouter::fleet_mcp::MAX_CONCURRENT_SUBAGENTS)
+                    // Share the escalation state so the handler can record the
+                    // client capability + peer for the (gated) elicitation seam.
+                    .escalation(escalation)
                     .build();
                 // No `complete`/`status` cost footer here (unlike the public
                 // stdio path): the orchestrator profile carries the richer
@@ -1624,8 +1692,8 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 // redundant. Intentional asymmetry.
                 return bitrouter_mcp::server::serve_stdio(server, None).await;
             }
-            if allow_writes {
-                eprintln!("note: --allow-writes only applies to --backend fleet; ignored");
+            for flag in non_fleet_flag_notes(allow_writes, budget_usd) {
+                eprintln!("note: {flag} only applies to --backend fleet; ignored");
             }
             let transport = bitrouter_mcp::Transport::from(transport);
             // Fleet was handled and returned above. Local/Cloud map straight
@@ -3047,6 +3115,48 @@ mod tests {
         use clap::CommandFactory;
         // Panics if clap detects a conflict (e.g. `--tag` vs global `--version`).
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn fleet_only_flags_are_noted_ignored_off_fleet() {
+        // On a non-fleet backend, `--allow-writes` / `--budget-usd` are
+        // politely ignored (a note is printed for each), never enforced.
+        assert!(non_fleet_flag_notes(false, None).is_empty());
+        assert_eq!(non_fleet_flag_notes(true, None), ["--allow-writes"]);
+        assert_eq!(non_fleet_flag_notes(false, Some(10.0)), ["--budget-usd"]);
+        assert_eq!(
+            non_fleet_flag_notes(true, Some(10.0)),
+            ["--allow-writes", "--budget-usd"]
+        );
+    }
+
+    #[test]
+    fn budget_usd_flag_parses_for_fleet_serve() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "mcp",
+            "serve",
+            "--backend",
+            "fleet",
+            "--budget-usd",
+            "12.5",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Mcp {
+                action:
+                    McpAction::Serve {
+                        backend,
+                        budget_usd,
+                        ..
+                    },
+            } => {
+                assert_eq!(backend, Some(McpBackend::Fleet));
+                assert_eq!(budget_usd, Some(12.5));
+            }
+            _ => panic!("expected `mcp serve` to parse with --budget-usd"),
+        }
     }
 
     #[test]

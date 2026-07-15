@@ -240,7 +240,9 @@ mod tests {
         assert_eq!(tiers[0]["above_input_tokens"], 200_000);
         assert_eq!(tiers[0]["input_micro_usd_per_token"], 2.0);
         assert!(
-            out["note"].as_str().is_some_and(|n| n.contains("context_tiers")),
+            out["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("context_tiers")),
             "note explains the brackets: {out}"
         );
     }

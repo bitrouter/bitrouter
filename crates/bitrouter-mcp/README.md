@@ -36,7 +36,7 @@ capability ports (`Fleet`, `CostQuery`, `RoutingQuery`, `SkillsQuery`,
 | `apply_subagent` | orchestrator | Apply the subagent's diff onto the base tree, uncommitted (human-gated) |
 | `merge_subagent` | orchestrator | Merge the subagent's branch into the base repo (human-gated) |
 | `close_subagent` | orchestrator | Shut the subagent down (worktree retained) |
-| `fleet_cost` | orchestrator | BitRouter spend snapshot (today + all-time totals) |
+| `fleet_cost` | orchestrator | BitRouter spend snapshot (today + all-time totals; plus `budget`/`remaining_usd` when `--budget-usd` is set) |
 | `route_preview` | orchestrator | Preview how a model/prompt would route (provider chain, policy decision, cost) |
 | `skills_search` | orchestrator | Search installed BitRouter skills by name/description |
 | `skills_get` | orchestrator | Fetch a skill's frontmatter + body to hand to a subagent |

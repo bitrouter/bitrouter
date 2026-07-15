@@ -41,7 +41,7 @@ your own completions / check spend without a second MCP server.
 | `apply_subagent(handle)` | Apply the diff onto the base working tree **uncommitted**. **Human-gated** — see below. |
 | `merge_subagent(handle)` | Merge the branch, keeping history; requires the subagent to have committed (clean worktree). Serialized: one integration at a time. **Human-gated.** |
 | `close_subagent(handle)` | Shut the subagent down. Its worktree is **retained** (cleanup is gated on merged-or-discarded, never automatic). |
-| `fleet_cost()` | BitRouter spend snapshot from the local metering database (machine-wide, not per-session): today's spend + request count and all-time totals. Keeps in-session model arbitrage cost-visible. |
+| `fleet_cost()` | BitRouter spend snapshot from the local metering database (machine-wide, not per-session): today's spend + request count and all-time totals. When the bridge was started with `--budget-usd`, also carries `budget` (`budget_usd`, `remaining_usd`, `over_budget`) so you can self-pace. Keeps in-session model arbitrage cost-visible. |
 
 The `fleet` profile also carries **read-only introspection** and **human
 escalation** tools:
@@ -69,6 +69,13 @@ escalation** tools:
   `spawn_subagent` past the cap is **rejected** with an actionable message —
   `merge_subagent`/`apply_subagent`/`close_subagent` one before spawning more.
   A healthy fleet is ~2–6; a disciplined review gate beats fanning out wide.
+- **Mind the budget, when set.** If the bridge was started with `--budget-usd`,
+  `spawn_subagent`/`prompt_subagent` are **refused** once today's machine-wide
+  spend reaches the ceiling (the message names the ceiling and current spend).
+  Watch `fleet_cost().budget.remaining_usd` and pace yourself — pick cheaper
+  models via `route_preview`, or ask the human to raise `--budget-usd` / wait
+  for a fresh window (it resets on a new UTC day). The ceiling is machine-wide,
+  not per-session, so other spend today counts against it.
 - **Review before integrating.** Read `subagent_diff` (or have the human
   review in `bitrouter tui`). Rejection loop: `prompt_subagent` with your
   feedback — the subagent addresses it in the same worktree.
@@ -85,6 +92,11 @@ escalation** tools:
   for their y/a/n — and are **denied** when the bridge is headless (no human
   in the loop). Every decision is logged to stderr. Under the TUI your
   subagents also appear in its rail as monitor panes.
+  *(Forward-compat: when the connecting client declares the MCP Tasks /
+  elicitation capability, a gated permission can instead route back to the
+  orchestrator conversation as an `elicitation/create`. No shipping harness
+  declares it yet, so this branch is off by default and the human-queue / deny
+  fallback above is the guaranteed path.)*
 - **Worktree hygiene.** Each subagent gets a `PORT` from `worktrees.ports`
   (default 3100–3199; leases are shared with the TUI's fleet, so ports never
   collide across the two). The `worktrees.bootstrap` hook (config-declared;

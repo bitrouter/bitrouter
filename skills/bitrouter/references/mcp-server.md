@@ -20,6 +20,7 @@ Starts the origin MCP server.
 | `--transport` | `stdio` | `stdio` or `http` |
 | `--backend` | *(derived)* | `local`, `cloud`, or `fleet`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon), the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`), `fleet_cost`, the routing-preview tool (`route_preview`), the skills tools (`skills_search`/`skills_get`), and the human-bridge tools (`notify_human`/`request_attach`/`request_review`). It is **stdio-only** |
 | `--allow-writes` | off | (`fleet` only) grant the orchestrator write autonomy: `apply_subagent`/`merge_subagent` may integrate into the base repo. Off = writes are human-gated |
+| `--budget-usd` | *(unlimited)* | (`fleet` only) spend ceiling in USD. `spawn_subagent`/`prompt_subagent` refuse once **today's machine-wide spend** reaches it (a circuit breaker, TUI_SPEC §5); `fleet_cost` reports `budget_usd`/`remaining_usd`. Not scoped to one session — other spend today counts; a new UTC day is the fresh window. Ignored (with a note) off `--backend fleet` |
 | `--local-url` | `http://127.0.0.1:4356` | Root URL of the local BitRouter daemon |
 | `--cloud-url` | `https://api.bitrouter.ai` | Root URL of BitRouter Cloud |
 | `--token` | *(env fallback)* | Cloud bearer token for **stdio→cloud only**; falls back to `BITROUTER_TOKEN` env var. Ignored when `--transport http` (multi-tenant PerCaller mode). |
@@ -43,6 +44,7 @@ bitrouter mcp serve --transport http --backend local --local-url http://127.0.0.
 # stdio — orchestrator profile: completion + subagent spawn/manage + fleet_cost
 bitrouter mcp serve --backend fleet            # writes human-gated
 bitrouter mcp serve --backend fleet --allow-writes
+bitrouter mcp serve --backend fleet --budget-usd 20   # refuse spawns past $20 today
 ```
 
 ### `bitrouter mcp install`

@@ -9,6 +9,7 @@
 //! port's result JSON is built adapter-side; the crate owns only the inputs.
 
 pub mod cost;
+pub mod escalation;
 pub mod fleet;
 pub mod human;
 pub mod routing;

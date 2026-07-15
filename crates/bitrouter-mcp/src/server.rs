@@ -16,6 +16,7 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler,
 
 use crate::backend::{Backend, CallerAuth, CompleteRequest};
 use crate::capabilities::cost::CostQuery;
+use crate::capabilities::escalation::EscalationState;
 use crate::capabilities::fleet::{Fleet, HandleArgs, PromptArgs, SpawnArgs, StatusArgs};
 use crate::capabilities::human::{HumanBridge, HumanHandleArgs, NotifyArgs};
 use crate::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
@@ -73,6 +74,10 @@ pub struct BitrouterMcp {
     /// hardcoded here) so the instruction string can't drift from the real
     /// `MAX_CONCURRENT_SUBAGENTS`.
     subagent_cap: Option<usize>,
+    /// Shared, connection-scoped escalation seam (capability-gated Tasks
+    /// elicitation). Populated at the first fleet tool call with the client's
+    /// capability + the server→client peer; the same `Arc` is held app-side.
+    escalation: Option<Arc<EscalationState>>,
     cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
 }
@@ -183,7 +188,12 @@ impl BitrouterMcp {
     async fn spawn_subagent(
         &self,
         Parameters(args): Parameters<SpawnArgs>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        // Capture the client's escalation capability + the server→client peer
+        // for the (capability-gated) Tasks elicitation seam. No-op unless the
+        // fleet backend wired an escalation state.
+        self.record_escalation(&ctx);
         Ok(json_tool_result(self.fleet()?.spawn(args).await))
     }
 
@@ -194,7 +204,9 @@ impl BitrouterMcp {
     async fn prompt_subagent(
         &self,
         Parameters(args): Parameters<PromptArgs>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        self.record_escalation(&ctx);
         Ok(json_tool_result(self.fleet()?.prompt(args).await))
     }
 
@@ -404,6 +416,19 @@ impl BitrouterMcp {
             .ok_or_else(|| McpError::internal_error("human bridge not wired", None))
     }
 
+    /// Record the connecting client's escalation capability + capture the
+    /// server→client peer for the capability-gated Tasks elicitation seam.
+    /// Reads the capabilities the client declared at `initialize` (available on
+    /// the recorded peer handshake info). A no-op when no escalation state is
+    /// wired (public profile) or before the peer info is recorded.
+    fn record_escalation(&self, ctx: &RequestContext<RoleServer>) {
+        if let Some(escalation) = &self.escalation
+            && let Some(info) = ctx.peer.peer_info()
+        {
+            escalation.record(&info.capabilities, ctx.peer.clone());
+        }
+    }
+
     /// The extra content item for a successful result, when a footer is
     /// attached and has something to say.
     async fn footer_content(&self) -> Option<ContentBlock> {
@@ -475,6 +500,7 @@ pub struct Builder {
     skills: Option<Arc<dyn SkillsQuery>>,
     human: Option<Arc<dyn HumanBridge>>,
     subagent_cap: Option<usize>,
+    escalation: Option<Arc<EscalationState>>,
 }
 
 impl Builder {
@@ -529,6 +555,16 @@ impl Builder {
         self
     }
 
+    /// Share the escalation seam's connection-scoped state with the handler.
+    /// The handler populates it (client capability + peer) at the first fleet
+    /// tool call; the app holds the same `Arc` to query it from the permission
+    /// path. Capability-gated: default behavior is unchanged when no client
+    /// declares the Tasks/elicitation capability.
+    pub fn escalation(mut self, escalation: Arc<EscalationState>) -> Self {
+        self.escalation = Some(escalation);
+        self
+    }
+
     /// Compose the handler, merging each wired capability's router.
     pub fn build(self) -> BitrouterMcp {
         let mut router = ToolRouter::new();
@@ -558,6 +594,7 @@ impl Builder {
             skills: self.skills,
             human: self.human,
             subagent_cap: self.subagent_cap,
+            escalation: self.escalation,
             // The footer is attached later, transport-side, via
             // `with_cost_footer` (stdio only) — never through the builder.
             cost_footer: None,
@@ -995,7 +1032,10 @@ mod tests {
             .build()
             .instructions();
         assert!(uncapped.contains("the concurrency cap"), "{uncapped}");
-        assert!(!uncapped.contains("6-subagent"), "no hardcoded 6: {uncapped}");
+        assert!(
+            !uncapped.contains("6-subagent"),
+            "no hardcoded 6: {uncapped}"
+        );
     }
 
     #[test]
