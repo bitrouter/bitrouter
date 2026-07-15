@@ -6,6 +6,8 @@
 //! own capabilities.
 
 pub mod backend;
+pub mod capabilities;
+pub mod error;
 pub mod install;
 pub mod server;
 
@@ -77,7 +79,9 @@ pub struct ServeOptions {
     pub cost_footer: Option<std::sync::Arc<dyn server::CostFooter>>,
 }
 
-/// Run the MCP server to completion.
+/// Run the MCP server to completion. This is the completion-only (public)
+/// entry point; the orchestrator profile is assembled directly through
+/// [`server::BitrouterMcp::builder`] by the embedding binary.
 pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
     let backend = server::build_backend(
         opts.backend,
@@ -87,7 +91,10 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
         opts.cloud_token.as_deref(),
     )?;
     match opts.transport {
-        Transport::Stdio => server::serve_stdio(backend, opts.cost_footer).await,
+        Transport::Stdio => {
+            let server = server::BitrouterMcp::builder().completion(backend).build();
+            server::serve_stdio(server, opts.cost_footer).await
+        }
         Transport::Http => {
             let require_auth = matches!(opts.backend, BackendKind::Cloud);
             // Without the auth middleware (local backend), a non-loopback bind

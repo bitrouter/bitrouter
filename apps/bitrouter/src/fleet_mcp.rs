@@ -1,41 +1,43 @@
-//! The fleet MCP bridge — `bitrouter mcp serve --backend fleet` (TUI_SPEC §4).
+//! The substrate-backed adapter for the fleet capability — the app side of
+//! `bitrouter mcp serve --backend fleet` (TUI_SPEC §4).
 //!
-//! A **stdio** MCP server the orchestrating harness launches as a subprocess;
-//! its tools spawn and manage worktree-isolated ACP subagents. Stdio, not
-//! HTTP, by design: these tools *mutate* (spawn processes, write your repo),
-//! so they inherit the orchestrator's process identity instead of riding an
-//! unauthenticated HTTP→local path (TUI_SPEC §15-Q2).
+//! The MCP handler and every tool schema live in `bitrouter-mcp`; this module
+//! implements that crate's [`Fleet`](bitrouter_mcp::capabilities::fleet::Fleet)
+//! port against `bitrouter_substrate`. All substrate-coupled behavior stays
+//! here so the crate never depends on the substrate.
+//!
+//! The orchestrator profile is **stdio-only** by design: these tools *mutate*
+//! (spawn processes, write your repo), so they inherit the orchestrator's
+//! process identity instead of riding an unauthenticated HTTP→local path
+//! (TUI_SPEC §15-Q2).
 //!
 //! The internal lifecycle is Task-shaped (MCP Tasks vocabulary — `working /
 //! completed / failed`), but no shipping harness consumes the Tasks extension
-//! yet, so every tool runs **blocking-with-summary**: `spawn_subagent` and
-//! `prompt_subagent` return when the turn ends, carrying the reply, the typed
-//! stop reason, and the worktree diff stat.
+//! yet, so every tool runs **blocking-with-summary**: `spawn` and `prompt`
+//! return when the turn ends, carrying the reply, the typed stop reason, and
+//! the worktree diff stat.
 //!
-//! **Writes are human-gated by default** (TUI_SPEC §5/§7): `apply_subagent`
-//! and `merge_subagent` integrate a subagent's work into the base repository
-//! and therefore refuse unless the human started the bridge with
-//! `--allow-writes` — an explicit autonomy grant. Subagent permission
-//! requests are auto-resolved by risk: reversible + in-worktree allows;
-//! everything else escalates to the hosting TUI's decision queue when this
-//! bridge runs under `bitrouter tui` (it connects back over the fleet
-//! socket, mirroring its subagents into the rail), and denies when headless
-//! (logged, never silent).
+//! **Writes are human-gated by default** (TUI_SPEC §5/§7): `apply` and `merge`
+//! integrate a subagent's work into the base repository and therefore refuse
+//! unless the human started the bridge with `--allow-writes` — an explicit
+//! autonomy grant. Subagent permission requests are auto-resolved by risk:
+//! reversible + in-worktree allows; everything else escalates to the hosting
+//! TUI's decision queue when this bridge runs under `bitrouter tui` (it
+//! connects back over the fleet socket, mirroring its subagents into the
+//! rail), and denies when headless (logged, never silent).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use bitrouter_mcp::capabilities::fleet::{Fleet, PromptArgs, SpawnArgs};
+use bitrouter_mcp::error::ToolError;
 use bitrouter_sdk::acp::ConfigAcpRoutingTable;
 use bitrouter_sdk::config::WorktreesConfig;
 use bitrouter_substrate::engine::{LaunchOptions, Session};
 use bitrouter_substrate::translate::{PermissionOutcome, SessionUpdateKind, select_option};
 use futures::StreamExt;
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
-use rmcp::{ErrorData as McpError, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::fleet::truncate_utf8;
 use crate::result_contract::ResultContract;
@@ -46,6 +48,12 @@ use crate::risk::Risk;
 const MAX_REPLY_BYTES: usize = 32 * 1024;
 /// Diff text beyond this is truncated with a note.
 const MAX_DIFF_BYTES: usize = 64 * 1024;
+/// Max subagents one fleet bridge will run at once — the circuit-breaker
+/// slice of TUI_SPEC §5. TUI_SPEC §13 sizes a healthy fleet at ~2–6
+/// subagents; past this the orchestrator should integrate or close one
+/// (`merge_subagent` / `close_subagent`) before spawning more, rather than
+/// fan out unboundedly.
+const MAX_CONCURRENT_SUBAGENTS: usize = 6;
 
 /// One managed subagent: the live session plus its integration metadata.
 struct Subagent {
@@ -63,12 +71,10 @@ struct Subagent {
     state: &'static str,
 }
 
-/// The fleet MCP server: tools over a registry of worktree-isolated
-/// ACP subagents.
-#[derive(Clone)]
-pub struct FleetMcp {
+/// The substrate-backed fleet: a registry of worktree-isolated ACP subagents.
+/// Injected into `bitrouter-mcp`'s orchestrator profile as the `Fleet` port.
+pub struct SubstrateFleet {
     inner: Arc<FleetInner>,
-    tool_router: ToolRouter<FleetMcp>,
 }
 
 struct FleetInner {
@@ -188,181 +194,50 @@ impl TuiLink {
     }
 }
 
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct SpawnArgs {
-    /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
-    /// `gemini-cli`) or a configured `agents:` entry.
-    pub agent: String,
-    /// The task prompt. Phrase it with clear boundaries and an output
-    /// contract; the subagent works in an isolated worktree.
-    pub task: String,
-    /// Isolate in a fresh git worktree + branch (default true — set false
-    /// only for read-only investigation tasks).
-    pub worktree: Option<bool>,
-    /// Optional JSON Schema the subagent's final reply must satisfy; the
-    /// summary then carries `result`/`schema_ok` (one repair re-prompt).
-    pub result_schema: Option<serde_json::Value>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct HandleArgs {
-    /// Subagent handle, as returned by `spawn_subagent`.
-    pub handle: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct PromptArgs {
-    /// Subagent handle, as returned by `spawn_subagent`.
-    pub handle: String,
-    /// The follow-up prompt (e.g. review feedback to address).
-    pub text: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct StatusArgs {
-    /// Subagent handle; omit for a whole-fleet snapshot.
-    pub handle: Option<String>,
-}
-
-#[tool_router]
-impl FleetMcp {
-    pub fn new(
+impl SubstrateFleet {
+    /// Build the fleet over `base_repo` and, on unix, connect back to the
+    /// hosting TUI's fleet socket when one is advertised (`BITROUTER_FLEET_TUI_SOCK`).
+    /// Linked, the fleet mirrors into the rail and gated permissions reach the
+    /// human's decision queue instead of the headless deny.
+    pub async fn connect(
         catalog: ConfigAcpRoutingTable,
         base_repo: PathBuf,
         worktrees: WorktreesConfig,
         allow_writes: bool,
     ) -> Self {
+        #[cfg(unix)]
+        let link = match std::env::var(crate::fleet::TUI_SOCK_ENV) {
+            Ok(path) => TuiLink::connect(&path).await,
+            Err(_) => None,
+        };
+        let inner = FleetInner {
+            catalog,
+            base_repo,
+            worktrees,
+            allow_writes,
+            agents: tokio::sync::Mutex::new(HashMap::new()),
+            #[cfg(unix)]
+            link,
+        };
         Self {
-            inner: Arc::new(FleetInner {
-                catalog,
-                base_repo,
-                worktrees,
-                allow_writes,
-                agents: tokio::sync::Mutex::new(HashMap::new()),
-                #[cfg(unix)]
-                link: None,
-            }),
-            tool_router: Self::tool_router(),
+            inner: Arc::new(inner),
         }
     }
 
-    /// Attach the TUI fleet-socket link (must run before the server is
-    /// cloned — the inner state is shared from then on).
-    #[cfg(unix)]
-    fn with_link(mut self, link: Option<Arc<TuiLink>>) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.link = link;
-        }
-        self
-    }
-
-    #[tool(
-        description = "Spawn a worktree-isolated ACP subagent, send it the task, and block until \
-                       its turn ends. Returns a summary: handle, stop_reason, reply, diff stat \
-                       (and result/schema_ok under result_schema). Subagents don't spawn \
-                       subagents — keep delegation depth 1."
-    )]
-    async fn spawn_subagent(
-        &self,
-        Parameters(args): Parameters<SpawnArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_spawn(args).await {
-            Ok(summary) => Ok(tool_json(&summary)),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-
-    #[tool(
-        description = "Send a follow-up prompt to a running subagent and block until the turn \
-                       ends. Same summary shape as spawn_subagent."
-    )]
-    async fn prompt_subagent(
-        &self,
-        Parameters(args): Parameters<PromptArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_prompt(args).await {
-            Ok(summary) => Ok(tool_json(&summary)),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-
-    #[tool(
-        description = "Fleet snapshot (or one subagent with handle): agent, state, worktree, \
-                       branch, diff stat."
-    )]
-    async fn subagent_status(
-        &self,
-        Parameters(args): Parameters<StatusArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_status(args.handle.as_deref()).await {
-            Ok(v) => Ok(tool_json(&v)),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-
-    #[tool(
-        description = "The subagent's full diff against its spawn base (committed + uncommitted \
-                       work in its worktree)."
-    )]
-    async fn subagent_diff(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_diff(&args.handle).await {
-            Ok(text) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-
-    #[tool(
-        description = "Apply the subagent's diff onto the base repository working tree, \
-                       UNCOMMITTED (the human writes the commit). Human-gated: requires the \
-                       bridge to have been started with --allow-writes."
-    )]
-    async fn apply_subagent(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_apply(&args.handle).await {
-            Ok(v) => Ok(tool_json(&v)),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-
-    #[tool(
-        description = "Merge the subagent's branch into the base repository, keeping history. \
-                       Requires the subagent to have committed its work (clean worktree). \
-                       Serialized: one integration at a time. Human-gated: requires \
-                       --allow-writes."
-    )]
-    async fn merge_subagent(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_merge(&args.handle).await {
-            Ok(v) => Ok(tool_json(&v)),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-
-    #[tool(
-        description = "Shut the subagent down. Its worktree is RETAINED (cleanup is gated on \
-                       merged-or-discarded, never automatic)."
-    )]
-    async fn close_subagent(
-        &self,
-        Parameters(args): Parameters<HandleArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        match self.do_close(&args.handle).await {
-            Ok(v) => Ok(tool_json(&v)),
-            Err(e) => Ok(tool_error(&e)),
-        }
-    }
-}
-
-impl FleetMcp {
     async fn do_spawn(&self, args: SpawnArgs) -> Result<serde_json::Value> {
         let inner = &self.inner;
+        // Circuit breaker: cap the live fleet so the orchestrator integrates
+        // or closes before fanning out unboundedly (TUI_SPEC §5).
+        {
+            let agents = inner.agents.lock().await;
+            if agents.len() >= MAX_CONCURRENT_SUBAGENTS {
+                anyhow::bail!(
+                    "fleet at capacity: {MAX_CONCURRENT_SUBAGENTS} subagents already running. \
+                     Integrate or close one (merge_subagent / apply_subagent / close_subagent) \
+                     before spawning more."
+                );
+            }
+        }
         let isolate = args.worktree.unwrap_or(true);
         let contract = args
             .result_schema
@@ -730,6 +605,43 @@ impl FleetMcp {
     }
 }
 
+/// Map an adapter error into the crate's substrate-free carrier (`{e:#}`
+/// keeps anyhow's context chain).
+fn to_tool_error(e: anyhow::Error) -> ToolError {
+    ToolError::new(format!("{e:#}"))
+}
+
+#[async_trait::async_trait]
+impl Fleet for SubstrateFleet {
+    async fn spawn(&self, args: SpawnArgs) -> Result<serde_json::Value, ToolError> {
+        self.do_spawn(args).await.map_err(to_tool_error)
+    }
+
+    async fn prompt(&self, args: PromptArgs) -> Result<serde_json::Value, ToolError> {
+        self.do_prompt(args).await.map_err(to_tool_error)
+    }
+
+    async fn status(&self, handle: Option<&str>) -> Result<serde_json::Value, ToolError> {
+        self.do_status(handle).await.map_err(to_tool_error)
+    }
+
+    async fn diff(&self, handle: &str) -> Result<String, ToolError> {
+        self.do_diff(handle).await.map_err(to_tool_error)
+    }
+
+    async fn apply(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.do_apply(handle).await.map_err(to_tool_error)
+    }
+
+    async fn merge(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.do_merge(handle).await.map_err(to_tool_error)
+    }
+
+    async fn close(&self, handle: &str) -> Result<serde_json::Value, ToolError> {
+        self.do_close(handle).await.map_err(to_tool_error)
+    }
+}
+
 /// Consume a subagent's permission stream with the risk auto-policy:
 /// reversible + in-worktree ⇒ allow-once; everything else escalates to the
 /// hosting TUI's decision queue when this bridge is linked (TUI_SPEC §5's
@@ -841,63 +753,19 @@ async fn snapshot(handle: &str, sub: &Subagent) -> serde_json::Value {
     })
 }
 
-/// Serialize `value` into a successful tool result.
-fn tool_json(value: &serde_json::Value) -> CallToolResult {
-    CallToolResult::success(vec![ContentBlock::text(value.to_string())])
-}
-
-/// Surface an operation failure as a tool error (the orchestrator sees the
-/// message and can adjust).
-fn tool_error(e: &anyhow::Error) -> CallToolResult {
-    CallToolResult::error(vec![ContentBlock::text(format!("{e:#}"))])
-}
-
-#[tool_handler(router = self.tool_router)]
-impl ServerHandler for FleetMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "BitRouter fleet bridge: spawn and manage worktree-isolated ACP subagents. \
-             spawn_subagent blocks and returns a summary; review with subagent_diff; \
-             apply/merge are human-gated unless the bridge was granted --allow-writes."
-                .to_string(),
-        )
-    }
-}
-
-/// Run the fleet bridge over stdio until the orchestrator disconnects.
-pub async fn serve_stdio(
-    catalog: ConfigAcpRoutingTable,
-    base_repo: PathBuf,
-    worktrees: WorktreesConfig,
-    allow_writes: bool,
-) -> Result<()> {
-    use rmcp::ServiceExt;
-    let server = FleetMcp::new(catalog, base_repo, worktrees, allow_writes);
-    // Launched under `bitrouter tui`? Connect back over its fleet socket so
-    // the fleet mirrors into the rail and gated permissions reach the
-    // human's decision queue instead of the headless deny.
-    #[cfg(unix)]
-    let server = match std::env::var(crate::fleet::TUI_SOCK_ENV) {
-        Ok(path) => server.with_link(TuiLink::connect(&path).await),
-        Err(_) => server,
-    };
-    let service = server.serve(rmcp::transport::stdio()).await?;
-    service.waiting().await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn write_verbs_are_gated_without_the_grant() {
-        let fleet = FleetMcp::new(
+    #[tokio::test]
+    async fn write_verbs_are_gated_without_the_grant() {
+        let fleet = SubstrateFleet::connect(
             ConfigAcpRoutingTable::from_configs(std::iter::empty()).expect("empty catalog"),
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
-        );
+        )
+        .await;
         let err = fleet
             .require_write_grant("merge_subagent")
             .expect_err("writes must be human-gated by default");
@@ -905,12 +773,13 @@ mod tests {
         assert!(msg.contains("--allow-writes"), "actionable: {msg}");
         assert!(msg.contains("human-gated"), "names the policy: {msg}");
 
-        let granted = FleetMcp::new(
+        let granted = SubstrateFleet::connect(
             ConfigAcpRoutingTable::from_configs(std::iter::empty()).expect("empty catalog"),
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             true,
-        );
+        )
+        .await;
         assert!(granted.require_write_grant("merge_subagent").is_ok());
     }
 }
@@ -939,16 +808,35 @@ mod e2e_tests {
         done
     "#;
 
-    fn worker_catalog() -> ConfigAcpRoutingTable {
+    /// A minimal stub that just answers — no git writes. Used by the
+    /// concurrency-cap test, which only needs the registry to fill up.
+    const IDLE_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+            *session/prompt*)
+              printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}\n'
+              printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+          esac
+        done
+    "#;
+
+    fn catalog_from(name: &str, script: &str) -> ConfigAcpRoutingTable {
         let cfg = bitrouter_sdk::acp::AcpAgentConfig {
-            name: "stub".to_string(),
+            name: name.to_string(),
             transport: bitrouter_sdk::acp::AcpTransport::Stdio {
                 command: "bash".to_string(),
-                args: vec!["-c".to_string(), WORKER_STUB.to_string()],
+                args: vec!["-c".to_string(), script.to_string()],
                 env: HashMap::new(),
             },
         };
-        ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog")
+        ConfigAcpRoutingTable::from_configs([(name.to_string(), cfg)]).expect("catalog")
+    }
+
+    fn worker_catalog() -> ConfigAcpRoutingTable {
+        catalog_from("stub", WORKER_STUB)
     }
 
     fn init_repo() -> tempfile::TempDir {
@@ -981,12 +869,13 @@ mod e2e_tests {
     #[tokio::test]
     async fn spawn_review_merge_close_roundtrip() {
         let repo = init_repo();
-        let fleet = FleetMcp::new(
+        let fleet = SubstrateFleet::connect(
             worker_catalog(),
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             true, // write autonomy granted for this test
-        );
+        )
+        .await;
 
         // ── spawn (blocking-with-summary) ──
         let summary = fleet
@@ -1050,12 +939,13 @@ mod e2e_tests {
     #[tokio::test]
     async fn apply_stages_diff_uncommitted() {
         let repo = init_repo();
-        let fleet = FleetMcp::new(
+        let fleet = SubstrateFleet::connect(
             worker_catalog(),
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             true,
-        );
+        )
+        .await;
         let summary = fleet
             .do_spawn(SpawnArgs {
                 agent: "stub".into(),
@@ -1081,6 +971,67 @@ mod e2e_tests {
             "applied changes are uncommitted in the base working tree"
         );
         fleet.do_close(&handle).await.expect("close");
+    }
+
+    /// The circuit breaker: once `MAX_CONCURRENT_SUBAGENTS` are live, the next
+    /// spawn is rejected (actionable) rather than fanning out unboundedly.
+    #[tokio::test]
+    async fn spawn_is_capped_at_max_concurrent() {
+        let repo = init_repo();
+        let fleet = SubstrateFleet::connect(
+            catalog_from("idle", IDLE_STUB),
+            repo.path().to_path_buf(),
+            WorktreesConfig::default(),
+            false,
+        )
+        .await;
+        // Fill the fleet to the cap (no worktrees: keep the test light).
+        let mut handles = Vec::new();
+        for _ in 0..MAX_CONCURRENT_SUBAGENTS {
+            let summary = fleet
+                .do_spawn(SpawnArgs {
+                    agent: "idle".into(),
+                    task: "noop".into(),
+                    worktree: Some(false),
+                    result_schema: None,
+                })
+                .await
+                .expect("spawn under the cap");
+            handles.push(summary["handle"].as_str().expect("handle").to_string());
+        }
+        let err = fleet
+            .do_spawn(SpawnArgs {
+                agent: "idle".into(),
+                task: "one too many".into(),
+                worktree: Some(false),
+                result_schema: None,
+            })
+            .await
+            .expect_err("spawn beyond the cap is rejected");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("capacity"), "actionable cap message: {msg}");
+        assert!(
+            msg.contains(&MAX_CONCURRENT_SUBAGENTS.to_string()),
+            "names the cap: {msg}"
+        );
+
+        // Closing one frees a slot: the cap is a live count, not a lifetime max.
+        let freed = handles.remove(0);
+        fleet.do_close(&freed).await.expect("close");
+        let summary = fleet
+            .do_spawn(SpawnArgs {
+                agent: "idle".into(),
+                task: "now there is room".into(),
+                worktree: Some(false),
+                result_schema: None,
+            })
+            .await
+            .expect("spawn after a close frees a slot");
+        handles.push(summary["handle"].as_str().expect("handle").to_string());
+
+        for handle in &handles {
+            fleet.do_close(handle).await.expect("close");
+        }
     }
 
     /// The TUI fleet-socket link: handshake policy lands in the flag, and

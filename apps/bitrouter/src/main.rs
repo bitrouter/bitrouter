@@ -576,16 +576,6 @@ impl From<McpTransport> for bitrouter_mcp::Transport {
     }
 }
 
-/// Map the completion backends onto the origin server's kind. `Fleet` is
-/// handled before this conversion (it runs a different server entirely).
-fn completion_backend(b: McpBackend) -> Option<bitrouter_mcp::BackendKind> {
-    match b {
-        McpBackend::Local => Some(bitrouter_mcp::BackendKind::Local),
-        McpBackend::Cloud => Some(bitrouter_mcp::BackendKind::Cloud),
-        McpBackend::Fleet => None,
-    }
-}
-
 impl From<McpClient> for bitrouter_mcp::install::Client {
     fn from(c: McpClient) -> Self {
         match c {
@@ -1511,6 +1501,61 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
     }
 }
 
+/// `CostQuery` over the local metering database — backs the orchestrator
+/// profile's `fleet_cost` tool. Reuses the same read-side query as
+/// [`LocalCostFooter`] (today's spend) and adds an all-time total, so the
+/// orchestrator can weigh spend against progress mid-session. No substrate.
+struct MeteringCost {
+    source: bitrouter::paths::ConfigSource,
+}
+
+impl MeteringCost {
+    fn new(source: bitrouter::paths::ConfigSource) -> Self {
+        Self { source }
+    }
+}
+
+#[async_trait::async_trait]
+impl bitrouter_mcp::capabilities::cost::CostQuery for MeteringCost {
+    async fn snapshot(&self) -> Result<serde_json::Value, bitrouter_mcp::error::ToolError> {
+        use bitrouter::metering::store::TimeWindow;
+        let store = bitrouter::metering::reader::open_readonly(&self.source)
+            .await
+            .ok_or_else(|| {
+                bitrouter_mcp::error::ToolError::new(
+                    "metering database unavailable (no requests recorded yet)",
+                )
+            })?;
+        let today = store.spend_summary(TimeWindow::Today).await.map_err(|e| {
+            bitrouter_mcp::error::ToolError::new(format!("reading today's spend: {e}"))
+        })?;
+        // All-time: a Custom window from the epoch (spend_summary filters on
+        // `created_at >= start`, so an epoch start counts every settled row).
+        let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap_or_else(chrono::Utc::now);
+        let total = store
+            .spend_summary(TimeWindow::Custom {
+                start: epoch,
+                end: chrono::Utc::now(),
+            })
+            .await
+            .map_err(|e| {
+                bitrouter_mcp::error::ToolError::new(format!("reading total spend: {e}"))
+            })?;
+        Ok(serde_json::json!({
+            "today": {
+                "spend_micro_usd": today.spend_micro_usd,
+                "spend_usd": bitrouter::metering::fmt_usd(today.spend_micro_usd),
+                "requests": today.requests,
+            },
+            "total": {
+                "spend_micro_usd": total.spend_micro_usd,
+                "spend_usd": bitrouter::metering::fmt_usd(total.spend_micro_usd),
+                "requests": total.requests,
+            },
+        }))
+    }
+}
+
 async fn mcp_cmd(action: McpAction) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -1530,7 +1575,7 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             if backend == Some(McpBackend::Fleet) {
                 if matches!(transport, McpTransport::Http) {
                     anyhow::bail!(
-                        "the fleet backend is stdio-only (its tools mutate;                          HTTP has no local auth story yet)"
+                        "the fleet backend is stdio-only (its tools mutate; HTTP has no local auth story yet)"
                     );
                 }
                 let source = bitrouter::paths::resolve_config(None)?;
@@ -1540,24 +1585,38 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 )
                 .context("building acp catalog from config.agents")?;
                 let base_repo = std::env::current_dir().context("resolving current directory")?;
-                return bitrouter::fleet_mcp::serve_stdio(
+                let fleet = bitrouter::fleet_mcp::SubstrateFleet::connect(
                     catalog,
                     base_repo,
                     cfg.worktrees.clone(),
                     allow_writes,
                 )
                 .await;
+                // The orchestrator profile is the union — completion + fleet +
+                // cost, stdio-only. Completion routes to the same local daemon
+                // the TUI runs; cost reads the shared metering database.
+                let server = bitrouter_mcp::server::BitrouterMcp::builder()
+                    .completion_local(&local_url)
+                    .fleet(std::sync::Arc::new(fleet))
+                    .cost(std::sync::Arc::new(MeteringCost::new(source)))
+                    .build();
+                return bitrouter_mcp::server::serve_stdio(server, None).await;
             }
             if allow_writes {
                 eprintln!("note: --allow-writes only applies to --backend fleet; ignored");
             }
             let transport = bitrouter_mcp::Transport::from(transport);
-            let backend = backend
-                .and_then(completion_backend)
-                .unwrap_or(match transport {
+            // Fleet was handled and returned above. Local/Cloud map straight
+            // across; an unset backend takes the transport default
+            // (stdio→local, http→cloud).
+            let backend = match backend {
+                Some(McpBackend::Local) => bitrouter_mcp::BackendKind::Local,
+                Some(McpBackend::Cloud) => bitrouter_mcp::BackendKind::Cloud,
+                Some(McpBackend::Fleet) | None => match transport {
                     bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
                     bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
-                });
+                },
+            };
             let cloud_token = token.or_else(|| std::env::var("BITROUTER_TOKEN").ok());
             if matches!(transport, bitrouter_mcp::Transport::Http) && cloud_token.is_some() {
                 eprintln!(

@@ -16,11 +16,29 @@ This crate makes BitRouter itself the server.
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `complete` | Route a completion through BitRouter and return the full result |
-| `list_models` | List models routable through BitRouter |
-| `status` | Report BitRouter status (local: liveness/models/providers; cloud: credit balance) |
+The handler assembles two **profiles** from one set of tool schemas. The
+public profile (`--backend local|cloud`) exposes only the completion tools and
+is HTTP-safe. The orchestrator profile (`--backend fleet`, stdio-only, injected
+by the TUI) is the *union*: the completion tools **plus** the fleet and cost
+tools, injected app-side through the crate's capability ports (`Fleet`,
+`CostQuery`) so the crate itself stays substrate-free.
+
+| Tool | Profile | Description |
+|------|---------|-------------|
+| `complete` | both | Route a completion through BitRouter and return the full result |
+| `list_models` | both | List models routable through BitRouter |
+| `status` | both | Report BitRouter status (local: liveness/models/providers; cloud: credit balance) |
+| `spawn_subagent` | orchestrator | Spawn a worktree-isolated ACP subagent, send the task, block until the turn ends |
+| `prompt_subagent` | orchestrator | Send a follow-up prompt to a running subagent |
+| `subagent_status` | orchestrator | Fleet snapshot, or one subagent's status |
+| `subagent_diff` | orchestrator | The subagent's diff against its spawn base |
+| `apply_subagent` | orchestrator | Apply the subagent's diff onto the base tree, uncommitted (human-gated) |
+| `merge_subagent` | orchestrator | Merge the subagent's branch into the base repo (human-gated) |
+| `close_subagent` | orchestrator | Shut the subagent down (worktree retained) |
+| `fleet_cost` | orchestrator | BitRouter spend snapshot (today + all-time totals) |
+
+Only wired capabilities register their tools, so a public client never sees —
+or can call — the mutating fleet tools.
 
 ## Transports & backends
 
@@ -65,7 +83,9 @@ mcp/
 ├── src/
 │   ├── lib.rs          # serve() / install() entry points, Transport / BackendKind
 │   ├── backend/        # Backend trait + LocalBackend / CloudBackend (thin reqwest)
-│   ├── server.rs       # rmcp handler (the 3 tools) + stdio / HTTP serving
+│   ├── capabilities/   # port traits: Fleet + CostQuery + their input schemas
+│   ├── error.rs        # ToolError — the substrate-free error a port returns
+│   ├── server.rs       # rmcp handler, named router blocks, Builder, serving
 │   └── install.rs      # render / merge client config blocks
 └── tests/              # stdio handshake + HTTP integration tests
 ```

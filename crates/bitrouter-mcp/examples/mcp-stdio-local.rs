@@ -3,12 +3,12 @@
 //! test can spawn a real process and drive the MCP handshake. Not a product
 //! binary — the shipping CLI lives in `apps/bitrouter`.
 
-use std::sync::Arc;
-
-use bitrouter_mcp::backend::local::LocalBackend;
+use bitrouter_mcp::server::BitrouterMcp;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let backend = Arc::new(LocalBackend::new("http://127.0.0.1:4356"));
-    bitrouter_mcp::server::serve_stdio(backend, None).await
+    let server = BitrouterMcp::builder()
+        .completion_local("http://127.0.0.1:4356")
+        .build();
+    bitrouter_mcp::server::serve_stdio(server, None).await
 }
