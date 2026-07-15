@@ -48,6 +48,9 @@ pub trait TerminalBackend: Send {
     /// Encode one key press into the byte sequence the inner app expects,
     /// honoring the emulator's current keyboard modes.
     fn encode_key(&self, key: &KeyEvent) -> Option<Vec<u8>>;
+    /// Encode pasted text for the inner app: wrapped in `ESC[200~ … ESC[201~`
+    /// when it enabled bracketed paste (DEC 2004), raw bytes otherwise.
+    fn encode_paste(&self, text: &str) -> Vec<u8>;
     /// Drain bytes the emulator wants written back to the PTY (device
     /// attribute / status responses) — capability scoping happens here: the
     /// emulator answers with what it actually renders.
@@ -187,6 +190,20 @@ impl TerminalBackend for AlacrittyBackend {
 
     fn encode_key(&self, key: &KeyEvent) -> Option<Vec<u8>> {
         encode_key(key, self.term.mode())
+    }
+
+    fn encode_paste(&self, text: &str) -> Vec<u8> {
+        // Normalize CRLF; inner readline-style apps expect \r for Enter-ish
+        // behavior only inside bracketed mode, raw \n otherwise is fine.
+        let text = text.replace("\r\n", "\n");
+        if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
+            let mut bytes = b"\x1b[200~".to_vec();
+            bytes.extend_from_slice(text.as_bytes());
+            bytes.extend_from_slice(b"\x1b[201~");
+            bytes
+        } else {
+            text.into_bytes()
+        }
     }
 
     fn drain_responses(&mut self) -> Vec<u8> {
@@ -501,6 +518,22 @@ mod tests {
         let red = &lines[0].spans[0];
         assert_eq!(red.content.as_ref(), "r");
         assert_eq!(red.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn paste_brackets_only_when_the_inner_app_asked() {
+        let mut backend = AlacrittyBackend::new(20, 4);
+        assert_eq!(
+            backend.encode_paste("a\r\nb"),
+            b"a\nb".to_vec(),
+            "raw (CRLF-normalized) without DEC 2004"
+        );
+        backend.feed(b"\x1b[?2004h");
+        assert_eq!(
+            backend.encode_paste("hi"),
+            b"\x1b[200~hi\x1b[201~".to_vec(),
+            "wrapped once the inner app enables bracketed paste"
+        );
     }
 
     #[test]

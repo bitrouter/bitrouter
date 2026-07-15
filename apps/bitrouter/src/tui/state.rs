@@ -1475,6 +1475,41 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.clamp_rail_cursor();
             Vec::new()
         }
+        AppEvent::Paste(text) => {
+            // One event, whole text: pasting must never act like typed keys
+            // (N Enter submissions) or feed panes that can't take input.
+            let text = text.replace("\r\n", "\n").replace('\r', "\n");
+            match state.mode {
+                Mode::Broadcast => {
+                    state.broadcast_input.push_str(&text);
+                    Vec::new()
+                }
+                Mode::Command => {
+                    if let Some(palette) = state.palette.as_mut() {
+                        // The palette is a one-line filter.
+                        palette.input.push_str(one_line(&text).trim());
+                        palette.selected = 0;
+                    }
+                    Vec::new()
+                }
+                Mode::Normal => match state.focused() {
+                    Some(p) if p.kind == PaneKind::Pty && !p.exited => {
+                        vec![Effect::PtyPaste {
+                            record_id: p.record_id.clone(),
+                            text,
+                        }]
+                    }
+                    Some(p) if p.kind == PaneKind::Acp => {
+                        // Into the composer, newlines intact (Shift-Enter
+                        // territory) — Enter still submits explicitly.
+                        state.input.push_str(&text);
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            }
+        }
         AppEvent::Scroll { up } => {
             let Some(pane) = state.focused_mut() else {
                 return Vec::new();
@@ -5204,6 +5239,42 @@ mod tests {
             !pty.turn_active,
             "no fake working spinner on a pane that got nothing"
         );
+    }
+
+    // ── Bracketed paste. ──
+
+    #[test]
+    fn paste_lands_in_the_composer_without_submitting() {
+        let mut st = AppState::new(pane());
+        let effects = reduce(&mut st, &AppEvent::Paste("line1\r\nline2".into()));
+        assert!(effects.is_empty(), "no submit on paste");
+        assert_eq!(st.input, "line1\nline2", "newlines intact, CRLF normalized");
+    }
+
+    #[test]
+    fn paste_routes_to_a_focused_pty_pane() {
+        let mut st = AppState::new(pane());
+        let mut pty = PaneState::new("session-1".into(), "claude".into());
+        pty.kind = PaneKind::Pty;
+        st.agents.push(pty);
+        st.detail = DetailLayout::solo("session-1".into());
+        let effects = reduce(&mut st, &AppEvent::Paste("hello".into()));
+        assert_eq!(
+            effects,
+            vec![Effect::PtyPaste {
+                record_id: "session-1".into(),
+                text: "hello".into(),
+            }]
+        );
+        assert!(st.input.is_empty(), "PTY paste never leaks to the composer");
+    }
+
+    #[test]
+    fn paste_feeds_the_broadcast_input() {
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Broadcast;
+        reduce(&mut st, &AppEvent::Paste("to all\n".into()));
+        assert_eq!(st.broadcast_input, "to all\n");
     }
 
     #[test]

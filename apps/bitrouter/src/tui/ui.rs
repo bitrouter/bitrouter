@@ -350,6 +350,7 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
         .split(area);
     let order = state.sessions_list();
     let cursor_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
+    let mut cursor_end = 0usize;
     let mut lines: Vec<TuiLine> = vec![header_line("sessions".to_string(), nc)];
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
@@ -379,12 +380,17 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
             Span::raw("   "),
             Span::styled(meta, tint(nc, Color::DarkGray)),
         ]));
+        if at_cursor {
+            cursor_end = lines.len();
+        }
     }
     if order.is_empty() {
         lines.push(TuiLine::raw(""));
         lines.push(TuiLine::styled("(no sessions)", tint(nc, Color::DarkGray)));
     }
-    let para = Paragraph::new(lines).block(Block::default().borders(Borders::RIGHT));
+    let para = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::RIGHT))
+        .scroll((scroll_to_cursor(cursor_end, chunks[0].height), 0));
     frame.render_widget(para, chunks[0]);
     // The `new` affordance, keyboard-flavored.
     let footer = Paragraph::new(TuiLine::styled("N new session", tint(nc, Color::DarkGray)))
@@ -411,6 +417,7 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
     } else {
         "subagents".to_string()
     };
+    let mut cursor_end = 0usize;
     let mut lines: Vec<TuiLine> = vec![header_line(header, nc)];
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
@@ -501,6 +508,9 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             detail.push(Span::styled(format!("-{dels}"), tint(nc, Color::Red)));
             lines.push(TuiLine::from(detail));
         }
+        if at_cursor {
+            cursor_end = lines.len();
+        }
     }
     if order.is_empty() {
         lines.push(TuiLine::raw(""));
@@ -510,7 +520,9 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
             lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
         }
     }
-    let roster = Paragraph::new(lines).block(Block::default().borders(Borders::LEFT));
+    let roster = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::LEFT))
+        .scroll((scroll_to_cursor(cursor_end, chunks[0].height), 0));
     frame.render_widget(roster, chunks[0]);
 
     // Radar: one glyph per agent in roster order — peripheral vision of every
@@ -632,6 +644,14 @@ fn split_rects(area: Rect, n: usize, split: Split) -> Vec<Rect> {
         .to_vec()
 }
 
+/// Sidebar scroll offset keeping the cursor entry (whose last line index is
+/// `cursor_end`) inside a viewport `height` rows tall — with many agents on
+/// a short terminal the `▸` cursor used to walk below the fold, making j/k
+/// look dead. Zero (top-anchored) while the cursor fits.
+fn scroll_to_cursor(cursor_end: usize, height: u16) -> u16 {
+    u16::try_from(cursor_end.saturating_sub(height as usize)).unwrap_or(u16::MAX)
+}
+
 /// Render one detail pane: bordered block titled
 /// `[slot] agent · harness · shortid [markers]`, focused slot highlighted.
 /// Shows the scrollback tail unless the pane is pinned (`scroll`), and records
@@ -733,6 +753,18 @@ fn render_pane(
     let para = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });
+    // Wrap-aware tail-follow: long logical lines wrap to multiple rows, so
+    // the slice above can overflow the viewport — which used to clip the
+    // NEWEST output (the streaming tail) off the bottom while following.
+    // Scroll the overflow off the top instead. Pinned views stay
+    // top-anchored (paging moves in logical lines).
+    let para = if pane.scroll.is_none() {
+        let rows = para.line_count(area.width.saturating_sub(2));
+        let overflow = rows.saturating_sub(inner_height);
+        para.scroll((u16::try_from(overflow).unwrap_or(u16::MAX), 0))
+    } else {
+        para
+    };
     frame.render_widget(para, area);
 }
 

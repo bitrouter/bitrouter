@@ -102,6 +102,10 @@ pub enum AppEvent {
         message: String,
         ok: bool,
     },
+    /// Bracketed paste from the outer terminal: one event with the whole
+    /// text — never N synthetic keypresses (a multi-line paste must not
+    /// submit at every newline).
+    Paste(String),
     /// Mouse wheel over the detail: page the focused pane's scrollback
     /// (ACP panes) or forward arrow presses to the child (PTY panes).
     Scroll { up: bool },
@@ -167,6 +171,9 @@ pub enum Effect {
     /// Route one key press to a PTY pane's child (the loop encodes it via
     /// the pane's emulator, which knows the child's keyboard modes).
     PtyKey { record_id: String, key: KeyEvent },
+    /// Route pasted text to a PTY pane's child (bracketed when the inner
+    /// app enabled DEC 2004, raw bytes otherwise).
+    PtyPaste { record_id: String, text: String },
     /// Cancel the ACP session's in-flight turn (`Ctrl-C` = interrupt the
     /// focused agent, not quit — TUI_SPEC §9/§12).
     CancelTurn { record_id: String },

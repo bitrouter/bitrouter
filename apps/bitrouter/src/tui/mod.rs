@@ -702,6 +702,11 @@ fn setup_after_raw() -> Result<Terminal<CrosstermBackend<Stdout>>> {
         // Focus events drive away-notifications and the seen/unseen decay.
         crossterm::event::EnableFocusChange
     )?;
+    // Bracketed paste: a multi-line paste must arrive as ONE Paste event —
+    // without it every newline submits the composer, and PTY children get
+    // unguarded keystroke storms. Best-effort (unsupported on legacy
+    // Windows consoles).
+    let _ = execute!(out, crossterm::event::EnableBracketedPaste);
     // Save the user's title so restore can put it back (XTWINOPS push/pop);
     // the loop then uses the title as the attention badge.
     write_out(&notify::NotifyPath::detect().title_push());
@@ -734,6 +739,7 @@ fn restore_terminal() {
         let _ = execute!(out, crossterm::event::PopKeyboardEnhancementFlags);
     }
     write_out(&notify::NotifyPath::detect().title_pop());
+    let _ = execute!(out, crossterm::event::DisableBracketedPaste);
     let _ = execute!(
         out,
         crossterm::event::DisableFocusChange,
@@ -954,6 +960,7 @@ async fn event_loop(
                 Some(Ok(CtEvent::Key(k)))
                     if k.kind == crossterm::event::KeyEventKind::Release => None,
                 Some(Ok(CtEvent::Key(k))) => Some(AppEvent::Key(k)),
+                Some(Ok(CtEvent::Paste(text))) => Some(AppEvent::Paste(text)),
                 // Wheel scroll pages the focused pane's scrollback.
                 Some(Ok(CtEvent::Mouse(m))) => match m.kind {
                     crossterm::event::MouseEventKind::ScrollUp =>
@@ -1432,6 +1439,12 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             if let Some(pane) = rt.ptys.get_mut(&record_id)
                 && let Some(bytes) = pane.backend.encode_key(&key)
             {
+                pane.write_input(&bytes);
+            }
+        }
+        Effect::PtyPaste { record_id, text } => {
+            if let Some(pane) = rt.ptys.get_mut(&record_id) {
+                let bytes = pane.backend.encode_paste(&text);
                 pane.write_input(&bytes);
             }
         }
