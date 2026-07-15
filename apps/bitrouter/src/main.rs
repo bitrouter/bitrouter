@@ -1625,8 +1625,16 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 )
                 .context("building acp catalog from config.agents")?;
                 let base_repo = std::env::current_dir().context("resolving current directory")?;
-                let routing =
-                    std::sync::Arc::new(bitrouter::routing_preview::RoutingPreview::new(&cfg));
+                // Resolve the daemon control socket so `route_preview` prefers
+                // the live daemon (subscription providers, reloads) and only
+                // falls back to static config when it's unreachable — the same
+                // order `bitrouter route` uses. Best-effort: an unresolved
+                // socket just means config-only resolution.
+                let route_socket = resolve_client_socket_from(&source, None).await.ok();
+                let routing = std::sync::Arc::new(bitrouter::routing_preview::RoutingPreview::new(
+                    &cfg,
+                    route_socket,
+                ));
                 let skills = std::sync::Arc::new(bitrouter::skills_query::InstalledSkills::new(
                     base_repo.clone(),
                 ));

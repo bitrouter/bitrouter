@@ -48,7 +48,7 @@ escalation** tools:
 
 | Tool | Effect |
 |---|---|
-| `route_preview(model, prompt?)` | Preview how BitRouter would route `model` (with the opening `prompt`, if given): the policy decision, the resolved provider fallback chain, and the registry's per-token rates for the top hop. Nothing is sent upstream. Use it to pick a model/tier before delegating. |
+| `route_preview(model, prompt?)` | Preview how BitRouter would route `model` (with the opening `prompt`, if given): the resolved provider fallback chain and the registry's per-token rates for the top hop. Resolves through the **live daemon first** (like `bitrouter route`) so it reflects `reload`s and subscription-backed providers, falling back to static config when the daemon is unreachable — `resolved_via` (`live daemon`/`config`) records which. When config-resolved it also reports the static policy decision. Nothing is sent upstream. Use it to pick a model/tier before delegating. |
 | `skills_search(query)` | Installed skills whose name/description match `query` (`{name, description, path}`). |
 | `skills_get(name)` | One skill's frontmatter + SKILL.md body — paste it into a `spawn_subagent` task to hand the subagent a skill. |
 | `notify_human(message)` | Post a one-line notice in the human's TUI. Headless (no TUI), it returns `{"delivered": false}` — no error. |

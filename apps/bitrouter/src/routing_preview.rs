@@ -8,6 +8,8 @@
 //! rates for the top hop. Read-only: nothing is sent upstream, and the
 //! resolved targets' secrets (api keys) are never surfaced.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use bitrouter_mcp::capabilities::routing::{RoutePreviewArgs, RoutingQuery};
 use bitrouter_mcp::error::ToolError;
@@ -19,6 +21,7 @@ use bitrouter_sdk::language_model::types::{
 };
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
+use crate::daemon::{DaemonCommand, DaemonResponse, RouteHop};
 use crate::metering::PricingTable;
 use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
 
@@ -28,14 +31,20 @@ pub struct RoutingPreview {
     table: ConfigRoutingTable,
     policy: Option<PolicyTableRouter>,
     pricing: PricingTable,
+    /// The daemon control socket, when known. `route_preview` resolves through
+    /// the live daemon first (like `bitrouter route`), so it reflects `reload`s
+    /// and subscription-backed providers the static config alone can't resolve;
+    /// it falls back to config resolution when the daemon is unreachable.
+    socket: Option<PathBuf>,
 }
 
 impl RoutingPreview {
     /// Snapshot the routing surface from `config`: apply the built-in provider
     /// defaults first (so a zero-config built-in still resolves), then build the
-    /// routing table, the static policy table, and the pricing table — exactly
-    /// the tables the daemon routes with.
-    pub fn new(config: &Config) -> Self {
+    /// routing table, the static policy table, and the pricing table — the
+    /// tables used for the config-fallback path. `socket` is the daemon control
+    /// socket used for the (preferred) live-daemon path.
+    pub fn new(config: &Config, socket: Option<PathBuf>) -> Self {
         let mut resolved = config.clone();
         bitrouter_providers::apply_builtin_defaults(&mut resolved);
         let pricing = crate::assemble::build_pricing_table(&resolved);
@@ -45,6 +54,7 @@ impl RoutingPreview {
             table,
             policy,
             pricing,
+            socket,
         }
     }
 
@@ -70,9 +80,46 @@ impl RoutingPreview {
     }
 
     async fn do_preview(&self, args: RoutePreviewArgs) -> Result<serde_json::Value> {
+        // Daemon-first, mirroring `bitrouter route`: the live routing table
+        // reflects `reload`s and subscription-backed providers (claude-code,
+        // google-ai, …) that the static config alone can't resolve. Only when
+        // the daemon isn't reachable do we fall back to config resolution.
+        // A reachable daemon, if we have one; `None` (unset socket or daemon
+        // down) skips straight to config resolution below.
+        let live_socket = self
+            .socket
+            .as_ref()
+            .filter(|s| crate::daemon::endpoint_in_use(s));
+        if let Some(socket) = live_socket {
+            match crate::daemon::send_command(
+                socket,
+                &DaemonCommand::Route {
+                    model: args.model.clone(),
+                },
+            )
+            .await
+            {
+                Ok(DaemonResponse::Route { chain }) => {
+                    // The daemon applied its own policy to produce the chain, so
+                    // there's no separate static decision to surface here.
+                    return Ok(self.report(&args.model, &args.model, "live daemon", None, &chain));
+                }
+                Ok(DaemonResponse::Error { message }) => {
+                    anyhow::bail!("resolving model '{}': {message}", args.model);
+                }
+                // An unexpected response or a transport error just falls back to
+                // config resolution — the daemon may not be reachable from this
+                // process even though the socket file exists.
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(error = %e, "daemon route_preview failed — resolving from config");
+                }
+            }
+        }
+
+        // Config fallback: the static policy table's view (the effective model it
+        // selects can differ from the requested one) plus config resolution.
         let prompt = self.probe_prompt(&args);
-        // The policy decision, when a policy table is configured — the effective
-        // model it selects can differ from the requested one.
         let decision = self
             .policy
             .as_ref()
@@ -81,10 +128,7 @@ impl RoutingPreview {
             .as_ref()
             .and_then(|d| d.selected_model.clone())
             .unwrap_or_else(|| args.model.clone());
-
-        // Resolve the effective model into its provider fallback chain (the same
-        // resolution `bitrouter route` does; no daemon needed).
-        let chain = self
+        let chain: Vec<RouteHop> = self
             .table
             .route_chain(
                 &effective_model,
@@ -92,32 +136,59 @@ impl RoutingPreview {
                 &CallerContext::local(),
             )
             .await
-            .with_context(|| format!("resolving model '{effective_model}'"))?;
+            .with_context(|| format!("resolving model '{effective_model}'"))?
+            .into_iter()
+            .map(|t| RouteHop {
+                provider: t.provider_name,
+                service_id: t.service_id,
+                api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
+            })
+            .collect();
+        Ok(self.report(
+            &args.model,
+            &effective_model,
+            "config",
+            decision.as_ref(),
+            &chain,
+        ))
+    }
 
+    /// Assemble the preview JSON from a resolved hop chain (daemon- or
+    /// config-sourced), pricing the top hop from the registry. `resolved_via`
+    /// records which path produced the chain so the orchestrator knows whether
+    /// it reflects the live daemon or a static config snapshot.
+    fn report(
+        &self,
+        requested_model: &str,
+        effective_model: &str,
+        resolved_via: &str,
+        decision: Option<&PolicyDecision>,
+        chain: &[RouteHop],
+    ) -> serde_json::Value {
         // The registry's per-token rates for the top hop, when priced. Surfaces
         // the base bracket *and* any higher context tiers (PR-2 review finding
         // 3: reporting only the base rates was misleading for tiered models —
         // long-context requests bill at the steeper bracket).
         let estimated_cost = chain
             .first()
-            .and_then(|t| self.pricing.resolve(&t.provider_name, &t.service_id))
+            .and_then(|h| self.pricing.resolve(&h.provider, &h.service_id))
             .filter(|p| !p.is_unconfigured())
             .map(|p| pricing_json(&p));
-
-        Ok(serde_json::json!({
-            "requested_model": args.model,
+        serde_json::json!({
+            "requested_model": requested_model,
             "effective_model": effective_model,
-            "policy_decision": decision.as_ref().map(decision_json),
+            "resolved_via": resolved_via,
+            "policy_decision": decision.map(decision_json),
             "provider_chain": chain
                 .iter()
-                .map(|t| serde_json::json!({
-                    "provider": t.provider_name,
-                    "service_id": t.service_id,
-                    "api_protocol": format!("{:?}", t.api_protocol).to_lowercase(),
+                .map(|h| serde_json::json!({
+                    "provider": h.provider,
+                    "service_id": h.service_id,
+                    "api_protocol": h.api_protocol,
                 }))
                 .collect::<Vec<_>>(),
             "estimated_cost": estimated_cost,
-        }))
+        })
     }
 }
 
@@ -200,7 +271,8 @@ mod tests {
 
     #[tokio::test]
     async fn preview_resolves_the_provider_chain() {
-        let preview = RoutingPreview::new(&config_with_model());
+        // No daemon socket → the config-resolution path.
+        let preview = RoutingPreview::new(&config_with_model(), None);
         let out = preview
             .do_preview(RoutePreviewArgs {
                 model: "demo-model".to_string(),
@@ -209,10 +281,29 @@ mod tests {
             .await
             .expect("resolves");
         assert_eq!(out["requested_model"], "demo-model");
+        assert_eq!(out["resolved_via"], "config");
         let chain = out["provider_chain"].as_array().expect("chain");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0]["provider"], "demo");
         assert_eq!(chain[0]["service_id"], "demo-model");
+    }
+
+    #[tokio::test]
+    async fn preview_falls_back_to_config_when_the_daemon_socket_is_dead() {
+        // A socket path that isn't in use must not stall or error — it falls
+        // straight through to config resolution (the daemon-first path is a
+        // best-effort preference, not a hard dependency).
+        let dead = std::env::temp_dir().join("bitrouter-nonexistent-route-preview.sock");
+        let preview = RoutingPreview::new(&config_with_model(), Some(dead));
+        let out = preview
+            .do_preview(RoutePreviewArgs {
+                model: "demo-model".to_string(),
+                prompt: None,
+            })
+            .await
+            .expect("resolves via config fallback");
+        assert_eq!(out["resolved_via"], "config");
+        assert_eq!(out["provider_chain"][0]["provider"], "demo");
     }
 
     #[test]
@@ -249,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn preview_errors_when_the_model_does_not_resolve() {
-        let preview = RoutingPreview::new(&config_with_model());
+        let preview = RoutingPreview::new(&config_with_model(), None);
         let err = preview
             .preview(RoutePreviewArgs {
                 model: "nonexistent-model".to_string(),
