@@ -115,12 +115,12 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   decision; `D/m/p/r` review the focused `Monitor`; `Ctrl-C` interrupts the focused agent;
   `PgUp/PgDn` scroll. Mouse click still focuses rows.
   **Proof:** existing decision/review reducer tests still pass (update, don't delete).
-- [ ] **`n` is not a top-level spawn.** Direct human spawn exists only as the palette entry
+- [x] **`n` is not a top-level spawn.** Direct human spawn exists only as the palette entry
   `spawn subagent` (`PickerPurpose::Subagent`); there is no `Normal`/leader path that spawns
   a subagent as a first-class key.
   **Proof:** `COMMANDS` contains `spawn subagent`; no reducer path maps a bare key to
   `PickerPurpose::Subagent`.
-- [ ] **Standing gates green** (§1).
+- [x] **Standing gates green** (§1).
 
 ### V3.3 — Status bar (active pane | global fleet)
 
@@ -296,4 +296,7 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   new test y_resolves_the_top_pending_and_advances_to_the_next; all ported
   decision/review tests (resolve, D/m/p/r inline, Ctrl-C, PgUp/PgDn, click
   focus) pass unmodified this round; gates green (1920).
+2026-07-16 81c8b1ff — V3.2 spawn hatch + phase gates box — COMMANDS entry renamed
+  to "spawn subagent"; PickerPurpose::Subagent reachable only via the palette
+  (run_command) + picker resolution; fmt+clippy+1920 nextest green. V3.2 done.
 ```
