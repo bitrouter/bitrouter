@@ -81,11 +81,11 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   that is not the composer.)
   **Proof:** `grep -rn 'fn render_input\|state\.input\b' apps/bitrouter/src/tui` prints
   nothing.
-- [ ] **A focused `Monitor` is read-only.** New reducer test `monitor_pane_is_read_only`:
+- [x] **A focused `Monitor` is read-only.** New reducer test `monitor_pane_is_read_only`:
   feeding `AppEvent::Key` chars then `Enter` to a focused `Monitor` returns no
   `Effect::Prompt`/`Effect::PtyPaste` and pushes no `Line::UserPrompt`.
   **Proof:** that test exists and passes.
-- [ ] **The composer never renders.** Render test (`TestBackend`) with a focused `Monitor`:
+- [x] **The composer never renders.** Render test (`TestBackend`) with a focused `Monitor`:
   no input-border row is drawn.
   **Proof:** that test exists and passes.
 - [ ] **BROADCAST is removed.** `Mode::Broadcast`, `broadcast_input`, `reduce_key_broadcast`,
@@ -255,4 +255,8 @@ DECISION: reject's feedback-as-next-prompt flow is gone with the composer;
   + composer_never_renders (the next two boxes) while porting broken tests.
 2026-07-16 c3cca160 — V3.1 composer deleted — 'fn render_input|state.input' grep
   empty; fmt+clippy+1939 nextest green.
+2026-07-16 148286cb — V3.1 read-only + never-renders boxes — front-filled tests
+  monitor_pane_is_read_only (state.rs) + composer_never_renders (ui.rs) verified
+  against their task specs; both pass via targeted nextest; gates green (clippy's
+  sole warning = pre-existing proc-macro-error2 future-incompat dep note).
 ```
