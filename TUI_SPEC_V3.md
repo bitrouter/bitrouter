@@ -116,7 +116,8 @@ AFTER  ·  one hub (NORMAL); leader is ONE-SHOT, not a sticky mode
           AGENT + BROADCAST deleted; PICKER/CONFIRM survive as leaves
 
    inline in NORMAL (no mode change):
-     y/a/n    resolve top pending decision (batch-clears → next)
+     y/a/n    decide the FOCUSED pane's pending; no focused pending →
+              first press reveals the queue head (batch-clears → next)
      D/m/p/r  review focused Monitor (diff / merge / apply / reject)
      Ctrl-C   interrupt focused agent        PgUp/PgDn  scroll
      click any rail row → focus
@@ -191,9 +192,10 @@ the two *sticky hubs* become *one hub + a one-shot prefix*, and BROADCAST is gon
 The decision queue is v1/v2's strongest surface and is **unchanged in spirit**; v3 only
 removes the *mode* around it.
 
-- **Decision queue.** A pending ACP permission surfaces at the rail head; `y/a/n` resolves it
-  inline from NORMAL; decisions across N subagents **batch** into one risk-sorted pass
-  (v2 §5). No mode entry.
+- **Decision queue.** A pending ACP permission surfaces at the rail head; `y/a/n` decides
+  the **focused** pane's pending inline from NORMAL (no focused pending → the first press
+  reveals the queue head — see §11.10); decisions across N subagents **batch** into one
+  risk-sorted pass (v2 §5). No mode entry.
 - **Review verbs** on a focused `Monitor`: `diff` / `merge` / `apply` / `reject`. Writes stay
   **human-gated by default** (v2 §5) — unchanged.
 - **Reject routing splits by ownership** (this is the resolved fork):
@@ -348,9 +350,19 @@ Resolved with the recommended defaults; don't reopen without reason.
    → `TuiMsg::ReviewVerdict` over the fleet socket → `subagent_status` reports
    `state: changes_requested` + `review_verdict` (the task outcome, per §5);
    human-owned → a direct re-prompt with the same note.
-10. **Batch clear shipped.** `y/a/n` resolve the top pending decision (roster head —
-    risk-sorted, oldest first) regardless of focus, and focus advances to the next
-    pending item.
+10. **Batch clear shipped — amended to focused-targeting (post-review).** `y/a/n`
+    resolve the **focused** pane's pending: the permission popup on screen is
+    exactly what the key decides, so an unseen request can never be approved
+    blind. When the focused pane has no pending but the queue isn't empty, the
+    first press **focuses the queue head** (roster head — risk-sorted, oldest
+    first) instead of resolving it: reveal-then-resolve. Focus advances to the
+    next pending after each resolve, so `y y y` still batch-clears. Two
+    hardenings ride along: the popup title carries the requesting agent's
+    identity + the risk tag, and a **high-risk arming delay** (~600ms after
+    arrival) latches `y`/`a` — never `n` — so a keypress already in flight
+    can't take a request that just appeared. *(Original wording resolved the
+    head "regardless of focus", which let `y` approve a request whose popup
+    was not the one on screen.)*
 11. **Leader spec-as-shipped.** `tui.leader` is a `ctrl-<key>` string (default
     `ctrl-space`), matched as `Char(<key>)+CONTROL` under the negotiated kitty
     protocol; the exact-byte terminal-matrix spike remains for Gate C / follow-up.
@@ -369,6 +381,18 @@ Resolved with the recommended defaults; don't reopen without reason.
     instead of claiming an undeliverable verdict was routed, and the leader
     leaf map is a single `LEADER_LEAVES` table both the reducer and the
     which-key overlay derive from (closes §9 keyboard-parity by construction).
+
+13. **Every pane reachable at any fleet size (post-review hardening).** A rail
+    overflowing the terminal used to strand below-the-fold, non-actionable rows
+    with no input path at all. Three layers close it: the **palette gains a
+    snapshotted `focus <agent> · <short-id>` entry per agent** (keyboard path by
+    name — `leader Tab` stays actionable-only); the **radar strip is clickable**
+    (one 1×1 zone per glyph — a constant-space index of the whole fleet); and
+    the **wheel routes by pointer position** (over a sidebar it scrolls that
+    panel — 3 lines a notch, clamped, continuing from the on-screen offset —
+    and the newly-visible rows' click zones follow). Manual sidebar offsets
+    re-snap to follow-focus on any focus change, and each sidebar's now-fixed
+    header shows `⇡N`/`⇣N` fold counts so overflow is visible, never silent.
 
 **Still open (smaller):** the leader byte across the full v2 §11 terminal matrix
 (spike); burn-rate metering for the status bar.

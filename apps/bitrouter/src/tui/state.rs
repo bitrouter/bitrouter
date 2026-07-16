@@ -18,6 +18,11 @@ const SCROLLBACK_CAP: usize = 2000;
 /// Max agents shown at once in the detail viewport.
 const MAX_SHOWN: usize = 4;
 
+/// Ticks a HIGH-risk pending must be on screen before `y/a` can take it
+/// (3 × the 200ms UI tick ≈ 600ms) — the security-dialog arming delay: a
+/// keypress already in flight when the request appears must not approve it.
+const HIGH_RISK_DWELL_TICKS: u64 = 3;
+
 /// Which key-handling mode the TUI is in. NORMAL is the only hub
 /// (TUI_SPEC_V3 §3/I3): supervision is inline, and the one-shot leader
 /// prefix covers the few rare verbs — there is no sticky manager mode.
@@ -159,21 +164,48 @@ fn leader_action(code: KeyCode) -> Option<LeaderAction> {
         .map(|&(_, _, action)| action)
 }
 
+/// One palette row: a static command, or a dynamic per-agent focus entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaletteEntry {
+    Command(&'static str, Command),
+    /// Focus an agent by name — the keyboard path to ANY pane, including
+    /// below-the-fold, non-actionable rail rows `leader Tab` skips
+    /// (TUI_SPEC_V3 §9 keyboard parity).
+    Focus {
+        label: String,
+        record_id: String,
+    },
+}
+
+impl PaletteEntry {
+    /// The display / fuzzy-match text.
+    pub fn label(&self) -> &str {
+        match self {
+            PaletteEntry::Command(name, _) => name,
+            PaletteEntry::Focus { label, .. } => label,
+        }
+    }
+}
+
 /// State of the command palette overlay.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PaletteState {
     pub input: String,
     pub selected: usize,
+    /// Per-agent `focus …` entries, snapshotted when the palette opens
+    /// (like the picker's agent list) — commands stay first in the display.
+    pub focus_entries: Vec<PaletteEntry>,
 }
 
 impl PaletteState {
-    /// Commands whose name fuzzy-matches (case-insensitive subsequence) the
-    /// current input, in table order.
-    pub fn matches(&self) -> Vec<(&'static str, Command)> {
+    /// Entries whose label fuzzy-matches (case-insensitive subsequence) the
+    /// current input: commands in table order, then the focus entries.
+    pub fn matches(&self) -> Vec<PaletteEntry> {
         COMMANDS
             .iter()
-            .copied()
-            .filter(|(name, _)| fuzzy_match(name, &self.input))
+            .map(|&(name, cmd)| PaletteEntry::Command(name, cmd))
+            .chain(self.focus_entries.iter().cloned())
+            .filter(|e| fuzzy_match(e.label(), &self.input))
             .collect()
     }
 }
@@ -468,6 +500,10 @@ pub struct PaneState {
     /// Arrival order of the current `pending` (from `AppState.perm_seq`);
     /// the queue orders needs-you rows oldest-first with it.
     pub pending_seq: u64,
+    /// Tick at which the current `pending` arrived — the high-risk dwell
+    /// latch (`HIGH_RISK_DWELL_TICKS`) keys off it so a just-arrived request
+    /// can't be approved by a keypress already in flight.
+    pub pending_at: u64,
     /// `None` = follow the tail; `Some(i)` = pinned with line `i` first visible.
     /// Content-pinned: new output never moves a pinned view.
     pub scroll: Option<usize>,
@@ -532,6 +568,7 @@ impl PaneState {
             last_bucket: u8::MAX,
             autonomy: Autonomy::default(),
             pending_seq: 0,
+            pending_at: 0,
             scroll: None,
             viewport: 0,
             usage: None,
@@ -848,6 +885,39 @@ impl ClickZone {
     }
 }
 
+/// Which sidebar a wheel event over it scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollPanel {
+    Sessions,
+    Rail,
+}
+
+/// A wheel-scrollable region recorded by the renderer for the current frame
+/// (like [`ClickZone`]): the panel's rectangle plus the content/viewport
+/// line counts the reducer needs to clamp a manual scroll offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollArea {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+    pub panel: ScrollPanel,
+    /// Total logical lines the panel rendered this frame.
+    pub content: u16,
+    /// Visible height (rows) of the panel's list region.
+    pub viewport: u16,
+    /// The scroll offset actually applied this frame (manual or
+    /// follow-focus) — a wheel notch continues from it, never jumps.
+    pub rendered: u16,
+}
+
+impl ScrollArea {
+    /// Whether cell `(col, row)` falls inside this area (top-left inclusive).
+    fn contains(&self, col: u16, row: u16) -> bool {
+        col >= self.x && col < self.x + self.w && row >= self.y && row < self.y + self.h
+    }
+}
+
 /// Whole-app render state: a flat agent list + the detail layout + rail cursor.
 /// Accessors return `Option` because the agent list may be empty transiently
 /// (right after the last agent closes, before `should_quit`).
@@ -913,6 +983,15 @@ pub struct AppState {
     /// hit-test targets: sidebar toggle buttons + roster rows). Rebuilt every
     /// frame, like [`AppState::pty_areas`].
     pub click_zones: Vec<ClickZone>,
+    /// Wheel-scrollable panel rectangles recorded by the renderer for the
+    /// current frame (pointer-aware wheel routing). Rebuilt every frame.
+    pub scroll_areas: Vec<ScrollArea>,
+    /// Manual sessions-panel scroll offset (wheel over the panel). `None` =
+    /// follow the focused entry; cleared whenever focus changes (re-snap).
+    pub sessions_scroll: Option<u16>,
+    /// Manual subagents-rail scroll offset — same lifecycle as
+    /// [`AppState::sessions_scroll`].
+    pub rail_scroll: Option<u16>,
 }
 
 impl AppState {
@@ -944,6 +1023,9 @@ impl AppState {
             confirm_agent: None,
             pty_areas: Vec::new(),
             click_zones: Vec::new(),
+            scroll_areas: Vec::new(),
+            sessions_scroll: None,
+            rail_scroll: None,
         }
     }
 
@@ -1111,10 +1193,17 @@ impl AppState {
 /// PURE: no I/O, no session access.
 pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
     let notice_before = state.notice.clone();
+    let focus_before = state.detail.focused_id().map(str::to_string);
     let effects = reduce_inner(state, event);
     // A fresh notice starts its decay clock (the Tick arm clears it).
     if state.notice != notice_before && state.notice.is_some() {
         state.notice_at = state.tick;
+    }
+    // A focus change re-snaps the sidebars to follow-focus: a manual wheel
+    // offset only holds while the human is browsing, never over navigation.
+    if state.detail.focused_id() != focus_before.as_deref() {
+        state.sessions_scroll = None;
+        state.rail_scroll = None;
     }
     // Time-in-state: stamp the tick whenever a pane changes actionability
     // bucket, so the rail can show how long it has been working/blocked/done.
@@ -1223,6 +1312,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             let notify = !state.term_focused;
             state.perm_seq += 1;
             let seq = state.perm_seq;
+            let tick = state.tick;
             let mut effects = Vec::new();
             if let Some(pane) = state.pane_by_id_mut(record_id) {
                 // Autonomy policy: does this request reach the user?
@@ -1249,6 +1339,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                         risk: *risk,
                     });
                     pane.pending_seq = seq;
+                    pane.pending_at = tick;
                     if !seen {
                         pane.attention = true;
                     }
@@ -1590,11 +1681,36 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 _ => Vec::new(),
             }
         }
-        AppEvent::Scroll { up } => {
+        AppEvent::Scroll { up, col, row } => {
             // Overlays (leader / picker / palette / confirm / which-key)
             // capture input: the wheel must not page — or worse, type into —
             // the pane behind them (mirrors `reduce_click`'s gate).
             if state.mode != Mode::Normal || state.keys_help {
+                return Vec::new();
+            }
+            // Pointer-aware routing: the wheel over a sidebar scrolls THAT
+            // panel (3 lines a notch, clamped), so below-the-fold rail rows
+            // scroll into reach — their click zones follow (TUI_SPEC_V3 §9).
+            if let Some(area) = state
+                .scroll_areas
+                .iter()
+                .find(|a| a.contains(*col, *row))
+                .copied()
+            {
+                let max = area.content.saturating_sub(area.viewport);
+                let slot = match area.panel {
+                    ScrollPanel::Sessions => &mut state.sessions_scroll,
+                    ScrollPanel::Rail => &mut state.rail_scroll,
+                };
+                // Continue from the offset actually on screen (the renderer
+                // records it), so the first notch never jumps.
+                let cur = slot.unwrap_or(area.rendered);
+                let next = if *up {
+                    cur.saturating_sub(3)
+                } else {
+                    (cur + 3).min(max)
+                };
+                *slot = Some(next);
                 return Vec::new();
             }
             let Some(pane) = state.focused_mut() else {
@@ -1761,9 +1877,14 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         _ => {}
     }
-    // ── Inline decisions (TUI_SPEC_V3 §5): `y/a/n` resolve the TOP pending
-    // decision — the roster head's, risk-sorted then oldest-first — and
-    // advance focus to the next pending item (batch clear, no mode).
+    // ── Inline decisions (TUI_SPEC_V3 §5, §11.10 as amended): `y/a/n`
+    // resolve the FOCUSED pane's pending — the permission popup on screen is
+    // exactly what the key decides, so an unseen request can never be
+    // approved blind. When the focused pane has none but the queue isn't
+    // empty, the first press *focuses* the queue head instead
+    // (reveal-then-resolve); the next press decides what is now on screen.
+    // Focus advances to the next pending after each resolve, so `y y y`
+    // still batch-clears the queue without refocusing by hand.
     let top_pending = state
         .roster()
         .into_iter()
@@ -1777,7 +1898,28 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             _ => None,
         };
         if let Some(outcome) = outcome {
-            if let Some(pane) = state.pane_by_id_mut(&top_id) {
+            let focused_pending = state.focused().and_then(|p| {
+                p.pending
+                    .as_ref()
+                    .map(|pending| (pending.risk, p.pending_at))
+            });
+            let Some((risk, arrived)) = focused_pending else {
+                // Reveal, don't resolve: bring the queue head on screen.
+                state.detail = DetailLayout::solo(top_id);
+                mark_shown_seen(state);
+                return Vec::new();
+            };
+            // The arming delay: a HIGH-risk request that appeared moments
+            // ago can't be taken by a keypress already in flight. Denying
+            // (`n`) is always allowed — the latch guards approval.
+            if outcome != PermissionOutcome::Deny
+                && risk == Risk::High
+                && state.tick.wrapping_sub(arrived) < HIGH_RISK_DWELL_TICKS
+            {
+                state.notice = Some("high-risk request just arrived — read it, then decide".into());
+                return Vec::new();
+            }
+            if let Some(pane) = state.focused_mut() {
                 pane.pending = None;
                 // Decided — nothing left to look at here.
                 pane.attention = false;
@@ -1795,7 +1937,7 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 mark_shown_seen(state);
             }
             return vec![Effect::ResolvePermission {
-                record_id: top_id,
+                record_id: focus_id,
                 outcome,
             }];
         }
@@ -1891,8 +2033,7 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     // would have typed lands on a notice pointing at the owner.
     match key.code {
         KeyCode::Char(':') => {
-            state.palette = Some(PaletteState::default());
-            state.mode = Mode::Command;
+            open_palette(state);
             Vec::new()
         }
         KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace => {
@@ -1968,8 +2109,7 @@ fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         // The command palette: the exhaustive rare-verb surface.
         LeaderAction::Palette => {
-            state.palette = Some(PaletteState::default());
-            state.mode = Mode::Command;
+            open_palette(state);
             Vec::new()
         }
         // Close the focused pane (attach close = detach). A *live*
@@ -2033,18 +2173,22 @@ fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Enter => {
-            let cmd = palette
+            let entry = palette
                 .matches()
                 .get(
                     palette
                         .selected
                         .min(palette.matches().len().saturating_sub(1)),
                 )
-                .map(|(_, c)| *c);
+                .cloned();
             state.palette = None;
             state.mode = Mode::Normal;
-            match cmd {
-                Some(cmd) => run_command(state, cmd),
+            match entry {
+                Some(PaletteEntry::Command(_, cmd)) => run_command(state, cmd),
+                Some(PaletteEntry::Focus { record_id, .. }) => {
+                    focus_or_solo(state, record_id);
+                    Vec::new()
+                }
                 None => Vec::new(), // no match → just close, no panic
             }
         }
@@ -2055,6 +2199,32 @@ fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         _ => Vec::new(),
     }
+}
+
+/// Open the command palette: the static command table plus a snapshotted
+/// `focus …` entry per agent (sessions first, then roster order) — the
+/// keyboard path to any pane by name, even one whose rail row is folded
+/// below the fold (TUI_SPEC_V3 §9 keyboard parity).
+fn open_palette(state: &mut AppState) {
+    let focus_entries = state
+        .sessions_list()
+        .into_iter()
+        .chain(state.roster())
+        .map(|i| {
+            let pane = &state.agents[i];
+            let short = pane.record_id.get(..8).unwrap_or(&pane.record_id);
+            PaletteEntry::Focus {
+                label: format!("focus {} · {short}", pane.agent_id),
+                record_id: pane.record_id.clone(),
+            }
+        })
+        .collect();
+    state.palette = Some(PaletteState {
+        input: String::new(),
+        selected: 0,
+        focus_entries,
+    });
+    state.mode = Mode::Command;
 }
 
 /// Execute one palette command. Every action maps onto an existing reducer
@@ -2925,7 +3095,14 @@ mod tests {
             let mut st = AppState::new(pane());
             st.agents[0].kind = PaneKind::Pty;
             st.mode = mode;
-            let fx = reduce(&mut st, &AppEvent::Scroll { up: true });
+            let fx = reduce(
+                &mut st,
+                &AppEvent::Scroll {
+                    up: true,
+                    col: 40,
+                    row: 10,
+                },
+            );
             assert!(fx.is_empty(), "no PtyKey leaks from {mode:?}: {fx:?}");
             assert_eq!(st.mode, mode, "the overlay stays armed");
         }
@@ -2933,7 +3110,14 @@ mod tests {
         let mut st = AppState::new(pane());
         st.agents[0].kind = PaneKind::Pty;
         st.keys_help = true;
-        let fx = reduce(&mut st, &AppEvent::Scroll { up: false });
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Scroll {
+                up: false,
+                col: 40,
+                row: 10,
+            },
+        );
         assert!(fx.is_empty());
         assert!(st.keys_help, "scroll is not the dismissing key");
     }
@@ -3069,6 +3253,13 @@ mod tests {
                 risk: Risk::High,
             },
         );
+        // The arming delay: a HIGH-risk request that just appeared can't be
+        // approved by a keypress already in flight.
+        let effects = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert!(effects.is_empty(), "latched while arming: {effects:?}");
+        assert!(st.agents[0].pending.is_some(), "still pending");
+        assert!(st.notice.is_some(), "the latch explains itself");
+        settle(&mut st);
         let effects = reduce(&mut st, &press(KeyCode::Char('y')));
         assert_eq!(
             effects,
@@ -3080,6 +3271,118 @@ mod tests {
         assert!(
             st.agents[0].pending.is_none(),
             "pending cleared after resolve"
+        );
+    }
+
+    #[test]
+    fn deny_and_low_risk_skip_the_arming_delay() {
+        // `n` guards nothing — denying a fresh high-risk request is fine.
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &perm("rec-1", "WRITE"));
+        let effects = reduce(&mut st, &press(KeyCode::Char('n')));
+        assert_eq!(
+            effects,
+            vec![Effect::ResolvePermission {
+                record_id: "rec-1".into(),
+                outcome: PermissionOutcome::Deny,
+            }]
+        );
+        // Low-risk approvals have no latch: zero added friction.
+        let mut st = AppState::new(pane());
+        reduce(&mut st, &perm_with_risk("rec-1", "READ", Risk::Low));
+        let effects = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert_eq!(
+            effects,
+            vec![Effect::ResolvePermission {
+                record_id: "rec-1".into(),
+                outcome: PermissionOutcome::AllowOnce,
+            }]
+        );
+    }
+
+    #[test]
+    fn palette_focus_entry_focuses_any_agent_by_name() {
+        // The keyboard path to a pane `leader Tab` skips (idle, below the
+        // fold): a snapshotted `focus …` palette entry (TUI_SPEC_V3 §9).
+        let mut st = agents3(); // detail = [r0]; r2 idle, not actionable
+        reduce(&mut st, &press(KeyCode::Char(':')));
+        for c in "focusr2".chars() {
+            reduce(&mut st, &press(KeyCode::Char(c)));
+        }
+        let fx = reduce(&mut st, &press(KeyCode::Enter));
+        assert!(fx.is_empty(), "focusing is effect-free: {fx:?}");
+        assert_eq!(st.mode, Mode::Normal);
+        assert_eq!(st.detail.shown, vec!["r2".to_string()], "r2 focused");
+    }
+
+    #[test]
+    fn wheel_over_a_sidebar_scrolls_that_panel_not_the_pane() {
+        let mut st = agents3();
+        st.agents[0].kind = PaneKind::Pty; // wheel-over-detail would forward keys
+        st.scroll_areas = vec![ScrollArea {
+            x: 60,
+            y: 0,
+            w: 20,
+            h: 20,
+            panel: ScrollPanel::Rail,
+            content: 40,
+            viewport: 18,
+            rendered: 5,
+        }];
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Scroll {
+                up: false,
+                col: 65,
+                row: 3,
+            },
+        );
+        assert!(
+            fx.is_empty(),
+            "no PtyKey with the pointer on the rail: {fx:?}"
+        );
+        assert_eq!(
+            st.rail_scroll,
+            Some(8),
+            "continues from the rendered offset"
+        );
+        // Clamped at the end of the content.
+        for _ in 0..20 {
+            reduce(
+                &mut st,
+                &AppEvent::Scroll {
+                    up: false,
+                    col: 65,
+                    row: 3,
+                },
+            );
+        }
+        assert_eq!(st.rail_scroll, Some(22), "clamped to content − viewport");
+        // Off-panel, the wheel still pages the focused pane (PTY: arrows).
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Scroll {
+                up: true,
+                col: 5,
+                row: 3,
+            },
+        );
+        assert_eq!(fx.len(), 3, "PTY scrollback forwarding unchanged: {fx:?}");
+    }
+
+    #[test]
+    fn manual_sidebar_scroll_resnaps_on_focus_change() {
+        let mut st = agents3();
+        reduce(&mut st, &perm("r2", "wants"));
+        st.rail_scroll = Some(7);
+        st.sessions_scroll = Some(2);
+        // Navigation (leader Tab → r2) returns the sidebars to follow-focus.
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Tab));
+        assert_eq!(st.detail.shown, vec!["r2".to_string()]);
+        assert!(
+            st.rail_scroll.is_none() && st.sessions_scroll.is_none(),
+            "manual offsets re-snap on focus change"
         );
     }
 
@@ -3761,12 +4064,19 @@ mod tests {
     // ── Polish: leader Tab (next actionable), wheel scroll. ──
 
     #[test]
-    fn y_resolves_the_top_pending_and_advances_to_the_next() {
+    fn y_reveals_then_resolves_and_advances_through_the_queue() {
         let mut st = agents3(); // detail = [r0]
         reduce(&mut st, &perm("r2", "older wants"));
         reduce(&mut st, &perm("r1", "newer wants"));
-        // Top of the queue = r2 (same risk, oldest first) — resolved even
-        // though r0 holds the focus.
+        settle(&mut st);
+        // Focus (r0) has no pending: the first press REVEALS the queue head
+        // (r2 — same risk, oldest first) instead of resolving it blind
+        // (TUI_SPEC_V3 §11.10 as amended).
+        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert!(fx.is_empty(), "reveal, not resolve: {fx:?}");
+        assert_eq!(st.detail.shown, vec!["r2".to_string()], "queue head shown");
+        assert!(st.agents[2].pending.is_some(), "nothing resolved yet");
+        // Now the popup on screen IS the queue head — `y` decides it.
         let fx = reduce(&mut st, &press(KeyCode::Char('y')));
         assert_eq!(
             fx,
@@ -3867,14 +4177,35 @@ mod tests {
         for i in 0..50 {
             reduce(&mut st, &msg(i));
         }
-        reduce(&mut st, &AppEvent::Scroll { up: true });
+        reduce(
+            &mut st,
+            &AppEvent::Scroll {
+                up: true,
+                col: 40,
+                row: 10,
+            },
+        );
         assert_eq!(st.agents[0].scroll, Some(30), "wheel pages the scrollback");
-        reduce(&mut st, &AppEvent::Scroll { up: false });
+        reduce(
+            &mut st,
+            &AppEvent::Scroll {
+                up: false,
+                col: 40,
+                row: 10,
+            },
+        );
         assert_eq!(st.agents[0].scroll, None, "back to following");
 
         let mut st = AppState::new(pane());
         st.agents[0].kind = PaneKind::Pty;
-        let fx = reduce(&mut st, &AppEvent::Scroll { up: true });
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Scroll {
+                up: true,
+                col: 40,
+                row: 10,
+            },
+        );
         assert_eq!(fx.len(), 3, "PTY pane gets arrow presses");
         assert!(matches!(&fx[0], Effect::PtyKey { .. }));
     }
@@ -4619,6 +4950,13 @@ mod tests {
         perm_with_risk(record_id, title, Risk::High)
     }
 
+    /// Advance past the high-risk arming delay so `y/a` can take a pending.
+    fn settle(st: &mut AppState) {
+        for _ in 0..HIGH_RISK_DWELL_TICKS {
+            reduce(st, &AppEvent::Tick);
+        }
+    }
+
     fn perm_with_risk(record_id: &str, title: &str, risk: Risk) -> AppEvent {
         AppEvent::Permission {
             record_id: record_id.into(),
@@ -4757,13 +5095,15 @@ mod tests {
         let p = PaletteState {
             input: "spw".into(),
             selected: 0,
+            focus_entries: Vec::new(),
         };
-        let names: Vec<&str> = p.matches().iter().map(|(n, _)| *n).collect();
+        let names: Vec<String> = p.matches().iter().map(|e| e.label().to_string()).collect();
         assert_eq!(names, vec!["spawn subagent"], "s-p-w subsequence");
 
         let none = PaletteState {
             input: "zzz".into(),
             selected: 0,
+            focus_entries: Vec::new(),
         };
         assert!(none.matches().is_empty());
 
@@ -5151,8 +5491,10 @@ mod tests {
             .find(|p| p.record_id == "mcp:abc123")
             .expect("mirror pane");
         assert!(mirror.pending.is_some(), "gated request reaches the queue");
-        // Resolve inline from NORMAL on the focused mirror.
+        // Resolve inline from NORMAL on the focused mirror (past the
+        // high-risk arming delay).
         st.detail = DetailLayout::solo("mcp:abc123".into());
+        settle(&mut st);
         let effects = reduce(&mut st, &press(KeyCode::Char('y')));
         assert!(
             effects.contains(&Effect::ResolvePermission {

@@ -106,9 +106,12 @@ pub enum AppEvent {
     /// text — never N synthetic keypresses (a multi-line paste must not
     /// submit at every newline).
     Paste(String),
-    /// Mouse wheel over the detail: page the focused pane's scrollback
-    /// (ACP panes) or forward arrow presses to the child (PTY panes).
-    Scroll { up: bool },
+    /// Mouse wheel at terminal cell `(col, row)`. Routed by pointer position
+    /// (like [`AppEvent::Click`]): over the sessions panel or the subagents
+    /// rail it scrolls that panel; over the detail it pages the focused
+    /// pane's scrollback (ACP panes) or forwards arrow presses to the child
+    /// (PTY panes).
+    Scroll { up: bool, col: u16, row: u16 },
     /// A left-click at terminal cell `(col, row)`. The reducer hit-tests it
     /// against the click zones the renderer recorded for the current frame
     /// (sidebar toggle buttons and roster rows).
