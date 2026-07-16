@@ -336,4 +336,16 @@ DECISION: CLI.md had no tui section at all (the task assumed one) — added a
 2026-07-16 c8880741 — Gate A — git status clean; §1 sweep green (fmt OK, clippy
   -D warnings 0 errors, 1923/1923 nextest, purity grep test-module-only);
   BASE=b01c8887 recorded since iteration 1.
+2026-07-16 59095783 — Gate B round 1 — Fable-5 reviewer returned 7 CONFIRMED +
+  2 PLAUSIBLE: (1) sticky review verdict masking revision state; (2) palette
+  bypassing ownership guards on close/autonomy; (3) y·a·n chip/which-key
+  pointing at focused not top pending; (4) split slot focus unreachable +
+  §11.8 claim false; (5) stale Ctrl-A x detach notices; (6) dead "N new
+  session" footer + stale attach hint; (7) AGENT/BROADCAST comment rot.
+  All 7 fixed (verdict consumed on re-prompt; shared close_focused/
+  cycle_focused_autonomy guards; queue-top chip; focus_or_solo click + tests;
+  ⌃space notices; clickable "+ new session" footer; comments swept) plus the
+  PLAUSIBLE Ctrl-C dead-pane docs nit. PLAUSIBLE finding 9 (review verbs on
+  an exited pane) accepted as pre-existing v2 baseline. Gates green (1925).
+  Reviewer re-running on the updated diff.
 ```
