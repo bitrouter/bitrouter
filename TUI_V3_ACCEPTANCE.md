@@ -141,7 +141,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 
 ### V3.4 — Review routing by ownership
 
-- [ ] **Panes carry an ownership marker** (orchestrator-owned vs. human-owned/hatch) on the
+- [x] **Panes carry an ownership marker** (orchestrator-owned vs. human-owned/hatch) on the
   pane or session record.
   **Proof:** the field exists and is set at spawn time for both paths.
 - [ ] **Reject routes by ownership** per `TUI_SPEC_V3.md` §5: orchestrator-owned → an effect
@@ -308,4 +308,8 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
 2026-07-16 29d8fef1 — V3.3 hints leave the bar + phase gates box — NORMAL hint is
   "⌃space menu" (+ the PTY routing hint); overlay modes just name themselves;
   'AGENT  [/] panel' grep empty; fmt+clippy+1921 nextest green. V3.3 done.
+2026-07-16 1c5780f8 — V3.4 ownership marker — verified the iteration-1 front-fill:
+  PaneState.owner: Ownership { Human (default: PaneState::new — picker spawns,
+  sessions, attaches), Orchestrator (BridgeSpawned) }; asserted at spawn by
+  bridge_spawn_mirrors_into_the_rail_without_stealing_focus; gates green.
 ```
