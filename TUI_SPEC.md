@@ -1,5 +1,11 @@
 # BitRouter TUI — Composite Manager Design Spec (v2)
 
+> **Superseded in part by [`TUI_SPEC_V3.md`](TUI_SPEC_V3.md)** (shipped): the §3 command
+> model (AGENT/BROADCAST → one NORMAL hub + a one-shot `tui.leader`), the §8 pane model
+> (`Acp`/`Mirror` → read-only `Monitor`; the composer is gone), and the status bar
+> (active-pane left / global-fleet right). The fabric described here (PTY orchestrator,
+> fleet MCP bridge, review queue, worktree isolation, fleet memory) still stands.
+
 **Status:** Draft for review · **Supersedes:** [`TUI_ACCEPTANCE.md`](TUI_ACCEPTANCE.md) (v1, deprecated)
 **Owner:** TUI · **Depends on:** `crates/bitrouter-substrate` (ACP, PR #613), harness catalog (`apps/bitrouter/src/harness.rs`, PR #705)
 

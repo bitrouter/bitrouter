@@ -327,5 +327,35 @@ Resolved with the recommended defaults; don't reopen without reason.
 5. **`Picker` / `Confirm` survive as palette/flow leaves; `Agent` / `Broadcast` deleted.**
    The claim is "two hubs → one," not "6 modes → 3."
 
-**Still open (smaller):** the exact leader byte (spike); whether manual `s`/`v` splits
-survive at all or are cut with the multiplexer; burn-rate metering for the status bar.
+**Build-time deviations (v3 as shipped — the decisions the build added):**
+
+6. **Ownership is an explicit field.** The `Acp`-vs-`Mirror` behavior split became
+   `PaneState.owner: Ownership { Human, Orchestrator }`, set at spawn for both paths —
+   capability edges (cancel / attach / autonomy / close / fleet membership) and §5's
+   reject routing key off it, not the pane kind.
+7. **Composer plumbing went with the composer.** `PaneState.draft` + the draft
+   stash/restore are deleted (write-never = dead code); the durable `FleetAgent.draft`
+   wire field stays for format compatibility and is always `None`. `Line::UserPrompt`
+   is deleted too — monitor transcripts are read-only **by construction**. Pane
+   `selected` marks (`✓`) died with BROADCAST.
+8. **The manager cursor machinery is gone entirely.** `Panel`, rail/session cursors,
+   queue-only mode, and the palette `queue` command are deleted; the queue is always
+   the rail head. Detail-slot focus switching is click-only; `s`/`v` splits survive as
+   palette commands only, filling with the most actionable unshown agent (resolving
+   §11.5's open question: splits stay, palette-only).
+9. **Reject carries a canned note.** With no composer there is nothing to type: reject
+   sends a fixed `changes_requested` note. Orchestrator-owned → `Effect::ReviewVerdict`
+   → `TuiMsg::ReviewVerdict` over the fleet socket → `subagent_status` reports
+   `state: changes_requested` + `review_verdict` (the task outcome, per §5);
+   human-owned → a direct re-prompt with the same note.
+10. **Batch clear shipped.** `y/a/n` resolve the top pending decision (roster head —
+    risk-sorted, oldest first) regardless of focus, and focus advances to the next
+    pending item.
+11. **Leader spec-as-shipped.** `tui.leader` is a `ctrl-<key>` string (default
+    `ctrl-space`), matched as `Char(<key>)+CONTROL` under the negotiated kitty
+    protocol; the exact-byte terminal-matrix spike remains for Gate C / follow-up.
+    The which-key overlay renders whenever the leader prefix is armed; `:` still
+    opens the palette from a focused `Monitor` (alongside `leader p`).
+
+**Still open (smaller):** the leader byte across the full v2 §11 terminal matrix
+(spike); burn-rate metering for the status bar.
