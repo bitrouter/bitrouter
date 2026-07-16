@@ -205,7 +205,7 @@ const CHECK_RETRY_CAP: u8 = 2;
 /// orchestrator, or the agent directly for hatch spawns) decides what to
 /// change.
 const REJECT_NOTE: &str =
-    "changes_requested: the human reviewed the diff and rejected it — revise and finish the task";
+    "the human reviewed the diff and rejected it — revise and finish the task";
 
 /// Render a unified diff (`git diff` output) into scrollback lines with the
 /// diff_render treatment: `+`/`-` rows tinted, hunk headers as gaps, file
