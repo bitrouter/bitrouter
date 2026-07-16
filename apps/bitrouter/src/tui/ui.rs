@@ -134,7 +134,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
     {
-        render_picker(picker, state.no_color, frame, area);
+        render_picker(picker, frame, area);
     }
 
     if state.mode == Mode::Command
@@ -148,7 +148,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     }
 
     if state.keys_help {
-        render_keys_help(state.mode, state.no_color, frame, area);
+        render_keys_help(state.mode, frame, area);
     }
 
     if let Some(pane) = state.focused()
@@ -168,9 +168,9 @@ fn render_palette(
     let popup = centered(area, 50, 50);
     frame.render_widget(Clear, popup);
     let mut lines: Vec<TuiLine> = vec![TuiLine::from(vec![
-        Span::styled(": ", tint(nc, Color::Cyan)),
+        Span::raw(": "),
         Span::raw(palette.input.clone()),
-        Span::styled("▏", tint(nc, Color::Cyan)),
+        Span::styled("▏", Style::default().add_modifier(Modifier::BOLD)),
     ])];
     let matches = palette.matches();
     if matches.is_empty() {
@@ -181,7 +181,11 @@ fn render_palette(
     }
     for (i, (name, _)) in matches.iter().enumerate() {
         if i == palette.selected.min(matches.len() - 1) {
-            lines.push(TuiLine::styled(format!("> {name}"), tint(nc, Color::Cyan)));
+            // Monochrome: the `>` marker + bold carries selection, not hue.
+            lines.push(TuiLine::styled(
+                format!("> {name}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
         } else {
             lines.push(TuiLine::raw(format!("  {name}")));
         }
@@ -205,12 +209,17 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
         )),
         TuiLine::raw("bootstrap hook in each new worktree? It executes shell:"),
         TuiLine::raw(""),
-        TuiLine::styled(format!("  {cmd}"), tint(nc, Color::Yellow)),
+        // Monochrome: the command to vet reads in bold; the y/n/Esc letters
+        // carry the choice without green/red.
+        TuiLine::styled(
+            format!("  {cmd}"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         TuiLine::raw(""),
         TuiLine::from(vec![
-            Span::styled("[y]", tint(nc, Color::Green)),
+            Span::styled("[y]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" run for this session   "),
-            Span::styled("[n]", tint(nc, Color::Red)),
+            Span::styled("[n]", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(" skip this session   "),
             Span::styled("[Esc]", tint(nc, Color::DarkGray)),
             Span::raw(" cancel spawn"),
@@ -227,7 +236,7 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
 }
 
 /// Which-key overlay: every binding for the current mode. Any key dismisses.
-fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
+fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
             ("type + Enter", "prompt the focused agent"),
@@ -277,7 +286,10 @@ fn render_keys_help(mode: Mode, nc: bool, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|(key, what)| {
             TuiLine::from(vec![
-                Span::styled(format!("{key:>18}  "), tint(nc, Color::Cyan)),
+                Span::styled(
+                    format!("{key:>18}  "),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(*what),
             ])
         })
@@ -1099,7 +1111,7 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
     frame.render_widget(Paragraph::new(TuiLine::from(spans)), area);
 }
 
-fn render_picker(picker: &PickerState, nc: bool, frame: &mut Frame, area: Rect) {
+fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     let popup = centered(area, 50, 50);
     frame.render_widget(Clear, popup);
     let items: Vec<TuiLine> = if picker.agents.is_empty() {
@@ -1111,7 +1123,11 @@ fn render_picker(picker: &PickerState, nc: bool, frame: &mut Frame, area: Rect) 
             .enumerate()
             .map(|(i, a)| {
                 if i == picker.selected {
-                    TuiLine::styled(format!("> {a}"), tint(nc, Color::Cyan))
+                    // Monochrome: `>` + bold marks the selection, not hue.
+                    TuiLine::styled(
+                        format!("> {a}"),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )
                 } else {
                     TuiLine::raw(format!("  {a}"))
                 }
