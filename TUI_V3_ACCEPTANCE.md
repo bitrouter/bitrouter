@@ -133,11 +133,11 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 - [x] **Right zone = global fleet:** badge counts (`⚠◆●◉`) + summed fleet cost + `serve ●/✗`.
   Fold the bare `N sessions` count.
   **Proof:** render test asserting the right zone contents and that `session` word is absent.
-- [ ] **Verbose hint strings leave the bar.** The AGENT/NORMAL cheat-sheet lines
+- [x] **Verbose hint strings leave the bar.** The AGENT/NORMAL cheat-sheet lines
   ([`ui.rs:977`](apps/bitrouter/src/tui/ui.rs)) are replaced by a minimal persistent leader
   affordance (e.g. `⌃Space menu`); full hints live in the which-key overlay + palette.
   **Proof:** `grep -n 'AGENT  \[/\] panel' ui.rs` prints nothing; the long NORMAL hint is gone.
-- [ ] **Standing gates green** (§1).
+- [x] **Standing gates green** (§1).
 
 ### V3.4 — Review routing by ownership
 
@@ -305,4 +305,7 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
 2026-07-16 b82dd693 — V3.3 right zone — bare "N sessions" segment folded; test
   status_bar_right_zone_reports_global_state asserts badges + $fleet + serve
   on the bar's own cells with no 'session' word; gates green (1921).
+2026-07-16 29d8fef1 — V3.3 hints leave the bar + phase gates box — NORMAL hint is
+  "⌃space menu" (+ the PTY routing hint); overlay modes just name themselves;
+  'AGENT  [/] panel' grep empty; fmt+clippy+1921 nextest green. V3.3 done.
 ```
