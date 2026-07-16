@@ -357,5 +357,18 @@ Resolved with the recommended defaults; don't reopen without reason.
     The which-key overlay renders whenever the leader prefix is armed; `:` still
     opens the palette from a focused `Monitor` (alongside `leader p`).
 
+12. **Ctrl-C never quits (post-review hardening).** One coherent policy: in an
+    overlay (leader / picker / palette / confirm / which-key) `Ctrl-C` cancels it
+    like `Esc`; in NORMAL it interrupts the focused live agent (raw `0x03` to a
+    PTY child, cancel an owned ACP turn) or posts a notice (orchestrator-owned:
+    interrupt it from the orchestrator; dead/empty focus: points at the palette's
+    `quit`). Quit lives in the palette, `leader c` on the last pane, and the
+    loop's ForceQuit. Same pass: mouse-wheel scroll is gated out of overlay
+    modes (it used to inject arrow keys into the PTY behind an armed leader),
+    rejecting a bridge-disconnected subagent dismisses the review honestly
+    instead of claiming an undeliverable verdict was routed, and the leader
+    leaf map is a single `LEADER_LEAVES` table both the reducer and the
+    which-key overlay derive from (closes §9 keyboard-parity by construction).
+
 **Still open (smaller):** the leader byte across the full v2 §11 terminal matrix
 (spike); burn-rate metering for the status bar.

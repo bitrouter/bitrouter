@@ -1380,6 +1380,12 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     },
                 )
                 .await;
+            } else {
+                // The bridge dropped between the keypress and delivery: the
+                // reducer's "routed to the orchestrator" notice would be a
+                // lie — correct it rather than fail silently.
+                state.notice = Some("orchestrator disconnected — verdict not delivered".into());
+                let _ = note;
             }
             #[cfg(not(unix))]
             {

@@ -98,6 +98,67 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("quit", Command::Quit),
 ];
 
+/// One leader leaf (TUI_SPEC_V3 §3). Dispatched by `leader_action`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderAction {
+    /// Focus session N (0-based; `leader 1..9`).
+    FocusSession(usize),
+    NextActionable,
+    NewSession,
+    Palette,
+    Close,
+    Autonomy,
+    Attach,
+    KeysHelp,
+}
+
+/// The leader leaf map — the single source both `leader_action` (dispatch)
+/// and the which-key overlay (docs) derive from, so a binding and its help
+/// line cannot drift apart (TUI_SPEC_V3 §9 keyboard parity). `1-9` (a key
+/// range) and `Esc` (the fall-through cancel) are the only rows the overlay
+/// adds by hand.
+pub const LEADER_LEAVES: &[(KeyCode, &str, LeaderAction)] = &[
+    (
+        KeyCode::Tab,
+        "focus next actionable subagent",
+        LeaderAction::NextActionable,
+    ),
+    (
+        KeyCode::Char('n'),
+        "new session (harness picker)",
+        LeaderAction::NewSession,
+    ),
+    (KeyCode::Char('p'), "command palette", LeaderAction::Palette),
+    (
+        KeyCode::Char('c'),
+        "close the focused pane",
+        LeaderAction::Close,
+    ),
+    (
+        KeyCode::Char('a'),
+        "cycle its autonomy tier",
+        LeaderAction::Autonomy,
+    ),
+    (
+        KeyCode::Char('t'),
+        "attach: drive it natively",
+        LeaderAction::Attach,
+    ),
+    (KeyCode::Char('?'), "keys help", LeaderAction::KeysHelp),
+];
+
+/// Resolve a leader leaf key: digits focus sessions, everything else comes
+/// from `LEADER_LEAVES`, and `None` cancels the prefix.
+fn leader_action(code: KeyCode) -> Option<LeaderAction> {
+    if let KeyCode::Char(c @ '1'..='9') = code {
+        return Some(LeaderAction::FocusSession((c as usize) - ('1' as usize)));
+    }
+    LEADER_LEAVES
+        .iter()
+        .find(|(key, _, _)| *key == code)
+        .map(|&(_, _, action)| action)
+}
+
 /// State of the command palette overlay.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PaletteState {
@@ -1530,6 +1591,12 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
         }
         AppEvent::Scroll { up } => {
+            // Overlays (leader / picker / palette / confirm / which-key)
+            // capture input: the wheel must not page — or worse, type into —
+            // the pane behind them (mirrors `reduce_click`'s gate).
+            if state.mode != Mode::Normal || state.keys_help {
+                return Vec::new();
+            }
             let Some(pane) = state.focused_mut() else {
                 return Vec::new();
             };
@@ -1584,13 +1651,30 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             vec![Effect::Quit]
         }
         AppEvent::Key(key) => {
-            // Ctrl-C interrupts the FOCUSED AGENT in NORMAL mode (PTY: raw
-            // 0x03 passes through; ACP: cancel the in-flight turn) — quit
-            // moved to the palette's `quit` / leader `c` on the last pane.
-            // In manager modes Ctrl-C still quits.
+            // The which-key overlay swallows exactly one key to dismiss —
+            // checked before anything else so even Ctrl-C just closes it
+            // instead of reaching the child mid-read.
+            if state.keys_help {
+                state.keys_help = false;
+                return Vec::new();
+            }
+            // Ctrl-C never quits the manager (quit lives in the palette and
+            // leader `c` on the last pane; the loop's ForceQuit covers
+            // teardown). In overlay modes it cancels like Esc; in NORMAL it
+            // interrupts the FOCUSED AGENT (PTY: raw 0x03 passes through;
+            // ACP: cancel the in-flight turn).
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                if state.mode == Mode::Normal
-                    && let Some(pane) = state.focused()
+                if state.mode != Mode::Normal {
+                    let esc = KeyEvent::from(KeyCode::Esc);
+                    return match state.mode {
+                        Mode::Leader => reduce_key_leader(state, &esc),
+                        Mode::Picker => reduce_key_picker(state, &esc),
+                        Mode::Command => reduce_key_command(state, &esc),
+                        Mode::Confirm => reduce_key_confirm(state, &esc),
+                        Mode::Normal => Vec::new(),
+                    };
+                }
+                if let Some(pane) = state.focused()
                     && !pane.exited
                 {
                     let record_id = pane.record_id.clone();
@@ -1603,16 +1687,23 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                             vec![Effect::CancelTurn { record_id }]
                         }
                         // The orchestrator owns its subagents' turns —
-                        // nothing to interrupt from here.
-                        (PaneKind::Monitor, Ownership::Orchestrator) => Vec::new(),
+                        // nothing to interrupt from here; say so instead of
+                        // swallowing the key silently.
+                        (PaneKind::Monitor, Ownership::Orchestrator) => {
+                            state.notice = Some(
+                                "orchestrator-managed subagent — interrupt it from the orchestrator"
+                                    .into(),
+                            );
+                            Vec::new()
+                        }
                     };
                 }
-                state.should_quit = true;
-                return vec![Effect::Quit];
-            }
-            // The which-key overlay swallows exactly one key to dismiss.
-            if state.keys_help {
-                state.keys_help = false;
+                // Dead pane / nothing focused: nothing to interrupt, and a
+                // reflexive Ctrl-C must not tear down the whole tower.
+                state.notice = Some(format!(
+                    "nothing to interrupt — quit via {} p → quit",
+                    state.leader_label()
+                ));
                 return Vec::new();
             }
             match state.mode {
@@ -1745,11 +1836,21 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
             KeyCode::Char('r') => {
                 let owner = state.focused().map(|p| p.owner);
+                let exited = state.focused().is_some_and(|p| p.exited);
                 if let Some(pane) = state.focused_mut() {
                     pane.review = None;
                 }
                 mark_shown_seen(state);
                 return match owner {
+                    // Orchestrator-owned but the bridge is gone: there is no
+                    // consumer for the verdict — dismiss the review honestly
+                    // instead of claiming it was routed.
+                    Some(Ownership::Orchestrator) if exited => {
+                        state.notice = Some(
+                            "orchestrator disconnected — review dismissed, no verdict sent".into(),
+                        );
+                        Vec::new()
+                    }
                     // Orchestrator-owned: the verdict is the subagent's task
                     // outcome, consumed by the owning orchestrator — nothing
                     // is injected into any PTY or prompt (TUI_SPEC_V3 §5).
@@ -1815,21 +1916,24 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
 fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     // One-shot: whatever happens below, the prefix is consumed.
     state.mode = Mode::Normal;
-    match key.code {
+    let Some(action) = leader_action(key.code) else {
+        // Esc / anything unmapped: cancel the prefix.
+        return Vec::new();
+    };
+    match action {
         // Focus session N (switch orchestrator conversation).
-        KeyCode::Char(c @ '1'..='9') => {
-            let idx = (c as usize) - ('1' as usize);
+        LeaderAction::FocusSession(idx) => {
             if let Some(&i) = state.sessions_list().get(idx) {
                 state.detail = DetailLayout::solo(state.agents[i].record_id.clone());
                 mark_shown_seen(state);
             } else {
-                state.notice = Some(format!("no session {c}"));
+                state.notice = Some(format!("no session {}", idx + 1));
             }
             Vec::new()
         }
         // Focus the next actionable subagent (needs-you → review), cycling
         // past the currently focused one.
-        KeyCode::Tab => {
+        LeaderAction::NextActionable => {
             let actionable: Vec<usize> = state
                 .roster()
                 .into_iter()
@@ -1853,7 +1957,7 @@ fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         // New orchestrator session (harness picker).
-        KeyCode::Char('n') => {
+        LeaderAction::NewSession => {
             state.picker = Some(PickerState {
                 agents: state.available_sessions.clone(),
                 selected: 0,
@@ -1863,7 +1967,7 @@ fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         // The command palette: the exhaustive rare-verb surface.
-        KeyCode::Char('p') => {
+        LeaderAction::Palette => {
             state.palette = Some(PaletteState::default());
             state.mode = Mode::Command;
             Vec::new()
@@ -1872,15 +1976,15 @@ fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         // orchestrator-owned monitor stays: another process owns that
         // session, and removing the pane would orphan its future
         // permission requests.
-        KeyCode::Char('c') => close_focused(state),
+        LeaderAction::Close => close_focused(state),
         // Cycle the focused pane's autonomy tier. Orchestrator-owned
         // monitors keep their policy in the owning bridge — cycling here
         // would be a lie.
-        KeyCode::Char('a') => cycle_focused_autonomy(state),
+        LeaderAction::Autonomy => cycle_focused_autonomy(state),
         // Attach: drive the focused agent's harness natively (PTY in its
         // worktree) — the fidelity escape hatch (TUI_SPEC_V3 §2). Live
         // human-owned monitors only; sessions ARE native PTYs already.
-        KeyCode::Char('t') => {
+        LeaderAction::Attach => {
             match state
                 .focused()
                 .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human && !p.exited)
@@ -1891,12 +1995,10 @@ fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
         }
         // Keys help overlay (any key dismisses it).
-        KeyCode::Char('?') => {
+        LeaderAction::KeysHelp => {
             state.keys_help = true;
             Vec::new()
         }
-        // Esc / anything unmapped: cancel the prefix.
-        _ => Vec::new(),
     }
 }
 
@@ -2721,21 +2823,46 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_quits_from_manager_modes_only() {
-        for mode in [Mode::Leader, Mode::Picker, Mode::Command] {
+    fn ctrl_c_cancels_overlay_modes_like_esc_and_never_quits() {
+        for mode in [Mode::Leader, Mode::Picker, Mode::Command, Mode::Confirm] {
             let mut st = AppState::new(pane());
             st.mode = mode;
-            if mode == Mode::Picker {
-                st.picker = Some(PickerState {
-                    agents: vec!["alpha".into()],
-                    selected: 0,
-                    purpose: PickerPurpose::Subagent,
-                });
+            match mode {
+                Mode::Picker => {
+                    st.picker = Some(PickerState {
+                        agents: vec!["alpha".into()],
+                        selected: 0,
+                        purpose: PickerPurpose::Subagent,
+                    });
+                }
+                Mode::Command => st.palette = Some(PaletteState::default()),
+                Mode::Confirm => st.confirm_agent = Some("alpha".into()),
+                _ => {}
             }
             let effects = reduce(&mut st, &ctrl_c());
-            assert!(st.should_quit, "Ctrl-C must quit from {mode:?}");
-            assert_eq!(effects, vec![Effect::Quit], "quit effect from {mode:?}");
+            assert!(!st.should_quit, "Ctrl-C must not quit from {mode:?}");
+            assert!(effects.is_empty(), "cancel is effect-free from {mode:?}");
+            assert_eq!(st.mode, Mode::Normal, "back to NORMAL from {mode:?}");
         }
+        // The overlay state itself is cleared, exactly as Esc would.
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Command;
+        st.palette = Some(PaletteState::default());
+        reduce(&mut st, &ctrl_c());
+        assert!(st.palette.is_none(), "palette cleared like Esc");
+    }
+
+    #[test]
+    fn ctrl_c_dismisses_keys_help_without_touching_the_child() {
+        // Reflexively closing the help overlay with Ctrl-C must not send a
+        // raw 0x03 into the focused PTY child (or quit).
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        st.keys_help = true;
+        let effects = reduce(&mut st, &ctrl_c());
+        assert!(effects.is_empty(), "no PtyKey leaks past the overlay");
+        assert!(!st.keys_help, "overlay dismissed");
+        assert!(!st.should_quit);
     }
 
     #[test]
@@ -2761,12 +2888,54 @@ mod tests {
         );
         assert!(!st.should_quit);
 
-        // Dead pane: nothing to interrupt — Ctrl-C falls back to quit.
+        // Dead pane: nothing to interrupt — a reflexive Ctrl-C (the moment a
+        // pane crashes) must NOT tear down the tower; it points at quit.
         let mut st = AppState::new(pane());
         st.agents[0].exited = true;
         let effects = reduce(&mut st, &ctrl_c());
-        assert_eq!(effects, vec![Effect::Quit]);
-        assert!(st.should_quit);
+        assert!(effects.is_empty());
+        assert!(!st.should_quit, "the manager survives a dead-pane Ctrl-C");
+        assert!(
+            st.notice.as_deref().is_some_and(|n| n.contains("quit")),
+            "the notice points at the real quit path: {:?}",
+            st.notice
+        );
+
+        // Orchestrator-owned monitor: nothing to interrupt from here — but
+        // say so instead of swallowing the key silently.
+        let mut st = AppState::new(pane());
+        st.agents[0].owner = Ownership::Orchestrator;
+        let effects = reduce(&mut st, &ctrl_c());
+        assert!(effects.is_empty());
+        assert!(!st.should_quit);
+        assert!(
+            st.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("orchestrator")),
+            "refusal is explained: {:?}",
+            st.notice
+        );
+    }
+
+    #[test]
+    fn scroll_is_inert_while_an_overlay_captures_input() {
+        // The wheel must not type into the PTY behind an armed leader /
+        // picker / palette / confirm — and must not disturb the overlay.
+        for mode in [Mode::Leader, Mode::Picker, Mode::Command, Mode::Confirm] {
+            let mut st = AppState::new(pane());
+            st.agents[0].kind = PaneKind::Pty;
+            st.mode = mode;
+            let fx = reduce(&mut st, &AppEvent::Scroll { up: true });
+            assert!(fx.is_empty(), "no PtyKey leaks from {mode:?}: {fx:?}");
+            assert_eq!(st.mode, mode, "the overlay stays armed");
+        }
+        // Same while the which-key overlay is up in NORMAL.
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        st.keys_help = true;
+        let fx = reduce(&mut st, &AppEvent::Scroll { up: false });
+        assert!(fx.is_empty());
+        assert!(st.keys_help, "scroll is not the dismissing key");
     }
 
     #[test]
@@ -3638,17 +3807,11 @@ mod tests {
     fn leader_leaves_are_one_shot() {
         // Every leaf leaves `Leader` in exactly one key: back to NORMAL, or
         // into a Command/Picker leaf — never a sticky mode (TUI_SPEC_V3 I3).
-        for key in [
-            KeyCode::Char('1'),
-            KeyCode::Tab,
-            KeyCode::Char('n'),
-            KeyCode::Char('p'),
-            KeyCode::Char('c'),
-            KeyCode::Char('a'),
-            KeyCode::Char('t'),
-            KeyCode::Char('?'),
-            KeyCode::Esc,
-        ] {
+        // Driven from LEADER_LEAVES so a new leaf is covered automatically.
+        let keys = [KeyCode::Char('1'), KeyCode::Esc]
+            .into_iter()
+            .chain(LEADER_LEAVES.iter().map(|&(key, _, _)| key));
+        for key in keys {
             let mut st = agents3();
             st.available_sessions = vec!["claude".into()];
             st.mode = Mode::Leader;
@@ -3660,6 +3823,27 @@ mod tests {
             );
             assert_ne!(st.mode, Mode::Leader, "{key:?} left the prefix armed");
         }
+    }
+
+    #[test]
+    fn leader_table_is_the_single_source_for_dispatch_and_help() {
+        // TUI_SPEC_V3 §9 keyboard parity: every documented leaf dispatches
+        // to exactly the action its table row declares (the overlay renders
+        // the same rows, so binding and help line cannot disagree).
+        for &(key, what, action) in LEADER_LEAVES {
+            assert_eq!(
+                leader_action(key),
+                Some(action),
+                "table row {what:?} must dispatch its own action"
+            );
+        }
+        // The two hand rows: digits focus sessions, Esc cancels.
+        assert_eq!(
+            leader_action(KeyCode::Char('3')),
+            Some(LeaderAction::FocusSession(2)),
+            "digits are 1-based session ordinals"
+        );
+        assert_eq!(leader_action(KeyCode::Esc), None, "Esc cancels the prefix");
     }
 
     #[test]
@@ -4230,6 +4414,34 @@ mod tests {
         assert!(
             !fx.iter().any(|f| matches!(f, Effect::Prompt { .. })),
             "no prompt reaches an orchestrator-owned subagent"
+        );
+        let mirror = st.agents.iter().find(|p| p.record_id == "mcp:abc123");
+        assert!(mirror.is_some_and(|p| p.review.is_none()), "review cleared");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_on_a_disconnected_orchestrator_is_honest() {
+        // Bridge gone (pane exited): there is no consumer for the verdict —
+        // rejecting must not emit ReviewVerdict or claim it was routed.
+        let mut st = AppState::new(pane());
+        spawn_mirror(&mut st); // mcp:abc123, Ownership::Orchestrator
+        reduce(&mut st, &review_ready("mcp:abc123"));
+        reduce(
+            &mut st,
+            &AppEvent::BridgeGone {
+                record_ids: vec!["mcp:abc123".into()],
+            },
+        );
+        st.detail = DetailLayout::solo("mcp:abc123".into());
+        let fx = reduce(&mut st, &press(KeyCode::Char('r')));
+        assert!(fx.is_empty(), "no verdict effect for a dead bridge: {fx:?}");
+        assert!(
+            st.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("disconnected") && !n.contains("routed")),
+            "the notice must not claim delivery: {:?}",
+            st.notice
         );
         let mirror = st.agents.iter().find(|p| p.record_id == "mcp:abc123");
         assert!(mirror.is_some_and(|p| p.review.is_none()), "review cleared");
