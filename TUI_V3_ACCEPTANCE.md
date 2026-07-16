@@ -97,7 +97,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 
 - [x] **`Mode::Agent` is removed;** `Mode` = `Normal · Leader · Command · Picker · Confirm`.
   **Proof:** `grep -n 'enum Mode' -A8 state.rs` shows exactly those five; no `reduce_key_agent`.
-- [ ] **The leader moves off `Ctrl-A`.** Default `Ctrl-Space`, read from a `tui.leader`
+- [x] **The leader moves off `Ctrl-A`.** Default `Ctrl-Space`, read from a `tui.leader`
   config field (fall back to default when unset). `Ctrl-A` no longer enters any manager
   mode. Leader press opens a **one-shot** which-key overlay.
   **Proof:** reducer tests `ctrl_a_is_not_a_leader` (a focused `Pty` receiving `Ctrl-A`
@@ -276,4 +276,10 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   and the Ctrl-A-passthrough assertions (task-2/3/4 tests build on these).
 2026-07-16 cc869dbf — V3.2 Mode::Agent removed — enum grep shows exactly the
   five v3 modes; reduce_key_agent gone; fmt+clippy+1914 nextest green.
+2026-07-16 efb29ebe — V3.2 leader off Ctrl-A — SDK TuiConfig{leader} (ctrl-<key>,
+  fallback ctrl-space) + parse_leader + AppState.leader; tests
+  ctrl_a_is_not_a_leader / leader_opens_whichkey / configured_leader_replaces_
+  the_default pass; gates green (1917). NOTE: skills/bitrouter + CLI.md rewrite
+  for the new config surface lands in V3.5 per this plan (lockstep deferred to
+  that phase deliberately).
 ```
