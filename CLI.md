@@ -102,13 +102,51 @@ Prints pid, listen address, number of routable models, and control socket path. 
 
 ## Config
 
-### `bitrouter init`
+### `bitrouter init` (onboarding wizard)
 
 ```
-bitrouter init [-c <path>]           # default: ./bitrouter.yaml
+bitrouter                            # bare: wizard when unconfigured, else status + hint
+bitrouter init                       # (re-)run the wizard interactively
+bitrouter init --yes [flags]         # headless: emit the JSON envelope, scaffold the config
+bitrouter init --force               # allow overwriting an existing bitrouter.yaml
+bitrouter init --reset               # clear stored credentials, then run
 ```
 
-Writes a commented starter `bitrouter.yaml` with `skip_auth: true`. Edit it to configure providers, routing, guardrails, MCP servers, and agents.
+Bare `bitrouter` (no subcommand) is the front door. It runs a **network-free credential probe** — BYOK env keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`), the cloud session file, and the local credential store — and either launches the guided wizard (nothing configured) or prints a one-line status + a `bitrouter launch` hint (already configured). It never re-onboards a configured user and never silently spawns a daemon or harness. Exit code 0 either way.
+
+The wizard is three steps, each mapping to a flag so an agent can drive it: **credentials** (sign in to BitRouter Cloud, log in to a provider, or paste a BYOK key), **harness** (`claude` / `codex`, installed via the native installer when missing), and **finish** — launch the harness now, start the daemon and print paste-in snippets, or exit. The only durable output is **credentials** (which zero-config auto-detects); the wizard never serializes `bitrouter.yaml` except the canned starter template.
+
+`bitrouter init --yes` runs the whole thing non-interactively and **never blocks on a human**: it consumes the flag-supplied keys, reports-and-skips anything that would need interactive OAuth (in `providers_skipped_interactive`), emits the JSON result envelope on stdout, and reproduces the classic starter-file scaffold (`skip_auth: true`; refuses to overwrite unless `--force`).
+
+| Flag | Step | Description |
+| --- | --- | --- |
+| `-c`, `--config <path>` | — | Starter-config write path (default `bitrouter.yaml`). |
+| `--yes`, `-y` | — | Headless: process the flags, never block, emit the envelope, scaffold the config. |
+| `--force` | — | Overwrite an existing `bitrouter.yaml` when scaffolding. |
+| `--reset` | — | Clear stored credentials first — cloud session always; provider credentials after a confirm, or unconditionally under `--yes`. |
+| `--cloud-login` | 1 | Sign in to BitRouter Cloud (device flow). Skipped-and-reported under `--yes`. |
+| `--api-key <brk_…>` | 1 | Seed the cloud credential from a `brk_` key (non-interactive). |
+| `--provider <id>` | 1 | Log in to an upstream provider (repeatable). |
+| `--provider-api-key <k>` | 1 | Key for the `--provider` at the same position (repeatable). |
+| `--use-detected` | 1 | Accept the auto-detected credential(s) without prompting. |
+| `--harness <claude\|codex>` | 2 | Harness to drive (repeatable). |
+| `--no-install` | 2 | Never install a missing harness. |
+| `--after <launch\|serve\|exit>` | 3 | Finish action (default `exit`; `launch` is honored only when the harness is present). |
+| `--model <id>` | 3 | Model handed to the harness for this session only (not persisted). |
+| `--write-config` | 3 | Write the starter `bitrouter.yaml`. |
+
+The result envelope:
+
+```json
+{
+  "action": "onboarding",
+  "providers_configured": ["bitrouter", "openai"],
+  "providers_skipped_interactive": ["github-copilot"],
+  "harnesses_installed": ["claude"],
+  "after": "launch",
+  "snippet": null
+}
+```
 
 ---
 
@@ -273,9 +311,13 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 bitrouter providers login claude-code     # Claude Pro/Max subscription via Claude Code
 bitrouter providers login openai-codex    # ChatGPT subscription via Codex
 bitrouter providers login github-copilot  # GitHub device-code flow
+bitrouter providers login openai --api-key sk-…        # BYOK, non-interactive
+printf %s "$KEY" | bitrouter providers login anthropic --key-stdin
 ```
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
+
+For a provider that accepts a pasted key, `--api-key <KEY>` (or `--key-stdin`, which reads one line from stdin) seeds it non-interactively — skipping the method menu and the paste prompt. Both conflict with the OAuth-only `--import-existing` / `--no-browser`, and error if the provider has no API-key method. For the built-in `bitrouter` provider the key seeds the cloud credential, exactly as `cloud login --api-key` does.
 
 For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 

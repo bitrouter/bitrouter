@@ -61,7 +61,7 @@ For terminal-first setup, launch the wizard:
 bitrouter
 ```
 
-The wizard asks **Cloud or local?** (default Cloud), prompts for keys if you choose local, then starts the proxy at `http://127.0.0.1:4356`. Toggle between modes with a single keypress.
+The wizard walks three steps — **credentials** (sign in to BitRouter Cloud by default, log in to a provider, or paste a BYOK key), **harness** (Claude Code or Codex), and **finish** (launch the agent, start the proxy at `http://127.0.0.1:4356`, or exit). Re-run it any time with `bitrouter init`; add `--yes` to drive it non-interactively (it emits a JSON result envelope and never blocks).
 
 ## Run self-hosted
 

@@ -105,15 +105,29 @@ providers:
 inherit_defaults: true
 "#;
 
-/// `bitrouter init` — write a starter config to `path` (refuses to overwrite).
-pub async fn init(path: &std::path::Path) -> Result<()> {
-    if tokio::fs::try_exists(path).await.unwrap_or(false) {
-        anyhow::bail!("{} already exists — refusing to overwrite", path.display());
+/// Outcome of a [`write_starter_config`] scaffold write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScaffoldOutcome {
+    /// The starter `bitrouter.yaml` was written.
+    Wrote,
+    /// A file already existed and `force` was not set — left untouched.
+    Skipped,
+}
+
+/// `bitrouter init` — write the starter `bitrouter.yaml` to `path`. Without
+/// `force`, an existing file is left untouched (returns
+/// [`ScaffoldOutcome::Skipped`]) so the onboarding wizard's `--yes` run never
+/// clobbers a config the user already tuned; with `force` it overwrites. This
+/// is the single sanctioned `bitrouter.yaml` write — nothing else in the tree
+/// serializes a `Config`.
+pub async fn write_starter_config(path: &std::path::Path, force: bool) -> Result<ScaffoldOutcome> {
+    if !force && tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return Ok(ScaffoldOutcome::Skipped);
     }
     tokio::fs::write(path, STARTER_CONFIG)
         .await
         .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    Ok(ScaffoldOutcome::Wrote)
 }
 
 /// The outcome of `bitrouter key generate` — the plaintext secret is shown to
@@ -459,12 +473,17 @@ pub struct LoginOutcome {
 }
 
 /// Non-interactive provider-login controls.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ProviderLoginOptions {
     /// Require importing an already-authenticated vendor CLI session.
     pub import_existing: bool,
     /// Refuse browser-based PKCE flows.
     pub no_browser: bool,
+    /// Seed the credential directly from this API key, skipping the interactive
+    /// method choice and the stdin paste entirely. Set by `providers login
+    /// --api-key` / `--key-stdin` and the onboarding wizard's per-provider
+    /// `--provider-api-key`. The provider must offer the API-key method.
+    pub api_key: Option<String>,
 }
 
 pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutcome> {
@@ -516,7 +535,7 @@ pub async fn login_provider_with_options(
             std::mem::discriminant(&entry.auth)
         );
     }
-    let chosen = choose_auth_method(&entry, &methods, options)?;
+    let chosen = choose_auth_method(&entry, &methods, &options)?;
     eprintln!();
     eprintln!(
         "  Logging in to {} via {}",
@@ -529,7 +548,18 @@ pub async fn login_provider_with_options(
         AuthMethod::PkceSubscription => run_pkce_subscription(provider_id).await?,
         AuthMethod::ImportFromCli => run_cli_import(provider_id)?,
         AuthMethod::DeviceCode => run_device_code(provider_id, &entry).await?,
-        AuthMethod::ApiKey => run_api_key_paste(&entry.display_name)?,
+        // A flag-supplied key (`--api-key` / `--key-stdin` / the wizard) skips
+        // the interactive stdin paste; otherwise prompt for it.
+        AuthMethod::ApiKey => match options.api_key.as_deref() {
+            Some(key) => {
+                let key = key.trim();
+                if key.is_empty() {
+                    anyhow::bail!("the supplied API key is empty — aborting login");
+                }
+                bitrouter_providers::oauth::credential_store::Credential::api_key(key)
+            }
+            None => run_api_key_paste(&entry.display_name)?,
+        },
     };
 
     let mut store = bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
@@ -554,8 +584,22 @@ pub async fn login_provider_with_options(
 fn choose_auth_method(
     entry: &bitrouter_providers::ProviderEntry,
     methods: &[AuthMethod],
-    options: ProviderLoginOptions,
+    options: &ProviderLoginOptions,
 ) -> Result<AuthMethod> {
+    // A supplied API key is the most explicit signal — take the API-key method
+    // directly, or fail clearly if the provider doesn't offer one (OAuth-only
+    // backends reject pasted keys).
+    if options.api_key.is_some() {
+        if methods.contains(&AuthMethod::ApiKey) {
+            return Ok(AuthMethod::ApiKey);
+        }
+        anyhow::bail!(
+            "provider '{}' does not accept a pasted API key — it uses an \
+             interactive OAuth flow; drop --api-key/--key-stdin",
+            entry.id
+        );
+    }
+
     if options.import_existing {
         if methods.contains(&AuthMethod::ImportFromCli) {
             return Ok(AuthMethod::ImportFromCli);
@@ -1157,14 +1201,37 @@ mod tests {
         ));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let path = dir.join("bitrouter.yaml");
-        init(&path).await.unwrap();
+        assert_eq!(
+            write_starter_config(&path, false).await.unwrap(),
+            ScaffoldOutcome::Wrote
+        );
         let written = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(written.contains("skip_auth: true"));
         // and it parses back into a valid Config
         let cfg = bitrouter_sdk::config::parse_with(&written, |_| Some("x".to_string())).unwrap();
         assert!(cfg.server.skip_auth);
-        // refuses to overwrite
-        assert!(init(&path).await.is_err());
+        // Without --force, an existing file is left untouched (Skipped) — the
+        // wizard's `--yes` run must never clobber a tuned config.
+        tokio::fs::write(&path, "# hand-edited\n").await.unwrap();
+        assert_eq!(
+            write_starter_config(&path, false).await.unwrap(),
+            ScaffoldOutcome::Skipped
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "# hand-edited\n"
+        );
+        // With --force it overwrites.
+        assert_eq!(
+            write_starter_config(&path, true).await.unwrap(),
+            ScaffoldOutcome::Wrote
+        );
+        assert!(
+            tokio::fs::read_to_string(&path)
+                .await
+                .unwrap()
+                .contains("skip_auth: true")
+        );
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 
@@ -1324,13 +1391,64 @@ mod tests {
         let chosen = choose_auth_method(
             &entry,
             &methods,
-            ProviderLoginOptions {
+            &ProviderLoginOptions {
                 import_existing: true,
                 no_browser: true,
+                api_key: None,
             },
         )
         .unwrap();
         assert_eq!(chosen, AuthMethod::ImportFromCli);
+    }
+
+    #[test]
+    fn api_key_option_selects_api_key_method_without_prompting() {
+        // A `--api-key`/`--key-stdin`-supplied key drives the non-interactive
+        // BYOK path: `anthropic` offers the API-key method, so it's chosen.
+        let entry = entry_for(serde_json::json!({
+            "name": "anthropic",
+            "api_base": "https://api.anthropic.com/v1",
+            "status": "active",
+            "auth": { "kind": "header", "header": "x-api-key", "env": "ANTHROPIC_API_KEY" },
+            "models": []
+        }));
+        let methods = available_methods(&entry);
+        let chosen = choose_auth_method(
+            &entry,
+            &methods,
+            &ProviderLoginOptions {
+                import_existing: false,
+                no_browser: false,
+                api_key: Some("sk-ant-test".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(chosen, AuthMethod::ApiKey);
+    }
+
+    #[test]
+    fn api_key_option_rejects_oauth_only_providers() {
+        // `openai-codex` is OAuth-only (no API-key method); a supplied key is a
+        // clear error rather than a silently-ignored flag.
+        let entry = entry_for(serde_json::json!({
+            "name": "openai-codex",
+            "api_base": "https://chatgpt.com/backend-api/codex",
+            "status": "active",
+            "auth": { "kind": "oauth", "handler": "openai-codex" },
+            "models": []
+        }));
+        let methods = available_methods(&entry);
+        let err = choose_auth_method(
+            &entry,
+            &methods,
+            &ProviderLoginOptions {
+                import_existing: false,
+                no_browser: false,
+                api_key: Some("sk-whatever".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("does not accept a pasted API key"));
     }
 
     #[test]
@@ -1346,9 +1464,10 @@ mod tests {
         let err = choose_auth_method(
             &entry,
             &methods,
-            ProviderLoginOptions {
+            &ProviderLoginOptions {
                 import_existing: true,
                 no_browser: true,
+                api_key: None,
             },
         )
         .unwrap_err();
