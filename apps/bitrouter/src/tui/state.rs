@@ -27,8 +27,6 @@ pub enum Mode {
     Agent,
     /// Selecting an agent to spawn.
     Picker,
-    /// Selecting multiple agents to send one message to all of them.
-    Broadcast,
     /// Fuzzy command palette (`:` on an empty prompt, or `:` in AGENT mode).
     Command,
     /// Approving the worktree bootstrap hook before the first isolated spawn
@@ -46,7 +44,6 @@ pub enum Command {
     SplitH,
     SplitV,
     Unsplit,
-    Broadcast,
     Queue,
     Autonomy,
     KillDone,
@@ -65,7 +62,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("split horizontal", Command::SplitH),
     ("split vertical", Command::SplitV),
     ("unsplit", Command::Unsplit),
-    ("broadcast", Command::Broadcast),
     ("queue", Command::Queue),
     ("autonomy cycle", Command::Autonomy),
     ("kill done", Command::KillDone),
@@ -122,10 +118,10 @@ pub struct PickerState {
 }
 
 /// One rendered scrollback line, tagged for styling by the UI layer.
+/// (No user-prompt variant: monitors are read-only per TUI_SPEC_V3 I2 —
+/// the transcript only ever shows what the agent side produced.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Line {
-    /// A prompt the user submitted (`› …`).
-    UserPrompt(String),
     /// Agent message text.
     Message(String),
     /// Agent thinking text.
@@ -359,7 +355,6 @@ pub struct PaneState {
     pub lines: Vec<Line>,
     pub pending: Option<PendingView>,
     pub exited: bool,
-    pub selected: bool,
     /// Something went wrong in the background (error, exit, gated
     /// permission) and the human hasn't looked yet.
     pub attention: bool,
@@ -433,7 +428,6 @@ impl PaneState {
             lines: Vec::new(),
             pending: None,
             exited: false,
-            selected: false,
             attention: false,
             done: false,
             since: 0,
@@ -821,7 +815,6 @@ pub struct AppState {
     /// notices decay off the status bar after [`NOTICE_DECAY_TICKS`] instead
     /// of lingering forever.
     notice_at: u64,
-    pub broadcast_input: String,
     /// The configured worktree bootstrap hook (`worktrees.bootstrap`), if any.
     pub bootstrap_cmd: Option<String>,
     /// The human's per-session bootstrap decision: `None` = not asked yet
@@ -867,7 +860,6 @@ impl AppState {
             serve_ok: None,
             notice: None,
             notice_at: 0,
-            broadcast_input: String::new(),
             bootstrap_cmd: None,
             bootstrap_decision: None,
             confirm_agent: None,
@@ -1537,10 +1529,6 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             // (N Enter submissions) or feed panes that can't take input.
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
             match state.mode {
-                Mode::Broadcast => {
-                    state.broadcast_input.push_str(&text);
-                    Vec::new()
-                }
                 Mode::Command => {
                     if let Some(palette) = state.palette.as_mut() {
                         // The palette is a one-line filter.
@@ -1653,7 +1641,6 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 Mode::Normal => reduce_key_normal(state, key),
                 Mode::Agent => reduce_key_agent(state, key),
                 Mode::Picker => reduce_key_picker(state, key),
-                Mode::Broadcast => reduce_key_broadcast(state, key),
                 Mode::Command => reduce_key_command(state, key),
                 Mode::Confirm => reduce_key_confirm(state, key),
             }
@@ -1699,14 +1686,6 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             record_id: pane.record_id.clone(),
             key: *key,
         }];
-    }
-    // Ctrl-B enters BROADCAST mode (with a cleared selection).
-    if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        for p in state.agents.iter_mut() {
-            p.selected = false;
-        }
-        state.mode = Mode::Broadcast;
-        return Vec::new();
     }
     let focus_id = match state.focused() {
         Some(p) => p.record_id.clone(),
@@ -2133,13 +2112,6 @@ fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
             let Some(&idx) = state.roster().get(i) else {
                 return Vec::new();
             };
-            // In BROADCAST a rail click toggles that row's selection (like
-            // Space) rather than dropping out of the mode.
-            if state.mode == Mode::Broadcast {
-                state.agents[idx].selected = !state.agents[idx].selected;
-                state.rail_cursor = i;
-                return Vec::new();
-            }
             let id = state.agents[idx].record_id.clone();
             state.mode = Mode::Agent;
             state.panel = Panel::Subagents;
@@ -2190,13 +2162,6 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
         }
         Command::Unsplit => {
             state.detail.remove_focused();
-            Vec::new()
-        }
-        Command::Broadcast => {
-            for p in state.agents.iter_mut() {
-                p.selected = false;
-            }
-            state.mode = Mode::Broadcast;
             Vec::new()
         }
         Command::Queue => {
@@ -2450,88 +2415,6 @@ fn reduce_key_confirm(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// BROADCAST-mode keys: select agents on the rail, type once, send to all.
-fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
-    match key.code {
-        KeyCode::Esc => {
-            clear_broadcast(state);
-            state.mode = Mode::Normal;
-            Vec::new()
-        }
-        // Space toggles the rail-cursor row.
-        KeyCode::Char(' ') => {
-            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
-                && let Some(p) = state.pane_by_id_mut(&id)
-            {
-                p.selected = !p.selected;
-            }
-            Vec::new()
-        }
-        // Digits toggle the Nth roster row.
-        KeyCode::Char(c @ '1'..='9') => {
-            let idx = (c as usize) - ('1' as usize);
-            let order = state.roster();
-            if let Some(&agent_idx) = order.get(idx)
-                && let Some(p) = state.agents.get_mut(agent_idx)
-            {
-                p.selected = !p.selected;
-            }
-            Vec::new()
-        }
-        // Select all *promptable* agents. PTY sessions and MCP mirrors have
-        // no ACP session behind `Effect::Prompt` — including them would
-        // silently drop the message and strand a fake spinner.
-        KeyCode::Char('a') => {
-            for p in state.agents.iter_mut() {
-                if p.kind == PaneKind::Monitor && p.owner == Ownership::Human {
-                    p.selected = true;
-                }
-            }
-            Vec::new()
-        }
-        KeyCode::Backspace => {
-            state.broadcast_input.pop();
-            Vec::new()
-        }
-        KeyCode::Enter => {
-            let text = state.broadcast_input.clone();
-            if text.is_empty() {
-                return Vec::new();
-            }
-            let mut effects = Vec::new();
-            for p in state.agents.iter_mut() {
-                if p.selected && p.kind == PaneKind::Monitor && p.owner == Ownership::Human {
-                    p.push_external(Line::UserPrompt(text.clone()));
-                    p.turn_active = true;
-                    p.review = None;
-                    p.done = false;
-                    p.check_retries = 0;
-                    effects.push(Effect::Prompt {
-                        record_id: p.record_id.clone(),
-                        text: text.clone(),
-                    });
-                }
-            }
-            clear_broadcast(state);
-            state.mode = Mode::Normal;
-            effects
-        }
-        KeyCode::Char(c) => {
-            state.broadcast_input.push(c);
-            Vec::new()
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Clear the broadcast input and all agent selections.
-fn clear_broadcast(state: &mut AppState) {
-    state.broadcast_input.clear();
-    for p in state.agents.iter_mut() {
-        p.selected = false;
-    }
-}
-
 /// Fold one translated update into a pane's scrollback.
 fn apply_update(pane: &mut PaneState, update: &SessionUpdateKind) {
     match update {
@@ -2736,24 +2619,6 @@ mod tests {
     }
 
     #[test]
-    fn broadcast_rail_click_toggles_selection_without_leaving_the_mode() {
-        let mut st = agents3();
-        st.mode = Mode::Broadcast;
-        st.click_zones.push(ClickZone {
-            x: 24,
-            y: 3,
-            w: 20,
-            h: 2,
-            target: ClickTarget::RailRow(0),
-        });
-        reduce(&mut st, &click(30, 3));
-        assert_eq!(st.mode, Mode::Broadcast, "click stays in broadcast");
-        assert!(st.agents[0].selected, "row 0 got selected");
-        reduce(&mut st, &click(30, 3));
-        assert!(!st.agents[0].selected, "clicking again deselects");
-    }
-
-    #[test]
     fn clicks_are_swallowed_while_an_overlay_is_up() {
         let mut st = agents3();
         st.mode = Mode::Picker;
@@ -2929,7 +2794,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_quits_from_manager_modes_only() {
-        for mode in [Mode::Agent, Mode::Picker, Mode::Broadcast, Mode::Command] {
+        for mode in [Mode::Agent, Mode::Picker, Mode::Command] {
             let mut st = AppState::new(pane());
             st.mode = mode;
             if mode == Mode::Picker {
@@ -3567,11 +3432,9 @@ mod tests {
             );
         }
         assert!(
-            !st.agents[0]
-                .lines
-                .iter()
-                .any(|l| matches!(l, Line::UserPrompt(_))),
-            "no prompt line lands in a read-only transcript"
+            st.agents[0].lines.is_empty(),
+            "nothing lands in a read-only transcript (Line no longer even
+             has a user-prompt variant — read-only by construction)"
         );
     }
 
@@ -4105,111 +3968,6 @@ mod tests {
         assert_eq!(st.serve_ok, Some(true));
         reduce(&mut st, &AppEvent::ServeStatus { ok: false });
         assert_eq!(st.serve_ok, Some(false));
-    }
-
-    // ── Broadcast. ──
-
-    fn bc_state() -> AppState {
-        let mut st = agents3();
-        st.mode = Mode::Broadcast;
-        st
-    }
-
-    #[test]
-    fn ctrl_b_enters_broadcast_and_clears_selection() {
-        let mut st = agents3();
-        st.agents[0].selected = true;
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)),
-        );
-        assert_eq!(st.mode, Mode::Broadcast);
-        assert!(!st.agents[0].selected);
-    }
-
-    #[test]
-    fn space_toggles_rail_cursor_selection() {
-        let mut st = bc_state();
-        st.rail_cursor = 1; // r1 (same bucket → roster = spawn order)
-        reduce(&mut st, &press(KeyCode::Char(' ')));
-        assert!(st.agents[1].selected);
-        reduce(&mut st, &press(KeyCode::Char(' ')));
-        assert!(!st.agents[1].selected);
-    }
-
-    #[test]
-    fn digit_toggles_nth_roster_row() {
-        let mut st = bc_state();
-        reduce(&mut st, &press(KeyCode::Char('3'))); // roster row 3 = r2
-        assert!(st.agents[2].selected);
-        reduce(&mut st, &press(KeyCode::Char('9'))); // out of range → no-op
-        assert!(st.agents.iter().filter(|p| p.selected).count() == 1);
-    }
-
-    #[test]
-    fn a_selects_all_agents() {
-        let mut st = bc_state();
-        reduce(&mut st, &press(KeyCode::Char('a')));
-        assert!(st.agents.iter().all(|p| p.selected));
-    }
-
-    #[test]
-    fn typing_builds_broadcast_input() {
-        let mut st = bc_state();
-        for c in ['h', 'i'] {
-            reduce(&mut st, &press(KeyCode::Char(c)));
-        }
-        assert_eq!(st.broadcast_input, "hi");
-    }
-
-    #[test]
-    fn enter_sends_to_selected_and_returns_to_normal() {
-        let mut st = bc_state();
-        st.agents[0].selected = true;
-        st.agents[2].selected = true;
-        st.broadcast_input = "go".into();
-        let fx = reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(
-            fx,
-            vec![
-                Effect::Prompt {
-                    record_id: "r0".into(),
-                    text: "go".into()
-                },
-                Effect::Prompt {
-                    record_id: "r2".into(),
-                    text: "go".into()
-                },
-            ]
-        );
-        assert_eq!(st.mode, Mode::Normal);
-        assert_eq!(st.broadcast_input, "");
-        assert!(st.agents.iter().all(|p| !p.selected));
-        assert_eq!(st.agents[0].lines, vec![Line::UserPrompt("go".into())]);
-        assert!(st.agents[1].lines.is_empty());
-        assert_eq!(st.agents[2].lines, vec![Line::UserPrompt("go".into())]);
-    }
-
-    #[test]
-    fn enter_with_no_selection_is_a_noop_but_exits() {
-        let mut st = bc_state();
-        st.broadcast_input = "go".into();
-        let fx = reduce(&mut st, &press(KeyCode::Enter));
-        assert!(fx.is_empty());
-        assert_eq!(st.mode, Mode::Normal);
-        assert_eq!(st.broadcast_input, "");
-    }
-
-    #[test]
-    fn esc_cancels_broadcast() {
-        let mut st = bc_state();
-        st.agents[0].selected = true;
-        st.broadcast_input = "x".into();
-        let fx = reduce(&mut st, &press(KeyCode::Esc));
-        assert!(fx.is_empty());
-        assert_eq!(st.mode, Mode::Normal);
-        assert_eq!(st.broadcast_input, "");
-        assert!(!st.agents[0].selected);
     }
 
     // ── Picker. ──
@@ -5352,37 +5110,6 @@ mod tests {
         assert!(mirror.pending.is_none());
     }
 
-    #[test]
-    fn broadcast_select_all_targets_only_promptable_acp_panes() {
-        let mut st = AppState::new(pane());
-        let mut pty = PaneState::new("session-1".into(), "claude".into());
-        pty.kind = PaneKind::Pty;
-        st.agents.push(pty);
-        st.mode = Mode::Broadcast;
-        reduce(&mut st, &press(KeyCode::Char('a')));
-        // 'a' both selects agents and types into the broadcast input; only
-        // the selection matters here.
-        st.broadcast_input = "status?".into();
-        let effects = reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(
-            effects,
-            vec![Effect::Prompt {
-                record_id: "rec-1".into(),
-                text: "status?".into(),
-            }],
-            "PTY sessions get no silent no-op prompt"
-        );
-        let pty = st
-            .agents
-            .iter()
-            .find(|p| p.record_id == "session-1")
-            .expect("pty pane");
-        assert!(
-            !pty.turn_active,
-            "no fake working spinner on a pane that got nothing"
-        );
-    }
-
     // ── Bracketed paste. ──
 
     #[test]
@@ -5414,14 +5141,6 @@ mod tests {
                 text: "hello".into(),
             }]
         );
-    }
-
-    #[test]
-    fn paste_feeds_the_broadcast_input() {
-        let mut st = AppState::new(pane());
-        st.mode = Mode::Broadcast;
-        reduce(&mut st, &AppEvent::Paste("to all\n".into()));
-        assert_eq!(st.broadcast_input, "to all\n");
     }
 
     #[test]

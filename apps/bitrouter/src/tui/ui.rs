@@ -49,8 +49,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     // wins, then the panel that has content, then the subagents rail.
     let rail_w = RAIL_WIDTH.min(area.width / 3);
     let sessions_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
-    let rail_active = (state.mode == Mode::Agent && state.panel == Panel::Subagents)
-        || state.mode == Mode::Broadcast;
+    let rail_active = state.mode == Mode::Agent && state.panel == Panel::Subagents;
     let sessions_allowed = !state.sessions_collapsed;
     let rail_allowed = !state.subagents_collapsed;
     let sessions_content = !state.sessions_list().is_empty();
@@ -218,13 +217,10 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
 fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
-            ("type + Enter", "prompt the focused agent"),
-            ("Shift-Enter", "newline in the composer"),
             ("y / a / n", "resolve its pending permission"),
             ("PgUp / PgDn", "scroll its scrollback"),
-            (": (empty line)", "command palette"),
+            (":", "command palette"),
             ("Ctrl-A", "manager mode"),
-            ("Ctrl-B", "broadcast mode"),
             ("Ctrl-C", "interrupt the focused agent"),
         ],
         Mode::Agent => &[
@@ -250,13 +246,6 @@ fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
             ("y", "run bootstrap this session"),
             ("n", "skip bootstrap this session"),
             ("Esc", "cancel the spawn"),
-        ],
-        Mode::Broadcast => &[
-            ("Space", "toggle cursor row"),
-            ("1-9", "toggle roster row"),
-            ("a", "select all"),
-            ("type + Enter", "send to selection"),
-            ("Esc", "cancel"),
         ],
     };
     let popup = centered(area, 60, 60);
@@ -423,8 +412,7 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         .split(area);
 
     let order = state.roster();
-    let cursor_active = (state.mode == Mode::Agent && state.panel == Panel::Subagents)
-        || state.mode == Mode::Broadcast;
+    let cursor_active = state.mode == Mode::Agent && state.panel == Panel::Subagents;
     let header = if state.queue_only {
         format!("needs you · {}", order.len())
     } else {
@@ -445,15 +433,12 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         if shown {
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
-        let mut spans = vec![
+        let spans = vec![
             Span::raw(cursor.to_string()),
             Span::raw(glyph.to_string()),
             Span::raw(" "),
             Span::styled(pane.agent_id.clone(), name_style),
         ];
-        if pane.selected {
-            spans.push(Span::raw(" ✓"));
-        }
         lines.push(TuiLine::raw(""));
         let start = lines.len();
         lines.push(TuiLine::from(spans));
@@ -543,8 +528,7 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         .block(Block::default().borders(Borders::LEFT))
         .scroll((scroll, 0));
     frame.render_widget(roster, chunks[0]);
-    // Each visible entry's rows are its click zone (select + open solo, or in
-    // broadcast toggle its selection).
+    // Each visible entry's rows are its click zone (select + open solo).
     for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
         if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
             zones.push(ClickZone {
@@ -738,9 +722,6 @@ fn render_pane(
     if pane.attention {
         markers.push_str(" ●");
     }
-    if pane.selected {
-        markers.push_str(" ✓");
-    }
     if pane.exited {
         markers.push_str(" ✗");
     }
@@ -833,10 +814,6 @@ fn fmt_cost(cost: &bitrouter_substrate::translate::UsageCost) -> String {
 fn render_line(line: &Line, nc: bool, width: usize) -> TuiLine<'static> {
     use bitrouter_substrate::translate::ToolStatus;
     match line {
-        Line::UserPrompt(t) => TuiLine::from(vec![
-            Span::styled("› ", tint(nc, Color::Cyan)),
-            Span::raw(t.clone()),
-        ]),
         Line::Message(t) => TuiLine::raw(t.clone()),
         Line::Thought(t) => TuiLine::styled(t.clone(), tint(nc, Color::DarkGray)),
         Line::Code { text, lang } => TuiLine::from(crate::tui::highlight::spans(lang, text, nc)),
@@ -930,14 +907,11 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
         Mode::Normal if pty_focused => {
             "NORMAL  ⇢ keys go to the orchestrator · ^a manage · ^c interrupt agent"
         }
-        Mode::Normal => {
-            "NORMAL  ^a manage · ^b broadcast · : cmd · PgUp/PgDn scroll · ^c interrupt agent"
-        }
+        Mode::Normal => "NORMAL  ^a manage · : cmd · PgUp/PgDn scroll · ^c interrupt agent",
         Mode::Agent => {
             "AGENT  [/] panel · j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · t attach · A tier · n/N new · x close · ? keys · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
-        Mode::Broadcast => "BROADCAST  Space/1-9 select · a all · Enter send · Esc",
         Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
         Mode::Confirm => "CONFIRM  y run bootstrap · n skip · Esc cancel spawn",
     };
@@ -1470,15 +1444,6 @@ mod tests {
         st.tick += 42 * 5;
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("42s"), "elapsed column rendered: {text:?}");
-    }
-
-    #[test]
-    fn rail_shows_selection_marks_in_broadcast() {
-        let mut st = agents3();
-        st.mode = Mode::Broadcast;
-        st.agents[0].selected = true;
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains('✓'), "selection marker rendered");
     }
 
     #[test]
