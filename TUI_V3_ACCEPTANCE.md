@@ -163,11 +163,11 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 - [x] **Update the `tui` section of [`CLI.md`](CLI.md)** to match (keys, no input bar,
   status bar).
   **Proof:** grep the same stale phrases in `CLI.md` → none.
-- [ ] **Mark v2 superseded.** Add a one-line header note to [`TUI_SPEC.md`](TUI_SPEC.md)
+- [x] **Mark v2 superseded.** Add a one-line header note to [`TUI_SPEC.md`](TUI_SPEC.md)
   pointing to `TUI_SPEC_V3.md` for the changed surfaces (§3 command model, §8 panes, status
   bar), and fold any build-time deviations into the `TUI_SPEC_V3.md` §11 decision log.
   **Proof:** the note exists; the decision log reflects reality.
-- [ ] **Standing gates green** (§1).
+- [x] **Standing gates green** (§1).
 
 ---
 
@@ -328,4 +328,9 @@ DECISION: CLI.md had no tui section at all (the task assumed one) — added a
   than updating a nonexistent one.
 2026-07-16 cbb8aafa — V3.5 CLI.md tui section — v3 keys / no input bar / status
   bar documented; stale-phrase grep empty.
+2026-07-16 3ab6d1a9 — V3.5 v2 superseded + phase gates box — TUI_SPEC.md header
+  note points at V3 for §3/§8/status bar; TUI_SPEC_V3 §11 gains deviations 6-11
+  (Ownership field, composer plumbing deletions, cursor machinery gone, canned
+  REJECT_NOTE + ReviewVerdict wire path, top-pending batch clear, leader as
+  shipped); fmt+clippy+1923 nextest green. ALL OF §2 IS [x] — exit gates next.
 ```
