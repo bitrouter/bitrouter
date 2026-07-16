@@ -95,7 +95,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 
 ### V3.2 — Command surface (one hub + a one-shot leader)
 
-- [ ] **`Mode::Agent` is removed;** `Mode` = `Normal · Leader · Command · Picker · Confirm`.
+- [x] **`Mode::Agent` is removed;** `Mode` = `Normal · Leader · Command · Picker · Confirm`.
   **Proof:** `grep -n 'enum Mode' -A8 state.rs` shows exactly those five; no `reduce_key_agent`.
 - [ ] **The leader moves off `Ctrl-A`.** Default `Ctrl-Space`, read from a `tui.leader`
   config field (fall back to default when unset). `Ctrl-A` no longer enters any manager
@@ -266,4 +266,14 @@ DECISION: BROADCAST removal also deletes PaneState.selected + the rail/pane ✓
   lines.is_empty(). V3.4's human-owned re-prompt may reintroduce the variant.
 2026-07-16 43d8de9e — V3.1 BROADCAST removed + phase gates box — proof grep
   'Broadcast|broadcast_input' empty in src/tui; fmt+clippy+1927 nextest green.
+DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
+  queue_only/rail_selected/panel_selected + Command::Queue (disposition: q is
+  cut; the queue is always the rail head). Detail-slot focus switching is
+  click-only; splits are palette-only and fill with the most actionable
+  unshown agent. Rail ▸/key-chips follow the focused pane. Leader hardcodes
+  DEFAULT_LEADER=Ctrl-Space this task; the tui.leader config field is the
+  next task. Front-filled reduce_key_leader leaf map + leader_opens_whichkey
+  and the Ctrl-A-passthrough assertions (task-2/3/4 tests build on these).
+2026-07-16 cc869dbf — V3.2 Mode::Agent removed — enum grep shows exactly the
+  five v3 modes; reduce_key_agent gone; fmt+clippy+1914 nextest green.
 ```
