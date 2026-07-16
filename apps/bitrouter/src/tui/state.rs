@@ -200,6 +200,13 @@ const MAX_DIFF_BYTES: usize = 200 * 1024;
 /// before the failure surfaces to the human.
 const CHECK_RETRY_CAP: u8 = 2;
 
+/// The canned rejection verdict (TUI_SPEC_V3 §5). There is no composer to
+/// type a note into; the verdict itself is the signal — the owner (the
+/// orchestrator, or the agent directly for hatch spawns) decides what to
+/// change.
+const REJECT_NOTE: &str =
+    "changes_requested: the human reviewed the diff and rejected it — revise and finish the task";
+
 /// Render a unified diff (`git diff` output) into scrollback lines with the
 /// diff_render treatment: `+`/`-` rows tinted, hunk headers as gaps, file
 /// headers dimmed.
@@ -1724,12 +1731,42 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 }];
             }
             KeyCode::Char('r') => {
+                let owner = state.focused().map(|p| p.owner);
                 if let Some(pane) = state.focused_mut() {
                     pane.review = None;
                 }
                 mark_shown_seen(state);
-                state.notice = Some("rejected".into());
-                return Vec::new();
+                return match owner {
+                    // Orchestrator-owned: the verdict is the subagent's task
+                    // outcome, consumed by the owning orchestrator — nothing
+                    // is injected into any PTY or prompt (TUI_SPEC_V3 §5).
+                    Some(Ownership::Orchestrator) => {
+                        state.notice = Some(
+                            "rejected — routed to the orchestrator (changes_requested)".into(),
+                        );
+                        vec![Effect::ReviewVerdict {
+                            record_id: focus_id,
+                            note: REJECT_NOTE.into(),
+                        }]
+                    }
+                    // Human-owned (the palette hatch): the human IS the
+                    // owner, so direct steering is correct here — and only
+                    // here. The rejection re-prompts the agent.
+                    _ => {
+                        if let Some(pane) = state.focused_mut() {
+                            pane.push_external(Line::Note("rejected — asked to revise".into()));
+                            // New work supersedes the finished turn's state.
+                            pane.turn_active = true;
+                            pane.done = false;
+                            pane.check_retries = 0;
+                        }
+                        state.notice = Some("rejected — agent asked to revise".into());
+                        vec![Effect::Prompt {
+                            record_id: focus_id,
+                            text: REJECT_NOTE.into(),
+                        }]
+                    }
+                };
             }
             _ => {}
         }
@@ -4089,20 +4126,62 @@ mod tests {
     }
 
     #[test]
+    fn reject_human_owned_reprompts() {
+        let mut st = agents3(); // human-owned monitors (Ownership::Human)
+        reduce(&mut st, &review_ready("r1"));
+        st.detail = DetailLayout::solo("r1".into());
+        let fx = reduce(&mut st, &press(KeyCode::Char('r')));
+        assert_eq!(
+            fx,
+            vec![Effect::Prompt {
+                record_id: "r1".into(),
+                text: REJECT_NOTE.into(),
+            }],
+            "the human owns the hatch spawn — reject re-prompts it directly"
+        );
+        assert!(st.agents[1].review.is_none(), "review cleared");
+        assert!(st.agents[1].turn_active, "the revision turn is in flight");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_orchestrator_owned_sets_task_outcome() {
+        let mut st = AppState::new(pane());
+        spawn_mirror(&mut st); // mcp:abc123, Ownership::Orchestrator
+        reduce(&mut st, &review_ready("mcp:abc123"));
+        st.detail = DetailLayout::solo("mcp:abc123".into());
+        let fx = reduce(&mut st, &press(KeyCode::Char('r')));
+        assert_eq!(
+            fx,
+            vec![Effect::ReviewVerdict {
+                record_id: "mcp:abc123".into(),
+                note: REJECT_NOTE.into(),
+            }],
+            "the verdict is the subagent's task outcome — never a prompt"
+        );
+        assert!(
+            !fx.iter().any(|f| matches!(f, Effect::Prompt { .. })),
+            "no prompt reaches an orchestrator-owned subagent"
+        );
+        let mirror = st.agents.iter().find(|p| p.record_id == "mcp:abc123");
+        assert!(mirror.is_some_and(|p| p.review.is_none()), "review cleared");
+    }
+
+    #[test]
     fn reject_clears_review_and_opens_the_pane() {
         let mut st = agents3();
         reduce(&mut st, &review_ready("r1"));
         st.detail = DetailLayout::solo("r1".into());
         let fx = reduce(&mut st, &press(KeyCode::Char('r')));
-        assert!(fx.is_empty());
+        assert_eq!(fx.len(), 1, "one routed rejection effect: {fx:?}");
         assert!(st.agents[1].review.is_none(), "review cleared");
         assert_eq!(st.mode, Mode::Normal);
         assert!(st.notice.as_deref().is_some_and(|n| n.contains("rejected")));
-        // Monitors are read-only: no feedback-as-next-prompt path remains.
+        // Monitors are read-only: typing after a reject stays inert.
         let fx = reduce(&mut st, &press(KeyCode::Enter));
         assert!(
             !fx.iter().any(|f| matches!(f, Effect::Prompt { .. })),
-            "reject never re-prompts from the keyboard: {fx:?}"
+            "no keyboard prompt path exists: {fx:?}"
         );
     }
 

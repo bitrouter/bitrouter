@@ -1356,6 +1356,33 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                 .await;
             }
         }
+        Effect::ReviewVerdict { record_id, note } => {
+            // The verdict rides the fleet socket to the owning bridge as the
+            // subagent's task outcome (TUI_SPEC_V3 §5) — the orchestrator
+            // consumes it from subagent_status; nothing is prompted.
+            #[cfg(unix)]
+            if let Some(&conn) = rt.bridge_agents.get(&record_id)
+                && let Some(writer) = rt.bridges.get_mut(&conn)
+            {
+                let handle = record_id
+                    .strip_prefix("mcp:")
+                    .unwrap_or(&record_id)
+                    .to_string();
+                bridge_write(
+                    writer,
+                    &crate::fleet::TuiMsg::ReviewVerdict {
+                        handle,
+                        verdict: "changes_requested".to_string(),
+                        note,
+                    },
+                )
+                .await;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (record_id, note);
+            }
+        }
         Effect::SpawnAgent { agent_id } => {
             // Fleet-managed subagents are worktree-isolated BY DEFAULT
             // (TUI_SPEC §6): each gets its own worktree + branch

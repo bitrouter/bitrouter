@@ -206,6 +206,10 @@ pub enum Effect {
     Merge { record_id: String },
     /// Apply the agent's diff onto the base working tree, uncommitted.
     Apply { record_id: String },
+    /// The human rejected an orchestrator-owned subagent's diff: carry the
+    /// verdict to the owning bridge as the subagent's task outcome
+    /// (`changes_requested` + note) — never a prompt (TUI_SPEC_V3 §5).
+    ReviewVerdict { record_id: String, note: String },
     /// Answer a bridge's connect with the TUI's standing policy state.
     #[cfg(unix)]
     BridgeHello { conn: u64, bootstrap_approved: bool },

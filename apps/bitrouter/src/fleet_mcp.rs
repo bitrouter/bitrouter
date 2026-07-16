@@ -347,6 +347,10 @@ struct TuiLink {
     /// In-flight permission requests awaiting the human, by bridge-local id.
     pending: tokio::sync::Mutex<HashMap<u64, tokio::sync::oneshot::Sender<String>>>,
     next_id: std::sync::atomic::AtomicU64,
+    /// The human's review verdicts by handle (TUI_SPEC_V3 §5): the note the
+    /// TUI sent with `changes_requested`. Surfaced as the subagent's task
+    /// outcome in `subagent_status`.
+    verdicts: tokio::sync::Mutex<HashMap<String, String>>,
 }
 
 #[cfg(unix)]
@@ -367,6 +371,7 @@ impl TuiLink {
             bootstrap_approved: std::sync::atomic::AtomicBool::new(false),
             pending: tokio::sync::Mutex::new(HashMap::new()),
             next_id: std::sync::atomic::AtomicU64::new(1),
+            verdicts: tokio::sync::Mutex::new(HashMap::new()),
         });
         let reader_link = Arc::clone(&link);
         tokio::spawn(async move {
@@ -388,6 +393,20 @@ impl TuiLink {
                         if let Some(sender) = reader_link.pending.lock().await.remove(&id) {
                             let _ = sender.send(outcome);
                         }
+                    }
+                    Ok(crate::fleet::TuiMsg::ReviewVerdict {
+                        handle,
+                        verdict,
+                        note,
+                    }) => {
+                        // The human's review verdict is the subagent's task
+                        // outcome (TUI_SPEC_V3 §5): recorded here, surfaced
+                        // by `subagent_status` for the orchestrator.
+                        reader_link
+                            .verdicts
+                            .lock()
+                            .await
+                            .insert(handle, format!("{verdict}: {note}"));
                     }
                     Err(e) => tracing::warn!(error = %e, "unparseable fleet TUI message"),
                 }
@@ -754,6 +773,15 @@ impl SubstrateFleet {
     }
 
     async fn do_status(&self, handle: Option<&str>) -> Result<serde_json::Value> {
+        // The human's review verdicts (TUI_SPEC_V3 §5), merged into each
+        // snapshot as the subagent's task outcome.
+        #[cfg(unix)]
+        let verdicts = match &self.inner.link {
+            Some(link) => link.verdicts.lock().await.clone(),
+            None => HashMap::new(),
+        };
+        #[cfg(not(unix))]
+        let verdicts: HashMap<String, String> = HashMap::new();
         let reg = self.inner.registry.lock().await;
         match handle {
             Some(h) => {
@@ -761,12 +789,12 @@ impl SubstrateFleet {
                     .agents
                     .get(h)
                     .with_context(|| format!("no subagent with handle '{h}'"))?;
-                Ok(snapshot(h, sub).await)
+                Ok(snapshot(h, sub, verdicts.get(h).map(String::as_str)).await)
             }
             None => {
                 let mut fleet = Vec::new();
                 for (h, sub) in reg.agents.iter() {
-                    fleet.push(snapshot(h, sub).await);
+                    fleet.push(snapshot(h, sub, verdicts.get(h).map(String::as_str)).await);
                 }
                 Ok(serde_json::json!({ "fleet": fleet }))
             }
@@ -1176,11 +1204,17 @@ async fn collect_turn(
 }
 
 /// One subagent's status snapshot.
-async fn snapshot(handle: &str, sub: &Subagent) -> serde_json::Value {
+async fn snapshot(handle: &str, sub: &Subagent, verdict: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "handle": handle,
         "agent": sub.agent_id,
-        "state": sub.state,
+        // A human review verdict is the task outcome — it outranks the
+        // lifecycle state so the orchestrator can't miss it.
+        "state": match verdict {
+            Some(_) => "changes_requested",
+            None => sub.state,
+        },
+        "review_verdict": verdict,
         "worktree": sub.worktree,
         "branch": sub.branch,
         "port": sub.port.as_ref().map(|l| l.port()),

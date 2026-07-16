@@ -90,6 +90,15 @@ pub enum TuiMsg {
     BootstrapApproved,
     /// The human resolved permission `id` (`allow_once`/`allow_always`/`deny`).
     Resolve { id: u64, outcome: String },
+    /// The human rejected the subagent's diff from the review queue
+    /// (TUI_SPEC_V3 §5): the verdict is the subagent's task outcome
+    /// (`changes_requested` + note) for the owning orchestrator to consume —
+    /// never a prompt injected anywhere.
+    ReviewVerdict {
+        handle: String,
+        verdict: String,
+        note: String,
+    },
 }
 
 /// A permission's file diff, reduced to wire data (both texts capped).
