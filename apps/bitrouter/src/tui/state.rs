@@ -18,21 +18,30 @@ const SCROLLBACK_CAP: usize = 2000;
 /// Max agents shown at once in the detail viewport.
 const MAX_SHOWN: usize = 4;
 
-/// Which key-handling mode the TUI is in.
+/// Which key-handling mode the TUI is in. NORMAL is the only hub
+/// (TUI_SPEC_V3 §3/I3): supervision is inline, and the one-shot leader
+/// prefix covers the few rare verbs — there is no sticky manager mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Keys go to the focused detail pane's prompt (default).
+    /// Keys go to the focused pane (PTY passthrough); supervision inline.
     Normal,
-    /// Manager keys: rail navigation, split, spawn, close.
-    Agent,
+    /// One-shot leader prefix: the which-key overlay is up and exactly one
+    /// leaf key runs, then back to `Normal` (or into a `Command`/`Picker`
+    /// leaf). Never sticky.
+    Leader,
     /// Selecting an agent to spawn.
     Picker,
-    /// Fuzzy command palette (`:` on an empty prompt, or `:` in AGENT mode).
+    /// Fuzzy command palette (`:`, or `leader p`).
     Command,
     /// Approving the worktree bootstrap hook before the first isolated spawn
     /// (it executes shell — shown to the human on first use, per session).
     Confirm,
 }
+
+/// The one-shot leader prefix (TUI_SPEC_V3 §3): `Ctrl-Space` by default —
+/// never `Ctrl-A`/`Ctrl-B`, which are readline keys the orchestrator PTY
+/// owns.
+pub const DEFAULT_LEADER: (KeyCode, KeyModifiers) = (KeyCode::Char(' '), KeyModifiers::CONTROL);
 
 /// One palette command. The table is static; actions map onto existing
 /// reducer paths so the palette adds discoverability, not new behavior.
@@ -44,7 +53,6 @@ pub enum Command {
     SplitH,
     SplitV,
     Unsplit,
-    Queue,
     Autonomy,
     KillDone,
     ToggleSessions,
@@ -62,7 +70,6 @@ pub const COMMANDS: &[(&str, Command)] = &[
     ("split horizontal", Command::SplitH),
     ("split vertical", Command::SplitV),
     ("unsplit", Command::Unsplit),
-    ("queue", Command::Queue),
     ("autonomy cycle", Command::Autonomy),
     ("kill done", Command::KillDone),
     ("toggle sessions", Command::ToggleSessions),
@@ -716,17 +723,6 @@ impl DetailLayout {
     }
 }
 
-/// Which sidebar the AGENT-mode cursor lives in (TUI_SPEC layout: sessions
-/// left, subagents right). `[`/`]` move it left/right.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Panel {
-    /// Left: orchestrator sessions (PTY panes).
-    Sessions,
-    /// Right: ACP subagents — the actionable roster (default).
-    #[default]
-    Subagents,
-}
-
 /// What a recorded click zone does when the human clicks inside it. The
 /// renderer rebuilds the zone list every frame (like [`AppState::pty_areas`]);
 /// the [`AppEvent::Click`] reducer hit-tests the pointer against them.
@@ -769,20 +765,11 @@ pub struct AppState {
     /// Every live agent, in spawn order (stable; the roster sorts a projection).
     pub agents: Vec<PaneState>,
     pub detail: DetailLayout,
-    /// Which sidebar AGENT-mode navigation targets.
-    pub panel: Panel,
-    /// Rail cursor: an index into `roster()` order.
-    pub rail_cursor: usize,
-    /// Sessions cursor: an index into `sessions_list()` order.
-    pub session_cursor: usize,
     /// User-collapsed sidebars (palette `toggle sessions`/`toggle subagents`;
     /// narrow terminals also auto-collapse at render time without touching
     /// these).
     pub sessions_collapsed: bool,
     pub subagents_collapsed: bool,
-    /// Queue focus mode (`q` in AGENT mode): the rail shows only agents that
-    /// need you. Cleared when leaving AGENT mode.
-    pub queue_only: bool,
     /// Monotonic permission-arrival counter backing `PaneState.pending_seq`.
     perm_seq: u64,
     /// agent_id → harness tag, from the config catalog.
@@ -839,12 +826,8 @@ impl AppState {
         Self {
             agents: vec![pane],
             detail,
-            panel: Panel::default(),
-            rail_cursor: 0,
-            session_cursor: 0,
             sessions_collapsed: false,
             subagents_collapsed: false,
-            queue_only: false,
             perm_seq: 0,
             harness_by_agent: HashMap::new(),
             should_quit: false,
@@ -886,13 +869,11 @@ impl AppState {
     /// Roster order for the subagents panel: indices of the ACP panes, sorted
     /// by actionability bucket (needs-you > attention > running > dead).
     /// Needs-you rows order by risk (high first) then age (oldest pending
-    /// first) — the queue; other buckets keep spawn order. In queue focus
-    /// mode (`queue_only`) only needs-you rows are listed. PTY panes live in
+    /// first) — the queue; other buckets keep spawn order. PTY panes live in
     /// the sessions panel ([`sessions_list`](Self::sessions_list)).
     pub fn roster(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.agents.len())
             .filter(|&i| self.agents[i].kind == PaneKind::Monitor)
-            .filter(|&i| !self.queue_only || self.agents[i].pending.is_some())
             .collect();
         order.sort_by_key(|&i| {
             let p = &self.agents[i];
@@ -984,31 +965,6 @@ impl AppState {
         total
     }
 
-    /// The agent under the rail cursor.
-    pub fn rail_selected(&self) -> Option<&PaneState> {
-        let order = self.roster();
-        order
-            .get(self.rail_cursor.min(order.len().saturating_sub(1)))
-            .and_then(|&i| self.agents.get(i))
-    }
-
-    /// The session under the sessions-panel cursor.
-    pub fn session_selected(&self) -> Option<&PaneState> {
-        let order = self.sessions_list();
-        order
-            .get(self.session_cursor.min(order.len().saturating_sub(1)))
-            .and_then(|&i| self.agents.get(i))
-    }
-
-    /// The active panel's cursor pane — what panel-aware AGENT verbs
-    /// (Enter/x/s/v) operate on.
-    fn panel_selected(&self) -> Option<&PaneState> {
-        match self.panel {
-            Panel::Sessions => self.session_selected(),
-            Panel::Subagents => self.rail_selected(),
-        }
-    }
-
     /// The durable identity of every orchestrator session, for the fleet
     /// snapshot (interactive attaches are transient and skipped).
     pub fn fleet_sessions(&self) -> Vec<bitrouter_substrate::fleet::OrchestratorState> {
@@ -1041,26 +997,6 @@ impl AppState {
 
     fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
         self.agents.iter_mut().find(|p| p.record_id == record_id)
-    }
-
-    /// Clamp the rail cursor into the current roster (which may be filtered).
-    fn clamp_rail_cursor(&mut self) {
-        let len = self.roster().len();
-        if len == 0 {
-            self.rail_cursor = 0;
-        } else if self.rail_cursor >= len {
-            self.rail_cursor = len - 1;
-        }
-    }
-
-    /// Clamp the sessions cursor into the current sessions list.
-    fn clamp_session_cursor(&mut self) {
-        let len = self.sessions_list().len();
-        if len == 0 {
-            self.session_cursor = 0;
-        } else if self.session_cursor >= len {
-            self.session_cursor = len - 1;
-        }
     }
 }
 
@@ -1166,7 +1102,6 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     });
                 }
             }
-            state.clamp_rail_cursor();
             effects
         }
         AppEvent::Permission {
@@ -1319,7 +1254,6 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     pane.push_external(Line::Note("bridge disconnected".into()));
                 }
             }
-            state.clamp_rail_cursor();
             Vec::new()
         }
         // ── Human-bridge escalations from the orchestrator: reuse the existing
@@ -1397,7 +1331,6 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             state.agents.push(pane);
             // A fresh session is what you asked to talk to — show it solo.
             state.detail = DetailLayout::solo(record_id.clone());
-            state.session_cursor = state.sessions_list().len().saturating_sub(1);
             state.mode = Mode::Normal;
             state.notice = None;
             Vec::new()
@@ -1521,7 +1454,6 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     pane.push_external(Line::Error(message.clone()));
                 }
             }
-            state.clamp_rail_cursor();
             Vec::new()
         }
         AppEvent::Paste(text) => {
@@ -1639,7 +1571,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             }
             match state.mode {
                 Mode::Normal => reduce_key_normal(state, key),
-                Mode::Agent => reduce_key_agent(state, key),
+                Mode::Leader => reduce_key_leader(state, key),
                 Mode::Picker => reduce_key_picker(state, key),
                 Mode::Command => reduce_key_command(state, key),
                 Mode::Confirm => reduce_key_confirm(state, key),
@@ -1650,32 +1582,16 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
 
 /// NORMAL-mode keys. Permission keys take priority when a prompt is pending.
 fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
-    // Ctrl-A enters AGENT (manager) mode with the cursor on the focused agent.
-    if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        state.mode = Mode::Agent;
-        // Park the cursor on the detail-focused pane's row — in whichever
-        // panel lists it (sessions for PTY panes, subagents for ACP panes).
-        if let Some(id) = state.detail.focused_id().map(str::to_string) {
-            let order = state.roster();
-            if let Some(pos) = order.iter().position(|&i| state.agents[i].record_id == id) {
-                state.panel = Panel::Subagents;
-                state.rail_cursor = pos;
-            } else {
-                let sessions = state.sessions_list();
-                if let Some(pos) = sessions
-                    .iter()
-                    .position(|&i| state.agents[i].record_id == id)
-                {
-                    state.panel = Panel::Sessions;
-                    state.session_cursor = pos;
-                }
-            }
-        }
+    // The one-shot leader (TUI_SPEC_V3 §3): intercepted before PTY
+    // passthrough so it never reaches the orchestrator child. It opens the
+    // which-key overlay; the next key runs one leaf and returns to NORMAL.
+    if (key.code, key.modifiers) == DEFAULT_LEADER {
+        state.mode = Mode::Leader;
         return Vec::new();
     }
     // A focused PTY pane is locked-mode passthrough (TUI_SPEC §9): every key
-    // except the `Ctrl-A` leader (handled above) routes to the child — that
-    // includes `Ctrl-B` (readline) and PgUp/PgDn.
+    // except the leader (handled above) routes to the child — that includes
+    // `Ctrl-A`/`Ctrl-B` (readline) and PgUp/PgDn.
     if let Some(pane) = state.focused()
         && pane.kind == PaneKind::Pty
     {
@@ -1732,6 +1648,49 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         return Vec::new();
     }
 
+    // ── Inline review verbs on the focused Monitor (TUI_SPEC_V3 §5): no
+    // mode to enter — `D` loads the diff, `m` merges, `p` applies, `r`
+    // rejects. Only live when the focused pane has a ready-to-review diff,
+    // so they never shadow anything else.
+    let review_ready = state.focused().is_some_and(|p| p.review.is_some());
+    if review_ready {
+        match key.code {
+            KeyCode::Char('D') => {
+                mark_shown_seen(state);
+                return vec![Effect::LoadDiff {
+                    record_id: focus_id,
+                }];
+            }
+            KeyCode::Char('m') => {
+                if let Some(pane) = state.focused_mut() {
+                    // Integrations queue one at a time in the background;
+                    // the outcome lands as an OpDone line.
+                    pane.push_external(Line::Note("merging in the background…".into()));
+                }
+                return vec![Effect::Merge {
+                    record_id: focus_id,
+                }];
+            }
+            KeyCode::Char('p') => {
+                if let Some(pane) = state.focused_mut() {
+                    pane.push_external(Line::Note("applying in the background…".into()));
+                }
+                return vec![Effect::Apply {
+                    record_id: focus_id,
+                }];
+            }
+            KeyCode::Char('r') => {
+                if let Some(pane) = state.focused_mut() {
+                    pane.review = None;
+                }
+                mark_shown_seen(state);
+                state.notice = Some("rejected".into());
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
+
     // Monitors are read-only (TUI_SPEC_V3 I2): there is no composer and no
     // human prompt path. `:` opens the command palette; anything else that
     // would have typed lands on a notice pointing at the owner.
@@ -1754,199 +1713,50 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// AGENT-mode keys: rail navigation + detail layout + queue + spawn/close.
-fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+/// LEADER leaves (TUI_SPEC_V3 §3): one key, then back to NORMAL (or into
+/// a `Command`/`Picker` leaf). Never sticky — every arm leaves `Leader`.
+fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
+    // One-shot: whatever happens below, the prefix is consumed.
+    state.mode = Mode::Normal;
     match key.code {
-        KeyCode::Esc => {
-            state.queue_only = false;
-            state.clamp_rail_cursor();
-            state.mode = Mode::Normal;
-            Vec::new()
-        }
-        // ── Panel navigation (sessions left, subagents right). ──
-        KeyCode::Char('[') => {
-            state.panel = Panel::Sessions;
-            state.clamp_session_cursor();
-            Vec::new()
-        }
-        KeyCode::Char(']') => {
-            state.panel = Panel::Subagents;
-            state.clamp_rail_cursor();
-            Vec::new()
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            match state.panel {
-                Panel::Sessions => {
-                    let max = state.sessions_list().len().saturating_sub(1);
-                    state.session_cursor = (state.session_cursor + 1).min(max);
-                }
-                Panel::Subagents => {
-                    let max = state.roster().len().saturating_sub(1);
-                    state.rail_cursor = (state.rail_cursor + 1).min(max);
-                }
-            }
-            Vec::new()
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            match state.panel {
-                Panel::Sessions => state.session_cursor = state.session_cursor.saturating_sub(1),
-                Panel::Subagents => state.rail_cursor = state.rail_cursor.saturating_sub(1),
-            }
-            Vec::new()
-        }
-        // Jump to the most actionable agent (the roster head) — the
-        // cross-pane "take me to who needs me" reflex.
-        KeyCode::Char('g') => {
-            state.panel = Panel::Subagents;
-            state.rail_cursor = 0;
-            Vec::new()
-        }
-        // ── Queue. ──
-        // Toggle queue focus: the rail shows only agents that need you.
-        KeyCode::Char('q') => {
-            state.queue_only = !state.queue_only;
-            state.clamp_rail_cursor();
-            Vec::new()
-        }
-        // ── Review verbs (cursor agent has a ready-to-review diff). ──
-        // Subagent-panel only — sessions have no pendings, reviews, or
-        // autonomy, so these verbs never fire across panels by surprise.
-        // `D` loads the full diff into the pane (opened solo); `m` merges the
-        // branch (requires committed work); `p` applies the diff uncommitted;
-        // `r` rejects — feedback typed next becomes the agent's next prompt.
-        KeyCode::Char('D')
-            if state.panel == Panel::Subagents
-                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
-        {
-            match state.rail_selected().map(|p| p.record_id.clone()) {
-                Some(id) => {
-                    state.detail = DetailLayout::solo(id.clone());
-                    mark_shown_seen(state);
-                    vec![Effect::LoadDiff { record_id: id }]
-                }
-                None => Vec::new(),
-            }
-        }
-        KeyCode::Char('m')
-            if state.panel == Panel::Subagents
-                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
-        {
-            match state.rail_selected().map(|p| p.record_id.clone()) {
-                Some(id) => {
-                    if let Some(pane) = state.pane_by_id_mut(&id) {
-                        // Integrations queue one at a time in the background;
-                        // the outcome lands as an OpDone line.
-                        pane.push_external(Line::Note("merging in the background…".into()));
-                    }
-                    vec![Effect::Merge { record_id: id }]
-                }
-                None => Vec::new(),
-            }
-        }
-        KeyCode::Char('p')
-            if state.panel == Panel::Subagents
-                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
-        {
-            match state.rail_selected().map(|p| p.record_id.clone()) {
-                Some(id) => {
-                    if let Some(pane) = state.pane_by_id_mut(&id) {
-                        pane.push_external(Line::Note("applying in the background…".into()));
-                    }
-                    vec![Effect::Apply { record_id: id }]
-                }
-                None => Vec::new(),
-            }
-        }
-        KeyCode::Char('r')
-            if state.panel == Panel::Subagents
-                && state.rail_selected().is_some_and(|p| p.review.is_some()) =>
-        {
-            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone()) {
-                if let Some(pane) = state.pane_by_id_mut(&id) {
-                    pane.review = None;
-                }
-                state.detail = DetailLayout::solo(id);
-                mark_shown_seen(state);
-                state.clamp_rail_cursor();
-                state.mode = Mode::Normal;
-                state.notice = Some("rejected".into());
-            }
-            Vec::new()
-        }
-        // Resolve the cursor agent's pending decision from the rail — the
-        // same `pending` the pane shows inline, so either surface clears both.
-        // `d` denies (not `n`, which spawns in this mode).
-        KeyCode::Char(c @ ('y' | 'a' | 'd'))
-            if state.panel == Panel::Subagents
-                && state.rail_selected().is_some_and(|p| p.pending.is_some()) =>
-        {
-            let outcome = match c {
-                'y' => PermissionOutcome::AllowOnce,
-                'a' => PermissionOutcome::AllowAlways,
-                _ => PermissionOutcome::Deny,
-            };
-            resolve_rail_pending(state, outcome)
-        }
-        // Open the active panel's cursor pane solo (and return to typing).
-        KeyCode::Enter => {
-            if let Some(id) = state.panel_selected().map(|p| p.record_id.clone()) {
-                state.detail = DetailLayout::solo(id);
-                mark_shown_seen(state);
-                state.queue_only = false;
-                state.clamp_rail_cursor();
-                state.mode = Mode::Normal;
-            }
-            Vec::new()
-        }
-        // Split the detail: add the cursor agent side-by-side / stacked.
-        KeyCode::Char('s') => {
-            split_detail(state, Split::H);
-            Vec::new()
-        }
-        KeyCode::Char('v') => {
-            split_detail(state, Split::V);
-            Vec::new()
-        }
-        // Drop the focused detail slot (never below one).
-        KeyCode::Char('u') => {
-            state.detail.remove_focused();
-            Vec::new()
-        }
-        // Cycle / jump detail-slot focus.
-        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-            if !state.detail.shown.is_empty() {
-                state.detail.focus = (state.detail.focus + 1) % state.detail.shown.len();
-            }
-            mark_shown_seen(state);
-            Vec::new()
-        }
-        KeyCode::Left | KeyCode::Char('h') => {
-            let n = state.detail.shown.len();
-            if n > 0 {
-                state.detail.focus = (state.detail.focus + n - 1) % n;
-            }
-            mark_shown_seen(state);
-            Vec::new()
-        }
+        // Focus session N (switch orchestrator conversation).
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as usize) - ('1' as usize);
-            if idx < state.detail.shown.len() {
-                state.detail.focus = idx;
+            if let Some(&i) = state.sessions_list().get(idx) {
+                state.detail = DetailLayout::solo(state.agents[i].record_id.clone());
+                mark_shown_seen(state);
+            } else {
+                state.notice = Some(format!("no session {c}"));
             }
+            Vec::new()
+        }
+        // Focus the next actionable subagent (needs-you → review), cycling
+        // past the currently focused one.
+        KeyCode::Tab => {
+            let actionable: Vec<usize> = state
+                .roster()
+                .into_iter()
+                .filter(|&i| {
+                    let p = &state.agents[i];
+                    p.pending.is_some() || p.review.is_some()
+                })
+                .collect();
+            if actionable.is_empty() {
+                state.notice = Some("all clear — nothing actionable".into());
+                return Vec::new();
+            }
+            let focused = state.detail.focused_id().map(str::to_string);
+            let next = actionable
+                .iter()
+                .position(|&i| Some(state.agents[i].record_id.as_str()) == focused.as_deref())
+                .map(|pos| actionable[(pos + 1) % actionable.len()])
+                .unwrap_or(actionable[0]);
+            state.detail = DetailLayout::solo(state.agents[next].record_id.clone());
             mark_shown_seen(state);
             Vec::new()
         }
+        // New orchestrator session (harness picker).
         KeyCode::Char('n') => {
-            state.picker = Some(PickerState {
-                agents: state.available_agents.clone(),
-                selected: 0,
-                purpose: PickerPurpose::Subagent,
-            });
-            state.mode = Mode::Picker;
-            Vec::new()
-        }
-        // New orchestrator session (capital N — lowercase spawns a subagent).
-        KeyCode::Char('N') => {
             state.picker = Some(PickerState {
                 agents: state.available_sessions.clone(),
                 selected: 0,
@@ -1955,35 +1765,33 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             state.mode = Mode::Picker;
             Vec::new()
         }
-        // Command palette + which-key.
-        KeyCode::Char(':') => {
+        // The command palette: the exhaustive rare-verb surface.
+        KeyCode::Char('p') => {
             state.palette = Some(PaletteState::default());
             state.mode = Mode::Command;
             Vec::new()
         }
-        KeyCode::Char('?') => {
-            state.keys_help = true;
-            Vec::new()
-        }
-        // Attach: drive the cursor agent's harness natively (PTY in its
-        // worktree). Live subagents only — sessions ARE native PTYs already.
-        KeyCode::Char('t') if state.panel == Panel::Subagents => {
-            match state
-                .rail_selected()
-                .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human && !p.exited)
-                .map(|p| p.record_id.clone())
-            {
-                Some(record_id) => vec![Effect::Attach { record_id }],
-                None => Vec::new(),
+        // Close the focused pane (attach close = detach). A *live*
+        // orchestrator-owned monitor stays: another process owns that
+        // session, and removing the pane would orphan its future
+        // permission requests.
+        KeyCode::Char('c') => match state
+            .focused()
+            .map(|p| (p.record_id.clone(), p.owner, p.exited))
+        {
+            Some((_, Ownership::Orchestrator, false)) => {
+                state.notice =
+                    Some("orchestrator-managed subagent — close it there (close_subagent)".into());
+                Vec::new()
             }
-        }
-        // Cycle the cursor agent's autonomy tier (capital A — lowercase `a`
-        // grants allow-always on a pending row). Mirror panes keep their
-        // autonomy in the owning bridge — cycling here would be a lie.
-        KeyCode::Char('A') if state.panel == Panel::Subagents => {
-            if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
-                && let Some(pane) = state.pane_by_id_mut(&id)
-            {
+            Some((id, _, _)) => close_agent_by_id(state, &id),
+            None => Vec::new(),
+        },
+        // Cycle the focused pane's autonomy tier. Orchestrator-owned
+        // monitors keep their policy in the owning bridge — cycling here
+        // would be a lie.
+        KeyCode::Char('a') => {
+            if let Some(pane) = state.focused_mut() {
                 if pane.owner == Ownership::Orchestrator {
                     state.notice = Some(
                         "orchestrator-managed subagent — its policy lives in the bridge".into(),
@@ -1996,21 +1804,25 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        // Close the active panel's cursor pane (an attach pane close = detach).
-        // A *live* mirror stays: another process owns that session, and
-        // removing the pane would orphan its future permission requests.
-        KeyCode::Char('x') => match state
-            .panel_selected()
-            .map(|p| (p.record_id.clone(), p.owner, p.exited))
-        {
-            Some((_, Ownership::Orchestrator, false)) => {
-                state.notice =
-                    Some("orchestrator-managed subagent — close it there (close_subagent)".into());
-                Vec::new()
+        // Attach: drive the focused agent's harness natively (PTY in its
+        // worktree) — the fidelity escape hatch (TUI_SPEC_V3 §2). Live
+        // human-owned monitors only; sessions ARE native PTYs already.
+        KeyCode::Char('t') => {
+            match state
+                .focused()
+                .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human && !p.exited)
+                .map(|p| p.record_id.clone())
+            {
+                Some(record_id) => vec![Effect::Attach { record_id }],
+                None => Vec::new(),
             }
-            Some((id, _, _)) => close_agent_by_id(state, &id),
-            None => Vec::new(),
-        },
+        }
+        // Keys help overlay (any key dismisses it).
+        KeyCode::Char('?') => {
+            state.keys_help = true;
+            Vec::new()
+        }
+        // Esc / anything unmapped: cancel the prefix.
         _ => Vec::new(),
     }
 }
@@ -2080,7 +1892,12 @@ fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
 /// palette / confirm / which-key) swallow clicks: their zones sit behind the
 /// popup, so acting on them would be a click-through.
 fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
-    if state.keys_help || matches!(state.mode, Mode::Picker | Mode::Command | Mode::Confirm) {
+    if state.keys_help
+        || matches!(
+            state.mode,
+            Mode::Leader | Mode::Picker | Mode::Command | Mode::Confirm
+        )
+    {
         return Vec::new();
     }
     let Some(target) = state
@@ -2100,12 +1917,8 @@ fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
                 return Vec::new();
             };
             let id = state.agents[idx].record_id.clone();
-            state.mode = Mode::Agent;
-            state.panel = Panel::Sessions;
-            state.session_cursor = i;
             state.detail = DetailLayout::solo(id);
             mark_shown_seen(state);
-            state.clamp_session_cursor();
             Vec::new()
         }
         ClickTarget::RailRow(i) => {
@@ -2113,12 +1926,8 @@ fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
                 return Vec::new();
             };
             let id = state.agents[idx].record_id.clone();
-            state.mode = Mode::Agent;
-            state.panel = Panel::Subagents;
-            state.rail_cursor = i;
             state.detail = DetailLayout::solo(id);
             mark_shown_seen(state);
-            state.clamp_rail_cursor();
             Vec::new()
         }
     }
@@ -2162,12 +1971,6 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
         }
         Command::Unsplit => {
             state.detail.remove_focused();
-            Vec::new()
-        }
-        Command::Queue => {
-            state.queue_only = !state.queue_only;
-            state.clamp_rail_cursor();
-            state.mode = Mode::Agent;
             Vec::new()
         }
         Command::Autonomy => {
@@ -2246,28 +2049,21 @@ fn mark_shown_seen(state: &mut AppState) {
     }
 }
 
-/// Split the detail in `split` direction. Adds the active panel's cursor
-/// pane — or, when that pane is already shown (`Ctrl-A` parks the cursor on
-/// the focused pane, so this is the common case), the most actionable agent
-/// not yet shown. A notice explains the no-op cases (all shown / full).
+/// Split the detail in `split` direction (palette-only in v3). Adds the
+/// roster's most actionable agent not yet shown. A notice explains the
+/// no-op cases (all shown / full).
 fn split_detail(state: &mut AppState, split: Split) {
     if state.detail.shown.len() >= MAX_SHOWN {
         state.notice = Some(format!(
-            "detail is full ({MAX_SHOWN} panes) — u drops a slot"
+            "detail is full ({MAX_SHOWN} panes) — unsplit drops a slot"
         ));
         return;
     }
-    let cursor = state.panel_selected().map(|p| p.record_id.clone());
-    let target = match cursor.filter(|id| !state.detail.shown.contains(id)) {
-        Some(id) => Some(id),
-        // Cursor agent already visible → fall back to the roster's most
-        // actionable non-shown agent.
-        None => state
-            .roster()
-            .into_iter()
-            .map(|i| state.agents[i].record_id.clone())
-            .find(|id| !state.detail.shown.contains(id)),
-    };
+    let target = state
+        .roster()
+        .into_iter()
+        .map(|i| state.agents[i].record_id.clone())
+        .find(|id| !state.detail.shown.contains(id));
     match target {
         Some(id) => {
             state.detail.add(id, split);
@@ -2279,26 +2075,6 @@ fn split_detail(state: &mut AppState, split: Split) {
     }
 }
 
-/// Resolve the rail-cursor agent's pending permission with `outcome`. One
-/// source of truth: this is the same `PaneState.pending` the pane shows
-/// inline, so resolving here clears that surface too (and vice versa).
-fn resolve_rail_pending(state: &mut AppState, outcome: PermissionOutcome) -> Vec<Effect> {
-    let record_id = match state.rail_selected().map(|p| p.record_id.clone()) {
-        Some(id) => id,
-        None => return Vec::new(),
-    };
-    if let Some(pane) = state.pane_by_id_mut(&record_id) {
-        if pane.pending.take().is_none() {
-            return Vec::new();
-        }
-        // Decided — nothing left to look at.
-        pane.attention = false;
-        pane.done = false;
-    }
-    state.clamp_rail_cursor();
-    vec![Effect::ResolvePermission { record_id, outcome }]
-}
-
 /// Close one agent by id: remove it, prune the detail layout (refilling it
 /// with the most actionable agent if it empties), emit `CloseAgent`. Closing
 /// the last agent quits.
@@ -2308,8 +2084,6 @@ fn close_agent_by_id(state: &mut AppState, record_id: &str) -> Vec<Effect> {
     }
     state.agents.retain(|p| p.record_id != record_id);
     state.detail.prune(record_id);
-    state.clamp_rail_cursor();
-    state.clamp_session_cursor();
     if state.agents.is_empty() {
         state.should_quit = true;
     } else if state.detail.shown.is_empty() {
@@ -2573,9 +2347,11 @@ mod tests {
             target: ClickTarget::RailRow(1),
         });
         reduce(&mut st, &click(30, 4));
-        assert_eq!(st.mode, Mode::Agent, "a row click enters AGENT mode");
-        assert_eq!(st.panel, Panel::Subagents);
-        assert_eq!(st.rail_cursor, 1, "cursor lands on the clicked row");
+        assert_eq!(
+            st.mode,
+            Mode::Normal,
+            "no mode to enter — click just focuses"
+        );
         assert_eq!(
             st.detail.shown,
             vec!["r1".to_string()],
@@ -2598,8 +2374,11 @@ mod tests {
             target: ClickTarget::SessionRow(0),
         });
         reduce(&mut st, &click(5, 2));
-        assert_eq!(st.mode, Mode::Agent);
-        assert_eq!(st.panel, Panel::Sessions);
+        assert_eq!(
+            st.mode,
+            Mode::Normal,
+            "no mode to enter — click just focuses"
+        );
         assert_eq!(st.detail.shown, vec!["orch".to_string()]);
     }
 
@@ -2794,7 +2573,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_quits_from_manager_modes_only() {
-        for mode in [Mode::Agent, Mode::Picker, Mode::Command] {
+        for mode in [Mode::Leader, Mode::Picker, Mode::Command] {
             let mut st = AppState::new(pane());
             st.mode = mode;
             if mode == Mode::Picker {
@@ -2870,13 +2649,23 @@ mod tests {
                 "{key:?} must pass through: {fx:?}"
             );
         }
-        // The one leader: Ctrl-A enters the manager.
+        // Ctrl-A is readline Home — it passes through like any other key.
         let fx = reduce(
             &mut st,
             &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
         );
+        assert!(
+            matches!(&fx[..], [Effect::PtyKey { .. }]),
+            "Ctrl-A passes through: {fx:?}"
+        );
+        assert_eq!(st.mode, Mode::Normal, "no manager mode to enter");
+        // The one leader: Ctrl-Space opens the which-key prefix.
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+        );
         assert!(fx.is_empty());
-        assert_eq!(st.mode, Mode::Agent, "leader reaches the manager");
+        assert_eq!(st.mode, Mode::Leader, "the leader never reaches the child");
     }
 
     // ── Prompt failures. ──
@@ -3439,32 +3228,20 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_a_enters_agent_mode() {
+    fn leader_opens_whichkey() {
         let mut st = AppState::new(pane());
         let fx = reduce(
             &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
         );
         assert!(fx.is_empty());
-        assert_eq!(st.mode, Mode::Agent);
+        assert_eq!(st.mode, Mode::Leader, "leader → which-key prefix");
     }
 
     #[test]
-    fn ctrl_a_parks_rail_cursor_on_focused_agent() {
-        let mut st = agents3();
-        st.detail = DetailLayout::solo("r2".into());
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
-        );
-        // All three are running (same bucket) → roster order = spawn order.
-        assert_eq!(st.rail_cursor, 2);
-    }
-
-    #[test]
-    fn esc_returns_to_normal_from_agent() {
+    fn esc_returns_to_normal_from_leader() {
         let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
+        st.mode = Mode::Leader;
         reduce(&mut st, &press(KeyCode::Esc));
         assert_eq!(st.mode, Mode::Normal);
     }
@@ -3493,81 +3270,21 @@ mod tests {
         assert_eq!(order, vec![1, 0, 2]);
     }
 
-    // ── AGENT mode: rail navigation + detail layout. ──
+    // ── Detail layout (splits are palette-only in v3). ──
 
     #[test]
-    fn jk_move_rail_cursor_with_clamping() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        reduce(&mut st, &press(KeyCode::Char('j')));
-        assert_eq!(st.rail_cursor, 1);
-        reduce(&mut st, &press(KeyCode::Char('j')));
-        assert_eq!(st.rail_cursor, 2);
-        reduce(&mut st, &press(KeyCode::Char('j'))); // clamp at bottom
-        assert_eq!(st.rail_cursor, 2);
-        reduce(&mut st, &press(KeyCode::Char('k')));
-        assert_eq!(st.rail_cursor, 1);
-        reduce(&mut st, &press(KeyCode::Up));
-        assert_eq!(st.rail_cursor, 0);
-        reduce(&mut st, &press(KeyCode::Up)); // clamp at top
-        assert_eq!(st.rail_cursor, 0);
-    }
-
-    #[test]
-    fn enter_opens_cursor_agent_solo_and_returns_to_normal() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1; // r1 (all same bucket → roster = spawn order)
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(st.detail.shown, vec!["r1".to_string()]);
-        assert_eq!(st.detail.focus, 0);
-        assert_eq!(st.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn s_adds_cursor_agent_as_horizontal_split() {
+    fn split_commands_add_most_actionable_unshown_agent() {
         let mut st = agents3(); // detail = [r0]
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1;
-        reduce(&mut st, &press(KeyCode::Char('s')));
+        run_command(&mut st, Command::SplitH);
         assert_eq!(st.detail.shown, vec!["r0".to_string(), "r1".to_string()]);
         assert_eq!(st.detail.split, Split::H);
         assert_eq!(st.detail.focus, 1, "new slot takes focus");
     }
 
     #[test]
-    fn v_adds_cursor_agent_as_vertical_split() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 2;
-        reduce(&mut st, &press(KeyCode::Char('v')));
-        assert_eq!(st.detail.shown, vec!["r0".to_string(), "r2".to_string()]);
-        assert_eq!(st.detail.split, Split::V);
-    }
-
-    #[test]
-    fn ctrl_a_then_s_immediately_splits_with_next_agent() {
-        // The reported dead path: Ctrl-A parks the cursor on the focused
-        // (already-shown) agent, so `s` must fall back to the next
-        // most-actionable non-shown agent instead of no-oping.
-        let mut st = agents3(); // detail = [r0]
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
-        );
-        reduce(&mut st, &press(KeyCode::Char('s')));
-        assert_eq!(
-            st.detail.shown,
-            vec!["r0".to_string(), "r1".to_string()],
-            "no duplicate; next agent added"
-        );
-    }
-
-    #[test]
     fn split_with_every_agent_shown_sets_a_notice() {
         let mut st = AppState::new(pane()); // one agent, already shown
-        st.mode = Mode::Agent;
-        reduce(&mut st, &press(KeyCode::Char('s')));
+        run_command(&mut st, Command::SplitH);
         assert_eq!(st.detail.shown, vec!["rec-1".to_string()], "unchanged");
         assert!(
             st.notice.as_deref().is_some_and(|n| n.contains("split")),
@@ -3580,70 +3297,51 @@ mod tests {
         let mut st = agents3();
         st.agents.push(PaneState::new("r3".into(), "a3".into()));
         st.agents.push(PaneState::new("r4".into(), "a4".into()));
-        st.mode = Mode::Agent;
-        for cursor in [1usize, 2, 3, 4] {
-            st.rail_cursor = cursor;
-            reduce(&mut st, &press(KeyCode::Char('s')));
+        for _ in 0..4 {
+            run_command(&mut st, Command::SplitH);
         }
         assert_eq!(st.detail.shown.len(), 4, "fifth split is refused");
         assert!(!st.detail.shown.contains(&"r4".to_string()));
     }
 
     #[test]
-    fn u_unsplits_focused_slot_but_never_below_one() {
+    fn unsplit_drops_focused_slot_but_never_below_one() {
         let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1;
-        reduce(&mut st, &press(KeyCode::Char('s'))); // [r0, r1], focus 1
-        reduce(&mut st, &press(KeyCode::Char('u')));
+        run_command(&mut st, Command::SplitH); // [r0, r1], focus 1
+        run_command(&mut st, Command::Unsplit);
         assert_eq!(st.detail.shown, vec!["r0".to_string()]);
         assert_eq!(st.detail.focus, 0);
-        reduce(&mut st, &press(KeyCode::Char('u'))); // already solo — no-op
+        run_command(&mut st, Command::Unsplit); // already solo — no-op
         assert_eq!(st.detail.shown, vec!["r0".to_string()]);
     }
 
     #[test]
-    fn tab_cycles_detail_focus_and_digits_jump() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1;
-        reduce(&mut st, &press(KeyCode::Char('s'))); // [r0, r1], focus 1
-        reduce(&mut st, &press(KeyCode::Tab));
-        assert_eq!(st.detail.focus, 0, "Tab wraps focus");
-        reduce(&mut st, &press(KeyCode::Char('2')));
-        assert_eq!(st.detail.focus, 1, "digit jumps to slot");
-        reduce(&mut st, &press(KeyCode::Char('9')));
-        assert_eq!(st.detail.focus, 1, "out-of-range digit ignored");
-        reduce(&mut st, &press(KeyCode::Left));
-        assert_eq!(st.detail.focus, 0, "Left cycles backward");
-    }
-
-    #[test]
-    fn n_opens_picker_with_available_agents() {
+    fn spawn_command_opens_picker_with_available_agents() {
         let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
         st.available_agents = vec!["fake".into(), "claude-acp".into()];
-        reduce(&mut st, &press(KeyCode::Char('n')));
+        run_command(&mut st, Command::SpawnAgent);
         assert_eq!(st.mode, Mode::Picker);
         let p = st.picker.as_ref().expect("picker set");
         assert_eq!(p.agents, vec!["fake".to_string(), "claude-acp".to_string()]);
         assert_eq!(p.selected, 0);
+        assert_eq!(p.purpose, PickerPurpose::Subagent);
     }
 
-    // ── Close. ──
+    // ── Close (leader `c` acts on the focused pane). ──
 
     #[test]
-    fn x_closes_cursor_agent_and_emits_close_agent() {
+    fn leader_c_closes_focused_agent_and_emits_close_agent() {
         let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1; // r1
-        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
+        st.detail = DetailLayout::solo("r1".into());
+        st.mode = Mode::Leader;
+        let fx = reduce(&mut st, &press(KeyCode::Char('c')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
                 record_id: "r1".into()
             }]
         );
+        assert_eq!(st.mode, Mode::Normal, "one-shot");
         assert_eq!(st.agents.len(), 2);
         assert_eq!(st.agents[0].record_id, "r0");
         assert_eq!(st.agents[1].record_id, "r2");
@@ -3651,10 +3349,10 @@ mod tests {
     }
 
     #[test]
-    fn x_on_last_agent_sets_should_quit() {
+    fn leader_c_on_last_agent_sets_should_quit() {
         let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
-        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
+        st.mode = Mode::Leader;
+        let fx = reduce(&mut st, &press(KeyCode::Char('c')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
@@ -3669,9 +3367,8 @@ mod tests {
     fn closing_the_shown_agent_refills_detail_with_roster_head() {
         let mut st = agents3(); // detail = [r0]
         st.agents[2].attention = true; // r2 = roster head after r0 closes
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1; // roster: [r2(attn), r0, r1] → cursor 1 = r0
-        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
+        st.mode = Mode::Leader;
+        let fx = reduce(&mut st, &press(KeyCode::Char('c')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
@@ -3685,17 +3382,20 @@ mod tests {
         );
     }
 
-    // ── Polish: jump, wheel scroll. ──
+    // ── Polish: leader Tab (next actionable), wheel scroll. ──
 
     #[test]
-    fn g_jumps_the_rail_cursor_to_the_roster_head() {
-        let mut st = agents3();
-        reduce(&mut st, &perm("r2", "wants")); // r2 tops the roster
-        st.mode = Mode::Agent;
-        st.rail_cursor = 2;
-        reduce(&mut st, &press(KeyCode::Char('g')));
-        assert_eq!(st.rail_cursor, 0, "cursor on the most actionable agent");
-        assert_eq!(st.rail_selected().map(|p| p.record_id.as_str()), Some("r2"));
+    fn leader_tab_focuses_the_next_actionable_agent() {
+        let mut st = agents3(); // detail = [r0]
+        reduce(&mut st, &perm("r2", "wants")); // r2 needs you
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Tab));
+        assert_eq!(st.mode, Mode::Normal, "one-shot");
+        assert_eq!(
+            st.detail.shown,
+            vec!["r2".to_string()],
+            "the actionable agent takes the detail"
+        );
     }
 
     #[test]
@@ -3720,10 +3420,10 @@ mod tests {
     // ── Attach (§13-B4). ──
 
     #[test]
-    fn t_attaches_the_cursor_acp_agent_only() {
+    fn leader_t_attaches_the_focused_live_monitor_only() {
         let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1; // r1
+        st.detail = DetailLayout::solo("r1".into());
+        st.mode = Mode::Leader;
         let fx = reduce(&mut st, &press(KeyCode::Char('t')));
         assert_eq!(
             fx,
@@ -3731,20 +3431,24 @@ mod tests {
                 record_id: "r1".into()
             }]
         );
-        // A session can't attach to itself: `t` is inert in the sessions panel.
-        st.panel = Panel::Sessions;
+        assert_eq!(st.mode, Mode::Normal, "one-shot");
+        // A session can't attach to itself.
+        let mut pty = PaneState::new("session-1".into(), "claude".into());
+        pty.kind = PaneKind::Pty;
+        st.agents.push(pty);
+        st.detail = DetailLayout::solo("session-1".into());
+        st.mode = Mode::Leader;
         assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
-        st.panel = Panel::Subagents;
         // A dead agent has nothing to drive.
         st.agents[1].exited = true;
-        st.rail_cursor = 2; // dead agents sort last — cursor onto r1
+        st.detail = DetailLayout::solo("r1".into());
+        st.mode = Mode::Leader;
         assert!(reduce(&mut st, &press(KeyCode::Char('t'))).is_empty());
     }
 
     #[test]
     fn pty_attached_adds_a_solo_pty_pane() {
         let mut st = agents3();
-        st.mode = Mode::Agent;
         reduce(
             &mut st,
             &AppEvent::PtyAttached {
@@ -3802,47 +3506,29 @@ mod tests {
     }
 
     #[test]
-    fn brackets_switch_the_panel_and_jk_move_its_cursor() {
-        let mut st = fleet_state();
-        st.mode = Mode::Agent;
-        assert_eq!(st.panel, Panel::Subagents, "default panel");
-        reduce(&mut st, &press(KeyCode::Char('[')));
-        assert_eq!(st.panel, Panel::Sessions);
-        reduce(&mut st, &press(KeyCode::Char('j')));
-        assert_eq!(st.session_cursor, 1, "j moves the sessions cursor");
-        assert_eq!(st.rail_cursor, 0, "rail cursor untouched");
-        // Enter opens the cursor session solo.
-        reduce(&mut st, &press(KeyCode::Enter));
+    fn leader_digit_focuses_session_n() {
+        let mut st = fleet_state(); // sessions: orchestrator, session-1
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Char('2')));
+        assert_eq!(st.mode, Mode::Normal, "one-shot");
         assert_eq!(st.detail.shown, vec!["session-1".to_string()]);
-        assert_eq!(st.mode, Mode::Normal);
-        // `]` returns cursor control to the subagents roster.
-        st.mode = Mode::Agent;
-        reduce(&mut st, &press(KeyCode::Char(']')));
-        assert_eq!(st.panel, Panel::Subagents);
-    }
-
-    #[test]
-    fn ctrl_a_parks_the_cursor_in_the_focused_panes_panel() {
-        let mut st = fleet_state();
-        st.detail = DetailLayout {
-            shown: vec!["session-1".into()],
-            split: Split::H,
-            focus: 0,
-        };
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        // Out of range → notice, focus untouched.
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Char('9')));
+        assert_eq!(st.detail.shown, vec!["session-1".to_string()]);
+        assert!(
+            st.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no session"))
         );
-        assert_eq!(st.panel, Panel::Sessions);
-        assert_eq!(st.session_cursor, 1, "cursor on the focused session");
     }
 
     #[test]
-    fn capital_n_opens_the_session_picker_and_enter_spawns() {
+    fn leader_n_opens_the_session_picker_and_enter_spawns() {
         let mut st = fleet_state();
         st.available_sessions = vec!["claude".into(), "codex".into()];
-        st.mode = Mode::Agent;
-        reduce(&mut st, &press(KeyCode::Char('N')));
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Char('n')));
         assert_eq!(st.mode, Mode::Picker);
         let picker = st.picker.as_ref().expect("picker");
         assert_eq!(picker.purpose, PickerPurpose::Session);
@@ -3878,16 +3564,14 @@ mod tests {
         assert!(pane.is_session());
         assert_eq!(pane.model.as_deref(), Some("supergrok:grok-4.5"));
         assert_eq!(st.detail.shown, vec!["session-2".to_string()], "solo");
-        assert_eq!(st.session_cursor, 2, "cursor follows the new session");
     }
 
     #[test]
-    fn x_in_the_sessions_panel_closes_the_cursor_session() {
+    fn leader_c_closes_a_focused_session() {
         let mut st = fleet_state();
-        st.mode = Mode::Agent;
-        st.panel = Panel::Sessions;
-        st.session_cursor = 1;
-        let fx = reduce(&mut st, &press(KeyCode::Char('x')));
+        st.detail = DetailLayout::solo("session-1".into());
+        st.mode = Mode::Leader;
+        let fx = reduce(&mut st, &press(KeyCode::Char('c')));
         assert_eq!(
             fx,
             vec![Effect::CloseAgent {
@@ -3898,23 +3582,19 @@ mod tests {
     }
 
     #[test]
-    fn review_verbs_and_autonomy_stay_inert_in_the_sessions_panel() {
-        let mut st = fleet_state();
+    fn review_verbs_never_fire_on_a_focused_session() {
+        // A focused PTY session owns the keyboard: review keys pass through
+        // to the child instead of firing on some other pane's review.
+        let mut st = fleet_state(); // detail = [orchestrator], a PTY
         st.agents[1].review = Some((1, 2, 3));
-        st.mode = Mode::Agent;
-        st.panel = Panel::Sessions;
-        for key in ['m', 'p', 'D', 'A'] {
+        for key in ['m', 'p', 'D', 'r'] {
+            let fx = reduce(&mut st, &press(KeyCode::Char(key)));
             assert!(
-                reduce(&mut st, &press(KeyCode::Char(key))).is_empty(),
-                "'{key}' must not fire on a subagent from the sessions panel"
+                matches!(&fx[..], [Effect::PtyKey { .. }]),
+                "'{key}' routes to the PTY child: {fx:?}"
             );
         }
         assert!(st.agents[1].review.is_some(), "review untouched");
-        assert_eq!(
-            st.agents[1].autonomy,
-            Autonomy::Manual,
-            "autonomy untouched"
-        );
     }
 
     #[test]
@@ -4201,8 +3881,7 @@ mod tests {
     fn review_keys_emit_integration_effects() {
         let mut st = agents3();
         reduce(&mut st, &review_ready("r1"));
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // r1 tops the roster (review tier)
+        st.detail = DetailLayout::solo("r1".into()); // review inline on focus
 
         let fx = reduce(&mut st, &press(KeyCode::Char('m')));
         assert_eq!(
@@ -4225,18 +3904,11 @@ mod tests {
                 record_id: "r1".into()
             }]
         );
-        assert_eq!(
-            st.detail.shown,
-            vec!["r1".to_string()],
-            "D opens the pane so the diff is visible"
-        );
     }
 
     #[test]
     fn review_keys_are_inert_without_review_state() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0;
+        let mut st = agents3(); // detail = [r0], no review
         for c in ['m', 'p', 'D'] {
             let fx = reduce(&mut st, &press(KeyCode::Char(c)));
             assert!(fx.is_empty(), "'{c}' without review state is a no-op");
@@ -4247,12 +3919,10 @@ mod tests {
     fn reject_clears_review_and_opens_the_pane() {
         let mut st = agents3();
         reduce(&mut st, &review_ready("r1"));
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0;
+        st.detail = DetailLayout::solo("r1".into());
         let fx = reduce(&mut st, &press(KeyCode::Char('r')));
         assert!(fx.is_empty());
         assert!(st.agents[1].review.is_none(), "review cleared");
-        assert_eq!(st.detail.shown, vec!["r1".to_string()], "pane opened");
         assert_eq!(st.mode, Mode::Normal);
         assert!(st.notice.as_deref().is_some_and(|n| n.contains("rejected")));
         // Monitors are read-only: no feedback-as-next-prompt path remains.
@@ -4393,9 +4063,7 @@ mod tests {
     #[test]
     fn permission_on_split_shown_pane_is_not_background() {
         let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1;
-        reduce(&mut st, &press(KeyCode::Char('s'))); // show r0 + r1
+        run_command(&mut st, Command::SplitH); // show r0 + r1
         let fx = reduce(
             &mut st,
             &AppEvent::Permission {
@@ -4442,79 +4110,6 @@ mod tests {
     }
 
     #[test]
-    fn rail_y_resolves_cursor_pending_not_the_focused_pane() {
-        let mut st = agents3(); // detail = [r0]
-        reduce(&mut st, &perm("r0", "focused wants"));
-        reduce(&mut st, &perm("r1", "background wants"));
-        st.mode = Mode::Agent;
-        // Queue: r0 (older) row 0, r1 row 1. Cursor to r1.
-        st.rail_cursor = 1;
-        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
-        assert_eq!(
-            fx,
-            vec![Effect::ResolvePermission {
-                record_id: "r1".into(),
-                outcome: PermissionOutcome::AllowOnce,
-            }]
-        );
-        assert!(st.agents[1].pending.is_none(), "rail resolve clears pane");
-        assert!(
-            st.agents[0].pending.is_some(),
-            "focused pane's pending untouched"
-        );
-    }
-
-    #[test]
-    fn rail_d_denies_cursor_pending() {
-        let mut st = agents3();
-        reduce(&mut st, &perm("r1", "wants"));
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // r1 tops the roster
-        let fx = reduce(&mut st, &press(KeyCode::Char('d')));
-        assert_eq!(
-            fx,
-            vec![Effect::ResolvePermission {
-                record_id: "r1".into(),
-                outcome: PermissionOutcome::Deny,
-            }]
-        );
-    }
-
-    #[test]
-    fn rail_y_without_pending_is_a_noop() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
-        assert!(fx.is_empty(), "no pending under cursor → nothing resolves");
-    }
-
-    #[test]
-    fn q_filters_rail_to_queue_and_esc_clears() {
-        let mut st = agents3();
-        reduce(&mut st, &perm("r1", "wants"));
-        st.mode = Mode::Agent;
-        reduce(&mut st, &press(KeyCode::Char('q')));
-        assert!(st.queue_only);
-        assert_eq!(st.roster(), vec![1], "only the needs-you row remains");
-        reduce(&mut st, &press(KeyCode::Esc));
-        assert!(!st.queue_only, "Esc restores the full rail");
-        assert_eq!(st.mode, Mode::Normal);
-        assert_eq!(st.roster().len(), 3);
-    }
-
-    #[test]
-    fn resolving_last_queued_item_clamps_cursor_in_queue_mode() {
-        let mut st = agents3();
-        reduce(&mut st, &perm("r1", "wants"));
-        st.mode = Mode::Agent;
-        reduce(&mut st, &press(KeyCode::Char('q')));
-        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
-        assert_eq!(fx.len(), 1);
-        assert!(st.roster().is_empty(), "queue drained");
-        assert_eq!(st.rail_cursor, 0, "cursor clamped, no panic");
-    }
-
-    #[test]
     fn dead_agents_pending_leaves_the_queue() {
         let mut st = agents3();
         reduce(&mut st, &perm("r1", "wants"));
@@ -4528,13 +4123,6 @@ mod tests {
         assert!(
             st.agents[1].pending.is_none(),
             "a dead agent's decision is moot"
-        );
-        // Still tops the roster (background death = attention), but the
-        // queue itself no longer lists it.
-        st.queue_only = true;
-        assert!(
-            st.roster().is_empty(),
-            "queue no longer lists the dead agent"
         );
     }
 
@@ -4593,15 +4181,17 @@ mod tests {
     }
 
     #[test]
-    fn capital_a_cycles_autonomy_and_logs() {
-        let mut st = agents3();
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // r0
-        reduce(&mut st, &press(KeyCode::Char('A')));
+    fn leader_a_cycles_autonomy_and_logs() {
+        let mut st = agents3(); // detail = [r0]
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Char('a')));
         assert_eq!(st.agents[0].autonomy, Autonomy::Assisted);
-        reduce(&mut st, &press(KeyCode::Char('A')));
+        assert_eq!(st.mode, Mode::Normal, "one-shot");
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Char('a')));
         assert_eq!(st.agents[0].autonomy, Autonomy::Auto);
-        reduce(&mut st, &press(KeyCode::Char('A')));
+        st.mode = Mode::Leader;
+        reduce(&mut st, &press(KeyCode::Char('a')));
         assert_eq!(st.agents[0].autonomy, Autonomy::Manual, "cycles back");
         assert!(
             matches!(st.agents[0].lines.last(), Some(Line::AutoResolved(l)) if l.contains("manual")),
@@ -4714,14 +4304,15 @@ mod tests {
     }
 
     #[test]
-    fn agent_question_mark_opens_keys_help_and_any_key_dismisses() {
+    fn leader_question_mark_opens_keys_help_and_any_key_dismisses() {
         let mut st = AppState::new(pane());
-        st.mode = Mode::Agent;
+        st.mode = Mode::Leader;
         reduce(&mut st, &press(KeyCode::Char('?')));
         assert!(st.keys_help);
+        assert_eq!(st.mode, Mode::Normal, "one-shot");
         // The dismissing key is swallowed, not acted on.
         let fx = reduce(&mut st, &press(KeyCode::Char('x')));
-        assert!(fx.is_empty(), "dismiss key must not close an agent");
+        assert!(fx.is_empty(), "dismiss key is swallowed");
         assert!(!st.keys_help);
         assert_eq!(st.agents.len(), 1);
     }
@@ -4730,9 +4321,15 @@ mod tests {
     fn opening_an_agent_clears_its_attention() {
         let mut st = agents3();
         st.agents[1].attention = true;
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // roster: [r1(attn), r0, r2] → cursor 0 = r1
-        reduce(&mut st, &press(KeyCode::Enter));
+        // Click its rail row (roster: [r1(attn), r0, r2] → row 0 = r1).
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2,
+            target: ClickTarget::RailRow(0),
+        });
+        reduce(&mut st, &click(1, 0));
         assert_eq!(st.detail.shown, vec!["r1".to_string()]);
         assert!(!st.agents[1].attention, "looking at it clears attention");
     }
@@ -4743,9 +4340,15 @@ mod tests {
     fn opening_an_agent_decays_done_to_idle() {
         let mut st = agents3();
         st.agents[1].done = true;
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // r1 tops the roster (done-unseen)
-        reduce(&mut st, &press(KeyCode::Enter));
+        // Click its rail row (r1 tops the roster, done-unseen).
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2,
+            target: ClickTarget::RailRow(0),
+        });
+        reduce(&mut st, &click(1, 0));
         assert!(!st.agents[1].done, "viewing decays done back to idle");
     }
 
@@ -5016,15 +4619,8 @@ mod tests {
             .find(|p| p.record_id == "mcp:abc123")
             .expect("mirror pane");
         assert!(mirror.pending.is_some(), "gated request reaches the queue");
-        // Resolve from the rail like any other agent.
-        st.mode = Mode::Agent;
-        st.panel = Panel::Subagents;
-        let order = st.roster();
-        let pos = order
-            .iter()
-            .position(|&i| st.agents[i].record_id == "mcp:abc123")
-            .expect("mirror row");
-        st.rail_cursor = pos;
+        // Resolve inline from NORMAL on the focused mirror.
+        st.detail = DetailLayout::solo("mcp:abc123".into());
         let effects = reduce(&mut st, &press(KeyCode::Char('y')));
         assert!(
             effects.contains(&Effect::ResolvePermission {
@@ -5040,16 +4636,10 @@ mod tests {
     fn live_mirror_refuses_close_and_prompt() {
         let mut st = AppState::new(pane());
         spawn_mirror(&mut st);
-        // `x` on the live mirror row: refused with guidance.
-        st.mode = Mode::Agent;
-        st.panel = Panel::Subagents;
-        let order = st.roster();
-        let pos = order
-            .iter()
-            .position(|&i| st.agents[i].record_id == "mcp:abc123")
-            .expect("mirror row");
-        st.rail_cursor = pos;
-        let effects = reduce(&mut st, &press(KeyCode::Char('x')));
+        // `leader c` on the focused live mirror: refused with guidance.
+        st.detail = DetailLayout::solo("mcp:abc123".into());
+        st.mode = Mode::Leader;
+        let effects = reduce(&mut st, &press(KeyCode::Char('c')));
         assert!(effects.is_empty(), "no CloseAgent for a live mirror");
         assert!(
             st.agents.iter().any(|p| p.record_id == "mcp:abc123"),

@@ -9,8 +9,8 @@ use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::state::{
-    AppState, ClickTarget, ClickZone, DiffLine, Line, Mode, PaneState, Panel, PendingView,
-    PickerPurpose, PickerState, Split, TailKind, diff_lines,
+    AppState, ClickTarget, ClickZone, DiffLine, Line, Mode, PaneState, PendingView, PickerPurpose,
+    PickerState, Split, TailKind, diff_lines,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
@@ -48,8 +48,6 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     // affordance, not noise); when space is tight the AGENT-cursor panel
     // wins, then the panel that has content, then the subagents rail.
     let rail_w = RAIL_WIDTH.min(area.width / 3);
-    let sessions_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
-    let rail_active = state.mode == Mode::Agent && state.panel == Panel::Subagents;
     let sessions_allowed = !state.sessions_collapsed;
     let rail_allowed = !state.subagents_collapsed;
     let sessions_content = !state.sessions_list().is_empty();
@@ -61,9 +59,8 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let (show_sessions, show_rail) = if fits_both {
         (sessions_allowed, rail_allowed)
     } else {
-        // One sidebar at most.
-        let prefer_sessions = sessions_allowed
-            && (sessions_active || (!rail_active && sessions_content && !rail_content));
+        // One sidebar at most: the panel with content wins.
+        let prefer_sessions = sessions_allowed && sessions_content && !rail_content;
         if prefer_sessions && area.width >= SESSIONS_WIDTH + CENTER_MIN_WIDTH {
             (true, false)
         } else if rail_allowed && area.width >= rail_w + CENTER_MIN_WIDTH {
@@ -125,7 +122,9 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         render_confirm(state, frame, area);
     }
 
-    if state.keys_help {
+    // The which-key overlay: up while the one-shot leader prefix is armed
+    // (TUI_SPEC_V3 §3), or when `?` asked for the current mode's bindings.
+    if state.keys_help || state.mode == Mode::Leader {
         render_keys_help(state.mode, frame, area);
     }
 
@@ -217,29 +216,23 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
 fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
-            ("y / a / n", "resolve its pending permission"),
-            ("PgUp / PgDn", "scroll its scrollback"),
+            ("y / a / n", "resolve the focused pending permission"),
+            ("D / m / p / r", "review: diff · merge · apply · reject"),
+            ("PgUp / PgDn", "scroll the focused scrollback"),
             (":", "command palette"),
-            ("Ctrl-A", "manager mode"),
+            ("Ctrl-Space", "leader (one-shot menu)"),
             ("Ctrl-C", "interrupt the focused agent"),
         ],
-        Mode::Agent => &[
-            ("[ / ]", "cursor to sessions / subagents panel"),
-            ("j / k / ↑ / ↓", "move the panel cursor"),
-            ("g", "jump to the most actionable agent"),
-            ("Enter", "open cursor pane solo"),
-            ("s / v", "split cursor pane in (h/v)"),
-            ("u", "drop the focused slot"),
-            ("Tab / ← / → / 1-4", "switch detail slot"),
-            ("q", "queue focus (needs-you only)"),
-            ("y / a / d", "resolve cursor pending"),
-            ("D / m / p / r", "review: diff · merge · apply · reject"),
-            ("t", "attach: drive the agent's native TUI"),
-            ("A", "cycle autonomy tier"),
-            ("n / N", "new subagent / new session"),
-            ("x", "close cursor pane"),
-            (":", "command palette"),
-            ("Esc", "back to normal"),
+        Mode::Leader => &[
+            ("1-9", "focus session N"),
+            ("Tab", "focus next actionable subagent"),
+            ("n", "new session (harness picker)"),
+            ("p", "command palette"),
+            ("c", "close the focused pane"),
+            ("a", "cycle its autonomy tier"),
+            ("t", "attach: drive it natively"),
+            ("?", "keys help"),
+            ("Esc", "cancel"),
         ],
         Mode::Picker => &[("↑ / ↓", "select"), ("Enter", "spawn"), ("Esc", "cancel")],
         Mode::Confirm => &[
@@ -333,16 +326,16 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(area);
     let order = state.sessions_list();
-    let cursor_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
+    let focused_id = state.focused().map(|p| p.record_id.clone());
     let mut cursor_end = 0usize;
     // Logical line range of each entry (name + meta), turned into click zones
     // once the scroll offset is known.
     let mut row_spans: Vec<(usize, usize)> = Vec::new();
     let mut lines: Vec<TuiLine> = vec![header_line("sessions".to_string(), nc)];
-    for (row, &idx) in order.iter().enumerate() {
+    for &idx in order.iter() {
         let pane = &state.agents[idx];
         let glyph = state_glyph(pane, state.tick);
-        let at_cursor = cursor_active && row == state.session_cursor;
+        let at_cursor = focused_id.as_deref() == Some(pane.record_id.as_str());
         let cursor = if at_cursor { "▸" } else { " " };
         let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
         let mut name_style = Style::default();
@@ -412,21 +405,17 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         .split(area);
 
     let order = state.roster();
-    let cursor_active = state.mode == Mode::Agent && state.panel == Panel::Subagents;
-    let header = if state.queue_only {
-        format!("needs you · {}", order.len())
-    } else {
-        "subagents".to_string()
-    };
+    let focused_id = state.focused().map(|p| p.record_id.clone());
+    let header = "subagents".to_string();
     let mut cursor_end = 0usize;
     // Logical line range of each entry (name through any expansion line),
     // turned into click zones once the scroll offset is known.
     let mut row_spans: Vec<(usize, usize)> = Vec::new();
     let mut lines: Vec<TuiLine> = vec![header_line(header, nc)];
-    for (row, &idx) in order.iter().enumerate() {
+    for &idx in order.iter() {
         let pane = &state.agents[idx];
         let glyph = state_glyph(pane, state.tick);
-        let at_cursor = cursor_active && row == state.rail_cursor;
+        let at_cursor = focused_id.as_deref() == Some(pane.record_id.as_str());
         let cursor = if at_cursor { "▸" } else { " " };
         let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
         let mut name_style = Style::default();
@@ -484,9 +473,9 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
             // Keys first, then risk, then the (clippable) title — on a narrow
             // rail the actionable part must survive truncation.
             let mut detail = vec![Span::raw(" └ ")];
-            if at_cursor && state.mode == Mode::Agent {
+            if at_cursor {
                 detail.push(Span::styled(
-                    "y·a·d ",
+                    "y·a·n ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ));
             }
@@ -495,10 +484,10 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
             lines.push(TuiLine::from(detail));
         } else if let Some((files, adds, dels)) = pane.review {
             // Ready-to-review rows expand with the diff stat and (on the
-            // cursor row in AGENT mode) the integration keys. The `+`/`-`
-            // signs carry the direction; no hue in the monochrome wrapper.
+            // focused row) the integration keys. The `+`/`-` signs carry
+            // the direction; no hue in the monochrome wrapper.
             let mut detail = vec![Span::raw(" └ ")];
-            if at_cursor && state.mode == Mode::Agent {
+            if at_cursor {
                 detail.push(Span::styled(
                     "m·p·D·r ",
                     Style::default().add_modifier(Modifier::BOLD),
@@ -517,11 +506,7 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
     }
     if order.is_empty() {
         lines.push(TuiLine::raw(""));
-        if state.queue_only {
-            lines.push(TuiLine::styled("✓ all clear", tint(nc, Color::DarkGray)));
-        } else {
-            lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
-        }
+        lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
     }
     let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
     let roster = Paragraph::new(lines)
@@ -905,11 +890,11 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
         .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Pty);
     let hints = match state.mode {
         Mode::Normal if pty_focused => {
-            "NORMAL  ⇢ keys go to the orchestrator · ^a manage · ^c interrupt agent"
+            "NORMAL  ⇢ keys go to the orchestrator · ^space menu · ^c interrupt agent"
         }
-        Mode::Normal => "NORMAL  ^a manage · : cmd · PgUp/PgDn scroll · ^c interrupt agent",
-        Mode::Agent => {
-            "AGENT  [/] panel · j/k · Enter open · s/v split · q queue · y/a/d · D/m/p/r review · t attach · A tier · n/N new · x close · ? keys · Esc"
+        Mode::Normal => "NORMAL  ^space menu · : cmd · PgUp/PgDn scroll · ^c interrupt agent",
+        Mode::Leader => {
+            "LEADER  1-9 session · Tab next · n new · p palette · c close · a tier · t attach · ? keys · Esc"
         }
         Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
         Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
@@ -1218,7 +1203,11 @@ mod tests {
             vec![target_id],
             "clicked rail row opened solo"
         );
-        assert_eq!(st.mode, Mode::Agent, "and entered AGENT mode");
+        assert_eq!(
+            st.mode,
+            Mode::Normal,
+            "no mode to enter — click just focuses"
+        );
     }
 
     #[test]
@@ -1497,12 +1486,15 @@ mod tests {
             options: vec![],
             risk: crate::risk::Risk::High,
         });
-        st.mode = Mode::Agent;
-        st.rail_cursor = 0; // r1 tops the roster
+        st.detail = DetailLayout {
+            shown: vec!["r1".into()],
+            split: crate::tui::state::Split::H,
+            focus: 0,
+        };
         let text = draw(&mut st, 100, 24);
         assert!(text.contains("rm -rf"), "pending title inline");
         assert!(text.contains('└'), "expanded row marker");
-        assert!(text.contains("y·a·d"), "resolve hint on the cursor row");
+        assert!(text.contains("y·a·n"), "resolve hint on the focused row");
     }
 
     #[test]
@@ -1518,15 +1510,6 @@ mod tests {
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("high ·"), "risk label on the expanded row");
         assert!(text.contains("[A]"), "auto tier tagged on the row");
-    }
-
-    #[test]
-    fn queue_only_rail_shows_all_clear_when_empty() {
-        let mut st = agents3();
-        st.queue_only = true;
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains("all clear"), "empty queue reads calm");
-        assert!(text.contains("needs you · 0"), "queue header with count");
     }
 
     #[test]
@@ -1557,12 +1540,12 @@ mod tests {
     #[test]
     fn keys_help_popup_lists_mode_bindings() {
         let mut st = agents3();
-        st.mode = Mode::Agent;
+        st.mode = Mode::Leader;
         st.keys_help = true;
         let text = draw(&mut st, 90, 30);
         assert!(
-            text.contains("cycle autonomy tier"),
-            "agent bindings listed"
+            text.contains("cycle its autonomy tier"),
+            "leader bindings listed"
         );
         assert!(text.contains("command palette"));
     }
