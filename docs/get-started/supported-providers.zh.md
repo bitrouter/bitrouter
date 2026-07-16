@@ -29,7 +29,7 @@ description: BitRouter 网络上已注册的每个供应商——由任何人都
 | `google-ai` | Google | US | google, openai | Subscription | 3 |
 | `minimax` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `minimax_cn` | MiniMax | CN | anthropic, openai | Per-token | 3 |
-| `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 3 |
+| `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 4 |
 | `moonshotai_coding_plan` | Moonshot AI | CN | openai | Subscription | 1 |
 | `novita` | Novita AI | US | openai | Per-token | 15 |
 | `openai` | OpenAI | US | openai, responses | Per-token | 6 |

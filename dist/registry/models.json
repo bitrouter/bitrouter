@@ -3540,18 +3540,6 @@
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "moonshotai_coding_plan",
-          "provider_model_id": "kimi-for-coding",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.16,
@@ -3894,6 +3882,61 @@
         }
       ],
       "release_date": "2026-06-12"
+    },
+    {
+      "family": "kimi-k3",
+      "id": "moonshotai/kimi-k3",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 131072,
+      "name": "Kimi: K3",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "moonshotai",
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "moonshotai_coding_plan",
+          "provider_model_id": "kimi-for-coding",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "release_date": "2026-07-16"
     },
     {
       "family": "gpt",
