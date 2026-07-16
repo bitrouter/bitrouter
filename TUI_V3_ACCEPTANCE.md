@@ -222,10 +222,10 @@ Assert, each with a captured snapshot:
 - [x] Record evidence file paths + the key asserting lines in the Build Log.
 
 ### Definition of Done
-- [ ] Every box in **§2** and **§3 (Gates A, B, C)** is `[x]`.
-- [ ] Working tree clean; all changes committed on the branch.
-- [ ] The Fable-5 reviewer's last run returned **zero CONFIRMED** findings.
-- [ ] Live e2e evidence is recorded in §4.
+- [x] Every box in **§2** and **§3 (Gates A, B, C)** is `[x]`.
+- [x] Working tree clean; all changes committed on the branch.
+- [x] The Fable-5 reviewer's last run returned **zero CONFIRMED** findings.
+- [x] Live e2e evidence is recorded in §4.
 
 When all of the above hold: **announce `DONE`, summarize the Build Log, and stop the loop.**
 Do not schedule another iteration.
@@ -387,4 +387,8 @@ DECISION: CLI.md had no tui section at all (the task assumed one) — added a
     mirrors' worktrees live bridge-side; the stub's change was untracked-only).
   Live e2e also caught + fixed the doubled changes_requested prefix in
   REJECT_NOTE (898d924b, gates green 1925); reviewer re-confirming.
+2026-07-16 7d040458 — DONE — reviewer confirmed 898d924b ("ZERO CONFIRMED
+  findings", final run postdates the last code change); final sweep on a clean
+  tree: fmt OK, clippy -D warnings 0, 1925/1925 nextest, purity grep
+  test-module-only. Every §2 + §3 box is [x]. TUI v3 is complete.
 ```
