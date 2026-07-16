@@ -88,32 +88,13 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         .constraints(constraints)
         .split(area);
 
-    // The center column: detail over (optional) composer over status bar.
-    // The composer renders only when it can receive input — a focused ACP
-    // pane (typed prompts) or BROADCAST composition. A focused PTY pane owns
-    // the keyboard (locked-mode passthrough), so its rows go back to the
-    // terminal; the status bar carries the routing hint instead.
-    let composer = state.mode == Mode::Broadcast
-        || state.focused().is_some_and(|p| {
-            p.kind == crate::tui::state::PaneKind::Monitor
-                && p.owner == crate::tui::state::Ownership::Human
-        });
-    // The composer grows with its (Shift-Enter) newlines, up to 5 rows.
-    let input_lines = if state.mode == Mode::Broadcast {
-        state.broadcast_input.split('\n').count()
-    } else {
-        state.input.split('\n').count()
-    }
-    .clamp(1, 5) as u16;
-    let mut row_constraints = vec![Constraint::Min(1)]; // detail viewport
-    if composer {
-        row_constraints.push(Constraint::Length(input_lines + 2)); // composer (+ borders)
-    }
-    row_constraints.push(Constraint::Length(1)); // status bar
+    // The center column: detail over status bar. There is no composer —
+    // monitors are read-only (TUI_SPEC_V3 I2) and a focused PTY pane owns
+    // the keyboard (locked-mode passthrough).
     let center = cols[if show_sessions { 1 } else { 0 }];
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(row_constraints)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(center);
 
     // Clickable regions for this frame, filled by the chrome renderers and
@@ -125,9 +106,6 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     render_detail(state, pty, frame, rows[0]);
     if show_rail {
         render_rail(state, &mut zones, frame, cols[cols.len() - 1]);
-    }
-    if composer {
-        render_input(state, frame, rows[1]);
     }
     render_statusbar(state, &mut zones, frame, rows[rows.len() - 1]);
     state.click_zones = zones;
@@ -939,32 +917,6 @@ fn render_diff_line(d: &DiffLine, nc: bool, width: usize) -> TuiLine<'static> {
     }
 }
 
-/// The composer (only drawn when a pane can receive typed input — the
-/// renderer gates on ACP focus / BROADCAST; a focused PTY pane's rows go to
-/// the terminal instead).
-fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
-    let (prefix, text) = if state.mode == Mode::Broadcast {
-        ("⇉ ", state.broadcast_input.as_str())
-    } else {
-        ("› ", state.input.as_str())
-    };
-    // Multiline composer: the prefix marks the first line; continuation
-    // lines indent under it.
-    let lines: Vec<TuiLine> = text
-        .split('\n')
-        .enumerate()
-        .map(|(i, l)| {
-            if i == 0 {
-                TuiLine::raw(format!("{prefix}{l}"))
-            } else {
-                TuiLine::raw(format!("  {l}"))
-            }
-        })
-        .collect();
-    let para = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
-    frame.render_widget(para, area);
-}
-
 /// The global status bar (one line, three zones): mode + context hints on
 /// the left — a notice temporarily claims that zone (it decays reducer-side)
 /// — and global fleet state on the right (attention counts by glyph, session
@@ -1333,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_renders_only_where_typing_can_land() {
+    fn composer_never_renders() {
         let mut st = with_session();
         // A focused PTY session owns the keyboard: no composer, and the
         // routing hint lives in the status bar instead.
@@ -1348,14 +1300,22 @@ mod tests {
             text.contains("keys go to the orchestrator"),
             "hint moved to the status bar"
         );
-        // An ACP focus gets the prompt back.
+        let boxes_under_pty = text.matches('┌').count();
+        // A focused Monitor is read-only (TUI_SPEC_V3 I2): no composer, no
+        // input-border row — the same chrome as a PTY focus, which never
+        // had one.
         st.detail = DetailLayout {
             shown: vec!["r0".into()],
             split: crate::tui::state::Split::H,
             focus: 0,
         };
         let text = draw(&mut st, 140, 24);
-        assert!(text.contains("› "), "composer for the ACP pane");
+        assert!(!text.contains("› "), "no composer for a Monitor pane");
+        assert_eq!(
+            text.matches('┌').count(),
+            boxes_under_pty,
+            "no extra input box appears when a Monitor takes focus"
+        );
     }
 
     #[test]
@@ -1519,15 +1479,6 @@ mod tests {
         st.agents[0].selected = true;
         let text = draw(&mut st, 80, 24);
         assert!(text.contains('✓'), "selection marker rendered");
-    }
-
-    #[test]
-    fn broadcast_input_renders_in_broadcast_mode() {
-        let mut st = agents3();
-        st.mode = Mode::Broadcast;
-        st.broadcast_input = "BROADCAST_TEXT".into();
-        let text = draw(&mut st, 80, 24);
-        assert!(text.contains("BROADCAST_TEXT"), "broadcast input shown");
     }
 
     #[test]

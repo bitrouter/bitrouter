@@ -422,10 +422,6 @@ pub struct PaneState {
     /// The model this pane was pinned to at launch (sessions: the `--model`
     /// value), shown in the sessions panel. `None` = the daemon's default.
     pub model: Option<String>,
-    /// Draft snapshot of the composer: what was typed at this pane before
-    /// focus moved away, restored when focus returns (polish: no lost input
-    /// across pane switches).
-    pub draft: String,
 }
 
 impl PaneState {
@@ -461,7 +457,6 @@ impl PaneState {
             kind: PaneKind::default(),
             owner: Ownership::default(),
             model: None,
-            draft: String::new(),
         }
     }
 
@@ -798,7 +793,6 @@ pub struct AppState {
     perm_seq: u64,
     /// agent_id → harness tag, from the config catalog.
     pub harness_by_agent: HashMap<String, String>,
-    pub input: String,
     pub should_quit: bool,
     pub mode: Mode,
     pub picker: Option<PickerState>,
@@ -860,7 +854,6 @@ impl AppState {
             queue_only: false,
             perm_seq: 0,
             harness_by_agent: HashMap::new(),
-            input: String::new(),
             should_quit: false,
             mode: Mode::Normal,
             picker: None,
@@ -956,30 +949,22 @@ impl AppState {
     /// The manager-layer state of every ACP agent, in the durable
     /// [`FleetAgent`](bitrouter_substrate::fleet::FleetAgent) shape — the
     /// fleet-state snapshot's agent list. PTY panes (the orchestrator,
-    /// interactive attaches) are not fleet agents and are skipped; the
-    /// focused pane's live composer text counts as its draft (unfocused
-    /// panes already hold theirs in `draft`).
+    /// interactive attaches) and orchestrator-owned monitors are not fleet
+    /// agents and are skipped. Monitors are read-only (TUI_SPEC_V3 I2):
+    /// there is no composer, so no draft to persist.
     pub fn fleet_agents(&self) -> Vec<bitrouter_substrate::fleet::FleetAgent> {
-        let focused = self.detail.focused_id().map(str::to_string);
         self.agents
             .iter()
             .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human)
-            .map(|p| {
-                let draft = if focused.as_deref() == Some(p.record_id.as_str()) {
-                    &self.input
-                } else {
-                    &p.draft
-                };
-                bitrouter_substrate::fleet::FleetAgent {
-                    record_id: p.record_id.clone(),
-                    autonomy: p.autonomy.label().to_string(),
-                    review: p.review,
-                    port: p.port,
-                    pending: p.pending.as_ref().map(|pending| pending.title.clone()),
-                    draft: (!draft.is_empty()).then(|| draft.clone()),
-                    turn_active: p.turn_active,
-                    exited: p.exited,
-                }
+            .map(|p| bitrouter_substrate::fleet::FleetAgent {
+                record_id: p.record_id.clone(),
+                autonomy: p.autonomy.label().to_string(),
+                review: p.review,
+                port: p.port,
+                pending: p.pending.as_ref().map(|pending| pending.title.clone()),
+                draft: None,
+                turn_active: p.turn_active,
+                exited: p.exited,
             })
             .collect()
     }
@@ -1089,33 +1074,12 @@ impl AppState {
 
 /// Fold one event into state, returning effects for the loop to run.
 /// PURE: no I/O, no session access.
-///
-/// Wraps the dispatch with the composer's draft snapshot: whenever an event
-/// moves detail focus, the outgoing pane keeps what was typed and the
-/// incoming pane's draft is restored — switching panes never loses input.
 pub fn reduce(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
-    let focus_before = state.detail.focused_id().map(str::to_string);
     let notice_before = state.notice.clone();
     let effects = reduce_inner(state, event);
     // A fresh notice starts its decay clock (the Tick arm clears it).
     if state.notice != notice_before && state.notice.is_some() {
         state.notice_at = state.tick;
-    }
-    let focus_after = state.detail.focused_id().map(str::to_string);
-    if focus_before != focus_after {
-        if let Some(old) = &focus_before {
-            let typed = std::mem::take(&mut state.input);
-            if let Some(pane) = state.pane_by_id_mut(old) {
-                pane.draft = typed;
-            }
-        }
-        if let Some(new) = &focus_after {
-            let restored = state
-                .pane_by_id_mut(new)
-                .map(|pane| std::mem::take(&mut pane.draft))
-                .unwrap_or_default();
-            state.input = restored;
-        }
     }
     // Time-in-state: stamp the tick whenever a pane changes actionability
     // bucket, so the rail can show how long it has been working/blocked/done.
@@ -1592,12 +1556,8 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                             text,
                         }]
                     }
-                    Some(p) if p.kind == PaneKind::Monitor && p.owner == Ownership::Human => {
-                        // Into the composer, newlines intact (Shift-Enter
-                        // territory) — Enter still submits explicitly.
-                        state.input.push_str(&text);
-                        Vec::new()
-                    }
+                    // Monitors are read-only (TUI_SPEC_V3 I2) — paste has
+                    // nowhere to land.
                     _ => Vec::new(),
                 },
                 _ => Vec::new(),
@@ -1793,62 +1753,23 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         return Vec::new();
     }
 
-    // A focused orchestrator-owned monitor can't be prompted — the
-    // orchestrator owns that session (its composer is hidden; don't type
-    // into an invisible input).
-    if state
-        .focused()
-        .is_some_and(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Orchestrator)
-    {
-        if key.code == KeyCode::Char(':') && state.input.is_empty() {
-            state.palette = Some(PaletteState::default());
-            state.mode = Mode::Command;
-        } else {
-            state.notice =
-                Some("orchestrator-managed subagent — steer it from the orchestrator".into());
-        }
-        return Vec::new();
-    }
-
+    // Monitors are read-only (TUI_SPEC_V3 I2): there is no composer and no
+    // human prompt path. `:` opens the command palette; anything else that
+    // would have typed lands on a notice pointing at the owner.
     match key.code {
-        // `:` on an empty prompt opens the command palette; mid-sentence it
-        // is a literal colon.
-        KeyCode::Char(':') if state.input.is_empty() => {
+        KeyCode::Char(':') => {
             state.palette = Some(PaletteState::default());
             state.mode = Mode::Command;
             Vec::new()
         }
-        KeyCode::Char(c) => {
-            state.input.push(c);
+        KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace => {
+            state.notice = Some(match state.focused().map(|p| p.owner) {
+                Some(Ownership::Orchestrator) => {
+                    "orchestrator-managed subagent — steer it from the orchestrator".into()
+                }
+                _ => "read-only monitor — attach (t) to drive it directly".into(),
+            });
             Vec::new()
-        }
-        KeyCode::Backspace => {
-            state.input.pop();
-            Vec::new()
-        }
-        // Shift-Enter inserts a newline (arrives distinctly under the kitty
-        // keyboard enhancement the loop enables when supported).
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-            state.input.push('\n');
-            Vec::new()
-        }
-        KeyCode::Enter => {
-            let text = std::mem::take(&mut state.input);
-            if text.is_empty() {
-                return Vec::new();
-            }
-            if let Some(pane) = state.focused_mut() {
-                pane.push_external(Line::UserPrompt(text.clone()));
-                pane.turn_active = true;
-                // New work supersedes the previous turn's review/done state.
-                pane.review = None;
-                pane.done = false;
-                pane.check_retries = 0;
-            }
-            vec![Effect::Prompt {
-                record_id: focus_id,
-                text,
-            }]
         }
         _ => Vec::new(),
     }
@@ -1969,9 +1890,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 mark_shown_seen(state);
                 state.clamp_rail_cursor();
                 state.mode = Mode::Normal;
-                state.notice = Some(
-                    "rejected — type feedback and Enter; it becomes the agent's next prompt".into(),
-                );
+                state.notice = Some("rejected".into());
             }
             Vec::new()
         }
@@ -3085,7 +3004,6 @@ mod tests {
                 matches!(&fx[..], [Effect::PtyKey { .. }]),
                 "{key:?} must pass through: {fx:?}"
             );
-            assert!(st.input.is_empty(), "nothing leaks into the prompt line");
         }
         // The one leader: Ctrl-A enters the manager.
         let fx = reduce(
@@ -3341,9 +3259,7 @@ mod tests {
     #[test]
     fn turn_ended_flushes_tail_clears_working_and_records_stop() {
         let mut st = AppState::new(pane());
-        st.input = "go".into();
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert!(st.agents[0].turn_active, "prompt starts a turn");
+        st.agents[0].turn_active = true; // a turn is in flight
         reduce(&mut st, &chunk_to("rec-1", "no trailing newline"));
         reduce(
             &mut st,
@@ -3633,49 +3549,30 @@ mod tests {
         assert_eq!(st.notice.as_deref(), Some("failed to spawn fake: boom"));
     }
 
-    // ── NORMAL-mode input. ──
+    // ── NORMAL-mode keys: monitors are read-only (TUI_SPEC_V3 I2). ──
 
     #[test]
-    fn typing_appends_to_input() {
+    fn monitor_pane_is_read_only() {
         let mut st = AppState::new(pane());
-        reduce(&mut st, &press(KeyCode::Char('h')));
-        reduce(&mut st, &press(KeyCode::Char('i')));
-        assert_eq!(st.input, "hi");
-    }
-
-    #[test]
-    fn backspace_removes_last_char() {
-        let mut st = AppState::new(pane());
-        st.input = "hi".into();
-        reduce(&mut st, &press(KeyCode::Backspace));
-        assert_eq!(st.input, "h");
-    }
-
-    #[test]
-    fn enter_emits_prompt_effect_records_line_and_clears_input() {
-        let mut st = AppState::new(pane());
-        st.input = "fix the bug".into();
-        let effects = reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(
-            effects,
-            vec![Effect::Prompt {
-                record_id: "rec-1".into(),
-                text: "fix the bug".into(),
-            }]
+        for key in [
+            press(KeyCode::Char('h')),
+            press(KeyCode::Char('i')),
+            press(KeyCode::Enter),
+        ] {
+            let fx = reduce(&mut st, &key);
+            assert!(
+                !fx.iter()
+                    .any(|f| matches!(f, Effect::Prompt { .. } | Effect::PtyPaste { .. })),
+                "a Monitor never emits a prompt or paste: {fx:?}"
+            );
+        }
+        assert!(
+            !st.agents[0]
+                .lines
+                .iter()
+                .any(|l| matches!(l, Line::UserPrompt(_))),
+            "no prompt line lands in a read-only transcript"
         );
-        assert_eq!(st.input, "");
-        assert_eq!(
-            st.agents[0].lines,
-            vec![Line::UserPrompt("fix the bug".into())]
-        );
-    }
-
-    #[test]
-    fn enter_on_empty_input_is_a_noop() {
-        let mut st = AppState::new(pane());
-        let effects = reduce(&mut st, &press(KeyCode::Enter));
-        assert!(effects.is_empty());
-        assert!(st.agents[0].lines.is_empty());
     }
 
     #[test]
@@ -3707,16 +3604,6 @@ mod tests {
         st.mode = Mode::Agent;
         reduce(&mut st, &press(KeyCode::Esc));
         assert_eq!(st.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn ctrl_a_does_not_type_into_input() {
-        let mut st = AppState::new(pane());
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
-        );
-        assert_eq!(st.input, "");
     }
 
     // ── Roster sort. ──
@@ -3935,49 +3822,7 @@ mod tests {
         );
     }
 
-    // ── Polish: composer drafts, Shift-Enter, jump, wheel scroll. ──
-
-    #[test]
-    fn draft_survives_pane_switches() {
-        let mut st = agents3(); // detail = [r0]
-        st.input = "half-typed thought".into();
-        // Switch to r1 (open solo from the rail).
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1;
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(st.input, "", "fresh pane starts with its own (empty) draft");
-        // Type into r1, then jump back to r0.
-        st.input = "note for r1".into();
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
-        );
-        st.rail_cursor = 0;
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(st.input, "half-typed thought", "r0's draft restored");
-        // And r1 kept its own.
-        st.mode = Mode::Agent;
-        st.rail_cursor = 1;
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(st.input, "note for r1");
-    }
-
-    #[test]
-    fn shift_enter_inserts_newline_enter_sends_it_all() {
-        let mut st = AppState::new(pane());
-        st.input = "line one".into();
-        reduce(
-            &mut st,
-            &AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
-        );
-        assert_eq!(st.input, "line one\n");
-        st.input.push_str("line two");
-        let fx = reduce(&mut st, &press(KeyCode::Enter));
-        assert!(
-            matches!(&fx[..], [Effect::Prompt { text, .. }] if text == "line one\nline two"),
-            "{fx:?}"
-        );
-    }
+    // ── Polish: jump, wheel scroll. ──
 
     #[test]
     fn g_jumps_the_rail_cursor_to_the_roster_head() {
@@ -4641,7 +4486,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_clears_review_and_routes_feedback_as_next_prompt() {
+    fn reject_clears_review_and_opens_the_pane() {
         let mut st = agents3();
         reduce(&mut st, &review_ready("r1"));
         st.mode = Mode::Agent;
@@ -4650,17 +4495,13 @@ mod tests {
         assert!(fx.is_empty());
         assert!(st.agents[1].review.is_none(), "review cleared");
         assert_eq!(st.detail.shown, vec!["r1".to_string()], "pane opened");
-        assert_eq!(st.mode, Mode::Normal, "ready to type feedback");
-        assert!(st.notice.as_deref().is_some_and(|n| n.contains("feedback")));
-        // The typed feedback goes to the rejected agent as its next prompt.
-        st.input = "use a builder instead".into();
+        assert_eq!(st.mode, Mode::Normal);
+        assert!(st.notice.as_deref().is_some_and(|n| n.contains("rejected")));
+        // Monitors are read-only: no feedback-as-next-prompt path remains.
         let fx = reduce(&mut st, &press(KeyCode::Enter));
-        assert_eq!(
-            fx,
-            vec![Effect::Prompt {
-                record_id: "r1".into(),
-                text: "use a builder instead".into()
-            }]
+        assert!(
+            !fx.iter().any(|f| matches!(f, Effect::Prompt { .. })),
+            "reject never re-prompts from the keyboard: {fx:?}"
         );
     }
 
@@ -4728,17 +4569,6 @@ mod tests {
             st.agents[0].lines.last(),
             Some(Line::Error(e)) if e.contains("review manually")
         ));
-    }
-
-    #[test]
-    fn new_prompt_supersedes_review_state() {
-        let mut st = AppState::new(pane());
-        reduce(&mut st, &review_ready("rec-1"));
-        st.agents[0].check_retries = 2;
-        st.input = "keep going".into();
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert!(st.agents[0].review.is_none());
-        assert_eq!(st.agents[0].check_retries, 0);
     }
 
     #[test]
@@ -5035,17 +4865,11 @@ mod tests {
     // ── Command palette + which-key. ──
 
     #[test]
-    fn colon_on_empty_prompt_opens_palette_mid_sentence_stays_literal() {
+    fn colon_opens_the_command_palette() {
         let mut st = AppState::new(pane());
         reduce(&mut st, &press(KeyCode::Char(':')));
         assert_eq!(st.mode, Mode::Command);
         assert!(st.palette.is_some());
-
-        let mut st = AppState::new(pane());
-        st.input = "add field x".into();
-        reduce(&mut st, &press(KeyCode::Char(':')));
-        assert_eq!(st.mode, Mode::Normal, "mid-sentence colon types");
-        assert_eq!(st.input, "add field x:");
     }
 
     #[test]
@@ -5252,16 +5076,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn new_prompt_supersedes_the_unread_completion() {
-        let mut st = agents3();
-        st.agents[0].done = true;
-        reduce(&mut st, &press(KeyCode::Char('g')));
-        reduce(&mut st, &press(KeyCode::Enter));
-        assert!(!st.agents[0].done, "new work clears done");
-        assert!(st.agents[0].turn_active);
-    }
-
     // ── Time-in-state. ──
 
     #[test]
@@ -5340,8 +5154,6 @@ mod tests {
     #[test]
     fn fleet_agents_snapshot_maps_manager_state() {
         let mut st = agents3(); // r0 focused solo
-        st.input = "half-typed".into(); // the focused pane's live composer
-        st.agents[1].draft = "stored".into();
         st.agents[1].autonomy = Autonomy::Auto;
         st.agents[1].review = Some((3, 42, 7));
         st.agents[1].port = Some(3101);
@@ -5359,18 +5171,15 @@ mod tests {
         let snap = st.fleet_agents();
         assert_eq!(snap.len(), 3, "pty panes skipped");
         assert_eq!(snap[0].record_id, "r0");
-        assert_eq!(
-            snap[0].draft.as_deref(),
-            Some("half-typed"),
-            "focused pane's draft is the live input"
-        );
         assert_eq!(snap[0].autonomy, "manual");
-        assert_eq!(snap[1].draft.as_deref(), Some("stored"));
         assert_eq!(snap[1].autonomy, "auto");
         assert_eq!(snap[1].review, Some((3, 42, 7)));
         assert_eq!(snap[1].port, Some(3101));
         assert_eq!(snap[2].pending.as_deref(), Some("rm -rf scratch"));
-        assert_eq!(snap[2].draft, None, "empty drafts are omitted");
+        assert!(
+            snap.iter().all(|a| a.draft.is_none()),
+            "monitors are read-only — no drafts to persist"
+        );
     }
 
     // ── Title badge. ──
@@ -5493,11 +5302,18 @@ mod tests {
                 .as_deref()
                 .is_some_and(|n| n.contains("close_subagent"))
         );
-        // Typing at a focused mirror doesn't feed an invisible composer.
+        // Typing at a focused orchestrator-owned monitor lands on a notice
+        // pointing at the owner, never an invisible composer.
         st.mode = Mode::Normal;
         st.detail = DetailLayout::solo("mcp:abc123".into());
-        reduce(&mut st, &press(KeyCode::Char('h')));
-        assert!(st.input.is_empty(), "no hidden composer input");
+        let fx = reduce(&mut st, &press(KeyCode::Char('h')));
+        assert!(fx.is_empty(), "typing at a mirror does nothing: {fx:?}");
+        assert!(
+            st.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("orchestrator")),
+            "notice routes the human to the owner"
+        );
     }
 
     #[cfg(unix)]
@@ -5570,11 +5386,17 @@ mod tests {
     // ── Bracketed paste. ──
 
     #[test]
-    fn paste_lands_in_the_composer_without_submitting() {
+    fn paste_at_a_monitor_is_inert() {
         let mut st = AppState::new(pane());
         let effects = reduce(&mut st, &AppEvent::Paste("line1\r\nline2".into()));
-        assert!(effects.is_empty(), "no submit on paste");
-        assert_eq!(st.input, "line1\nline2", "newlines intact, CRLF normalized");
+        assert!(
+            effects.is_empty(),
+            "monitors are read-only — paste is inert"
+        );
+        assert!(
+            st.agents[0].lines.is_empty(),
+            "nothing lands in the transcript"
+        );
     }
 
     #[test]
@@ -5592,7 +5414,6 @@ mod tests {
                 text: "hello".into(),
             }]
         );
-        assert!(st.input.is_empty(), "PTY paste never leaks to the composer");
     }
 
     #[test]

@@ -899,16 +899,12 @@ fn previous_fleet_notice(prev: &bitrouter_substrate::fleet::FleetState) -> Optio
         return None;
     }
     let reviews = prev.agents.iter().filter(|a| a.review.is_some()).count();
-    let drafts = prev.agents.iter().filter(|a| a.draft.is_some()).count();
     let mut notice = format!("previous fleet remembered: {} agent(s)", prev.agents.len());
     if prev.sessions.len() > 1 {
         notice.push_str(&format!(", {} sessions", prev.sessions.len()));
     }
     if reviews > 0 {
         notice.push_str(&format!(", {reviews} mid-review"));
-    }
-    if drafts > 0 {
-        notice.push_str(&format!(", {drafts} unsent draft(s)"));
     }
     if !prev.clean_shutdown {
         notice.push_str(" · unclean shutdown");
@@ -1754,13 +1750,13 @@ mod tests {
     #[test]
     fn previous_fleet_notice_summarizes_and_flags_unclean_stops() {
         use bitrouter_substrate::fleet::{FLEET_STATE_VERSION, FleetAgent, FleetState};
-        let agent = |review: Option<(u64, u64, u64)>, draft: Option<&str>| FleetAgent {
+        let agent = |review: Option<(u64, u64, u64)>| FleetAgent {
             record_id: "r".into(),
             autonomy: "manual".into(),
             review,
             port: None,
             pending: None,
-            draft: draft.map(str::to_string),
+            draft: None,
             turn_active: false,
             exited: false,
         };
@@ -1770,12 +1766,11 @@ mod tests {
             clean_shutdown: false,
             writer_pid: 1,
             sessions: Vec::new(),
-            agents: vec![agent(Some((1, 2, 3)), None), agent(None, Some("d"))],
+            agents: vec![agent(Some((1, 2, 3))), agent(None)],
         };
         let notice = super::previous_fleet_notice(&prev).expect("notice");
         assert!(notice.contains("2 agent(s)"), "{notice}");
         assert!(notice.contains("1 mid-review"), "{notice}");
-        assert!(notice.contains("1 unsent draft(s)"), "{notice}");
         assert!(notice.contains("unclean shutdown"), "{notice}");
         assert!(notice.contains("fleet-state.json"), "{notice}");
 
