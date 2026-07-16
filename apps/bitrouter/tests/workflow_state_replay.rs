@@ -4,7 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::routing::post;
 use axum_test::TestServer;
-use bitrouter::metering::{ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource};
+use bitrouter::metering::{
+    ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
+};
 use bitrouter::workflow_state::archive::{CloudUsageRecord, TraceArchive, WorkflowRunArtifact};
 use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
@@ -129,6 +131,9 @@ fn computed_usage(
             pricing_version: format!("sha256:{}", "0".repeat(64)),
             unknown_reason: None,
         }),
+        reconciliation_status: ReconciliationStatus::NotApplicable,
+        reconciliation_attempts: 0,
+        authoritative_receipt: None,
         status: Some("succeeded".to_string()),
     }
 }
@@ -209,6 +214,81 @@ fn benchmark_integrity_rejects_unknown_charge_evidence() {
         .expect_err("unknown charge must fail benchmark integrity");
 
     assert!(error.to_string().contains("charge is not computed"));
+}
+
+#[test]
+fn benchmark_integrity_accepts_exact_authoritative_computed_receipt() {
+    let traces = vec![benchmark_trace("req-1")];
+    let mut usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+    let receipt = json!({
+        "request_id": "req-1",
+        "state": "computed",
+        "model_id": "gpt-test",
+        "provider_id": "openai",
+        "usage": {
+            "uncached_input_tokens": 10,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 2,
+            "reasoning_tokens": 0
+        },
+        "final_charge_micro_usd": 30
+    });
+    usage.usage_origin = UsageOrigin::AuthoritativeReceipt;
+    usage.raw_usage = Some(receipt.clone());
+    usage.reconciliation_status = ReconciliationStatus::Computed;
+    usage.reconciliation_attempts = 1;
+    usage.authoritative_receipt = Some(receipt);
+
+    WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect("exact authoritative receipt should pass");
+}
+
+#[test]
+fn benchmark_integrity_rejects_pending_authoritative_reconciliation() {
+    let traces = vec![benchmark_trace("req-1")];
+    let mut usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+    usage.reconciliation_status = ReconciliationStatus::Pending;
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect_err("pending receipt must fail artifact assembly");
+
+    assert!(error.to_string().contains("reconciliation is pending"));
+}
+
+#[test]
+fn benchmark_integrity_accepts_authoritative_not_charged_without_zero_imputation() {
+    let traces = vec![benchmark_trace("req-1")];
+    let receipt = json!({
+        "request_id": "req-1",
+        "state": "not_charged",
+        "model_id": null,
+        "provider_id": null,
+        "usage": {
+            "uncached_input_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0
+        },
+        "final_charge_micro_usd": null
+    });
+    let usage = CloudUsageRecord {
+        request_id: Some("req-1".to_string()),
+        provider_id: "bitrouter".to_string(),
+        model_id: "unresolved".to_string(),
+        usage_origin: UsageOrigin::AuthoritativeReceipt,
+        raw_usage: Some(receipt.clone()),
+        charge_status: ChargeStatus::NotCharged,
+        reconciliation_status: ReconciliationStatus::NotCharged,
+        reconciliation_attempts: 1,
+        authoritative_receipt: Some(receipt),
+        status: Some("failed".to_string()),
+        ..Default::default()
+    };
+
+    WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect("authoritative not-charged receipt should pass");
 }
 
 #[test]

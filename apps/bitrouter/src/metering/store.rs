@@ -18,18 +18,20 @@ use std::path::Path;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set,
 };
 use serde::{Deserialize, Serialize};
 
+use bitrouter_cloud_sdk::settlement::{SettlementReceipt, SettlementState};
 use bitrouter_sdk::language_model::{Usage, UsageOrigin};
 use bitrouter_sdk::{BitrouterError, Result};
 
-use crate::metering::db::RequestMetric;
+use crate::metering::db::{ReconciliationStatus, RequestMetric};
 use crate::metering::entities::requests;
 use crate::metering::pricing::{
     ChargeEvidence, ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
+    unavailable_charge_evidence,
 };
 
 /// A rolling time window for usage queries.
@@ -95,6 +97,12 @@ pub struct MeteringUsageRecord {
     pub charge_status: ChargeStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charge_evidence: Option<ChargeEvidence>,
+    #[serde(default)]
+    pub reconciliation_status: ReconciliationStatus,
+    #[serde(default)]
+    pub reconciliation_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoritative_receipt: Option<serde_json::Value>,
     pub status: Option<String>,
 }
 
@@ -106,6 +114,17 @@ pub struct UsagePriceOverride {
     pub cache_read_micro_usd_per_token: Option<f64>,
     pub cache_write_micro_usd_per_token: Option<f64>,
     pub output_micro_usd_per_token: f64,
+}
+
+/// Minimal state needed by the bounded reconciliation loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconciliationRecord {
+    /// Stable request identity.
+    pub request_id: String,
+    /// Current reconciliation state.
+    pub status: ReconciliationStatus,
+    /// Receipt fetches already attempted.
+    pub attempts: u32,
 }
 
 impl MeteringUsageRecord {
@@ -390,6 +409,312 @@ impl MeteringStore {
         })
     }
 
+    /// Load reconciliation state for exactly the supplied request ids.
+    pub async fn reconciliation_records(
+        &self,
+        request_ids: &[String],
+    ) -> Result<Vec<ReconciliationRecord>> {
+        if request_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = requests::Entity::find()
+            .filter(requests::Column::RequestId.is_in(request_ids.iter().cloned()))
+            .order_by_asc(requests::Column::RequestId)
+            .all(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("load reconciliation records: {error}"))
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ReconciliationRecord {
+                request_id: row.request_id,
+                status: ReconciliationStatus::from_persisted(&row.reconciliation_status),
+                attempts: row.reconciliation_attempts.max(0) as u32,
+            })
+            .collect())
+    }
+
+    /// Increment the durable attempt counter before issuing a receipt request.
+    pub async fn start_reconciliation_attempt(&self, request_id: &str) -> Result<u32> {
+        let row = requests::Entity::find_by_id(request_id)
+            .one(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("load reconciliation attempt: {error}"))
+            })?
+            .ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "reconciliation request not found: {request_id}"
+                ))
+            })?;
+        if ReconciliationStatus::from_persisted(&row.reconciliation_status)
+            != ReconciliationStatus::Pending
+        {
+            return Err(BitrouterError::bad_request(format!(
+                "reconciliation request {request_id} is not pending"
+            )));
+        }
+        let attempts = row.reconciliation_attempts.max(0).saturating_add(1);
+        let mut active: requests::ActiveModel = row.into();
+        active.reconciliation_attempts = Set(attempts);
+        active.reconciliation_last_attempt_at = Set(Some(Utc::now().to_rfc3339()));
+        active.reconciliation_last_error = Set(None);
+        active.update(&self.db).await.map_err(|error| {
+            BitrouterError::internal(format!("persist reconciliation attempt: {error}"))
+        })?;
+        Ok(attempts as u32)
+    }
+
+    /// Store a content-free receipt-fetch failure for operator diagnosis.
+    pub async fn record_reconciliation_error(&self, request_id: &str, error: &str) -> Result<()> {
+        let row = requests::Entity::find_by_id(request_id)
+            .one(&self.db)
+            .await
+            .map_err(|load_error| {
+                BitrouterError::internal(format!("load reconciliation error row: {load_error}"))
+            })?
+            .ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "reconciliation request not found: {request_id}"
+                ))
+            })?;
+        let mut active: requests::ActiveModel = row.into();
+        active.reconciliation_last_error = Set(Some(truncate_error(error)));
+        active.update(&self.db).await.map_err(|update_error| {
+            BitrouterError::internal(format!("persist reconciliation error: {update_error}"))
+        })?;
+        Ok(())
+    }
+
+    /// Terminally fail a pending row after the bounded retry budget expires.
+    pub async fn exhaust_reconciliation(&self, request_id: &str, reason: &str) -> Result<()> {
+        let row = requests::Entity::find_by_id(request_id)
+            .one(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("load exhausted reconciliation: {error}"))
+            })?
+            .ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "reconciliation request not found: {request_id}"
+                ))
+            })?;
+        if ReconciliationStatus::from_persisted(&row.reconciliation_status)
+            != ReconciliationStatus::Pending
+        {
+            return Ok(());
+        }
+        let mut active: requests::ActiveModel = row.into();
+        active.reconciliation_status = Set(ReconciliationStatus::Unknown.as_str().to_string());
+        active.charge_status = Set(ChargeStatus::Unknown.as_str().to_string());
+        active.estimated_charge_micro_usd = Set(0);
+        active.reconciliation_last_error = Set(Some(truncate_error(reason)));
+        active.authoritative_settled_at = Set(Some(Utc::now().to_rfc3339()));
+        active.update(&self.db).await.map_err(|error| {
+            BitrouterError::internal(format!("persist exhausted reconciliation: {error}"))
+        })?;
+        Ok(())
+    }
+
+    /// Apply one content-free authoritative receipt to a pending local row.
+    /// Computed receipts are accepted only when frozen pricing reconstructs
+    /// the exact final micro-USD charge.
+    pub async fn apply_authoritative_receipt(
+        &self,
+        receipt: &SettlementReceipt,
+        prices: &[UsagePriceOverride],
+    ) -> Result<ReconciliationStatus> {
+        let row = requests::Entity::find_by_id(&receipt.request_id)
+            .one(&self.db)
+            .await
+            .map_err(|error| BitrouterError::internal(format!("load reconciliation row: {error}")))?
+            .ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "reconciliation request not found: {}",
+                    receipt.request_id
+                ))
+            })?;
+        let current = ReconciliationStatus::from_persisted(&row.reconciliation_status);
+        if current != ReconciliationStatus::Pending {
+            return Err(BitrouterError::bad_request(format!(
+                "reconciliation request {} is already terminal ({})",
+                receipt.request_id,
+                current.as_str()
+            )));
+        }
+        let receipt_json = serde_json::to_value(receipt).map_err(|error| {
+            BitrouterError::internal(format!("serialize authoritative receipt: {error}"))
+        })?;
+        let usage = authoritative_usage(receipt, receipt_json.clone())?;
+        let (status, charge_status, evidence, provider_id, model_id) = match receipt.state {
+            SettlementState::Pending => return Ok(ReconciliationStatus::Pending),
+            SettlementState::NotCharged => {
+                if usage.prompt_tokens != 0 || usage.completion_tokens != 0 {
+                    return self
+                        .persist_unknown_reconciliation(
+                            row,
+                            &usage,
+                            receipt_json,
+                            "not_charged_receipt_has_usage",
+                        )
+                        .await;
+                }
+                let mut evidence = unavailable_charge_evidence(&usage, "authoritative_not_charged");
+                evidence.status = ChargeStatus::NotCharged;
+                (
+                    ReconciliationStatus::NotCharged,
+                    ChargeStatus::NotCharged,
+                    evidence,
+                    receipt
+                        .provider_id
+                        .clone()
+                        .unwrap_or(row.provider_id.clone()),
+                    receipt.model_id.clone().unwrap_or(row.model_id.clone()),
+                )
+            }
+            SettlementState::Unknown => {
+                return self
+                    .persist_unknown_reconciliation(
+                        row,
+                        &usage,
+                        receipt_json,
+                        "authoritative_settlement_unknown",
+                    )
+                    .await;
+            }
+            SettlementState::Computed => {
+                let Some(provider_id) = receipt.provider_id.as_deref() else {
+                    return self
+                        .persist_unknown_reconciliation(
+                            row,
+                            &usage,
+                            receipt_json,
+                            "authoritative_provider_missing",
+                        )
+                        .await;
+                };
+                let Some(model_id) = receipt.model_id.as_deref() else {
+                    return self
+                        .persist_unknown_reconciliation(
+                            row,
+                            &usage,
+                            receipt_json,
+                            "authoritative_model_missing",
+                        )
+                        .await;
+                };
+                let Some(price) = prices
+                    .iter()
+                    .find(|price| price.provider_id == provider_id && price.model_id == model_id)
+                else {
+                    return self
+                        .persist_unknown_reconciliation(
+                            row,
+                            &usage,
+                            receipt_json,
+                            "authoritative_pricing_not_found",
+                        )
+                        .await;
+                };
+                let pricing = ModelPricing::cache_aware(
+                    Some(price.input_micro_usd_per_token),
+                    price.cache_read_micro_usd_per_token,
+                    price.cache_write_micro_usd_per_token,
+                    Some(price.output_micro_usd_per_token),
+                );
+                let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Override);
+                if evidence.status != ChargeStatus::Computed
+                    || evidence.charge_micro_usd != receipt.final_charge_micro_usd
+                {
+                    return self
+                        .persist_unknown_reconciliation(
+                            row,
+                            &usage,
+                            receipt_json,
+                            "authoritative_charge_mismatch",
+                        )
+                        .await;
+                }
+                (
+                    ReconciliationStatus::Computed,
+                    ChargeStatus::Computed,
+                    evidence,
+                    provider_id.to_string(),
+                    model_id.to_string(),
+                )
+            }
+        };
+        let raw_json = serde_json::to_string(&receipt_json).map_err(|error| {
+            BitrouterError::internal(format!("serialize authoritative usage: {error}"))
+        })?;
+        let evidence_json = serde_json::to_string(&evidence).map_err(|error| {
+            BitrouterError::internal(format!("serialize reconciled charge evidence: {error}"))
+        })?;
+        let settled_at = Utc::now().to_rfc3339();
+        let mut active: requests::ActiveModel = row.into();
+        active.provider_id = Set(provider_id);
+        active.model_id = Set(model_id);
+        active.prompt_tokens = Set(usage.prompt_tokens as i64);
+        active.completion_tokens = Set(usage.completion_tokens as i64);
+        active.reasoning_tokens = Set(usage.reasoning_tokens as i64);
+        active.cache_read_tokens = Set(usage.cache_read_tokens as i64);
+        active.cache_write_tokens = Set(usage.cache_write_tokens as i64);
+        let normalized = &evidence.normalized_usage;
+        active.uncached_input_tokens = Set(normalized.uncached_input_tokens as i64);
+        active.output_tokens = Set(normalized.output_tokens as i64);
+        active.usage_origin = Set(UsageOrigin::AuthoritativeReceipt.as_str().to_string());
+        active.raw_usage_json = Set(Some(raw_json.clone()));
+        active.charge_status = Set(charge_status.as_str().to_string());
+        active.charge_evidence_json = Set(Some(evidence_json));
+        active.estimated_charge_micro_usd = Set(evidence.charge_micro_usd.unwrap_or(0));
+        active.reconciliation_status = Set(status.as_str().to_string());
+        active.reconciliation_last_error = Set(None);
+        active.authoritative_settled_at = Set(Some(settled_at));
+        active.authoritative_receipt_json = Set(Some(raw_json));
+        active.update(&self.db).await.map_err(|error| {
+            BitrouterError::internal(format!("persist authoritative receipt: {error}"))
+        })?;
+        Ok(status)
+    }
+
+    async fn persist_unknown_reconciliation(
+        &self,
+        row: requests::Model,
+        usage: &Usage,
+        receipt_json: serde_json::Value,
+        reason: &str,
+    ) -> Result<ReconciliationStatus> {
+        let evidence = unavailable_charge_evidence(usage, reason);
+        let evidence_json = serde_json::to_string(&evidence).map_err(|error| {
+            BitrouterError::internal(format!("serialize unknown reconciliation: {error}"))
+        })?;
+        let receipt_json = serde_json::to_string(&receipt_json).map_err(|error| {
+            BitrouterError::internal(format!("serialize authoritative receipt: {error}"))
+        })?;
+        let mut active: requests::ActiveModel = row.into();
+        active.prompt_tokens = Set(usage.prompt_tokens as i64);
+        active.completion_tokens = Set(usage.completion_tokens as i64);
+        active.reasoning_tokens = Set(usage.reasoning_tokens as i64);
+        active.cache_read_tokens = Set(usage.cache_read_tokens as i64);
+        active.cache_write_tokens = Set(usage.cache_write_tokens as i64);
+        active.uncached_input_tokens = Set(evidence.normalized_usage.uncached_input_tokens as i64);
+        active.output_tokens = Set(evidence.normalized_usage.output_tokens as i64);
+        active.usage_origin = Set(UsageOrigin::AuthoritativeReceipt.as_str().to_string());
+        active.raw_usage_json = Set(Some(receipt_json.clone()));
+        active.charge_status = Set(ChargeStatus::Unknown.as_str().to_string());
+        active.charge_evidence_json = Set(Some(evidence_json));
+        active.estimated_charge_micro_usd = Set(0);
+        active.reconciliation_status = Set(ReconciliationStatus::Unknown.as_str().to_string());
+        active.reconciliation_last_error = Set(Some(reason.to_string()));
+        active.authoritative_settled_at = Set(Some(Utc::now().to_rfc3339()));
+        active.authoritative_receipt_json = Set(Some(receipt_json));
+        active.update(&self.db).await.map_err(|error| {
+            BitrouterError::internal(format!("persist unknown reconciliation: {error}"))
+        })?;
+        Ok(ReconciliationStatus::Unknown)
+    }
+
     /// Record one settled request. The single writer.
     pub async fn record_request(&self, record: RequestMetric) -> Result<()> {
         let raw_usage_json = record
@@ -420,6 +745,12 @@ impl MeteringStore {
             raw_usage_json: Set(raw_usage_json),
             charge_status: Set(record.charge_status.as_str().to_string()),
             charge_evidence_json: Set(charge_evidence_json),
+            reconciliation_status: Set(record.reconciliation_status.as_str().to_string()),
+            reconciliation_attempts: Set(0),
+            reconciliation_last_error: Set(None),
+            reconciliation_last_attempt_at: Set(None),
+            authoritative_settled_at: Set(None),
+            authoritative_receipt_json: Set(None),
             estimated_charge_micro_usd: Set(record.estimated_charge_micro_usd),
             streamed: Set(record.streamed as i32),
             latency_ms: Set(record.latency_ms as i64),
@@ -464,6 +795,46 @@ impl MeteringStore {
     }
 }
 
+fn authoritative_usage(receipt: &SettlementReceipt, raw: serde_json::Value) -> Result<Usage> {
+    fn tokens(value: i64, bucket: &str) -> Result<u64> {
+        u64::try_from(value).map_err(|_| {
+            BitrouterError::bad_request(format!("authoritative receipt has negative {bucket}"))
+        })
+    }
+    let uncached = tokens(receipt.usage.uncached_input_tokens, "uncached_input_tokens")?;
+    let cache_read = tokens(receipt.usage.cache_read_tokens, "cache_read_tokens")?;
+    let cache_write = tokens(receipt.usage.cache_write_tokens, "cache_write_tokens")?;
+    let output = tokens(receipt.usage.output_tokens, "output_tokens")?;
+    let reasoning = tokens(receipt.usage.reasoning_tokens, "reasoning_tokens")?;
+    let prompt_tokens = uncached
+        .checked_add(cache_read)
+        .and_then(|sum| sum.checked_add(cache_write))
+        .ok_or_else(|| BitrouterError::bad_request("authoritative input token overflow"))?;
+    let completion_tokens = output
+        .checked_add(reasoning)
+        .ok_or_else(|| BitrouterError::bad_request("authoritative output token overflow"))?;
+    if prompt_tokens > i64::MAX as u64 || completion_tokens > i64::MAX as u64 {
+        return Err(BitrouterError::bad_request(
+            "authoritative token total exceeds local storage range",
+        ));
+    }
+    Ok(Usage {
+        prompt_tokens,
+        completion_tokens,
+        reasoning_tokens: reasoning,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
+        origin: UsageOrigin::AuthoritativeReceipt,
+        raw: Some(Box::new(raw)),
+        ..Default::default()
+    })
+}
+
+fn truncate_error(error: &str) -> String {
+    const MAX_CHARS: usize = 512;
+    error.chars().take(MAX_CHARS).collect()
+}
+
 impl From<requests::Model> for MeteringUsageRecord {
     fn from(row: requests::Model) -> Self {
         let status = if row.error.is_some() {
@@ -486,11 +857,16 @@ impl From<requests::Model> for MeteringUsageRecord {
         };
         let usage_origin = match row.usage_origin.as_str() {
             "provider_reported" => UsageOrigin::ProviderReported,
+            "authoritative_receipt" => UsageOrigin::AuthoritativeReceipt,
             "estimated" => UsageOrigin::Estimated,
             _ => UsageOrigin::Unknown,
         };
         let raw_usage = row
             .raw_usage_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        let authoritative_receipt = row
+            .authoritative_receipt_json
             .as_deref()
             .and_then(|json| serde_json::from_str(json).ok());
         Self {
@@ -510,6 +886,9 @@ impl From<requests::Model> for MeteringUsageRecord {
             final_charge_micro_usd,
             charge_status,
             charge_evidence,
+            reconciliation_status: ReconciliationStatus::from_persisted(&row.reconciliation_status),
+            reconciliation_attempts: row.reconciliation_attempts.max(0) as u32,
+            authoritative_receipt,
             status: Some(status.to_string()),
         }
     }

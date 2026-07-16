@@ -24,20 +24,23 @@ pub mod db;
 pub mod entities;
 pub mod pricing;
 pub mod reader;
+pub mod reconciliation;
 pub mod recorder;
 pub mod store;
 
 #[cfg(test)]
 mod tests;
 
-pub use db::RequestMetric;
+pub use db::{ReconciliationStatus, RequestMetric};
 pub use pricing::{
     ChargeEvidence, ChargeStatus, ContextTier, EffectivePricingRates, ModelPricing, PricingSource,
     PricingTable, calculate_charge_evidence, calculate_charge_micro_usd,
 };
+pub use reconciliation::{ReconciliationSummary, reconcile_requests};
 pub use recorder::MeteringRecorder;
 pub use store::{
-    MeteringStore, MeteringUsageRecord, RateMetrics, TimeWindow, TokenUsage, UsagePriceOverride,
+    MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord, TimeWindow, TokenUsage,
+    UsagePriceOverride,
 };
 
 /// Render micro-USD for the agent-facing cost surfaces (`status --agent`

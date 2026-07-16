@@ -181,6 +181,8 @@ impl ModelPricing {
 pub enum ChargeStatus {
     /// All nonzero token buckets had valid rates.
     Computed,
+    /// An authoritative receipt confirms that the request was not charged.
+    NotCharged,
     /// Usage, normalization, or pricing evidence was incomplete.
     Unknown,
     /// A pre-evidence row retained from an older database schema.
@@ -193,6 +195,7 @@ impl ChargeStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Computed => "computed",
+            Self::NotCharged => "not_charged",
             Self::Unknown => "unknown",
             Self::LegacyUnknown => "legacy_unknown",
         }
@@ -203,6 +206,7 @@ impl ChargeStatus {
     pub fn from_persisted(value: &str) -> Self {
         match value {
             "computed" => Self::Computed,
+            "not_charged" => Self::NotCharged,
             "unknown" => Self::Unknown,
             _ => Self::LegacyUnknown,
         }

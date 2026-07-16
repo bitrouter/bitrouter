@@ -506,6 +506,7 @@ impl HttpExecutor {
             .apply_auth(request, input.target, input.transport)
             .await?;
         merge_outbound_trace_headers(&mut request, input.trace_headers);
+        inject_outbound_request_id(&mut request, input.ctx)?;
         Ok(request)
     }
 
@@ -737,6 +738,20 @@ fn merge_outbound_trace_headers(request: &mut reqwest::Request, headers: Option<
     for (name, value) in headers.iter() {
         dest.insert(name.clone(), value.clone());
     }
+}
+
+/// Bind every upstream hop to the pipeline's stable request identity.
+///
+/// The value comes from the pipeline context, not from an arbitrary outbound
+/// header, so retries and fallback hops share the same reconciliation key.
+fn inject_outbound_request_id(request: &mut reqwest::Request, ctx: &PipelineContext) -> Result<()> {
+    let value = http::HeaderValue::from_str(ctx.request_id()).map_err(|error| {
+        BitrouterError::internal(format!("invalid pipeline request id header: {error}"))
+    })?;
+    request
+        .headers_mut()
+        .insert("x-bitrouter-request-id", value);
+    Ok(())
 }
 
 /// Forward the inbound `anthropic-beta` header(s) to a Messages-protocol
@@ -1334,6 +1349,41 @@ mod beta_forward_tests {
             &ctx_with_beta(None),
         );
         assert!(request.headers().get("anthropic-beta").is_none());
+    }
+
+    #[test]
+    fn forwards_pipeline_request_id_to_every_upstream() {
+        let mut request = fresh_request();
+        let ctx = ctx_with_beta(None);
+
+        inject_outbound_request_id(&mut request, &ctx).unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("t")
+        );
+    }
+
+    #[test]
+    fn pipeline_request_id_replaces_untrusted_outbound_value() {
+        let mut request = fresh_request();
+        request.headers_mut().insert(
+            "x-bitrouter-request-id",
+            http::HeaderValue::from_static("untrusted"),
+        );
+
+        inject_outbound_request_id(&mut request, &ctx_with_beta(None)).unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("t")
+        );
     }
 }
 

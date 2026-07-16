@@ -10,6 +10,7 @@
 //! deployment-specific; if the OSS deployment needs a hard spend cap, it
 //! goes through `apps/bitrouter/src/policy/` reading `MeteringStore`.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,7 +18,7 @@ use async_trait::async_trait;
 use bitrouter_sdk::Result;
 use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, Usage, UsageOrigin};
 
-use crate::metering::db::RequestMetric;
+use crate::metering::db::{ReconciliationStatus, RequestMetric};
 use crate::metering::pricing::{
     ChargeEvidence, PricingSource, PricingTable, calculate_charge_evidence,
     unavailable_charge_evidence,
@@ -28,13 +29,24 @@ use crate::metering::store::MeteringStore;
 pub struct MeteringRecorder {
     store: MeteringStore,
     pricing: Arc<PricingTable>,
+    reconciliation_providers: HashSet<String>,
 }
 
 impl MeteringRecorder {
     /// Build a recorder over the shared `MeteringStore` and a
     /// `(provider, service_id) → ModelPricing` table.
     pub fn new(store: MeteringStore, pricing: Arc<PricingTable>) -> Self {
-        Self { store, pricing }
+        Self {
+            store,
+            pricing,
+            reconciliation_providers: HashSet::new(),
+        }
+    }
+
+    /// Require request-scoped authoritative reconciliation for this provider.
+    pub fn with_reconciliation_provider(mut self, provider_id: impl Into<String>) -> Self {
+        self.reconciliation_providers.insert(provider_id.into());
+        self
     }
 
     fn charge_evidence(&self, ctx: &SettlementContext) -> ChargeEvidence {
@@ -102,6 +114,11 @@ impl SettlementRecorder for MeteringRecorder {
             raw_usage: ctx.raw_usage.clone(),
             charge_status: charge_evidence.status,
             charge_evidence,
+            reconciliation_status: if self.reconciliation_providers.contains(&ctx.provider_id) {
+                ReconciliationStatus::Pending
+            } else {
+                ReconciliationStatus::NotApplicable
+            },
             estimated_charge_micro_usd,
             latency_ms: ctx.latency_ms,
             generation_time_ms: ctx.generation_time_ms,

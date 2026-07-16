@@ -414,10 +414,10 @@ pub async fn build_app_with_path(
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
             .executor(executor.clone())
-            .settlement_recorder(MeteringRecorder::new(
-                metering_store.clone(),
-                pricing.clone(),
-            ));
+            .settlement_recorder(
+                MeteringRecorder::new(metering_store.clone(), pricing.clone())
+                    .with_reconciliation_provider("bitrouter"),
+            );
         let sub_pipeline = Arc::new(
             sub.build()
                 .context("building the server-tool sub-completion pipeline")?,
@@ -525,10 +525,10 @@ pub async fn build_app_with_path(
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
-            lm.settlement_recorder(MeteringRecorder::new(
-                metering_store_for_recorder,
-                pricing_for_recorder,
-            ));
+            lm.settlement_recorder(
+                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_reconciliation_provider("bitrouter"),
+            );
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);

@@ -322,6 +322,10 @@ fn combined_usage_origin(left: UsageOrigin, right: UsageOrigin) -> UsageOrigin {
         (UsageOrigin::ProviderReported, UsageOrigin::ProviderReported) => {
             UsageOrigin::ProviderReported
         }
+        (UsageOrigin::AuthoritativeReceipt, UsageOrigin::AuthoritativeReceipt) => {
+            UsageOrigin::AuthoritativeReceipt
+        }
+        _ => UsageOrigin::Unknown,
     }
 }
 

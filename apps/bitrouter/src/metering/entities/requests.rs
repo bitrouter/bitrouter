@@ -31,14 +31,28 @@ pub struct Model {
     pub uncached_input_tokens: i64,
     /// Non-reasoning output tokens after normalizing the reasoning subset.
     pub output_tokens: i64,
-    /// Usage provenance (`provider_reported`, `estimated`, or `unknown`).
+    /// Usage provenance (`provider_reported`, `authoritative_receipt`,
+    /// `estimated`, or `unknown`).
     pub usage_origin: String,
     /// Verbatim provider usage object serialized as JSON.
     pub raw_usage_json: Option<String>,
-    /// Charge evidence state (`computed`, `unknown`, or `legacy_unknown`).
+    /// Charge evidence state (`computed`, `not_charged`, `unknown`, or
+    /// `legacy_unknown`).
     pub charge_status: String,
     /// Full charge evidence serialized as JSON.
     pub charge_evidence_json: Option<String>,
+    /// Request-scoped reconciliation state.
+    pub reconciliation_status: String,
+    /// Number of receipt fetches attempted.
+    pub reconciliation_attempts: i32,
+    /// Last content-free reconciliation error.
+    pub reconciliation_last_error: Option<String>,
+    /// RFC3339 timestamp of the latest receipt fetch.
+    pub reconciliation_last_attempt_at: Option<String>,
+    /// RFC3339 timestamp when an authoritative terminal receipt was applied.
+    pub authoritative_settled_at: Option<String>,
+    /// Content-free authoritative receipt serialized as JSON.
+    pub authoritative_receipt_json: Option<String>,
     /// Estimated charge in micro-USD computed from pricing × tokens.
     pub estimated_charge_micro_usd: i64,
     /// Whether the request was streamed (`1`) or not (`0`).

@@ -43,5 +43,6 @@
 pub mod auth;
 pub mod management;
 pub mod provider;
+pub mod settlement;
 
 pub use provider::BitrouterCloudAuthApplier;

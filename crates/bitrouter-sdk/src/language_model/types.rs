@@ -1362,6 +1362,8 @@ pub enum UsageNormalizationError {
 pub enum UsageOrigin {
     /// The upstream provider supplied this usage payload.
     ProviderReported,
+    /// A request-scoped authoritative settlement receipt supplied this usage.
+    AuthoritativeReceipt,
     /// BitRouter estimated usage because the provider payload was unavailable.
     Estimated,
     /// Usage provenance is unavailable, including the absence of a usage payload.
@@ -1374,6 +1376,7 @@ impl UsageOrigin {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ProviderReported => "provider_reported",
+            Self::AuthoritativeReceipt => "authoritative_receipt",
             Self::Estimated => "estimated",
             Self::Unknown => "unknown",
         }

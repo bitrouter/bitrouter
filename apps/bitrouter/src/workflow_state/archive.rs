@@ -3,12 +3,13 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
+use bitrouter_cloud_sdk::settlement::{SettlementReceipt, SettlementState};
 use bitrouter_sdk::language_model::UsageOrigin;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::metering::pricing::MAX_TRUSTED_TOKENS;
-use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource};
+use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
 use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
 use crate::workflow_state::ir::{AgentRole, ContextTransition, HarnessId};
@@ -52,6 +53,12 @@ pub struct CloudUsageRecord {
     pub charge_status: ChargeStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charge_evidence: Option<ChargeEvidence>,
+    #[serde(default)]
+    pub reconciliation_status: ReconciliationStatus,
+    #[serde(default)]
+    pub reconciliation_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoritative_receipt: Option<serde_json::Value>,
     pub status: Option<String>,
 }
 
@@ -250,12 +257,12 @@ impl CloudUsageSummary {
             summary.cache_read_tokens += record.cache_read_tokens;
             summary.cache_write_tokens += record.cache_write_tokens;
             summary.output_tokens += record.output_tokens;
-            if let Some(charge) = record.final_charge_micro_usd {
-                summary.settled_request_count += 1;
-                summary.final_charge_micro_usd += charge;
-            } else {
-                summary.unknown_charge_count += 1;
-            }
+            accumulate_charge(
+                record,
+                &mut summary.settled_request_count,
+                &mut summary.unknown_charge_count,
+                &mut summary.final_charge_micro_usd,
+            );
 
             let key = format!("{}/{}", record.provider_id, record.model_id);
             let model = summary.by_model_provider.entry(key).or_default();
@@ -267,18 +274,34 @@ impl CloudUsageSummary {
             model.cache_read_tokens += record.cache_read_tokens;
             model.cache_write_tokens += record.cache_write_tokens;
             model.output_tokens += record.output_tokens;
-            if let Some(charge) = record.final_charge_micro_usd {
-                model.settled_request_count += 1;
-                model.final_charge_micro_usd += charge;
-            } else {
-                model.unknown_charge_count += 1;
-            }
+            accumulate_charge(
+                record,
+                &mut model.settled_request_count,
+                &mut model.unknown_charge_count,
+                &mut model.final_charge_micro_usd,
+            );
         }
         summary.final_charge_usd = micro_usd_to_usd(summary.final_charge_micro_usd);
         for model in summary.by_model_provider.values_mut() {
             model.final_charge_usd = micro_usd_to_usd(model.final_charge_micro_usd);
         }
         summary
+    }
+}
+
+fn accumulate_charge(
+    record: &CloudUsageRecord,
+    settled: &mut usize,
+    unknown: &mut usize,
+    total: &mut u64,
+) {
+    match record.final_charge_micro_usd {
+        Some(charge) => {
+            *settled += 1;
+            *total += charge;
+        }
+        None if record.charge_status == ChargeStatus::NotCharged => *settled += 1,
+        None => *unknown += 1,
     }
 }
 
@@ -617,14 +640,50 @@ impl WorkflowRunArtifact {
 }
 
 fn validate_usage_evidence(record: &CloudUsageRecord, request_id: &str) -> Result<()> {
-    if record.usage_origin != UsageOrigin::ProviderReported {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: usage {request_id} is not provider reported"
-        )));
+    match record.reconciliation_status {
+        ReconciliationStatus::Pending => {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} reconciliation is pending"
+            )));
+        }
+        ReconciliationStatus::Unknown => {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} reconciliation is unknown"
+            )));
+        }
+        ReconciliationStatus::NotCharged => {
+            validate_authoritative_receipt(record, request_id, SettlementState::NotCharged)?;
+            if record.usage_origin != UsageOrigin::AuthoritativeReceipt
+                || record.charge_status != ChargeStatus::NotCharged
+                || record.final_charge_micro_usd.is_some()
+                || record.prompt_tokens != 0
+                || record.completion_tokens != 0
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: usage {request_id} has invalid not-charged evidence"
+                )));
+            }
+            return Ok(());
+        }
+        ReconciliationStatus::Computed => {
+            validate_authoritative_receipt(record, request_id, SettlementState::Computed)?;
+            if record.usage_origin != UsageOrigin::AuthoritativeReceipt {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: usage {request_id} is not from its authoritative receipt"
+                )));
+            }
+        }
+        ReconciliationStatus::NotApplicable => {
+            if record.usage_origin != UsageOrigin::ProviderReported {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: usage {request_id} is not provider reported"
+                )));
+            }
+        }
     }
     if record.raw_usage.is_none() {
         return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: usage {request_id} has no raw provider payload"
+            "benchmark integrity: usage {request_id} has no raw usage evidence"
         )));
     }
     if record.charge_status != ChargeStatus::Computed {
@@ -679,6 +738,52 @@ fn validate_usage_evidence(record: &CloudUsageRecord, request_id: &str) -> Resul
     {
         return Err(BitrouterError::bad_request(format!(
             "benchmark integrity: usage {request_id} has inconsistent normalized buckets"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_authoritative_receipt(
+    record: &CloudUsageRecord,
+    request_id: &str,
+    expected_state: SettlementState,
+) -> Result<()> {
+    let receipt: SettlementReceipt = serde_json::from_value(
+        record.authoritative_receipt.clone().ok_or_else(|| {
+            BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} has no authoritative receipt"
+            ))
+        })?,
+    )
+    .map_err(|error| {
+        BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has malformed authoritative receipt: {error}"
+        ))
+    })?;
+    if receipt.request_id != request_id || receipt.state != expected_state {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} authoritative receipt identity/state mismatch"
+        )));
+    }
+    let expected_charge = record.final_charge_micro_usd.map(|charge| charge as i64);
+    if receipt.final_charge_micro_usd != expected_charge
+        || receipt
+            .provider_id
+            .as_deref()
+            .is_some_and(|provider| provider != record.provider_id)
+        || receipt
+            .model_id
+            .as_deref()
+            .is_some_and(|model| model != record.model_id)
+        || u64::try_from(receipt.usage.uncached_input_tokens).ok()
+            != Some(record.uncached_input_tokens)
+        || u64::try_from(receipt.usage.cache_read_tokens).ok() != Some(record.cache_read_tokens)
+        || u64::try_from(receipt.usage.cache_write_tokens).ok() != Some(record.cache_write_tokens)
+        || u64::try_from(receipt.usage.output_tokens).ok() != Some(record.output_tokens)
+        || u64::try_from(receipt.usage.reasoning_tokens).ok() != Some(record.reasoning_tokens)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} does not match authoritative receipt"
         )));
     }
     Ok(())

@@ -12,8 +12,51 @@
 //! reads and writes rows.
 
 use bitrouter_sdk::language_model::UsageOrigin;
+use serde::{Deserialize, Serialize};
 
 use super::pricing::{ChargeEvidence, ChargeStatus};
+
+/// Whether a local metering row requires and has received authoritative
+/// request-scoped reconciliation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationStatus {
+    /// The selected provider does not expose request-scoped settlement.
+    #[default]
+    NotApplicable,
+    /// The request must not enter a benchmark artifact yet.
+    Pending,
+    /// An authoritative computed receipt has been applied.
+    Computed,
+    /// An authoritative receipt confirms no charge.
+    NotCharged,
+    /// Reconciliation terminated without usable evidence.
+    Unknown,
+}
+
+impl ReconciliationStatus {
+    /// Stable database and JSON representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not_applicable",
+            Self::Pending => "pending",
+            Self::Computed => "computed",
+            Self::NotCharged => "not_charged",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Parse a persisted value, failing closed for unrecognized values.
+    pub fn from_persisted(value: &str) -> Self {
+        match value {
+            "not_applicable" => Self::NotApplicable,
+            "pending" => Self::Pending,
+            "computed" => Self::Computed,
+            "not_charged" => Self::NotCharged,
+            _ => Self::Unknown,
+        }
+    }
+}
 
 /// One settled request, as recorded by [`super::MeteringRecorder`].
 #[derive(Debug, Clone)]
@@ -50,6 +93,8 @@ pub struct RequestMetric {
     pub charge_status: ChargeStatus,
     /// Auditable normalization and pricing evidence.
     pub charge_evidence: ChargeEvidence,
+    /// Whether this row requires authoritative request reconciliation.
+    pub reconciliation_status: ReconciliationStatus,
     /// Estimated charge in micro-USD computed from pricing × tokens. Consult
     /// `charge_status` before using this legacy non-null numeric column: its
     /// stored value is `0` when the auditable charge is unknown.

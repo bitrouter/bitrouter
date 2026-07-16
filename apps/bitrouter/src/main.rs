@@ -440,6 +440,30 @@ enum WorkflowStateAction {
         #[arg(long)]
         until: Option<String>,
     },
+    /// Reconcile selected metering rows against request-scoped receipts.
+    ReconcileMetering {
+        /// Database URL for the daemon metering DB.
+        #[arg(long)]
+        database_url: String,
+        /// Inference API root ending in `/v1`.
+        #[arg(long, default_value = "https://api.bitrouter.ai/v1")]
+        api_base: String,
+        /// Environment variable containing the inference key.
+        #[arg(long, default_value = "BITROUTER_API_KEY")]
+        api_key_env: String,
+        /// Exact request id to reconcile. Repeat for every selected row.
+        #[arg(long = "request-id", required = true)]
+        request_ids: Vec<String>,
+        /// Frozen price as provider:model=uncached,cache_read,cache_write,output.
+        #[arg(long = "price")]
+        prices: Vec<String>,
+        /// Maximum durable receipt fetches per request.
+        #[arg(long, default_value_t = 12)]
+        max_attempts: u32,
+        /// Delay between pending-receipt polls.
+        #[arg(long, default_value_t = 1_000)]
+        poll_interval_ms: u64,
+    },
     /// Apply task rewards to cheap replacement transitions before the next round.
     ApplyRewardFeedback {
         /// Database URL for the policy daemon DB, for example sqlite:///path/bitrouter.db.
@@ -1285,6 +1309,63 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 "✓ wrote {} metering usage records to {}",
                 records.len(),
                 output.display()
+            );
+            Ok(())
+        }
+        WorkflowStateAction::ReconcileMetering {
+            database_url,
+            api_base,
+            api_key_env,
+            request_ids,
+            prices,
+            max_attempts,
+            poll_interval_ms,
+        } => {
+            use std::time::Duration;
+
+            use bitrouter::metering::{MeteringStore, UsagePriceOverride, reconcile_requests};
+            use bitrouter_cloud_sdk::settlement::SettlementClient;
+
+            let prices = prices
+                .iter()
+                .map(|value| UsagePriceOverride::parse(value))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(anyhow::Error::from)?;
+            let api_key = std::env::var(&api_key_env).with_context(|| {
+                format!("read inference key from environment variable {api_key_env}")
+            })?;
+            let client = SettlementClient::new(&api_base, api_key)
+                .context("build request settlement client")?;
+            let db = bitrouter::db::connect(&database_url)
+                .await
+                .with_context(|| format!("connect metering database {database_url}"))?;
+            bitrouter::db::run_migrations(&db)
+                .await
+                .context("run metering reconciliation migrations")?;
+            let summary = reconcile_requests(
+                &MeteringStore::new(db),
+                &client,
+                &request_ids,
+                &prices,
+                max_attempts,
+                Duration::from_millis(poll_interval_ms),
+            )
+            .await
+            .context("reconcile selected metering requests")?;
+            if !summary.accepted() {
+                anyhow::bail!(
+                    "metering reconciliation failed closed: requested={}, computed={}, \
+                     not_charged={}, unknown={}, attempts={}",
+                    summary.requested,
+                    summary.computed,
+                    summary.not_charged,
+                    summary.unknown,
+                    summary.attempts
+                );
+            }
+            println!(
+                "✓ reconciled {} metering requests (computed: {}, not charged: {}, attempts: {})",
+                summary.requested, summary.computed, summary.not_charged, summary.attempts
             );
             Ok(())
         }
