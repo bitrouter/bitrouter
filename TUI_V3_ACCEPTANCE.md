@@ -75,7 +75,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   arms updated.
   **Proof:** `grep -n 'enum PaneKind' -A6 state.rs` shows only `Pty`, `Monitor`; and
   `grep -rn 'PaneKind::Acp\|PaneKind::Mirror' apps/bitrouter/src` prints nothing.
-- [ ] **The composer is deleted.** Remove the `state.input` pane buffer, `render_input`, and
+- [x] **The composer is deleted.** Remove the `state.input` pane buffer, `render_input`, and
   the composer layout row ([`ui.rs:96`](apps/bitrouter/src/tui/ui.rs),
   [`ui.rs:128`](apps/bitrouter/src/tui/ui.rs)). (The palette keeps its own `palette.input` —
   that is not the composer.)
@@ -246,4 +246,13 @@ DECISION: the Acp-vs-Mirror behavior split is re-expressed as an Ownership
   this front-fills V3.4's ownership-marker task, per TUI_SPEC_V3 §4/§5.
 2026-07-15 a1f36fa7 — V3.1 PaneKind collapse — enum grep shows only Monitor/Pty;
   PaneKind::Acp|Mirror grep empty; fmt+clippy+1948 nextest green.
+DECISION: the composer deletion also removes PaneState.draft + the draft
+  stash/restore (write-never once the composer is gone = dead code); the
+  substrate FleetAgent.draft field stays for format compat, always None.
+DECISION: reject's feedback-as-next-prompt flow is gone with the composer;
+  \`r\` now just clears review + notices "rejected" until V3.4 lands the
+  ownership-routed verdict effects. Front-filled tests monitor_pane_is_read_only
+  + composer_never_renders (the next two boxes) while porting broken tests.
+2026-07-16 c3cca160 — V3.1 composer deleted — 'fn render_input|state.input' grep
+  empty; fmt+clippy+1939 nextest green.
 ```
