@@ -1009,7 +1009,14 @@ async fn main() {
         })
     );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
-    match run(cli, &output).await {
+    // Box the dispatch future onto the heap. `run` is a large `async fn` whose
+    // state machine inlines the biggest per-command futures (the onboarding
+    // wizard, `spawn`, …), and `#[tokio::main]` polls it on the main thread —
+    // whose stack is only ~1 MiB on Windows. Keeping that state off the stack
+    // leaves headroom for the deep synchronous call chains (rustls/reqwest on
+    // the `cloud` path) that would otherwise overflow the main-thread stack on
+    // Windows (macOS/Linux's 8 MiB default hides it).
+    match Box::pin(run(cli, &output)).await {
         Ok(()) => {}
         Err(e) => {
             if raw_cloud_api {
