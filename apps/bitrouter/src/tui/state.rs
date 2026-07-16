@@ -1649,12 +1649,15 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         }
         _ => {}
     }
-    let has_pending = state
-        .focused()
-        .map(|p| p.pending.is_some())
-        .unwrap_or(false);
-
-    if has_pending {
+    // ── Inline decisions (TUI_SPEC_V3 §5): `y/a/n` resolve the TOP pending
+    // decision — the roster head's, risk-sorted then oldest-first — and
+    // advance focus to the next pending item (batch clear, no mode).
+    let top_pending = state
+        .roster()
+        .into_iter()
+        .find(|&i| state.agents[i].pending.is_some())
+        .map(|i| state.agents[i].record_id.clone());
+    if let Some(top_id) = top_pending {
         let outcome = match key.code {
             KeyCode::Char('y') => Some(PermissionOutcome::AllowOnce),
             KeyCode::Char('a') => Some(PermissionOutcome::AllowAlways),
@@ -1662,15 +1665,30 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             _ => None,
         };
         if let Some(outcome) = outcome {
-            if let Some(pane) = state.focused_mut() {
+            if let Some(pane) = state.pane_by_id_mut(&top_id) {
                 pane.pending = None;
+                // Decided — nothing left to look at here.
+                pane.attention = false;
+                pane.done = false;
+            }
+            // Advance to the next decision so `y y y` batch-clears the
+            // queue without refocusing by hand.
+            if let Some(next) = state
+                .roster()
+                .into_iter()
+                .find(|&i| state.agents[i].pending.is_some())
+                .map(|i| state.agents[i].record_id.clone())
+            {
+                state.detail = DetailLayout::solo(next);
+                mark_shown_seen(state);
             }
             return vec![Effect::ResolvePermission {
-                record_id: focus_id,
+                record_id: top_id,
                 outcome,
             }];
         }
-        return Vec::new();
+        // A pending decision is up: other keys still work (scroll handled
+        // above; review/notice arms below), but never leak into it.
     }
 
     // ── Inline review verbs on the focused Monitor (TUI_SPEC_V3 §5): no
@@ -3466,6 +3484,39 @@ mod tests {
     }
 
     // ── Polish: leader Tab (next actionable), wheel scroll. ──
+
+    #[test]
+    fn y_resolves_the_top_pending_and_advances_to_the_next() {
+        let mut st = agents3(); // detail = [r0]
+        reduce(&mut st, &perm("r2", "older wants"));
+        reduce(&mut st, &perm("r1", "newer wants"));
+        // Top of the queue = r2 (same risk, oldest first) — resolved even
+        // though r0 holds the focus.
+        let fx = reduce(&mut st, &press(KeyCode::Char('y')));
+        assert_eq!(
+            fx,
+            vec![Effect::ResolvePermission {
+                record_id: "r2".into(),
+                outcome: PermissionOutcome::AllowOnce,
+            }]
+        );
+        assert!(st.agents[2].pending.is_none(), "top item cleared");
+        assert_eq!(
+            st.detail.shown,
+            vec!["r1".to_string()],
+            "focus advances to the next pending item (batch clear)"
+        );
+        // The next `n` denies r1's — queue drained.
+        let fx = reduce(&mut st, &press(KeyCode::Char('n')));
+        assert_eq!(
+            fx,
+            vec![Effect::ResolvePermission {
+                record_id: "r1".into(),
+                outcome: PermissionOutcome::Deny,
+            }]
+        );
+        assert!(st.agents.iter().all(|p| p.pending.is_none()));
+    }
 
     #[test]
     fn leader_p_opens_the_command_palette() {
