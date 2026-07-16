@@ -1,6 +1,7 @@
-//! ratatui rendering of `AppState`: a fixed left rail (roster sorted by
-//! actionability + radar strip) beside a splittable detail viewport, with the
-//! input box, mode bar, and the picker/permission popups.
+//! ratatui rendering of `AppState`: a sessions sidebar and a subagents rail
+//! (roster sorted by actionability + radar strip) beside a splittable detail
+//! viewport, over the status bar, plus the picker/palette/permission popups.
+//! There is no composer — monitors are read-only (TUI_SPEC_V3 I2).
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -12,7 +13,7 @@ use crossterm::event::KeyCode;
 
 use crate::tui::state::{
     AppState, ClickTarget, ClickZone, DiffLine, LEADER_LEAVES, Line, Mode, PaneState, PendingView,
-    PickerPurpose, PickerState, Split, TailKind, diff_lines,
+    PickerPurpose, PickerState, ScrollArea, ScrollPanel, Split, TailKind, diff_lines,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
@@ -95,18 +96,21 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(center);
 
-    // Clickable regions for this frame, filled by the chrome renderers and
-    // handed to state for the `Click` reducer to hit-test (mirrors `pty_areas`).
+    // Clickable + wheel-scrollable regions for this frame, filled by the
+    // chrome renderers and handed to state for the `Click`/`Scroll` reducers
+    // to hit-test (mirrors `pty_areas`).
     let mut zones: Vec<ClickZone> = Vec::new();
+    let mut scrolls: Vec<ScrollArea> = Vec::new();
     if show_sessions {
-        render_sessions(state, &mut zones, frame, cols[0]);
+        render_sessions(state, &mut zones, &mut scrolls, frame, cols[0]);
     }
     render_detail(state, pty, frame, rows[0]);
     if show_rail {
-        render_rail(state, &mut zones, frame, cols[cols.len() - 1]);
+        render_rail(state, &mut zones, &mut scrolls, frame, cols[cols.len() - 1]);
     }
     render_statusbar(state, &mut zones, frame, rows[rows.len() - 1]);
     state.click_zones = zones;
+    state.scroll_areas = scrolls;
 
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
@@ -133,7 +137,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     if let Some(pane) = state.focused()
         && let Some(pending) = &pane.pending
     {
-        render_permission(pending, state.no_color, frame, area);
+        render_permission(pane, pending, state.no_color, frame, area);
     }
 }
 
@@ -158,7 +162,8 @@ fn render_palette(
             tint(nc, Color::DarkGray),
         ));
     }
-    for (i, (name, _)) in matches.iter().enumerate() {
+    for (i, entry) in matches.iter().enumerate() {
+        let name = entry.label();
         if i == palette.selected.min(matches.len() - 1) {
             // Monochrome: the `>` marker + bold carries selection, not hue.
             lines.push(TuiLine::styled(
@@ -331,14 +336,59 @@ fn header_line(text: String, nc: bool) -> TuiLine<'static> {
     TuiLine::styled(text, tint(nc, Color::DarkGray).add_modifier(Modifier::BOLD))
 }
 
+/// Resolve a sidebar's scroll offset — a manual wheel offset wins (clamped
+/// to the content), otherwise follow the focused entry — plus the header's
+/// fold indicator: how many entries sit fully above / below the viewport,
+/// so overflow is visible instead of silently unreachable.
+fn panel_scroll(
+    manual: Option<u16>,
+    cursor_end: usize,
+    content: usize,
+    height: u16,
+    row_spans: &[(usize, usize)],
+) -> (u16, String) {
+    let max = u16::try_from(content.saturating_sub(height as usize)).unwrap_or(u16::MAX);
+    let scroll = manual
+        .map(|s| s.min(max))
+        .unwrap_or_else(|| scroll_to_cursor(cursor_end, height));
+    let (mut above, mut below) = (0usize, 0usize);
+    for &(lo, hi) in row_spans {
+        if hi <= scroll as usize {
+            above += 1;
+        } else if lo >= scroll as usize + height as usize {
+            below += 1;
+        }
+    }
+    let mut fold = String::new();
+    if above > 0 {
+        fold.push_str(&format!(" ⇡{above}"));
+    }
+    if below > 0 {
+        fold.push_str(&format!(" ⇣{below}"));
+    }
+    (scroll, fold)
+}
+
 /// Left sidebar: orchestrator sessions (PTY panes), herdr-spaces style — a
 /// name line over a dim `state · model` line per entry. The cursor (`▸`)
 /// follows the detail-focused session.
-fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
+fn render_sessions(
+    state: &AppState,
+    zones: &mut Vec<ClickZone>,
+    scrolls: &mut Vec<ScrollArea>,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let nc = state.no_color;
+    // Fixed header (carries the fold indicator, so it must not scroll away),
+    // scrolling entry list, fixed footer.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(area);
     let order = state.sessions_list();
     let focused_id = state.focused().map(|p| p.record_id.clone());
@@ -346,7 +396,7 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
     // Logical line range of each entry (name + meta), turned into click zones
     // once the scroll offset is known.
     let mut row_spans: Vec<(usize, usize)> = Vec::new();
-    let mut lines: Vec<TuiLine> = vec![header_line("sessions".to_string(), nc)];
+    let mut lines: Vec<TuiLine> = Vec::new();
     for &idx in order.iter() {
         let pane = &state.agents[idx];
         let glyph = state_glyph(pane, state.tick);
@@ -385,18 +435,38 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
         lines.push(TuiLine::raw(""));
         lines.push(TuiLine::styled("(no sessions)", tint(nc, Color::DarkGray)));
     }
-    let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
+    let (scroll, fold) = panel_scroll(
+        state.sessions_scroll,
+        cursor_end,
+        lines.len(),
+        chunks[1].height,
+        &row_spans,
+    );
+    let header = Paragraph::new(header_line(format!("sessions{fold}"), nc))
+        .block(Block::default().borders(Borders::RIGHT));
+    frame.render_widget(header, chunks[0]);
+    // The wheel anywhere over this panel scrolls it (pointer-aware routing).
+    scrolls.push(ScrollArea {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        panel: ScrollPanel::Sessions,
+        content: u16::try_from(lines.len()).unwrap_or(u16::MAX),
+        viewport: chunks[1].height,
+        rendered: scroll,
+    });
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::RIGHT))
         .scroll((scroll, 0));
-    frame.render_widget(para, chunks[0]);
+    frame.render_widget(para, chunks[1]);
     // Each visible entry's name+meta rows are its click zone (select + solo).
     for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
-        if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
+        if let Some((y, h)) = screen_span(chunks[1], scroll as usize, lo, hi) {
             zones.push(ClickZone {
-                x: chunks[0].x,
+                x: chunks[1].x,
                 y,
-                w: chunks[0].width,
+                w: chunks[1].width,
                 h,
                 target: ClickTarget::SessionRow(row),
             });
@@ -409,40 +479,52 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
     ))
     .block(Block::default().borders(Borders::RIGHT));
     zones.push(ClickZone {
-        x: chunks[1].x,
-        y: chunks[1].y,
-        w: chunks[1].width,
-        h: chunks[1].height,
+        x: chunks[2].x,
+        y: chunks[2].y,
+        w: chunks[2].width,
+        h: chunks[2].height,
         target: ClickTarget::NewSession,
     });
-    frame.render_widget(footer, chunks[1]);
+    frame.render_widget(footer, chunks[2]);
 }
 
 /// Right rail: the subagents roster (every ACP agent, sorted by
 /// actionability) over a radar strip — a name line over a dim
 /// `state · harness` line per entry, herdr-minimal. The rail cursor (`▸`)
 /// follows the detail-focused agent.
-fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
+fn render_rail(
+    state: &AppState,
+    zones: &mut Vec<ClickZone>,
+    scrolls: &mut Vec<ScrollArea>,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let nc = state.no_color;
+    // Fixed header (fold indicator), scrolling roster, fixed radar strip.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(area);
 
     let order = state.roster();
     let focused_id = state.focused().map(|p| p.record_id.clone());
-    // What `y/a/n` acts on: the roster head's pending (the queue top) —
-    // the chip marks that row, not the focused one.
+    // `y/a/n` decide the FOCUSED pane's pending (the popup on screen). When
+    // the focused pane has none, the first press focuses the queue head
+    // (reveal-then-resolve) — the head row carries a dim `y ⇢` hint then.
+    let focused_has_pending = state.focused().is_some_and(|p| p.pending.is_some());
     let top_pending_id = order
         .iter()
         .find(|&&i| state.agents[i].pending.is_some())
         .map(|&i| state.agents[i].record_id.clone());
-    let header = "subagents".to_string();
     let mut cursor_end = 0usize;
     // Logical line range of each entry (name through any expansion line),
     // turned into click zones once the scroll offset is known.
     let mut row_spans: Vec<(usize, usize)> = Vec::new();
-    let mut lines: Vec<TuiLine> = vec![header_line(header, nc)];
+    let mut lines: Vec<TuiLine> = Vec::new();
     for &idx in order.iter() {
         let pane = &state.agents[idx];
         let glyph = state_glyph(pane, state.tick);
@@ -504,11 +586,17 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
             // Keys first, then risk, then the (clippable) title — on a narrow
             // rail the actionable part must survive truncation.
             let mut detail = vec![Span::raw(" └ ")];
-            if top_pending_id.as_deref() == Some(pane.record_id.as_str()) {
+            if at_cursor {
+                // This pending is the one on screen — the keys decide it.
                 detail.push(Span::styled(
                     "y·a·n ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ));
+            } else if !focused_has_pending
+                && top_pending_id.as_deref() == Some(pane.record_id.as_str())
+            {
+                // Queue head while focus is elsewhere: `y` reveals it first.
+                detail.push(Span::styled("y ⇢ ", tint(nc, Color::DarkGray)));
             }
             detail.push(risk_span);
             detail.push(Span::raw(pending.title.clone()));
@@ -539,18 +627,38 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         lines.push(TuiLine::raw(""));
         lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
     }
-    let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
+    let (scroll, fold) = panel_scroll(
+        state.rail_scroll,
+        cursor_end,
+        lines.len(),
+        chunks[1].height,
+        &row_spans,
+    );
+    let header = Paragraph::new(header_line(format!("subagents{fold}"), nc))
+        .block(Block::default().borders(Borders::LEFT));
+    frame.render_widget(header, chunks[0]);
+    // The wheel anywhere over this panel scrolls it (pointer-aware routing).
+    scrolls.push(ScrollArea {
+        x: area.x,
+        y: area.y,
+        w: area.width,
+        h: area.height,
+        panel: ScrollPanel::Rail,
+        content: u16::try_from(lines.len()).unwrap_or(u16::MAX),
+        viewport: chunks[1].height,
+        rendered: scroll,
+    });
     let roster = Paragraph::new(lines)
         .block(Block::default().borders(Borders::LEFT))
         .scroll((scroll, 0));
-    frame.render_widget(roster, chunks[0]);
+    frame.render_widget(roster, chunks[1]);
     // Each visible entry's rows are its click zone (select + open solo).
     for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
-        if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
+        if let Some((y, h)) = screen_span(chunks[1], scroll as usize, lo, hi) {
             zones.push(ClickZone {
-                x: chunks[0].x,
+                x: chunks[1].x,
                 y,
-                w: chunks[0].width,
+                w: chunks[1].width,
                 h,
                 target: ClickTarget::RailRow(row),
             });
@@ -558,14 +666,30 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
     }
 
     // Radar: one glyph per agent in roster order — peripheral vision of every
-    // agent's state even while the detail is zoomed into one.
+    // agent's state even while the detail is zoomed into one. Each glyph is
+    // a 1-cell click zone: the whole fleet stays one click away no matter
+    // how far the roster overflows the rail (TUI_SPEC_V3 §9 mouse parity).
     let radar: Vec<Span> = order
         .iter()
         .map(|&idx| Span::raw(state_glyph(&state.agents[idx], state.tick).to_string()))
         .collect();
+    let glyph_x0 = chunks[2].x + 1; // col 0 is the block's left border
+    for row in 0..radar.len() {
+        let x = glyph_x0 + row as u16;
+        if x >= chunks[2].x + chunks[2].width {
+            break; // wider than the strip — the rest have no cell to click
+        }
+        zones.push(ClickZone {
+            x,
+            y: chunks[2].y,
+            w: 1,
+            h: 1,
+            target: ClickTarget::RailRow(row),
+        });
+    }
     frame.render_widget(
         Paragraph::new(TuiLine::from(radar)).block(Block::default().borders(Borders::LEFT)),
-        chunks[1],
+        chunks[2],
     );
 }
 
@@ -1101,11 +1225,32 @@ fn render_picker(picker: &PickerState, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, popup);
 }
 
-fn render_permission(pending: &PendingView, nc: bool, frame: &mut Frame, area: Rect) {
+fn render_permission(
+    pane: &PaneState,
+    pending: &PendingView,
+    nc: bool,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let popup = centered(area, 70, 40);
     frame.render_widget(Clear, popup);
     let width = popup.width.saturating_sub(2) as usize;
-    let mut lines: Vec<TuiLine> = vec![TuiLine::raw(pending.title.clone())];
+    // Identity in the card: WHO is asking, so the request on screen is never
+    // ambiguous about which agent `y` approves.
+    let short = pane.record_id.get(..8).unwrap_or(pane.record_id.as_str());
+    let title_bar = format!(" permission — {} · {short} ", pane.agent_id);
+    // Risk leads the request line, same treatment as the rail expansion:
+    // `high` leans on bold (not hue), `low` stays dim.
+    let risk_span = match pending.risk {
+        crate::risk::Risk::High => {
+            Span::styled("high · ", Style::default().add_modifier(Modifier::BOLD))
+        }
+        crate::risk::Risk::Low => Span::styled("low · ", tint(nc, Color::DarkGray)),
+    };
+    let mut lines: Vec<TuiLine> = vec![TuiLine::from(vec![
+        risk_span,
+        Span::raw(pending.title.clone()),
+    ])];
     if let Some(diff) = &pending.diff {
         // Same diff_render treatment as the scrollback, not raw text.
         for l in diff_lines(diff) {
@@ -1119,7 +1264,7 @@ fn render_permission(pending: &PendingView, nc: bool, frame: &mut Frame, area: R
         .collect();
     lines.push(TuiLine::raw(keys.join("   ")));
     let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(" permission "))
+        .block(Block::default().borders(Borders::ALL).title(title_bar))
         .wrap(Wrap { trim: false });
     frame.render_widget(para, popup);
 }
@@ -1188,6 +1333,94 @@ mod tests {
         let text = draw(&mut agents3(), 80, 24);
         assert!(text.contains("a0") && text.contains("a1") && text.contains("a2"));
         assert!(text.contains("subagents"), "rail header");
+    }
+
+    #[test]
+    fn radar_glyphs_are_click_zones_for_every_agent() {
+        // The radar strip is a complete clickable index of the fleet: one
+        // 1×1 zone per roster agent, regardless of rail overflow.
+        let mut st = agents3();
+        draw(&mut st, 90, 24);
+        let radar_zones = st
+            .click_zones
+            .iter()
+            .filter(|z| z.w == 1 && z.h == 1 && matches!(z.target, ClickTarget::RailRow(_)))
+            .count();
+        assert_eq!(radar_zones, 3, "one radar zone per agent");
+    }
+
+    #[test]
+    fn rail_header_folds_and_wheel_areas_are_recorded() {
+        let mut st = agents3();
+        for i in 3..10 {
+            st.agents
+                .push(PaneState::new(format!("r{i}"), format!("agent{i}")));
+        }
+        let text = draw(&mut st, 90, 12);
+        // 10 monitors × 3 lines never fit 12 rows: the fixed header says so
+        // instead of letting rows vanish silently.
+        assert!(text.contains('⇣'), "fold indicator in the header: {text}");
+        // The wheel hit-test targets recorded for the reducer.
+        assert!(
+            st.scroll_areas
+                .iter()
+                .any(|a| a.panel == ScrollPanel::Rail && a.viewport > 0),
+            "rail scroll area recorded: {:?}",
+            st.scroll_areas
+        );
+    }
+
+    #[test]
+    fn manual_rail_scroll_is_honored_and_clamped_by_the_renderer() {
+        let mut st = agents3();
+        for i in 3..10 {
+            st.agents
+                .push(PaneState::new(format!("r{i}"), format!("agent{i}")));
+        }
+        st.rail_scroll = Some(6);
+        draw(&mut st, 90, 12);
+        let rail = st
+            .scroll_areas
+            .iter()
+            .find(|a| a.panel == ScrollPanel::Rail)
+            .copied();
+        assert_eq!(
+            rail.map(|a| a.rendered),
+            Some(6),
+            "manual offset applied: {rail:?}"
+        );
+        // Way past the end: clamped to content − viewport, never blank space.
+        st.rail_scroll = Some(500);
+        draw(&mut st, 90, 12);
+        let rail = st
+            .scroll_areas
+            .iter()
+            .find(|a| a.panel == ScrollPanel::Rail)
+            .copied();
+        assert!(
+            rail.is_some_and(|a| a.rendered < 500 && a.rendered == a.content - a.viewport),
+            "clamped: {rail:?}"
+        );
+    }
+
+    #[test]
+    fn permission_popup_names_the_agent_and_leads_with_risk() {
+        let mut st = agents3();
+        st.agents[0].pending = Some(PendingView {
+            title: "WRITE src/main.rs".into(),
+            diff: None,
+            options: vec![],
+            risk: crate::risk::Risk::High,
+        });
+        let text = draw(&mut st, 80, 24);
+        assert!(
+            text.contains("permission — a0 · r0"),
+            "WHO is asking is in the card: {text}"
+        );
+        assert!(
+            text.contains("high · WRITE src/main.rs"),
+            "risk leads the request line: {text}"
+        );
     }
 
     /// agents3 plus a PTY orchestrator session pinned to a model.
@@ -1605,6 +1838,7 @@ mod tests {
         st.palette = Some(crate::tui::state::PaletteState {
             input: "sp".into(),
             selected: 0,
+            focus_entries: Vec::new(),
         });
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("spawn subagent"), "match listed");
@@ -1618,6 +1852,7 @@ mod tests {
         st.palette = Some(crate::tui::state::PaletteState {
             input: "zzz".into(),
             selected: 3,
+            focus_entries: Vec::new(),
         });
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("no matching command"), "empty state shown");
