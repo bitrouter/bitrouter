@@ -6,11 +6,11 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TuiLine, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::state::{
-    AppState, DiffLine, Line, Mode, PaneState, Panel, PendingView, PickerPurpose, PickerState,
-    Split, TailKind, diff_lines,
+    AppState, ClickTarget, ClickZone, DiffLine, Line, Mode, PaneState, Panel, PendingView,
+    PickerPurpose, PickerState, Split, TailKind, diff_lines,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
@@ -115,17 +115,21 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
         .constraints(row_constraints)
         .split(center);
 
+    // Clickable regions for this frame, filled by the chrome renderers and
+    // handed to state for the `Click` reducer to hit-test (mirrors `pty_areas`).
+    let mut zones: Vec<ClickZone> = Vec::new();
     if show_sessions {
-        render_sessions(state, frame, cols[0]);
+        render_sessions(state, &mut zones, frame, cols[0]);
     }
     render_detail(state, pty, frame, rows[0]);
     if show_rail {
-        render_rail(state, frame, cols[cols.len() - 1]);
+        render_rail(state, &mut zones, frame, cols[cols.len() - 1]);
     }
     if composer {
         render_input(state, frame, rows[1]);
     }
-    render_statusbar(state, frame, rows[rows.len() - 1]);
+    render_statusbar(state, &mut zones, frame, rows[rows.len() - 1]);
+    state.click_zones = zones;
 
     if state.mode == Mode::Picker
         && let Some(picker) = &state.picker
@@ -294,23 +298,23 @@ fn tint(no_color: bool, color: Color) -> Style {
     }
 }
 
-/// State glyph + color for one agent, shared by the roster and the radar.
-/// Never color-alone: each state has a distinct glyph.
-fn state_glyph(pane: &PaneState, tick: u64) -> (&'static str, Color) {
+/// State glyph for one agent, shared by the roster and the radar. The wrapper
+/// is monochrome, so shape alone carries the state — each glyph is distinct.
+fn state_glyph(pane: &PaneState, tick: u64) -> &'static str {
     if pane.pending.is_some() {
-        ("⚠", Color::Red) // needs you
+        "⚠" // needs you
     } else if pane.review.is_some() && !pane.exited {
-        ("◆", Color::Blue) // ready to review
+        "◆" // ready to review
     } else if pane.attention {
-        ("●", Color::Yellow) // went wrong in the background
+        "●" // went wrong in the background
     } else if pane.done && !pane.exited {
-        ("◉", Color::Magenta) // finished, unseen — decays to ○ on view
+        "◉" // finished, unseen — decays to ○ on view
     } else if !pane.exited && pane.turn_active {
-        (SPINNER[(tick % 8) as usize], Color::Cyan) // working (turn in flight)
+        SPINNER[(tick % 8) as usize] // working (turn in flight)
     } else if !pane.exited {
-        ("○", Color::Green) // idle
+        "○" // idle
     } else {
-        ("✗", Color::DarkGray) // dead
+        "✗" // dead
     }
 }
 
@@ -342,7 +346,7 @@ fn header_line(text: String, nc: bool) -> TuiLine<'static> {
 /// Left sidebar: orchestrator sessions (PTY panes), herdr-spaces style — a
 /// name line over a dim `state · model` line per entry. The cursor (`▸`)
 /// shows when AGENT-mode panel focus is here (`[`).
-fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
+fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -351,10 +355,13 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
     let order = state.sessions_list();
     let cursor_active = state.mode == Mode::Agent && state.panel == Panel::Sessions;
     let mut cursor_end = 0usize;
+    // Logical line range of each entry (name + meta), turned into click zones
+    // once the scroll offset is known.
+    let mut row_spans: Vec<(usize, usize)> = Vec::new();
     let mut lines: Vec<TuiLine> = vec![header_line("sessions".to_string(), nc)];
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
-        let (glyph, color) = state_glyph(pane, state.tick);
+        let glyph = state_glyph(pane, state.tick);
         let at_cursor = cursor_active && row == state.session_cursor;
         let cursor = if at_cursor { "▸" } else { " " };
         let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
@@ -363,9 +370,10 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
         lines.push(TuiLine::raw(""));
+        let start = lines.len();
         lines.push(TuiLine::from(vec![
             Span::raw(cursor.to_string()),
-            Span::styled(glyph.to_string(), tint(nc, color)),
+            Span::raw(glyph.to_string()),
             Span::raw(" "),
             Span::styled(pane.agent_id.clone(), name_style),
         ]));
@@ -380,6 +388,7 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
             Span::raw("   "),
             Span::styled(meta, tint(nc, Color::DarkGray)),
         ]));
+        row_spans.push((start, lines.len()));
         if at_cursor {
             cursor_end = lines.len();
         }
@@ -388,10 +397,23 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
         lines.push(TuiLine::raw(""));
         lines.push(TuiLine::styled("(no sessions)", tint(nc, Color::DarkGray)));
     }
+    let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::RIGHT))
-        .scroll((scroll_to_cursor(cursor_end, chunks[0].height), 0));
+        .scroll((scroll, 0));
     frame.render_widget(para, chunks[0]);
+    // Each visible entry's name+meta rows are its click zone (select + solo).
+    for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
+        if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
+            zones.push(ClickZone {
+                x: chunks[0].x,
+                y,
+                w: chunks[0].width,
+                h,
+                target: ClickTarget::SessionRow(row),
+            });
+        }
+    }
     // The `new` affordance, keyboard-flavored.
     let footer = Paragraph::new(TuiLine::styled("N new session", tint(nc, Color::DarkGray)))
         .block(Block::default().borders(Borders::RIGHT));
@@ -402,7 +424,7 @@ fn render_sessions(state: &AppState, frame: &mut Frame, area: Rect) {
 /// actionability) over a radar strip — a name line over a dim
 /// `state · harness` line per entry, herdr-minimal. The rail cursor (`▸`)
 /// shows in AGENT (panel focus here) and BROADCAST modes.
-fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
+fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -418,10 +440,13 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         "subagents".to_string()
     };
     let mut cursor_end = 0usize;
+    // Logical line range of each entry (name through any expansion line),
+    // turned into click zones once the scroll offset is known.
+    let mut row_spans: Vec<(usize, usize)> = Vec::new();
     let mut lines: Vec<TuiLine> = vec![header_line(header, nc)];
     for (row, &idx) in order.iter().enumerate() {
         let pane = &state.agents[idx];
-        let (glyph, color) = state_glyph(pane, state.tick);
+        let glyph = state_glyph(pane, state.tick);
         let at_cursor = cursor_active && row == state.rail_cursor;
         let cursor = if at_cursor { "▸" } else { " " };
         let shown = state.detail.shown.iter().any(|r| r == &pane.record_id);
@@ -431,14 +456,15 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         }
         let mut spans = vec![
             Span::raw(cursor.to_string()),
-            Span::styled(glyph.to_string(), tint(nc, color)),
+            Span::raw(glyph.to_string()),
             Span::raw(" "),
             Span::styled(pane.agent_id.clone(), name_style),
         ];
         if pane.selected {
-            spans.push(Span::styled(" ✓", tint(nc, Color::Green)));
+            spans.push(Span::raw(" ✓"));
         }
         lines.push(TuiLine::raw(""));
+        let start = lines.len();
         lines.push(TuiLine::from(spans));
         // Dim metadata line: state word, harness tag, then the quantitative
         // extras (time-in-state, dev-server port, metered cost, autonomy).
@@ -471,9 +497,11 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
         // Actionable rows expand inline: risk + what the agent wants, and (on
         // the cursor row in AGENT mode) the resolve keys.
         if let Some(pending) = &pane.pending {
+            // Monochrome: `high` leans on bold (not red); `low` stays dim. The
+            // words + glyphs carry the risk without hue.
             let risk_span = match pending.risk {
                 crate::risk::Risk::High => {
-                    Span::styled("high · ", tint(nc, Color::Red).add_modifier(Modifier::BOLD))
+                    Span::styled("high · ", Style::default().add_modifier(Modifier::BOLD))
                 }
                 crate::risk::Risk::Low => Span::styled("low · ", tint(nc, Color::DarkGray)),
             };
@@ -487,11 +515,12 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
                 ));
             }
             detail.push(risk_span);
-            detail.push(Span::styled(pending.title.clone(), tint(nc, Color::Red)));
+            detail.push(Span::raw(pending.title.clone()));
             lines.push(TuiLine::from(detail));
         } else if let Some((files, adds, dels)) = pane.review {
             // Ready-to-review rows expand with the diff stat and (on the
-            // cursor row in AGENT mode) the integration keys.
+            // cursor row in AGENT mode) the integration keys. The `+`/`-`
+            // signs carry the direction; no hue in the monochrome wrapper.
             let mut detail = vec![Span::raw(" └ ")];
             if at_cursor && state.mode == Mode::Agent {
                 detail.push(Span::styled(
@@ -499,15 +528,13 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ));
             }
-            detail.push(Span::styled(
-                format!("review · {files}f "),
-                tint(nc, Color::Blue),
-            ));
-            detail.push(Span::styled(format!("+{adds}"), tint(nc, Color::Green)));
+            detail.push(Span::raw(format!("review · {files}f ")));
+            detail.push(Span::raw(format!("+{adds}")));
             detail.push(Span::raw("/"));
-            detail.push(Span::styled(format!("-{dels}"), tint(nc, Color::Red)));
+            detail.push(Span::raw(format!("-{dels}")));
             lines.push(TuiLine::from(detail));
         }
+        row_spans.push((start, lines.len()));
         if at_cursor {
             cursor_end = lines.len();
         }
@@ -515,24 +542,35 @@ fn render_rail(state: &AppState, frame: &mut Frame, area: Rect) {
     if order.is_empty() {
         lines.push(TuiLine::raw(""));
         if state.queue_only {
-            lines.push(TuiLine::styled("✓ all clear", tint(nc, Color::Green)));
+            lines.push(TuiLine::styled("✓ all clear", tint(nc, Color::DarkGray)));
         } else {
             lines.push(TuiLine::styled("(no subagents)", tint(nc, Color::DarkGray)));
         }
     }
+    let scroll = scroll_to_cursor(cursor_end, chunks[0].height);
     let roster = Paragraph::new(lines)
         .block(Block::default().borders(Borders::LEFT))
-        .scroll((scroll_to_cursor(cursor_end, chunks[0].height), 0));
+        .scroll((scroll, 0));
     frame.render_widget(roster, chunks[0]);
+    // Each visible entry's rows are its click zone (select + open solo, or in
+    // broadcast toggle its selection).
+    for (row, (lo, hi)) in row_spans.into_iter().enumerate() {
+        if let Some((y, h)) = screen_span(chunks[0], scroll as usize, lo, hi) {
+            zones.push(ClickZone {
+                x: chunks[0].x,
+                y,
+                w: chunks[0].width,
+                h,
+                target: ClickTarget::RailRow(row),
+            });
+        }
+    }
 
     // Radar: one glyph per agent in roster order — peripheral vision of every
     // agent's state even while the detail is zoomed into one.
     let radar: Vec<Span> = order
         .iter()
-        .map(|&idx| {
-            let (glyph, color) = state_glyph(&state.agents[idx], state.tick);
-            Span::styled(glyph.to_string(), tint(nc, color))
-        })
+        .map(|&idx| Span::raw(state_glyph(&state.agents[idx], state.tick).to_string()))
         .collect();
     frame.render_widget(
         Paragraph::new(TuiLine::from(radar)).block(Block::default().borders(Borders::LEFT)),
@@ -579,6 +617,26 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
     state.pty_areas = pty_areas;
 }
 
+/// Monochrome pane frame: focus is carried by weight, not hue. Focused → a
+/// thick, bold border with a bold title; unfocused → a plain, dim border.
+/// Selection rides on the `✓` marker the caller bakes into `title`, not color.
+fn pane_block(title: String, focused: bool, nc: bool) -> Block<'static> {
+    if focused {
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
+            .border_style(bold)
+            .title(TuiLine::from(Span::styled(title, bold)))
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(tint(nc, Color::DarkGray))
+            .title(title)
+    }
+}
+
 /// Render a PTY pane: the emulator's grid verbatim inside the pane border —
 /// the harness renders itself; bitrouter draws no lines of its own here.
 fn render_pty_pane(
@@ -602,15 +660,7 @@ fn render_pty_pane(
         pane.harness,
         markers
     );
-    let border_style = if focused {
-        tint(nc, Color::Cyan)
-    } else {
-        Style::default()
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(title);
+    let block = pane_block(title, focused, nc);
     let lines: Vec<TuiLine> = match view {
         Some(v) => v.lines.clone(),
         None => vec![TuiLine::styled(
@@ -650,6 +700,20 @@ fn split_rects(area: Rect, n: usize, split: Split) -> Vec<Rect> {
 /// look dead. Zero (top-anchored) while the cursor fits.
 fn scroll_to_cursor(cursor_end: usize, height: u16) -> u16 {
     u16::try_from(cursor_end.saturating_sub(height as usize)).unwrap_or(u16::MAX)
+}
+
+/// Map a paragraph's logical line range `[lo, hi)` to an on-screen `(y, h)`
+/// inside `area`, given the vertical `scroll` offset — so a roster row's lines
+/// become a click zone. `None` when the range is fully scrolled out of view.
+fn screen_span(area: Rect, scroll: usize, lo: usize, hi: usize) -> Option<(u16, u16)> {
+    let top = area.y as usize;
+    let vis_lo = lo.max(scroll);
+    let vis_hi = hi.min(scroll + area.height as usize);
+    if vis_lo >= vis_hi {
+        return None;
+    }
+    let y = top + (vis_lo - scroll);
+    Some((y as u16, (vis_hi - vis_lo) as u16))
 }
 
 /// Render one detail pane: bordered block titled
@@ -718,17 +782,7 @@ fn render_pane(
         cost,
         markers
     );
-    let border_style = if focused {
-        tint(nc, Color::Cyan)
-    } else if pane.selected {
-        tint(nc, Color::Green)
-    } else {
-        Style::default()
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(title);
+    let block = pane_block(title, focused, nc);
     let committed_end = pane.lines.len().min(start + inner_height);
     let mut lines: Vec<TuiLine> = pane.lines[start.min(pane.lines.len())..committed_end]
         .iter()
@@ -903,7 +957,7 @@ fn render_input(state: &AppState, frame: &mut Frame, area: Rect) {
 /// the left — a notice temporarily claims that zone (it decays reducer-side)
 /// — and global fleet state on the right (attention counts by glyph, session
 /// count, cumulative cost, and the live `serve` dot).
-fn render_statusbar(state: &AppState, frame: &mut Frame, area: Rect) {
+fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let pty_focused = state
         .focused()
@@ -950,23 +1004,31 @@ fn render_statusbar(state: &AppState, frame: &mut Frame, area: Rect) {
     if let Some(total) = state.total_cost() {
         segments.push(fmt_cost(&total).trim_start().to_string());
     }
-    // The `serve` dot renders as its own span: a down daemon is the one
-    // red thing on the bar (glyph carries it too — never color-alone).
+    // The `serve` dot: monochrome, so the ✗ vs ● glyph carries daemon-down
+    // (never color-alone) instead of the old red accent.
     let serve = match state.serve_ok {
-        Some(true) => Some(("serve ●", tint(nc, Color::DarkGray))),
-        Some(false) => Some(("serve ✗", tint(nc, Color::Red))),
+        Some(true) => Some("serve ●"),
+        Some(false) => Some("serve ✗"),
         None => None,
     };
     let mut right = segments.join(" · ");
     if serve.is_some() && !right.is_empty() {
         right.push_str(" · ");
     }
-    let right_chars = right.chars().count() + serve.map_or(0, |(s, _)| s.chars().count());
+    let right_chars = right.chars().count() + serve.map_or(0, |s| s.chars().count());
+
+    // Reserve the bar's edge cells for the sidebar toggle buttons (`<<`/`>>`).
+    // They live here — always drawn — so a collapsed sidebar can be brought
+    // back (a button inside the sidebar would vanish with it). Dropped only
+    // when the bar is too narrow to spare the cells.
+    const BTN: usize = 3; // "<< " and " >>"
+    let full = area.width as usize;
+    let buttons = full >= BTN * 2 + 4;
+    let width = if buttons { full - BTN * 2 } else { full };
 
     // Right-align the state zone. When both don't fit, hints yield to the
     // global state (truncated with an ellipsis); a notice keeps the whole
     // line — it's transient, and clipping it is exactly the old failure.
-    let width = area.width as usize;
     let mut left = left;
     if state.notice.is_none() && right_chars > 0 && left.chars().count() + right_chars + 2 > width {
         let keep = width.saturating_sub(right_chars + 3);
@@ -976,17 +1038,63 @@ fn render_statusbar(state: &AppState, frame: &mut Frame, area: Rect) {
         }
     }
     let left_chars = left.chars().count();
-    let mut spans = Vec::new();
+    // The inner region between the buttons, padded to exactly `width` so the
+    // right button stays flush at the bar's edge.
+    let mut inner: Vec<Span> = Vec::new();
     if right_chars > 0 && left_chars + right_chars + 2 <= width {
         let pad = width - left_chars - right_chars;
-        spans.push(Span::raw(left));
-        spans.push(Span::raw(" ".repeat(pad)));
-        spans.push(Span::styled(right, tint(nc, Color::DarkGray)));
-        if let Some((text, style)) = serve {
-            spans.push(Span::styled(text, style));
+        inner.push(Span::raw(left));
+        inner.push(Span::raw(" ".repeat(pad)));
+        inner.push(Span::styled(right, tint(nc, Color::DarkGray)));
+        if let Some(text) = serve {
+            inner.push(Span::styled(text, tint(nc, Color::DarkGray)));
         }
     } else {
-        spans.push(Span::raw(left));
+        // Lone-left (or an over-long notice): keep it within its cells so the
+        // right button stays put, then pad out to `width`.
+        if left.chars().count() > width {
+            left = left.chars().take(width).collect();
+        }
+        let pad = width - left.chars().count();
+        inner.push(Span::raw(left));
+        if pad > 0 {
+            inner.push(Span::raw(" ".repeat(pad)));
+        }
+    }
+
+    let mut spans = Vec::new();
+    if buttons {
+        // Chevrons reflect the collapse flag the click toggles: `<<` collapses
+        // an open sidebar, `>>` expands a collapsed one.
+        let l_btn = if state.sessions_collapsed {
+            ">> "
+        } else {
+            "<< "
+        };
+        let r_btn = if state.subagents_collapsed {
+            " <<"
+        } else {
+            " >>"
+        };
+        spans.push(Span::styled(l_btn, tint(nc, Color::DarkGray)));
+        spans.extend(inner);
+        spans.push(Span::styled(r_btn, tint(nc, Color::DarkGray)));
+        zones.push(ClickZone {
+            x: area.x,
+            y: area.y,
+            w: BTN as u16,
+            h: 1,
+            target: ClickTarget::ToggleSessions,
+        });
+        zones.push(ClickZone {
+            x: area.x + area.width - BTN as u16,
+            y: area.y,
+            w: BTN as u16,
+            h: 1,
+            target: ClickTarget::ToggleSubagents,
+        });
+    } else {
+        spans.extend(inner);
     }
     frame.render_widget(Paragraph::new(TuiLine::from(spans)), area);
 }
@@ -1116,6 +1224,59 @@ mod tests {
         orch.model = Some("supergrok:grok-4.5".into());
         st.agents.push(orch);
         st
+    }
+
+    /// Render `state` at `w`×`h`, keeping the state so its recorded click zones
+    /// (and everything else the renderer wrote back) can be inspected.
+    fn render_keeping_state(state: &mut AppState, w: u16, h: u16) {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|f| render(state, &[], f)).expect("draw");
+    }
+
+    #[test]
+    fn renderer_records_click_zones_for_buttons_and_rows() {
+        let mut st = with_session();
+        render_keeping_state(&mut st, 130, 30);
+        let has = |t: ClickTarget| st.click_zones.iter().any(|z| z.target == t);
+        assert!(has(ClickTarget::ToggleSessions), "<< button zone recorded");
+        assert!(has(ClickTarget::ToggleSubagents), ">> button zone recorded");
+        assert!(
+            st.click_zones
+                .iter()
+                .any(|z| matches!(z.target, ClickTarget::SessionRow(_))),
+            "a session row is clickable"
+        );
+        assert!(
+            st.click_zones
+                .iter()
+                .any(|z| matches!(z.target, ClickTarget::RailRow(_))),
+            "a subagent row is clickable"
+        );
+    }
+
+    #[test]
+    fn a_click_at_a_recorded_rail_zone_opens_that_agent() {
+        // The renderer's zone coordinates and the reducer's hit-test must
+        // agree: click the center of the RailRow(1) zone and that agent opens.
+        let mut st = with_session();
+        render_keeping_state(&mut st, 130, 30);
+        let target = st.roster()[1];
+        let target_id = st.agents[target].record_id.clone();
+        let zone = st
+            .click_zones
+            .iter()
+            .find(|z| z.target == ClickTarget::RailRow(1))
+            .copied()
+            .expect("a RailRow(1) zone");
+        let (col, row) = (zone.x + zone.w / 2, zone.y + zone.h / 2);
+        crate::tui::state::reduce(&mut st, &crate::tui::event::AppEvent::Click { col, row });
+        assert_eq!(
+            st.detail.shown,
+            vec![target_id],
+            "clicked rail row opened solo"
+        );
+        assert_eq!(st.mode, Mode::Agent, "and entered AGENT mode");
     }
 
     #[test]

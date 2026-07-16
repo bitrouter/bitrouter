@@ -725,6 +725,40 @@ pub enum Panel {
     Subagents,
 }
 
+/// What a recorded click zone does when the human clicks inside it. The
+/// renderer rebuilds the zone list every frame (like [`AppState::pty_areas`]);
+/// the [`AppEvent::Click`] reducer hit-tests the pointer against them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClickTarget {
+    /// The `<<` status-bar button: toggle the sessions (left) sidebar.
+    ToggleSessions,
+    /// The `>>` status-bar button: toggle the subagents (right) sidebar.
+    ToggleSubagents,
+    /// A sessions-panel row — an index into [`AppState::sessions_list`] order.
+    SessionRow(usize),
+    /// A subagents-rail row — an index into [`AppState::roster`] order.
+    RailRow(usize),
+}
+
+/// A clickable region recorded by the renderer for the current frame. Pure
+/// geometry (no `ratatui` in this module — the renderer converts its `Rect`s),
+/// so the reducer can hit-test the pointer without a retained widget tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClickZone {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+    pub target: ClickTarget,
+}
+
+impl ClickZone {
+    /// Whether cell `(col, row)` falls inside this zone (top-left inclusive).
+    fn contains(&self, col: u16, row: u16) -> bool {
+        col >= self.x && col < self.x + self.w && row >= self.y && row < self.y + self.h
+    }
+}
+
 /// Whole-app render state: a flat agent list + the detail layout + rail cursor.
 /// Accessors return `Option` because the agent list may be empty transiently
 /// (right after the last agent closes, before `should_quit`).
@@ -793,6 +827,10 @@ pub struct AppState {
     /// resizes the emulator + PTY (SIGWINCH) when one changes. Rebuilt every
     /// frame by the renderer.
     pub pty_areas: Vec<(String, (u16, u16))>,
+    /// Clickable regions recorded by the renderer for the current frame (mouse
+    /// hit-test targets: sidebar toggle buttons + roster rows). Rebuilt every
+    /// frame, like [`AppState::pty_areas`].
+    pub click_zones: Vec<ClickZone>,
 }
 
 impl AppState {
@@ -828,6 +866,7 @@ impl AppState {
             bootstrap_decision: None,
             confirm_agent: None,
             pty_areas: Vec::new(),
+            click_zones: Vec::new(),
         }
     }
 
@@ -1577,6 +1616,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 }
             }
         }
+        AppEvent::Click { col, row } => reduce_click(state, *col, *row),
         AppEvent::Focus(gained) => {
             state.term_focused = *gained;
             if *gained {
@@ -2115,6 +2155,65 @@ fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
 
 /// Execute one palette command. Every action maps onto an existing reducer
 /// path — the palette is a discoverable front door, not a second behavior set.
+/// Hit-test a left-click against the zones the renderer recorded this frame.
+/// Later-pushed zones sit on top, so the topmost match wins (`rev()`). Sidebar
+/// buttons toggle their panel; a roster row selects it and opens it solo —
+/// entering AGENT mode so the `▸` cursor lands there and the human keeps
+/// clicking without the `Ctrl-A` modal dance (TUI_SPEC). Overlays (picker /
+/// palette / confirm / which-key) swallow clicks: their zones sit behind the
+/// popup, so acting on them would be a click-through.
+fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
+    if state.keys_help || matches!(state.mode, Mode::Picker | Mode::Command | Mode::Confirm) {
+        return Vec::new();
+    }
+    let Some(target) = state
+        .click_zones
+        .iter()
+        .rev()
+        .find(|z| z.contains(col, row))
+        .map(|z| z.target)
+    else {
+        return Vec::new();
+    };
+    match target {
+        ClickTarget::ToggleSessions => run_command(state, Command::ToggleSessions),
+        ClickTarget::ToggleSubagents => run_command(state, Command::ToggleSubagents),
+        ClickTarget::SessionRow(i) => {
+            let Some(&idx) = state.sessions_list().get(i) else {
+                return Vec::new();
+            };
+            let id = state.agents[idx].record_id.clone();
+            state.mode = Mode::Agent;
+            state.panel = Panel::Sessions;
+            state.session_cursor = i;
+            state.detail = DetailLayout::solo(id);
+            mark_shown_seen(state);
+            state.clamp_session_cursor();
+            Vec::new()
+        }
+        ClickTarget::RailRow(i) => {
+            let Some(&idx) = state.roster().get(i) else {
+                return Vec::new();
+            };
+            // In BROADCAST a rail click toggles that row's selection (like
+            // Space) rather than dropping out of the mode.
+            if state.mode == Mode::Broadcast {
+                state.agents[idx].selected = !state.agents[idx].selected;
+                state.rail_cursor = i;
+                return Vec::new();
+            }
+            let id = state.agents[idx].record_id.clone();
+            state.mode = Mode::Agent;
+            state.panel = Panel::Subagents;
+            state.rail_cursor = i;
+            state.detail = DetailLayout::solo(id);
+            mark_shown_seen(state);
+            state.clamp_rail_cursor();
+            Vec::new()
+        }
+    }
+}
+
 fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
     match cmd {
         Command::SpawnAgent => {
@@ -2618,6 +2717,120 @@ mod tests {
         st.agents.push(PaneState::new("r1".into(), "a1".into()));
         st.agents.push(PaneState::new("r2".into(), "a2".into()));
         st
+    }
+
+    fn click(col: u16, row: u16) -> AppEvent {
+        AppEvent::Click { col, row }
+    }
+
+    #[test]
+    fn click_toggle_button_collapses_the_sidebar() {
+        let mut st = agents3();
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 20,
+            w: 3,
+            h: 1,
+            target: ClickTarget::ToggleSessions,
+        });
+        assert!(!st.sessions_collapsed);
+        reduce(&mut st, &click(1, 20));
+        assert!(st.sessions_collapsed, "<< toggles the sessions sidebar");
+        reduce(&mut st, &click(1, 20));
+        assert!(!st.sessions_collapsed, "clicking again restores it");
+    }
+
+    #[test]
+    fn click_on_a_rail_row_opens_it_solo_in_agent_mode() {
+        let mut st = agents3();
+        // roster() with three idle agents keeps spawn order: row 1 == r1.
+        st.click_zones.push(ClickZone {
+            x: 24,
+            y: 3,
+            w: 20,
+            h: 2,
+            target: ClickTarget::RailRow(1),
+        });
+        reduce(&mut st, &click(30, 4));
+        assert_eq!(st.mode, Mode::Agent, "a row click enters AGENT mode");
+        assert_eq!(st.panel, Panel::Subagents);
+        assert_eq!(st.rail_cursor, 1, "cursor lands on the clicked row");
+        assert_eq!(
+            st.detail.shown,
+            vec!["r1".to_string()],
+            "the clicked agent opens solo"
+        );
+    }
+
+    #[test]
+    fn click_on_a_session_row_focuses_the_sessions_panel() {
+        let mut st = agents3();
+        let mut orch = PaneState::new("orch".into(), "claude".into());
+        orch.kind = PaneKind::Pty;
+        st.agents.push(orch);
+        // sessions_list() holds only the PTY pane: row 0 == orch.
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 2,
+            w: 24,
+            h: 2,
+            target: ClickTarget::SessionRow(0),
+        });
+        reduce(&mut st, &click(5, 2));
+        assert_eq!(st.mode, Mode::Agent);
+        assert_eq!(st.panel, Panel::Sessions);
+        assert_eq!(st.detail.shown, vec!["orch".to_string()]);
+    }
+
+    #[test]
+    fn click_outside_every_zone_is_a_noop() {
+        let mut st = agents3();
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 1,
+            target: ClickTarget::ToggleSubagents,
+        });
+        reduce(&mut st, &click(50, 50));
+        assert!(!st.subagents_collapsed, "a miss changes nothing");
+        assert_eq!(st.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn broadcast_rail_click_toggles_selection_without_leaving_the_mode() {
+        let mut st = agents3();
+        st.mode = Mode::Broadcast;
+        st.click_zones.push(ClickZone {
+            x: 24,
+            y: 3,
+            w: 20,
+            h: 2,
+            target: ClickTarget::RailRow(0),
+        });
+        reduce(&mut st, &click(30, 3));
+        assert_eq!(st.mode, Mode::Broadcast, "click stays in broadcast");
+        assert!(st.agents[0].selected, "row 0 got selected");
+        reduce(&mut st, &click(30, 3));
+        assert!(!st.agents[0].selected, "clicking again deselects");
+    }
+
+    #[test]
+    fn clicks_are_swallowed_while_an_overlay_is_up() {
+        let mut st = agents3();
+        st.mode = Mode::Picker;
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 20,
+            w: 3,
+            h: 1,
+            target: ClickTarget::ToggleSessions,
+        });
+        reduce(&mut st, &click(1, 20));
+        assert!(
+            !st.sessions_collapsed,
+            "a click behind the picker must not act on the zone under it"
+        );
     }
 
     /// The human-bridge escalations reuse the notice / attention / review-queue

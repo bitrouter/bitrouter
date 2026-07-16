@@ -979,12 +979,19 @@ async fn event_loop(
                     if k.kind == crossterm::event::KeyEventKind::Release => None,
                 Some(Ok(CtEvent::Key(k))) => Some(AppEvent::Key(k)),
                 Some(Ok(CtEvent::Paste(text))) => Some(AppEvent::Paste(text)),
-                // Wheel scroll pages the focused pane's scrollback.
+                // Wheel scroll pages the focused pane's scrollback; a left
+                // click hit-tests the frame's recorded zones (reducer-side).
                 Some(Ok(CtEvent::Mouse(m))) => match m.kind {
                     crossterm::event::MouseEventKind::ScrollUp =>
                         Some(AppEvent::Scroll { up: true }),
                     crossterm::event::MouseEventKind::ScrollDown =>
                         Some(AppEvent::Scroll { up: false }),
+                    crossterm::event::MouseEventKind::Down(
+                        crossterm::event::MouseButton::Left,
+                    ) => Some(AppEvent::Click {
+                        col: m.column,
+                        row: m.row,
+                    }),
                     _ => None,
                 },
                 // Focus drives away-notifications; regaining it marks the

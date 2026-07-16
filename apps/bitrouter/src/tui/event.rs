@@ -109,6 +109,10 @@ pub enum AppEvent {
     /// Mouse wheel over the detail: page the focused pane's scrollback
     /// (ACP panes) or forward arrow presses to the child (PTY panes).
     Scroll { up: bool },
+    /// A left-click at terminal cell `(col, row)`. The reducer hit-tests it
+    /// against the click zones the renderer recorded for the current frame
+    /// (sidebar toggle buttons and roster rows).
+    Click { col: u16, row: u16 },
     /// The outer terminal gained (`true`) or lost (`false`) focus. Drives
     /// away-notifications and the done-unseen decay: regaining focus marks
     /// the shown panes seen.
