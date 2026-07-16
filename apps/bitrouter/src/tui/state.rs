@@ -84,7 +84,7 @@ pub enum Command {
 /// Palette entries: display name → command. Order = display order when the
 /// filter is empty.
 pub const COMMANDS: &[(&str, Command)] = &[
-    ("spawn agent", Command::SpawnAgent),
+    ("spawn subagent", Command::SpawnAgent),
     ("new session", Command::NewSession),
     ("close agent", Command::CloseAgent),
     ("split horizontal", Command::SplitH),
@@ -130,7 +130,8 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
 /// What the picker overlay spawns on Enter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerPurpose {
-    /// An ACP subagent from the config catalog (`n` / `spawn agent`).
+    /// An ACP subagent from the config catalog — the human-spawn hatch,
+    /// reachable only as the palette entry `spawn subagent` (TUI_SPEC_V3 §4).
     Subagent,
     /// A native orchestrator session on a PTY (`N` / `new session`).
     Session,
@@ -4399,7 +4400,7 @@ mod tests {
             selected: 0,
         };
         let names: Vec<&str> = p.matches().iter().map(|(n, _)| *n).collect();
-        assert_eq!(names, vec!["spawn agent"], "s-p-w subsequence");
+        assert_eq!(names, vec!["spawn subagent"], "s-p-w subsequence");
 
         let none = PaletteState {
             input: "zzz".into(),

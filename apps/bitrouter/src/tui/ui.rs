@@ -1521,8 +1521,8 @@ mod tests {
             selected: 0,
         });
         let text = draw(&mut st, 80, 24);
-        assert!(text.contains("spawn agent"), "match listed");
-        assert!(text.contains("> spawn agent"), "selection marked");
+        assert!(text.contains("spawn subagent"), "match listed");
+        assert!(text.contains("> spawn subagent"), "selection marked");
     }
 
     #[test]
