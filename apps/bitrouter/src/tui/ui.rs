@@ -934,13 +934,6 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
     if !badge.is_empty() {
         segments.push(badge.join(" "));
     }
-    let sessions = state.sessions_list().len();
-    if sessions > 0 {
-        segments.push(format!(
-            "{sessions} session{}",
-            if sessions == 1 { "" } else { "s" }
-        ));
-    }
     if let Some(total) = state.total_cost() {
         segments.push(fmt_cost(&total).trim_start().to_string());
     }
@@ -1340,14 +1333,23 @@ mod tests {
             currency: "USD".into(),
         });
         st.agents[2].attention = true;
-        let text = draw(&mut st, 130, 30);
-        assert!(text.contains("serve ●"), "live daemon dot: {text}");
-        assert!(text.contains("1 session"), "session count");
-        assert!(text.contains("$0.42"), "summed fleet cost");
-        assert!(text.contains("●1"), "attention count");
+        let (w, h) = (130u16, 30u16);
+        let text = draw(&mut st, w, h);
+        // The bar is the frame's last row between its << / >> buttons —
+        // the full-height sidebars legitimately say "session" beside it,
+        // so the fold is asserted on the bar's own cells.
+        let row: String = text.chars().skip((w as usize) * (h as usize - 1)).collect();
+        let bar: String = match (row.find("<<"), row.rfind(">>")) {
+            (Some(lo), Some(hi)) if lo < hi => row[lo..hi].to_string(),
+            _ => row,
+        };
+        assert!(bar.contains("serve ●"), "live daemon dot: {bar}");
+        assert!(!bar.contains("session"), "bare session count folded: {bar}");
+        assert!(bar.contains("$0.42"), "summed fleet cost");
+        assert!(bar.contains("●1"), "attention count");
         // A down daemon flips the glyph.
         st.serve_ok = Some(false);
-        let text = draw(&mut st, 130, 30);
+        let text = draw(&mut st, w, h);
         assert!(text.contains("serve ✗"));
     }
 
