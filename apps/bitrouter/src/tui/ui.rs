@@ -57,7 +57,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let rail_content = state
         .agents
         .iter()
-        .any(|p| p.kind == crate::tui::state::PaneKind::Acp);
+        .any(|p| p.kind == crate::tui::state::PaneKind::Monitor);
     let fits_both = area.width >= SESSIONS_WIDTH + rail_w + CENTER_MIN_WIDTH;
     let (show_sessions, show_rail) = if fits_both {
         (sessions_allowed, rail_allowed)
@@ -94,9 +94,10 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     // the keyboard (locked-mode passthrough), so its rows go back to the
     // terminal; the status bar carries the routing hint instead.
     let composer = state.mode == Mode::Broadcast
-        || state
-            .focused()
-            .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Acp);
+        || state.focused().is_some_and(|p| {
+            p.kind == crate::tui::state::PaneKind::Monitor
+                && p.owner == crate::tui::state::Ownership::Human
+        });
     // The composer grows with its (Shift-Enter) newlines, up to 5 rows.
     let input_lines = if state.mode == Mode::Broadcast {
         state.broadcast_input.split('\n').count()
@@ -618,9 +619,8 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
                     let view = pty.iter().find(|v| &v.record_id == rid);
                     render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
                 }
-                // Mirror panes (orchestrator-spawned, MCP) render like ACP
-                // monitors: bitrouter-drawn lines, no PTY grid.
-                crate::tui::state::PaneKind::Acp | crate::tui::state::PaneKind::Mirror => {
+                // Monitor panes: bitrouter-drawn lines, no PTY grid.
+                crate::tui::state::PaneKind::Monitor => {
                     render_pane(pane, slot, slot == focus, nc, frame, *rect)
                 }
             }

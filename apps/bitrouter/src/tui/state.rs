@@ -323,20 +323,29 @@ impl Autonomy {
     }
 }
 
-/// What renders a pane's content (TUI_SPEC §3's pane-source table).
+/// What renders a pane's content (TUI_SPEC_V3 §2's two-kind pane model).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PaneKind {
-    /// An ACP subagent monitor, rendered by bitrouter from typed events.
+    /// A read-only subagent monitor, rendered by bitrouter from typed ACP
+    /// events: transcript + decision queue + review verbs, no composer.
     #[default]
-    Acp,
+    Monitor,
     /// A native harness on a PTY (the orchestrator) — rendered by the
     /// terminal backend; keys pass through except the leader.
     Pty,
-    /// A monitor mirror of a subagent the orchestrator spawned via the MCP
-    /// bridge (another process owns the session). Display + decision queue
-    /// only: it can't be prompted, attached, or closed from here — the
-    /// orchestrator steers it.
-    Mirror,
+}
+
+/// Who steers an agent (TUI_SPEC_V3 §4's ownership rule). Capability edges
+/// key off this, not the pane kind: an orchestrator-owned session lives in
+/// another process, so it can't be cancelled, attached, re-tiered, or closed
+/// from here — and review verdicts route back as its task outcome (§5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ownership {
+    /// Human-spawned (the palette hatch, attaches, sessions): steered here.
+    #[default]
+    Human,
+    /// Spawned by an orchestrator via the MCP bridge: steered there.
+    Orchestrator,
 }
 
 /// One agent pane's state.
@@ -407,6 +416,9 @@ pub struct PaneState {
     pub check_retries: u8,
     /// What renders this pane (ACP monitor vs native PTY).
     pub kind: PaneKind,
+    /// Who steers this agent (TUI_SPEC_V3 §4): set at spawn time — `Human`
+    /// for hatch spawns/attaches/sessions, `Orchestrator` for bridge spawns.
+    pub owner: Ownership,
     /// The model this pane was pinned to at launch (sessions: the `--model`
     /// value), shown in the sessions panel. `None` = the daemon's default.
     pub model: Option<String>,
@@ -447,6 +459,7 @@ impl PaneState {
             review: None,
             check_retries: 0,
             kind: PaneKind::default(),
+            owner: Ownership::default(),
             model: None,
             draft: String::new(),
         }
@@ -893,7 +906,7 @@ impl AppState {
     /// the sessions panel ([`sessions_list`](Self::sessions_list)).
     pub fn roster(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.agents.len())
-            .filter(|&i| matches!(self.agents[i].kind, PaneKind::Acp | PaneKind::Mirror))
+            .filter(|&i| self.agents[i].kind == PaneKind::Monitor)
             .filter(|&i| !self.queue_only || self.agents[i].pending.is_some())
             .collect();
         order.sort_by_key(|&i| {
@@ -950,7 +963,7 @@ impl AppState {
         let focused = self.detail.focused_id().map(str::to_string);
         self.agents
             .iter()
-            .filter(|p| p.kind == PaneKind::Acp)
+            .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human)
             .map(|p| {
                 let draft = if focused.as_deref() == Some(p.record_id.as_str()) {
                     &self.input
@@ -1299,7 +1312,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             port,
         } => {
             let mut pane = PaneState::new(record_id.clone(), agent_id.clone());
-            pane.kind = PaneKind::Mirror;
+            pane.owner = Ownership::Orchestrator;
             pane.harness = "mcp".to_string();
             pane.port = *port;
             // A bridge spawn blocks on its first turn — it starts working.
@@ -1579,7 +1592,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                             text,
                         }]
                     }
-                    Some(p) if p.kind == PaneKind::Acp => {
+                    Some(p) if p.kind == PaneKind::Monitor && p.owner == Ownership::Human => {
                         // Into the composer, newlines intact (Shift-Enter
                         // territory) — Enter still submits explicitly.
                         state.input.push_str(&text);
@@ -1595,7 +1608,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                 return Vec::new();
             };
             match pane.kind {
-                PaneKind::Acp | PaneKind::Mirror => {
+                PaneKind::Monitor => {
                     if *up {
                         pane.scroll_page_up();
                     } else {
@@ -1655,15 +1668,17 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
                     && !pane.exited
                 {
                     let record_id = pane.record_id.clone();
-                    return match pane.kind {
-                        PaneKind::Pty => vec![Effect::PtyKey {
+                    return match (pane.kind, pane.owner) {
+                        (PaneKind::Pty, _) => vec![Effect::PtyKey {
                             record_id,
                             key: *key,
                         }],
-                        PaneKind::Acp => vec![Effect::CancelTurn { record_id }],
-                        // The orchestrator owns a mirror's turn — nothing
-                        // to interrupt from here.
-                        PaneKind::Mirror => Vec::new(),
+                        (PaneKind::Monitor, Ownership::Human) => {
+                            vec![Effect::CancelTurn { record_id }]
+                        }
+                        // The orchestrator owns its subagents' turns —
+                        // nothing to interrupt from here.
+                        (PaneKind::Monitor, Ownership::Orchestrator) => Vec::new(),
                     };
                 }
                 state.should_quit = true;
@@ -1778,9 +1793,13 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         return Vec::new();
     }
 
-    // A focused mirror pane can't be prompted — the orchestrator owns that
-    // session (its composer is hidden; don't type into an invisible input).
-    if state.focused().is_some_and(|p| p.kind == PaneKind::Mirror) {
+    // A focused orchestrator-owned monitor can't be prompted — the
+    // orchestrator owns that session (its composer is hidden; don't type
+    // into an invisible input).
+    if state
+        .focused()
+        .is_some_and(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Orchestrator)
+    {
         if key.code == KeyCode::Char(':') && state.input.is_empty() {
             state.palette = Some(PaletteState::default());
             state.mode = Mode::Command;
@@ -2053,7 +2072,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         KeyCode::Char('t') if state.panel == Panel::Subagents => {
             match state
                 .rail_selected()
-                .filter(|p| p.kind == PaneKind::Acp && !p.exited)
+                .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human && !p.exited)
                 .map(|p| p.record_id.clone())
             {
                 Some(record_id) => vec![Effect::Attach { record_id }],
@@ -2067,7 +2086,7 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             if let Some(id) = state.rail_selected().map(|p| p.record_id.clone())
                 && let Some(pane) = state.pane_by_id_mut(&id)
             {
-                if pane.kind == PaneKind::Mirror {
+                if pane.owner == Ownership::Orchestrator {
                     state.notice = Some(
                         "orchestrator-managed subagent — its policy lives in the bridge".into(),
                     );
@@ -2084,9 +2103,9 @@ fn reduce_key_agent(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         // removing the pane would orphan its future permission requests.
         KeyCode::Char('x') => match state
             .panel_selected()
-            .map(|p| (p.record_id.clone(), p.kind, p.exited))
+            .map(|p| (p.record_id.clone(), p.owner, p.exited))
         {
-            Some((_, PaneKind::Mirror, false)) => {
+            Some((_, Ownership::Orchestrator, false)) => {
                 state.notice =
                     Some("orchestrator-managed subagent — close it there (close_subagent)".into());
                 Vec::new()
@@ -2545,7 +2564,7 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         // silently drop the message and strand a fake spinner.
         KeyCode::Char('a') => {
             for p in state.agents.iter_mut() {
-                if p.kind == PaneKind::Acp {
+                if p.kind == PaneKind::Monitor && p.owner == Ownership::Human {
                     p.selected = true;
                 }
             }
@@ -2562,7 +2581,7 @@ fn reduce_key_broadcast(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
             }
             let mut effects = Vec::new();
             for p in state.agents.iter_mut() {
-                if p.selected && p.kind == PaneKind::Acp {
+                if p.selected && p.kind == PaneKind::Monitor && p.owner == Ownership::Human {
                     p.push_external(Line::UserPrompt(text.clone()));
                     p.turn_active = true;
                     p.review = None;
@@ -5393,7 +5412,8 @@ mod tests {
         spawn_mirror(&mut st);
         let mirror = st.agents.iter().find(|p| p.record_id == "mcp:abc123");
         let mirror = mirror.expect("mirror pane created");
-        assert_eq!(mirror.kind, PaneKind::Mirror);
+        assert_eq!(mirror.kind, PaneKind::Monitor);
+        assert_eq!(mirror.owner, Ownership::Orchestrator);
         assert!(mirror.turn_active, "a bridge spawn starts working");
         assert!(
             st.roster()
