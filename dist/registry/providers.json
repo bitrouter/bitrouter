@@ -3935,6 +3935,31 @@
             "structured_outputs",
             "tools"
           ],
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
@@ -4032,7 +4057,7 @@
             "reasoning",
             "tools"
           ],
-          "id": "moonshotai/kimi-k2.6",
+          "id": "moonshotai/kimi-k3",
           "provider_model_id": "kimi-for-coding",
           "rate_limits": {
             "requests_per_minute": 60

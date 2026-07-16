@@ -29,7 +29,7 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `google-ai` | Google | US | google, openai | Subscription | 3 |
 | `minimax` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `minimax_cn` | MiniMax | CN | anthropic, openai | Per-token | 3 |
-| `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 3 |
+| `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 4 |
 | `moonshotai_coding_plan` | Moonshot AI | CN | openai | Subscription | 1 |
 | `novita` | Novita AI | US | openai | Per-token | 15 |
 | `openai` | OpenAI | US | openai, responses | Per-token | 6 |

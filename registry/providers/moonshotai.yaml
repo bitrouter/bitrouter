@@ -15,6 +15,18 @@ rate_limits:
   - "*":
       requests_per_minute: 60
 models:
+  - id: moonshotai/kimi-k3
+    provider_model_id: kimi-k3
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+      output_tokens:
+        text: 15
+    capabilities:
+      - reasoning
+      - structured_outputs
+      - tools
   - id: moonshotai/kimi-k2.6
     provider_model_id: kimi-k2.6
     pricing:
