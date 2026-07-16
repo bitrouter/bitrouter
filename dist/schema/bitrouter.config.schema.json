@@ -78,6 +78,10 @@
       "description": "Worktree isolation settings for fleet-managed subagents\n(`bitrouter tui` spawns). All fields default — `worktrees:` is\noptional in `bitrouter.yaml`.",
       "$ref": "#/$defs/WorktreesConfig"
     },
+    "tui": {
+      "description": "`bitrouter tui` settings. All fields default — `tui:` is optional\nin `bitrouter.yaml`.",
+      "$ref": "#/$defs/TuiConfig"
+    },
     "inherit_defaults": {
       "description": "Whether providers inherit workspace defaults.",
       "type": "boolean",
@@ -1481,6 +1485,20 @@
           "minimum": 0,
           "maximum": 65535,
           "default": 3199
+        }
+      }
+    },
+    "TuiConfig": {
+      "description": "`bitrouter tui` settings.",
+      "type": "object",
+      "properties": {
+        "leader": {
+          "description": "The one-shot leader key that opens the TUI's which-key menu\n(TUI_SPEC_V3 §3). `ctrl-<key>` form, where `<key>` is a single\ncharacter or `space` — e.g. `ctrl-space` (the default), `ctrl-]`,\n`ctrl-\\`. Unset or unparseable falls back to `ctrl-space`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       }
     },
