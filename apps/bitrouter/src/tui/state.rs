@@ -3468,6 +3468,16 @@ mod tests {
     // ── Polish: leader Tab (next actionable), wheel scroll. ──
 
     #[test]
+    fn leader_p_opens_the_command_palette() {
+        let mut st = AppState::new(pane());
+        st.mode = Mode::Leader;
+        let fx = reduce(&mut st, &press(KeyCode::Char('p')));
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Command);
+        assert!(st.palette.is_some(), "palette overlay armed");
+    }
+
+    #[test]
     fn leader_leaves_are_one_shot() {
         // Every leaf leaves `Leader` in exactly one key: back to NORMAL, or
         // into a Command/Picker leaf — never a sticky mode (TUI_SPEC_V3 I3).
