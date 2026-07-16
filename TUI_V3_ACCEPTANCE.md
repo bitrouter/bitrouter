@@ -160,7 +160,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   the active-pane/global-fleet status bar.
   **Proof:** `grep -nE 'Ctrl-A → AGENT|Ctrl-B → BROADCAST|composer renders only where' skills/bitrouter/references/cli.md`
   prints nothing; a human-read pass confirms the new keys are described.
-- [ ] **Update the `tui` section of [`CLI.md`](CLI.md)** to match (keys, no input bar,
+- [x] **Update the `tui` section of [`CLI.md`](CLI.md)** to match (keys, no input bar,
   status bar).
   **Proof:** grep the same stale phrases in `CLI.md` → none.
 - [ ] **Mark v2 superseded.** Add a one-line header note to [`TUI_SPEC.md`](TUI_SPEC.md)
@@ -323,4 +323,9 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   supervision, ownership-routed reject, gauge status bar); the sole remaining
   Ctrl-A/Ctrl-B mention states they pass through; sessions.md composer-drafts
   claim fixed; stale-phrase grep empty; gates green (1923).
+DECISION: CLI.md had no tui section at all (the task assumed one) — added a
+  concise \`### bitrouter tui\` section matching the v3 skill reference rather
+  than updating a nonexistent one.
+2026-07-16 cbb8aafa — V3.5 CLI.md tui section — v3 keys / no input bar / status
+  bar documented; stale-phrase grep empty.
 ```
