@@ -282,7 +282,7 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   the_default pass; gates green (1917). NOTE: skills/bitrouter + CLI.md rewrite
   for the new config surface lands in V3.5 per this plan (lockstep deferred to
   that phase deliberately).
-2026-07-16 eb476eb5 — V3.2 leader one-shot — leader_leaves_are_one_shot
+2026-07-16 0dfa39f6 — V3.2 leader one-shot — leader_leaves_are_one_shot
   covers 1/Tab/n/p/c/a/t/?/Esc, each ends in Normal|Picker|Command; gates
   green (1918).
 ```
