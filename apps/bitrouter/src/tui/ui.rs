@@ -125,7 +125,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     // The which-key overlay: up while the one-shot leader prefix is armed
     // (TUI_SPEC_V3 §3), or when `?` asked for the current mode's bindings.
     if state.keys_help || state.mode == Mode::Leader {
-        render_keys_help(state.mode, frame, area);
+        render_keys_help(state.mode, &state.leader_label(), frame, area);
     }
 
     if let Some(pane) = state.focused()
@@ -213,7 +213,7 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
 }
 
 /// Which-key overlay: every binding for the current mode. Any key dismisses.
-fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
+fn render_keys_help(mode: Mode, leader: &str, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
             (
@@ -223,7 +223,7 @@ fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
             ("D / m / p / r", "review: diff · merge · apply · reject"),
             ("PgUp / PgDn", "scroll the focused scrollback"),
             (":", "command palette"),
-            ("Ctrl-Space", "leader (one-shot menu)"),
+            (leader, "leader (one-shot menu)"),
             ("Ctrl-C", "interrupt the focused agent"),
         ],
         Mode::Leader => &[
@@ -392,7 +392,7 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
     }
     // The `new` affordance: clickable, with the real chord (`leader n`).
     let footer = Paragraph::new(TuiLine::styled(
-        "+ new session (⌃space n)",
+        format!("+ new session ({} n)", state.leader_label()),
         tint(nc, Color::DarkGray),
     ))
     .block(Block::default().borders(Borders::RIGHT));
@@ -564,9 +564,12 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
     let focus = state.detail.focus;
     let split = state.detail.split;
     if shown.is_empty() {
-        let placeholder = Paragraph::new("no agent shown — Ctrl-A then n to spawn")
-            .style(tint(nc, Color::DarkGray))
-            .block(Block::default().borders(Borders::ALL));
+        let placeholder = Paragraph::new(format!(
+            "no agent shown — {} n for a session · palette 'spawn subagent'",
+            state.leader_label()
+        ))
+        .style(tint(nc, Color::DarkGray))
+        .block(Block::default().borders(Borders::ALL));
         frame.render_widget(placeholder, area);
         return;
     }
@@ -902,14 +905,17 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
     // persistent affordance is the leader; full bindings live in the
     // which-key overlay (leader / `?`) and the palette. The PTY routing
     // hint stays — it explains where every keystroke is going.
+    let leader = state.leader_label();
     let hints = match state.mode {
-        Mode::Normal if pty_focused => "⇢ keys go to the orchestrator · ⌃space menu",
-        Mode::Normal => "⌃space menu",
+        Mode::Normal if pty_focused => {
+            format!("⇢ keys go to the orchestrator · {leader} menu")
+        }
+        Mode::Normal => format!("{leader} menu"),
         // Overlay modes render their own affordances; the bar just names them.
-        Mode::Leader => "LEADER",
-        Mode::Picker => "PICKER",
-        Mode::Command => "COMMAND",
-        Mode::Confirm => "CONFIRM",
+        Mode::Leader => "LEADER".to_string(),
+        Mode::Picker => "PICKER".to_string(),
+        Mode::Command => "COMMAND".to_string(),
+        Mode::Confirm => "CONFIRM".to_string(),
     };
     // The left zone follows the focused pane (TUI_SPEC_V3 §6): context
     // gauge + model + cost, when the upstream reports them — the numbers
@@ -937,7 +943,7 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
                 }
             }
             if parts.is_empty() {
-                hints.to_string()
+                hints.clone()
             } else {
                 format!("{}  {}", parts.join(" · "), hints)
             }

@@ -362,7 +362,10 @@ fn harness_tag(transport: &bitrouter_sdk::acp::AcpTransport) -> String {
 fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_>) {
     let attach_id = format!("attach:{record_id}");
     if rt.ptys.contains_key(&attach_id) {
-        state.notice = Some("already attached — ⌃space c on the attach pane detaches".into());
+        state.notice = Some(format!(
+            "already attached — {} c on the attach pane detaches",
+            state.leader_label()
+        ));
         return;
     }
     let Some(sess) = rt.sessions.get(record_id) else {

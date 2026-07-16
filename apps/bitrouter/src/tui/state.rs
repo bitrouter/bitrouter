@@ -1033,6 +1033,17 @@ impl AppState {
     fn pane_by_id_mut(&mut self, record_id: &str) -> Option<&mut PaneState> {
         self.agents.iter_mut().find(|p| p.record_id == record_id)
     }
+
+    /// The configured leader chord as a short display label (`⌃space`,
+    /// `⌃]`, …) — every affordance renders THIS, so hints stay honest when
+    /// `tui.leader` is customized.
+    pub fn leader_label(&self) -> String {
+        match self.leader.0 {
+            KeyCode::Char(' ') => "⌃space".to_string(),
+            KeyCode::Char(c) => format!("⌃{c}"),
+            _ => "leader".to_string(),
+        }
+    }
 }
 
 /// Fold one event into state, returning effects for the loop to run.
@@ -1351,7 +1362,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             // pass through; `leader c` on the attach pane detaches.
             state.detail = DetailLayout::solo(record_id.clone());
             state.mode = Mode::Normal;
-            state.notice = Some("attached — ⌃space c detaches".into());
+            state.notice = Some(format!("attached — {} c detaches", state.leader_label()));
             Vec::new()
         }
         AppEvent::SessionSpawned {
@@ -1575,7 +1586,7 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
         AppEvent::Key(key) => {
             // Ctrl-C interrupts the FOCUSED AGENT in NORMAL mode (PTY: raw
             // 0x03 passes through; ACP: cancel the in-flight turn) — quit
-            // moved to the leader (`Ctrl-A` → `x`/`:quit`; TUI_SPEC §9/§12).
+            // moved to the palette's `quit` / leader `c` on the last pane.
             // In manager modes Ctrl-C still quits.
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 if state.mode == Mode::Normal
@@ -1786,9 +1797,12 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         KeyCode::Char(_) | KeyCode::Enter | KeyCode::Backspace => {
             state.notice = Some(match state.focused().map(|p| p.owner) {
                 Some(Ownership::Orchestrator) => {
-                    "orchestrator-managed subagent — steer it from the orchestrator".into()
+                    "orchestrator-managed subagent — steer it from the orchestrator".to_string()
                 }
-                _ => "read-only monitor — ⌃space t attaches to drive it directly".into(),
+                _ => format!(
+                    "read-only monitor — {} t attaches to drive it directly",
+                    state.leader_label()
+                ),
             });
             Vec::new()
         }
