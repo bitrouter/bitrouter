@@ -153,7 +153,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 
 ### V3.5 — Docs lockstep (mandatory — `CLAUDE.md` requires it)
 
-- [ ] **Rewrite the `tui` rows in [`skills/bitrouter/references/cli.md`](skills/bitrouter/references/cli.md).**
+- [x] **Rewrite the `tui` rows in [`skills/bitrouter/references/cli.md`](skills/bitrouter/references/cli.md).**
   Remove every now-false claim: `Ctrl-A` manager leader, "composer renders where typing can
   land", AGENT + BROADCAST modes, `Ctrl-A N` new session, `Ctrl-B`. Describe: read-only
   `Monitor` panes (no composer), the one-shot `tui.leader` (default `Ctrl-Space`) + leaf map,
@@ -318,4 +318,9 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   re-prompts with the canned REJECT_NOTE. Tests
   reject_orchestrator_owned_sets_task_outcome + reject_human_owned_reprompts;
   fmt+clippy+1923 nextest green. V3.4 done.
+2026-07-16 6fc12b47 — V3.5 skill reference rewritten — cli.md tui rows describe
+  the v3 surface (read-only Monitors, tui.leader Ctrl-Space + leaf map, inline
+  supervision, ownership-routed reject, gauge status bar); the sole remaining
+  Ctrl-A/Ctrl-B mention states they pass through; sessions.md composer-drafts
+  claim fixed; stale-phrase grep empty; gates green (1923).
 ```
