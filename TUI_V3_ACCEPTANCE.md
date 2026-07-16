@@ -130,7 +130,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   claims this zone and decays.
   **Proof:** render test asserting the left zone shows the focused pane's `ctx …%`/`used/size`,
   model, and `$cost`.
-- [ ] **Right zone = global fleet:** badge counts (`⚠◆●◉`) + summed fleet cost + `serve ●/✗`.
+- [x] **Right zone = global fleet:** badge counts (`⚠◆●◉`) + summed fleet cost + `serve ●/✗`.
   Fold the bare `N sessions` count.
   **Proof:** render test asserting the right zone contents and that `session` word is absent.
 - [ ] **Verbose hint strings leave the bar.** The AGENT/NORMAL cheat-sheet lines
@@ -302,4 +302,7 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
 2026-07-16 cb878030 — V3.3 left zone — ctx gauge (% or raw tokens) + model +
   $cost promoted from the pane header to the bar's left zone; notice still
   preempts; test status_bar_left_zone_follows_the_focused_pane; gates green (1921).
+2026-07-16 b82dd693 — V3.3 right zone — bare "N sessions" segment folded; test
+  status_bar_right_zone_reports_global_state asserts badges + $fleet + serve
+  on the bar's own cells with no 'session' word; gates green (1921).
 ```
