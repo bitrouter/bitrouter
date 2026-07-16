@@ -174,7 +174,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 ## 3. Exit gates — only after every box in §2 is `[x]`
 
 ### Gate A — full sweep from a clean tree
-- [ ] `git status` is clean (all §2 work committed); re-run all **§1 standing gates**; all
+- [x] `git status` is clean (all §2 work committed); re-run all **§1 standing gates**; all
   green. Record `BASE=<sha at loop start>` in the Build Log if not already there — it scopes
   the review + diff.
 
@@ -333,4 +333,7 @@ DECISION: CLI.md had no tui section at all (the task assumed one) — added a
   (Ownership field, composer plumbing deletions, cursor machinery gone, canned
   REJECT_NOTE + ReviewVerdict wire path, top-pending batch clear, leader as
   shipped); fmt+clippy+1923 nextest green. ALL OF §2 IS [x] — exit gates next.
+2026-07-16 c8880741 — Gate A — git status clean; §1 sweep green (fmt OK, clippy
+  -D warnings 0 errors, 1923/1923 nextest, purity grep test-module-only);
+  BASE=b01c8887 recorded since iteration 1.
 ```
