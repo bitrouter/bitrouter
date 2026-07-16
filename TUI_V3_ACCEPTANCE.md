@@ -107,7 +107,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   `Command`/`Picker` leaf) in ≤1 key — never a sticky mode.
   **Proof:** reducer test `leader_leaves_are_one_shot` covering `1`,`Tab`,`n`,`p`,`c`,`a`,
   `t`,`?`,`Esc`.
-- [ ] **Leaf map wired** per `TUI_SPEC_V3.md` §3: `1..9` focus session · `Tab` next
+- [x] **Leaf map wired** per `TUI_SPEC_V3.md` §3: `1..9` focus session · `Tab` next
   actionable · `n` new session (Picker/Session) · `p` palette · `c` close · `a` autonomy ·
   `t` attach · `?` keys.
   **Proof:** reducer tests asserting each leaf's `Effect`/mode transition.
@@ -285,4 +285,10 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
 2026-07-16 0dfa39f6 — V3.2 leader one-shot — leader_leaves_are_one_shot
   covers 1/Tab/n/p/c/a/t/?/Esc, each ends in Normal|Picker|Command; gates
   green (1918).
+2026-07-16 9c649224 — V3.2 leaf map wired — per-leaf reducer tests:
+  leader_digit_focuses_session_n / leader_tab_focuses_the_next_actionable_agent /
+  leader_n_opens_the_session_picker_and_enter_spawns /
+  leader_p_opens_the_command_palette / leader_c_* (×3) /
+  leader_a_cycles_autonomy_and_logs / leader_t_attaches_the_focused_live_monitor_only /
+  leader_question_mark_opens_keys_help; 14 leader tests pass; gates green (1919).
 ```
