@@ -8,9 +8,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TuiLine, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
+use crossterm::event::KeyCode;
+
 use crate::tui::state::{
-    AppState, ClickTarget, ClickZone, DiffLine, Line, Mode, PaneState, PendingView, PickerPurpose,
-    PickerState, Split, TailKind, diff_lines,
+    AppState, ClickTarget, ClickZone, DiffLine, LEADER_LEAVES, Line, Mode, PaneState, PendingView,
+    PickerPurpose, PickerState, Split, TailKind, diff_lines,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
@@ -214,8 +216,13 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
 
 /// Which-key overlay: every binding for the current mode. Any key dismisses.
 fn render_keys_help(mode: Mode, leader: &str, frame: &mut Frame, area: Rect) {
-    let bindings: &[(&str, &str)] = match mode {
-        Mode::Normal | Mode::Command => &[
+    let static_rows = |rows: &[(&str, &str)]| -> Vec<(String, String)> {
+        rows.iter()
+            .map(|&(k, w)| (k.to_string(), w.to_string()))
+            .collect()
+    };
+    let bindings: Vec<(String, String)> = match mode {
+        Mode::Normal | Mode::Command => static_rows(&[
             (
                 "y / a / n",
                 "resolve the top pending decision (batch-clears)",
@@ -225,36 +232,41 @@ fn render_keys_help(mode: Mode, leader: &str, frame: &mut Frame, area: Rect) {
             (":", "command palette"),
             (leader, "leader (one-shot menu)"),
             ("Ctrl-C", "interrupt the focused agent"),
-        ],
-        Mode::Leader => &[
-            ("1-9", "focus session N"),
-            ("Tab", "focus next actionable subagent"),
-            ("n", "new session (harness picker)"),
-            ("p", "command palette"),
-            ("c", "close the focused pane"),
-            ("a", "cycle its autonomy tier"),
-            ("t", "attach: drive it natively"),
-            ("?", "keys help"),
-            ("Esc", "cancel"),
-        ],
-        Mode::Picker => &[("↑ / ↓", "select"), ("Enter", "spawn"), ("Esc", "cancel")],
-        Mode::Confirm => &[
+        ]),
+        // Rendered from LEADER_LEAVES — the same table the reducer
+        // dispatches from — so a leaf and its help line cannot drift apart
+        // (TUI_SPEC_V3 §9). Only the digit range and Esc are hand rows.
+        Mode::Leader => {
+            let mut rows = vec![("1-9".to_string(), "focus session N".to_string())];
+            rows.extend(LEADER_LEAVES.iter().map(|(key, what, _)| {
+                let label = match key {
+                    KeyCode::Tab => "Tab".to_string(),
+                    KeyCode::Char(c) => c.to_string(),
+                    other => format!("{other:?}"),
+                };
+                (label, (*what).to_string())
+            }));
+            rows.push(("Esc".to_string(), "cancel".to_string()));
+            rows
+        }
+        Mode::Picker => static_rows(&[("↑ / ↓", "select"), ("Enter", "spawn"), ("Esc", "cancel")]),
+        Mode::Confirm => static_rows(&[
             ("y", "run bootstrap this session"),
             ("n", "skip bootstrap this session"),
             ("Esc", "cancel the spawn"),
-        ],
+        ]),
     };
     let popup = centered(area, 60, 60);
     frame.render_widget(Clear, popup);
     let lines: Vec<TuiLine> = bindings
-        .iter()
+        .into_iter()
         .map(|(key, what)| {
             TuiLine::from(vec![
                 Span::styled(
                     format!("{key:>18}  "),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(*what),
+                Span::raw(what),
             ])
         })
         .collect();
@@ -1617,11 +1629,14 @@ mod tests {
         st.mode = Mode::Leader;
         st.keys_help = true;
         let text = draw(&mut st, 90, 30);
-        assert!(
-            text.contains("cycle its autonomy tier"),
-            "leader bindings listed"
-        );
-        assert!(text.contains("command palette"));
+        // Every leader leaf's help line comes from LEADER_LEAVES (TUI_SPEC_V3
+        // §9 keyboard parity) — assert the whole table renders, plus the two
+        // hand rows.
+        for (_, what, _) in LEADER_LEAVES {
+            assert!(text.contains(what), "leader overlay lists {what:?}");
+        }
+        assert!(text.contains("focus session N"));
+        assert!(text.contains("cancel"));
     }
 
     #[test]
