@@ -764,6 +764,8 @@ pub enum ClickTarget {
     SessionRow(usize),
     /// A subagents-rail row — an index into [`AppState::roster`] order.
     RailRow(usize),
+    /// The sessions panel's `+ new session` footer — opens the harness picker.
+    NewSession,
 }
 
 /// A clickable region recorded by the renderer for the current frame. Pure
@@ -1346,10 +1348,10 @@ fn reduce_inner(state: &mut AppState, event: &AppEvent) -> Vec<Effect> {
             pane.harness = "attach".to_string();
             state.agents.push(pane);
             // Attaching is for DRIVING this one agent — show it solo, keys
-            // pass through; `Ctrl-A x` detaches back to supervision.
+            // pass through; `leader c` on the attach pane detaches.
             state.detail = DetailLayout::solo(record_id.clone());
             state.mode = Mode::Normal;
-            state.notice = Some("attached — Ctrl-A then x detaches".into());
+            state.notice = Some("attached — ⌃space c detaches".into());
             Vec::new()
         }
         AppEvent::SessionSpawned {
@@ -1786,7 +1788,7 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
                 Some(Ownership::Orchestrator) => {
                     "orchestrator-managed subagent — steer it from the orchestrator".into()
                 }
-                _ => "read-only monitor — attach (t) to drive it directly".into(),
+                _ => "read-only monitor — ⌃space t attaches to drive it directly".into(),
             });
             Vec::new()
         }
@@ -1856,35 +1858,11 @@ fn reduce_key_leader(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
         // orchestrator-owned monitor stays: another process owns that
         // session, and removing the pane would orphan its future
         // permission requests.
-        KeyCode::Char('c') => match state
-            .focused()
-            .map(|p| (p.record_id.clone(), p.owner, p.exited))
-        {
-            Some((_, Ownership::Orchestrator, false)) => {
-                state.notice =
-                    Some("orchestrator-managed subagent — close it there (close_subagent)".into());
-                Vec::new()
-            }
-            Some((id, _, _)) => close_agent_by_id(state, &id),
-            None => Vec::new(),
-        },
+        KeyCode::Char('c') => close_focused(state),
         // Cycle the focused pane's autonomy tier. Orchestrator-owned
         // monitors keep their policy in the owning bridge — cycling here
         // would be a lie.
-        KeyCode::Char('a') => {
-            if let Some(pane) = state.focused_mut() {
-                if pane.owner == Ownership::Orchestrator {
-                    state.notice = Some(
-                        "orchestrator-managed subagent — its policy lives in the bridge".into(),
-                    );
-                    return Vec::new();
-                }
-                pane.autonomy = pane.autonomy.next();
-                let label = pane.autonomy.label();
-                pane.push(Line::AutoResolved(format!("autonomy set to {label}")));
-            }
-            Vec::new()
-        }
+        KeyCode::Char('a') => cycle_focused_autonomy(state),
         // Attach: drive the focused agent's harness natively (PTY in its
         // worktree) — the fidelity escape hatch (TUI_SPEC_V3 §2). Live
         // human-owned monitors only; sessions ARE native PTYs already.
@@ -1967,11 +1945,11 @@ fn reduce_key_command(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
 /// path — the palette is a discoverable front door, not a second behavior set.
 /// Hit-test a left-click against the zones the renderer recorded this frame.
 /// Later-pushed zones sit on top, so the topmost match wins (`rev()`). Sidebar
-/// buttons toggle their panel; a roster row selects it and opens it solo —
-/// entering AGENT mode so the `▸` cursor lands there and the human keeps
-/// clicking without the `Ctrl-A` modal dance (TUI_SPEC). Overlays (picker /
-/// palette / confirm / which-key) swallow clicks: their zones sit behind the
-/// popup, so acting on them would be a click-through.
+/// buttons toggle their panel; a row click focuses that pane — its split slot
+/// when already shown, else solo (TUI_SPEC_V3 §3: click is the pointer half
+/// of navigation; no mode involved). Overlays (picker / palette / confirm /
+/// which-key) swallow clicks: their zones sit behind the popup, so acting on
+/// them would be a click-through.
 fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
     if state.keys_help
         || matches!(
@@ -1998,8 +1976,7 @@ fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
                 return Vec::new();
             };
             let id = state.agents[idx].record_id.clone();
-            state.detail = DetailLayout::solo(id);
-            mark_shown_seen(state);
+            focus_or_solo(state, id);
             Vec::new()
         }
         ClickTarget::RailRow(i) => {
@@ -2007,10 +1984,10 @@ fn reduce_click(state: &mut AppState, col: u16, row: u16) -> Vec<Effect> {
                 return Vec::new();
             };
             let id = state.agents[idx].record_id.clone();
-            state.detail = DetailLayout::solo(id);
-            mark_shown_seen(state);
+            focus_or_solo(state, id);
             Vec::new()
         }
+        ClickTarget::NewSession => run_command(state, Command::NewSession),
     }
 }
 
@@ -2034,13 +2011,7 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             state.mode = Mode::Picker;
             Vec::new()
         }
-        Command::CloseAgent => {
-            let id = state.detail.focused_id().map(str::to_string);
-            match id {
-                Some(id) => close_agent_by_id(state, &id),
-                None => Vec::new(),
-            }
-        }
+        Command::CloseAgent => close_focused(state),
         Command::SplitH | Command::SplitV => {
             let split = if cmd == Command::SplitH {
                 Split::H
@@ -2054,14 +2025,7 @@ fn run_command(state: &mut AppState, cmd: Command) -> Vec<Effect> {
             state.detail.remove_focused();
             Vec::new()
         }
-        Command::Autonomy => {
-            if let Some(pane) = state.focused_mut() {
-                pane.autonomy = pane.autonomy.next();
-                let label = pane.autonomy.label();
-                pane.push(Line::AutoResolved(format!("autonomy set to {label}")));
-            }
-            Vec::new()
-        }
+        Command::Autonomy => cycle_focused_autonomy(state),
         Command::KillDone => {
             let dead: Vec<String> = state
                 .agents
@@ -2154,6 +2118,53 @@ fn split_detail(state: &mut AppState, split: Split) {
             state.notice = Some("nothing to split with — every agent is already shown".into());
         }
     }
+}
+
+/// Focus `id` in the detail: when it is already shown (a split slot), move
+/// focus to its slot — the only way to switch slots, so clicking must never
+/// collapse a split; otherwise open it solo.
+fn focus_or_solo(state: &mut AppState, id: String) {
+    match state.detail.shown.iter().position(|r| r == &id) {
+        Some(slot) => state.detail.focus = slot,
+        None => state.detail = DetailLayout::solo(id),
+    }
+    mark_shown_seen(state);
+}
+
+/// Close the focused pane (leader `c` / palette `close agent`; attach close
+/// = detach). A *live* orchestrator-owned monitor stays: another process
+/// owns that session, and removing the pane would orphan its future
+/// permission requests — every close surface shares this guard.
+fn close_focused(state: &mut AppState) -> Vec<Effect> {
+    match state
+        .focused()
+        .map(|p| (p.record_id.clone(), p.owner, p.exited))
+    {
+        Some((_, Ownership::Orchestrator, false)) => {
+            state.notice =
+                Some("orchestrator-managed subagent — close it there (close_subagent)".into());
+            Vec::new()
+        }
+        Some((id, _, _)) => close_agent_by_id(state, &id),
+        None => Vec::new(),
+    }
+}
+
+/// Cycle the focused pane's autonomy tier (leader `a` / palette `autonomy
+/// cycle`). Orchestrator-owned monitors keep their policy in the owning
+/// bridge — cycling here would be a lie, so every surface refuses alike.
+fn cycle_focused_autonomy(state: &mut AppState) -> Vec<Effect> {
+    if let Some(pane) = state.focused_mut() {
+        if pane.owner == Ownership::Orchestrator {
+            state.notice =
+                Some("orchestrator-managed subagent — its policy lives in the bridge".into());
+            return Vec::new();
+        }
+        pane.autonomy = pane.autonomy.next();
+        let label = pane.autonomy.label();
+        pane.push(Line::AutoResolved(format!("autonomy set to {label}")));
+    }
+    Vec::new()
 }
 
 /// Close one agent by id: remove it, prune the detail layout (refilling it
@@ -2437,6 +2448,49 @@ mod tests {
             st.detail.shown,
             vec!["r1".to_string()],
             "the clicked agent opens solo"
+        );
+    }
+
+    #[test]
+    fn clicking_a_shown_panes_row_focuses_its_slot() {
+        // A split's slots are focus-switchable by clicking their rows —
+        // never collapsed back to solo (Fable review finding 4).
+        let mut st = agents3(); // detail = [r0]
+        run_command(&mut st, Command::SplitH); // [r0, r1], focus 1
+        assert_eq!(st.detail.focus, 1);
+        st.click_zones.push(ClickZone {
+            x: 24,
+            y: 3,
+            w: 20,
+            h: 2,
+            target: ClickTarget::RailRow(0), // r0's row (all same bucket)
+        });
+        reduce(&mut st, &click(30, 4));
+        assert_eq!(
+            st.detail.shown,
+            vec!["r0".to_string(), "r1".to_string()],
+            "the split survives the click"
+        );
+        assert_eq!(st.detail.focus, 0, "focus moved to the clicked slot");
+    }
+
+    #[test]
+    fn clicking_new_session_footer_opens_the_picker() {
+        let mut st = agents3();
+        st.available_sessions = vec!["claude".into()];
+        st.click_zones.push(ClickZone {
+            x: 0,
+            y: 22,
+            w: 24,
+            h: 1,
+            target: ClickTarget::NewSession,
+        });
+        reduce(&mut st, &click(2, 22));
+        assert_eq!(st.mode, Mode::Picker);
+        assert!(
+            st.picker
+                .as_ref()
+                .is_some_and(|p| p.purpose == PickerPurpose::Session)
         );
     }
 

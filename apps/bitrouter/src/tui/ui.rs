@@ -21,9 +21,9 @@ const RAIL_WIDTH: u16 = 28;
 const SESSIONS_WIDTH: u16 = 24;
 
 /// The center column (the agent-native TUI) never shrinks below this: when
-/// both sidebars don't fit beside it, they fold one at a time — the AGENT
-/// cursor's panel wins, then the panel with content, then the subagents
-/// rail by default. User collapse (palette toggles) always wins over all.
+/// both sidebars don't fit beside it, they fold one at a time — the panel
+/// with content wins, then the subagents rail by default. User collapse
+/// (palette toggles) always wins over all.
 const CENTER_MIN_WIDTH: u16 = 48;
 
 /// A PTY pane's rendered grid for this frame, produced loop-side from its
@@ -45,8 +45,8 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     //
     // Which sidebars show: user collapse always wins; when both fit beside
     // a usable center they both show (even empty — an empty panel is an
-    // affordance, not noise); when space is tight the AGENT-cursor panel
-    // wins, then the panel that has content, then the subagents rail.
+    // affordance, not noise); when space is tight the panel that has
+    // content wins, then the subagents rail.
     let rail_w = RAIL_WIDTH.min(area.width / 3);
     let sessions_allowed = !state.sessions_collapsed;
     let rail_allowed = !state.subagents_collapsed;
@@ -216,7 +216,10 @@ fn render_confirm(state: &AppState, frame: &mut Frame, area: Rect) {
 fn render_keys_help(mode: Mode, frame: &mut Frame, area: Rect) {
     let bindings: &[(&str, &str)] = match mode {
         Mode::Normal | Mode::Command => &[
-            ("y / a / n", "resolve the focused pending permission"),
+            (
+                "y / a / n",
+                "resolve the top pending decision (batch-clears)",
+            ),
             ("D / m / p / r", "review: diff · merge · apply · reject"),
             ("PgUp / PgDn", "scroll the focused scrollback"),
             (":", "command palette"),
@@ -318,7 +321,7 @@ fn header_line(text: String, nc: bool) -> TuiLine<'static> {
 
 /// Left sidebar: orchestrator sessions (PTY panes), herdr-spaces style — a
 /// name line over a dim `state · model` line per entry. The cursor (`▸`)
-/// shows when AGENT-mode panel focus is here (`[`).
+/// follows the detail-focused session.
 fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let chunks = Layout::default()
@@ -387,16 +390,26 @@ fn render_sessions(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fra
             });
         }
     }
-    // The `new` affordance, keyboard-flavored.
-    let footer = Paragraph::new(TuiLine::styled("N new session", tint(nc, Color::DarkGray)))
-        .block(Block::default().borders(Borders::RIGHT));
+    // The `new` affordance: clickable, with the real chord (`leader n`).
+    let footer = Paragraph::new(TuiLine::styled(
+        "+ new session (⌃space n)",
+        tint(nc, Color::DarkGray),
+    ))
+    .block(Block::default().borders(Borders::RIGHT));
+    zones.push(ClickZone {
+        x: chunks[1].x,
+        y: chunks[1].y,
+        w: chunks[1].width,
+        h: chunks[1].height,
+        target: ClickTarget::NewSession,
+    });
     frame.render_widget(footer, chunks[1]);
 }
 
 /// Right rail: the subagents roster (every ACP agent, sorted by
 /// actionability) over a radar strip — a name line over a dim
 /// `state · harness` line per entry, herdr-minimal. The rail cursor (`▸`)
-/// shows in AGENT (panel focus here) and BROADCAST modes.
+/// follows the detail-focused agent.
 fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, area: Rect) {
     let nc = state.no_color;
     let chunks = Layout::default()
@@ -406,6 +419,12 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
 
     let order = state.roster();
     let focused_id = state.focused().map(|p| p.record_id.clone());
+    // What `y/a/n` acts on: the roster head's pending (the queue top) —
+    // the chip marks that row, not the focused one.
+    let top_pending_id = order
+        .iter()
+        .find(|&&i| state.agents[i].pending.is_some())
+        .map(|&i| state.agents[i].record_id.clone());
     let header = "subagents".to_string();
     let mut cursor_end = 0usize;
     // Logical line range of each entry (name through any expansion line),
@@ -459,8 +478,8 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         }
         meta.push(Span::styled(words.join(" · "), tint(nc, Color::DarkGray)));
         lines.push(TuiLine::from(meta));
-        // Actionable rows expand inline: risk + what the agent wants, and (on
-        // the cursor row in AGENT mode) the resolve keys.
+        // Actionable rows expand inline: risk + what the agent wants, and
+        // (on the queue-top row) the resolve keys `y/a/n` act on.
         if let Some(pending) = &pane.pending {
             // Monochrome: `high` leans on bold (not red); `low` stays dim. The
             // words + glyphs carry the risk without hue.
@@ -473,7 +492,7 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
             // Keys first, then risk, then the (clippable) title — on a narrow
             // rail the actionable part must survive truncation.
             let mut detail = vec![Span::raw(" └ ")];
-            if at_cursor {
+            if top_pending_id.as_deref() == Some(pane.record_id.as_str()) {
                 detail.push(Span::styled(
                     "y·a·n ",
                     Style::default().add_modifier(Modifier::BOLD),
@@ -1227,18 +1246,18 @@ mod tests {
         assert!(text.contains("sessions"), "left header");
         assert!(text.contains("claude"), "session binary");
         assert!(text.contains("supergrok:grok-4.5"), "session model");
-        assert!(text.contains("N new session"), "footer affordance");
+        assert!(text.contains("+ new session"), "footer affordance");
     }
 
     #[test]
     fn sessions_panel_folds_on_narrow_terminals_and_on_collapse() {
         let mut st = with_session();
         let text = draw(&mut st, 80, 24);
-        assert!(!text.contains("N new session"), "auto-collapsed at 80 cols");
+        assert!(!text.contains("+ new session"), "auto-collapsed at 80 cols");
         // Wide but user-collapsed: stays hidden.
         st.sessions_collapsed = true;
         let text = draw(&mut st, 130, 30);
-        assert!(!text.contains("N new session"), "user collapse wins");
+        assert!(!text.contains("+ new session"), "user collapse wins");
         // Both sidebars collapsed: the detail still renders.
         st.subagents_collapsed = true;
         let text = draw(&mut st, 130, 30);
@@ -1250,11 +1269,11 @@ mod tests {
         // agents3 is pure-ACP. Wide: both sidebars fit — the empty sessions
         // panel is an affordance, not noise.
         let text = draw(&mut agents3(), 130, 30);
-        assert!(text.contains("N new session"), "affordance on wide: {text}");
+        assert!(text.contains("+ new session"), "affordance on wide: {text}");
         // Tight: one sidebar at most — the panel with content (the rail)
         // wins and the empty sessions panel gives its columns back.
         let text = draw(&mut agents3(), 90, 30);
-        assert!(!text.contains("N new session"), "empty panel folds");
+        assert!(!text.contains("+ new session"), "empty panel folds");
         assert!(text.contains("subagents"), "content panel survives");
     }
 
@@ -1543,7 +1562,7 @@ mod tests {
         let text = draw(&mut st, 100, 24);
         assert!(text.contains("rm -rf"), "pending title inline");
         assert!(text.contains('└'), "expanded row marker");
-        assert!(text.contains("y·a·n"), "resolve hint on the focused row");
+        assert!(text.contains("y·a·n"), "resolve hint on the queue-top row");
     }
 
     #[test]

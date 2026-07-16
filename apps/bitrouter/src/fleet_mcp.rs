@@ -669,6 +669,14 @@ impl SubstrateFleet {
             sub.state = "working";
             Arc::clone(&sub.session)
         };
+        // Re-prompting consumes the human's review verdict (TUI_SPEC_V3 §5):
+        // the orchestrator has acted on `changes_requested`, so the revision
+        // turn's lifecycle state must be observable again in
+        // `subagent_status` — a sticky verdict would mask it forever.
+        #[cfg(unix)]
+        if let Some(link) = &self.inner.link {
+            link.verdicts.lock().await.remove(&args.handle);
+        }
         self.run_blocking_turn(&args.handle, session, &args.text, None)
             .await
     }

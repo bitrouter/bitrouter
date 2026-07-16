@@ -33,8 +33,8 @@ use crate::tui::state::{AppState, PaneState, reduce};
 /// fidelity in a PTY pane (TUI_SPEC §2/§3) with the fleet MCP bridge
 /// injected where the harness supports MCP — or a configured `agents:`
 /// entry, which falls back to an ACP-rendered primary pane. `--model` pins
-/// the orchestrator's model (a daemon-routable id). `n` (in AGENT mode)
-/// spawns worktree-isolated ACP subagents either way.
+/// the orchestrator's model (a daemon-routable id). The palette's `spawn
+/// subagent` hatch spawns worktree-isolated ACP subagents either way.
 pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) -> Result<()> {
     // ── Config + catalog. ──
     let source = crate::paths::resolve_config(None)?;
@@ -357,12 +357,12 @@ fn harness_tag(transport: &bitrouter_sdk::acp::AcpTransport) -> String {
 /// Attach (TUI_SPEC §13-B4): relaunch the ACP agent's harness interactively
 /// on a PTY in its worktree — native fidelity for driving one agent — and
 /// resume the same provider-native conversation when its id is known.
-/// Detach (`Ctrl-A x` on the attach pane) kills only the interactive child;
+/// Detach (`leader c` on the attach pane) kills only the interactive child;
 /// the ACP session is untouched.
 fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_>) {
     let attach_id = format!("attach:{record_id}");
     if rt.ptys.contains_key(&attach_id) {
-        state.notice = Some("already attached — Ctrl-A x on the attach pane detaches".into());
+        state.notice = Some("already attached — ⌃space c on the attach pane detaches".into());
         return;
     }
     let Some(sess) = rt.sessions.get(record_id) else {

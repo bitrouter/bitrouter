@@ -340,7 +340,7 @@ Resolved with the recommended defaults; don't reopen without reason.
    `selected` marks (`✓`) died with BROADCAST.
 8. **The manager cursor machinery is gone entirely.** `Panel`, rail/session cursors,
    queue-only mode, and the palette `queue` command are deleted; the queue is always
-   the rail head. Detail-slot focus switching is click-only; `s`/`v` splits survive as
+   the rail head. Detail-slot focus switching is click-only — clicking an already-shown pane's rail/sessions row focuses its slot, an unshown one opens solo; `s`/`v` splits survive as
    palette commands only, filling with the most actionable unshown agent (resolving
    §11.5's open question: splits stay, palette-only).
 9. **Reject carries a canned note.** With no composer there is nothing to type: reject
