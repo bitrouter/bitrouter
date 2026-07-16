@@ -103,7 +103,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   **Proof:** reducer tests `ctrl_a_is_not_a_leader` (a focused `Pty` receiving `Ctrl-A`
   emits `Effect::PtyKey` passthrough, no mode change) and `leader_opens_whichkey` (the
   configured leader → `Mode::Leader` + overlay set).
-- [ ] **The leader is one-shot.** Every leaf key returns to `Normal` (or opens a
+- [x] **The leader is one-shot.** Every leaf key returns to `Normal` (or opens a
   `Command`/`Picker` leaf) in ≤1 key — never a sticky mode.
   **Proof:** reducer test `leader_leaves_are_one_shot` covering `1`,`Tab`,`n`,`p`,`c`,`a`,
   `t`,`?`,`Esc`.
@@ -282,4 +282,7 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   the_default pass; gates green (1917). NOTE: skills/bitrouter + CLI.md rewrite
   for the new config surface lands in V3.5 per this plan (lockstep deferred to
   that phase deliberately).
+2026-07-16 eb476eb5 — V3.2 leader one-shot — leader_leaves_are_one_shot
+  covers 1/Tab/n/p/c/a/t/?/Esc, each ends in Normal|Picker|Command; gates
+  green (1918).
 ```

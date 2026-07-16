@@ -3468,6 +3468,34 @@ mod tests {
     // ── Polish: leader Tab (next actionable), wheel scroll. ──
 
     #[test]
+    fn leader_leaves_are_one_shot() {
+        // Every leaf leaves `Leader` in exactly one key: back to NORMAL, or
+        // into a Command/Picker leaf — never a sticky mode (TUI_SPEC_V3 I3).
+        for key in [
+            KeyCode::Char('1'),
+            KeyCode::Tab,
+            KeyCode::Char('n'),
+            KeyCode::Char('p'),
+            KeyCode::Char('c'),
+            KeyCode::Char('a'),
+            KeyCode::Char('t'),
+            KeyCode::Char('?'),
+            KeyCode::Esc,
+        ] {
+            let mut st = agents3();
+            st.available_sessions = vec!["claude".into()];
+            st.mode = Mode::Leader;
+            reduce(&mut st, &press(key));
+            assert!(
+                matches!(st.mode, Mode::Normal | Mode::Picker | Mode::Command),
+                "{key:?} must leave Leader in one key, got {:?}",
+                st.mode
+            );
+            assert_ne!(st.mode, Mode::Leader, "{key:?} left the prefix armed");
+        }
+    }
+
+    #[test]
     fn leader_tab_focuses_the_next_actionable_agent() {
         let mut st = agents3(); // detail = [r0]
         reduce(&mut st, &perm("r2", "wants")); // r2 needs you
