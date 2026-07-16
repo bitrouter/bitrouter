@@ -25,11 +25,13 @@ pub struct SettlementContext {
     pub request_id: String,
     /// The caller.
     pub caller: CallerContext,
-    /// The target that actually served the request.
+    /// The target that served the request, or the latest attempted target when
+    /// execution failed before producing an [`ExecutionResult`](crate::language_model::ExecutionResult).
     pub target: Option<RoutingTarget>,
-    /// Resolved model id.
+    /// Resolved model id, including the attempted model on execution failure.
     pub model_id: String,
-    /// Resolved provider id.
+    /// Resolved provider id, including the attempted provider on execution
+    /// failure.
     pub provider_id: String,
     /// Which account of a multi-account provider served the request —
     /// `None` for a single-credential provider. Reflects any failover
