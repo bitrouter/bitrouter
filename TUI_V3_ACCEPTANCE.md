@@ -88,10 +88,10 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 - [x] **The composer never renders.** Render test (`TestBackend`) with a focused `Monitor`:
   no input-border row is drawn.
   **Proof:** that test exists and passes.
-- [ ] **BROADCAST is removed.** `Mode::Broadcast`, `broadcast_input`, `reduce_key_broadcast`,
+- [x] **BROADCAST is removed.** `Mode::Broadcast`, `broadcast_input`, `reduce_key_broadcast`,
   and the `Ctrl-B` handler are gone.
   **Proof:** `grep -rn 'Broadcast\|broadcast_input' apps/bitrouter/src/tui` prints nothing.
-- [ ] **Standing gates green** (§1).
+- [x] **Standing gates green** (§1).
 
 ### V3.2 — Command surface (one hub + a one-shot leader)
 
@@ -259,4 +259,11 @@ DECISION: reject's feedback-as-next-prompt flow is gone with the composer;
   monitor_pane_is_read_only (state.rs) + composer_never_renders (ui.rs) verified
   against their task specs; both pass via targeted nextest; gates green (clippy's
   sole warning = pre-existing proc-macro-error2 future-incompat dep note).
+DECISION: BROADCAST removal also deletes PaneState.selected + the rail/pane ✓
+  markers (selection existed only for broadcast) and Line::UserPrompt (nothing
+  constructs it once composer+broadcast are gone — dead code; transcripts are
+  now read-only by construction). monitor_pane_is_read_only tightened to
+  lines.is_empty(). V3.4's human-owned re-prompt may reintroduce the variant.
+2026-07-16 43d8de9e — V3.1 BROADCAST removed + phase gates box — proof grep
+  'Broadcast|broadcast_input' empty in src/tui; fmt+clippy+1927 nextest green.
 ```
