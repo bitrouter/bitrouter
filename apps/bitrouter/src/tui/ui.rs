@@ -879,17 +879,18 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
     let pty_focused = state
         .focused()
         .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Pty);
+    // The bar is a gauge, not a cheat-sheet (TUI_SPEC_V3 §6): the one
+    // persistent affordance is the leader; full bindings live in the
+    // which-key overlay (leader / `?`) and the palette. The PTY routing
+    // hint stays — it explains where every keystroke is going.
     let hints = match state.mode {
-        Mode::Normal if pty_focused => {
-            "NORMAL  ⇢ keys go to the orchestrator · ^space menu · ^c interrupt agent"
-        }
-        Mode::Normal => "NORMAL  ^space menu · : cmd · PgUp/PgDn scroll · ^c interrupt agent",
-        Mode::Leader => {
-            "LEADER  1-9 session · Tab next · n new · p palette · c close · a tier · t attach · ? keys · Esc"
-        }
-        Mode::Picker => "PICKER  up/down select · Enter spawn · Esc",
-        Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
-        Mode::Confirm => "CONFIRM  y run bootstrap · n skip · Esc cancel spawn",
+        Mode::Normal if pty_focused => "⇢ keys go to the orchestrator · ⌃space menu",
+        Mode::Normal => "⌃space menu",
+        // Overlay modes render their own affordances; the bar just names them.
+        Mode::Leader => "LEADER",
+        Mode::Picker => "PICKER",
+        Mode::Command => "COMMAND",
+        Mode::Confirm => "CONFIRM",
     };
     // The left zone follows the focused pane (TUI_SPEC_V3 §6): context
     // gauge + model + cost, when the upstream reports them — the numbers
