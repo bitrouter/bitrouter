@@ -472,6 +472,9 @@ enum WorkflowStateAction {
         /// Daemon workflow trace JSONL for the just-finished benchmark group.
         #[arg(long)]
         traces: PathBuf,
+        /// Exact, reconciled usage JSONL for the same benchmark group.
+        #[arg(long)]
+        cloud_usage: PathBuf,
         /// Benchmark outcome JSONL for the just-finished benchmark group.
         #[arg(long)]
         outcomes: PathBuf,
@@ -1372,11 +1375,14 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
         WorkflowStateAction::ApplyRewardFeedback {
             database_url,
             traces,
+            cloud_usage,
             outcomes,
             policy_decisions,
         } => {
             use bitrouter::adequacy::store::AdequacyStore;
-            use bitrouter::workflow_state::archive::{TraceArchive, WorkflowRunArtifact};
+            use bitrouter::workflow_state::archive::{
+                CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
+            };
             use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
             use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
@@ -1385,12 +1391,18 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
             let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
                 .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
+            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
+                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
             let decisions = PolicyDecisionRecord::load_jsonl(&policy_decisions)
                 .with_context(|| format!("read policy decisions {}", policy_decisions.display()))?;
+            WorkflowRunArtifact::validate_complete_benchmark_integrity(
+                &traces, &usage, &outcomes, &decisions,
+            )
+            .context("validate benchmark integrity before reward feedback")?;
             let artifact = WorkflowRunArtifact::build_with_decisions(
                 "reward-feedback",
                 &traces,
-                &[],
+                &usage,
                 &outcomes,
                 &decisions,
             )
@@ -1415,6 +1427,12 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             }
             for key in summary.semantic_success_request_keys {
                 println!("  confirmed success {key}");
+            }
+            for decision in summary.decisions {
+                println!(
+                    "  feedback {} request={} reason={}",
+                    decision.action, decision.request_id, decision.reason
+                );
             }
             Ok(())
         }

@@ -278,6 +278,19 @@ pub struct AdequacyConfig {
     /// `0` means the pin never decays (until the process restarts or the row is
     /// cleared). Default `1800` (30 minutes).
     pub pin_cooldown_secs: u64,
+    /// Number of recent endpoint outcomes retained for provider reliability.
+    /// Default `23`, a prime-sized window that avoids aligning with short
+    /// benchmark batch cadences.
+    pub reliability_window_size: u32,
+    /// Consecutive transient provider failures that immediately open the
+    /// endpoint circuit. Default `2`.
+    pub reliability_consecutive_failures: u32,
+    /// Rolling transient-failure percentage that opens the circuit once the
+    /// reliability window is full. Default `35`.
+    pub reliability_error_rate_percent: u32,
+    /// Seconds an open provider circuit waits before admitting exactly one
+    /// half-open probe. Default `300`.
+    pub reliability_cooldown_secs: u64,
     /// Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)
     /// is on, the daemon periodically trials [`explore_tier`](Self::explore_tier)
     /// on fingerprints the static table routes to the escalation tier (i.e. ones
@@ -320,6 +333,10 @@ impl Default for AdequacyConfig {
             escalation_tier: None,
             escalation_threshold: 1,
             pin_cooldown_secs: 1800,
+            reliability_window_size: 23,
+            reliability_consecutive_failures: 2,
+            reliability_error_rate_percent: 35,
+            reliability_cooldown_secs: 300,
             explore_enabled: false,
             explore_tier: None,
             explore_interval: 5,
@@ -1240,6 +1257,22 @@ pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     // (or the default tier), so that target must exist and resolve to a defined
     // tier when learning is enabled.
     let adequacy = &policy.adequacy;
+    if adequacy.reliability_window_size == 0 {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_window_size must be positive".to_string(),
+        ));
+    }
+    if adequacy.reliability_consecutive_failures == 0 {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_consecutive_failures must be positive".to_string(),
+        ));
+    }
+    if !(1..=100).contains(&adequacy.reliability_error_rate_percent) {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_error_rate_percent must be between 1 and 100"
+                .to_string(),
+        ));
+    }
     if let Some(tier) = &adequacy.escalation_tier {
         check("adequacy.escalation_tier", tier)?;
     }

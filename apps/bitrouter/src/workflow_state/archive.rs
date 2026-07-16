@@ -125,6 +125,10 @@ pub struct SemanticPolicyTransitionCandidate {
     pub task_id: String,
     pub reward: f64,
     pub failed_reason: Option<String>,
+    #[serde(default)]
+    pub request_transport_outcome: RequestTransportOutcome,
+    #[serde(default)]
+    pub settlement_outcome: SemanticSettlementOutcome,
     pub request_key: String,
     #[serde(default)]
     pub ledger_key: Option<String>,
@@ -136,6 +140,26 @@ pub struct SemanticPolicyTransitionCandidate {
     pub selected_model: Option<String>,
     pub model_transition: Option<String>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestTransportOutcome {
+    Completed,
+    Failed,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticSettlementOutcome {
+    AuthoritativeComputed,
+    ProviderReportedComputed,
+    AuthoritativeNotCharged,
+    Pending,
+    #[default]
+    Unknown,
 }
 
 impl TraceArchive {
@@ -546,6 +570,7 @@ impl WorkflowRunArtifact {
             &reward_join.semantic_outcome_candidates,
             traces,
             decisions,
+            usage,
         );
         let route_counts = cost
             .by_model_provider
@@ -992,6 +1017,7 @@ fn semantic_policy_transition_candidates(
     semantic_candidates: &[SemanticOutcomeCandidate],
     traces: &[CapturedIngressTrace],
     decisions: &[PolicyDecisionRecord],
+    usage: &[CloudUsageRecord],
 ) -> Vec<SemanticPolicyTransitionCandidate> {
     let request_id_by_trace_id = traces
         .iter()
@@ -1008,12 +1034,22 @@ fn semantic_policy_transition_candidates(
                 .map(|request_id| (request_id.clone(), decision))
         })
         .collect::<BTreeMap<_, _>>();
+    let usage_by_request_id = usage
+        .iter()
+        .filter_map(|record| {
+            record
+                .request_id
+                .as_ref()
+                .map(|request_id| (request_id.clone(), record))
+        })
+        .collect::<BTreeMap<_, _>>();
 
     semantic_candidates
         .iter()
         .filter_map(|candidate| {
             let request_id = request_id_by_trace_id.get(&candidate.trace_id)?;
             let decision = decisions_by_request_id.get(request_id)?;
+            let usage = usage_by_request_id.get(request_id).copied();
             let tier_changed = changed(&decision.static_tier, &decision.selected_tier);
             let model_changed = changed(&decision.static_model, &decision.selected_model);
             if !tier_changed && !model_changed {
@@ -1026,6 +1062,8 @@ fn semantic_policy_transition_candidates(
                 task_id: candidate.task_id.clone(),
                 reward: candidate.reward,
                 failed_reason: candidate.failed_reason.clone(),
+                request_transport_outcome: request_transport_outcome(usage),
+                settlement_outcome: semantic_settlement_outcome(usage),
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
                 workflow_state: decision.workflow_state.clone(),
@@ -1042,6 +1080,43 @@ fn semantic_policy_transition_candidates(
             })
         })
         .collect()
+}
+
+fn request_transport_outcome(usage: Option<&CloudUsageRecord>) -> RequestTransportOutcome {
+    match usage.and_then(|record| record.status.as_deref()) {
+        Some("completed") => RequestTransportOutcome::Completed,
+        Some("failed") => RequestTransportOutcome::Failed,
+        _ => RequestTransportOutcome::Unknown,
+    }
+}
+
+fn semantic_settlement_outcome(usage: Option<&CloudUsageRecord>) -> SemanticSettlementOutcome {
+    let Some(usage) = usage else {
+        return SemanticSettlementOutcome::Unknown;
+    };
+    match (
+        usage.reconciliation_status,
+        usage.usage_origin,
+        usage.charge_status,
+    ) {
+        (
+            ReconciliationStatus::Computed,
+            UsageOrigin::AuthoritativeReceipt,
+            ChargeStatus::Computed,
+        ) => SemanticSettlementOutcome::AuthoritativeComputed,
+        (
+            ReconciliationStatus::NotApplicable,
+            UsageOrigin::ProviderReported,
+            ChargeStatus::Computed,
+        ) => SemanticSettlementOutcome::ProviderReportedComputed,
+        (
+            ReconciliationStatus::NotCharged,
+            UsageOrigin::AuthoritativeReceipt,
+            ChargeStatus::NotCharged,
+        ) => SemanticSettlementOutcome::AuthoritativeNotCharged,
+        (ReconciliationStatus::Pending, _, _) => SemanticSettlementOutcome::Pending,
+        _ => SemanticSettlementOutcome::Unknown,
+    }
 }
 
 fn changed(left: &Option<String>, right: &Option<String>) -> bool {

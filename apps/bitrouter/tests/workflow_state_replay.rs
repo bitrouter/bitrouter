@@ -7,7 +7,10 @@ use axum_test::TestServer;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
-use bitrouter::workflow_state::archive::{CloudUsageRecord, TraceArchive, WorkflowRunArtifact};
+use bitrouter::workflow_state::archive::{
+    CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
+    WorkflowRunArtifact,
+};
 use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{
@@ -1433,10 +1436,19 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         trialed: true,
     }];
 
+    let mut usage = computed_usage(
+        "req-success-001",
+        "bitrouter",
+        "moonshotai/kimi-k2.7-code",
+        10,
+        2,
+        30,
+    );
+    usage.status = Some("completed".to_string());
     let artifact = WorkflowRunArtifact::build_with_decisions(
         "successful-transition",
         &traces,
-        &[],
+        &[usage],
         &outcomes,
         &decisions,
     )
@@ -1446,6 +1458,14 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
     let candidate = &artifact.semantic_policy_transition_candidates[0];
     assert_eq!(candidate.task_id, "terminal-bench/regex-log");
     assert_eq!(candidate.reward, 1.0);
+    assert_eq!(
+        candidate.request_transport_outcome,
+        RequestTransportOutcome::Completed
+    );
+    assert_eq!(
+        candidate.settlement_outcome,
+        SemanticSettlementOutcome::ProviderReportedComputed
+    );
     assert_eq!(candidate.request_key, "codex|responses|tool_followup");
     assert_eq!(
         candidate.ledger_key.as_deref(),

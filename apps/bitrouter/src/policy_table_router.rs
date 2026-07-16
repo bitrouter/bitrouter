@@ -32,6 +32,7 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::adequacy::AdequacyLedger;
+use crate::adequacy::reliability::RoutePermit;
 use crate::adequacy::settlement::{PendingAdequacyDecision, PendingAdequacyStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::{AgentRole, HarnessId, WorkflowIdentity, WorkflowStateKind};
@@ -44,6 +45,8 @@ pub enum PolicyDecisionReason {
     ExplorationTrial,
     ExplorationLocked,
     AdequacyPin,
+    ReliabilityCircuitOpen,
+    ReliabilityHalfOpenProbe,
     ToolGuardrail,
     NoMatch,
 }
@@ -55,6 +58,8 @@ impl PolicyDecisionReason {
             Self::ExplorationTrial => "exploration_trial",
             Self::ExplorationLocked => "exploration_locked",
             Self::AdequacyPin => "adequacy_pin",
+            Self::ReliabilityCircuitOpen => "reliability_circuit_open",
+            Self::ReliabilityHalfOpenProbe => "reliability_half_open_probe",
             Self::ToolGuardrail => "tool_guardrail",
             Self::NoMatch => "no_match",
         }
@@ -188,7 +193,7 @@ impl PolicyTable {
     }
 
     /// The model id a tier routes to.
-    fn model_of_tier(&self, tier: &str) -> Option<&str> {
+    pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
         self.tiers.get(tier).map(String::as_str)
     }
 
@@ -514,6 +519,24 @@ impl PolicyTableRouter {
                     } else {
                         PolicyDecisionReason::ExplorationTrial
                     };
+                }
+            }
+
+            if Some(selected_tier) != self.table.escalation_tier()
+                && let Some(route_key) = self.table.model_of_tier(selected_tier)
+            {
+                match ledger.reliability_permit(route_key) {
+                    RoutePermit::Closed => {}
+                    RoutePermit::HalfOpenProbe => {
+                        decision.reason = PolicyDecisionReason::ReliabilityHalfOpenProbe;
+                    }
+                    RoutePermit::Open => {
+                        if let Some(escalation) = self.table.escalation_tier() {
+                            (selected_tier, _) =
+                                self.table.guardrail_with_status(escalation, prompt);
+                            decision.reason = PolicyDecisionReason::ReliabilityCircuitOpen;
+                        }
+                    }
                 }
             }
         }
@@ -1556,6 +1579,43 @@ mod tests {
         ledger.observe("opening", trial_ok()).await; // 2 → locked
         let router = exploring_router(ledger);
         assert_eq!(route_with(&router, vec![user("start")]), "vendor/cheap");
+    }
+
+    #[tokio::test]
+    async fn open_provider_circuit_escalates_a_locked_cheap_route() {
+        use crate::adequacy::reliability::{ReliabilityKey, ReliabilityObservation};
+
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        ledger.observe("opening", trial_ok()).await;
+        ledger.observe("opening", trial_ok()).await;
+        let endpoint = ReliabilityKey {
+            provider: "vendor".to_string(),
+            model: "cheap".to_string(),
+            credential_class: "default".to_string(),
+            endpoint_scope: "us-east-2".to_string(),
+            protocol: "responses".to_string(),
+        };
+        ledger.observe_provider_reliability(
+            "vendor/cheap",
+            endpoint.clone(),
+            ReliabilityObservation::TransientFailure,
+        );
+        ledger.observe_provider_reliability(
+            "vendor/cheap",
+            endpoint,
+            ReliabilityObservation::TransientFailure,
+        );
+        let router = exploring_router(ledger);
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("start")];
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(
+            decision.reason,
+            PolicyDecisionReason::ReliabilityCircuitOpen
+        );
     }
 
     #[tokio::test]

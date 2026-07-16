@@ -7,6 +7,7 @@ use bitrouter_sdk::language_model::SettlementRecorder;
 use bitrouter_sdk::language_model::settlement::SettlementContext;
 
 use crate::adequacy::observer::classify_failure;
+use crate::adequacy::reliability::{ReliabilityKey, ReliabilityObservation};
 use crate::adequacy::{AdequacyLedger, InadequacyCause, Outcome};
 use crate::policy_table_router::PolicyTable;
 
@@ -111,6 +112,30 @@ impl SettlementRecorder for AdequacySettlementRecorder {
             return Ok(());
         };
         let cause = Self::cause(ctx);
+        let route_key = pending
+            .table
+            .model_of_tier(&served_tier)
+            .unwrap_or(&ctx.model_id);
+        let reliability_observation = match cause {
+            InadequacyCause::None => Some(ReliabilityObservation::Success),
+            InadequacyCause::ProviderTransient => Some(ReliabilityObservation::TransientFailure),
+            _ => None,
+        };
+        if let Some(observation) = reliability_observation {
+            let endpoint_key = reliability_key(ctx);
+            pending
+                .ledger
+                .observe_provider_reliability(route_key, endpoint_key, observation);
+        }
+        if cause == InadequacyCause::ProviderTransient {
+            tracing::debug!(
+                request_id = %ctx.request_id,
+                request_key = %pending.request_key,
+                route_key,
+                "provider transient recorded only in reliability ledger"
+            );
+            return Ok(());
+        }
         let Some(outcome) = Self::outcome_for(&pending, &served_tier, cause) else {
             tracing::debug!(
                 request_id = %ctx.request_id,
@@ -143,6 +168,40 @@ impl SettlementRecorder for AdequacySettlementRecorder {
     }
 }
 
+fn reliability_key(ctx: &SettlementContext) -> ReliabilityKey {
+    let account_class = if ctx.account_label.is_some() {
+        "named_account"
+    } else {
+        "default"
+    };
+    let auth_class = ctx
+        .target
+        .as_ref()
+        .map_or("unknown", |target| match target.auth_scheme {
+            bitrouter_sdk::language_model::types::AuthScheme::XApiKey => "x_api_key",
+            bitrouter_sdk::language_model::types::AuthScheme::Bearer => "bearer",
+        });
+    ReliabilityKey {
+        provider: ctx.provider_id.clone(),
+        model: ctx.model_id.clone(),
+        credential_class: format!("{account_class}:{auth_class}"),
+        endpoint_scope: ctx
+            .target
+            .as_ref()
+            .and_then(|target| target.effective_api_base().parse::<http::Uri>().ok())
+            .and_then(|uri| {
+                uri.authority()
+                    .map(|authority| authority.as_str().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string()),
+        protocol: ctx
+            .target
+            .as_ref()
+            .map(|target| target.api_protocol.as_str().to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -154,6 +213,7 @@ mod tests {
     use bitrouter_sdk::language_model::settlement::SettlementContext;
 
     use crate::adequacy::AdequacyLedger;
+    use crate::adequacy::reliability::RoutePermit;
     use crate::adequacy::settlement::{
         AdequacySettlementRecorder, PendingAdequacyDecision, PendingAdequacyStore,
     };
@@ -260,5 +320,41 @@ mod tests {
             ledger.should_trial(request_key),
             "settlement recorder should advance the same trial cadence as the observe hook"
         );
+    }
+
+    #[tokio::test]
+    async fn transient_provider_failures_open_route_circuit_without_semantic_pin() {
+        let table = policy_table();
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 900, 1, 3));
+        let pending = Arc::new(PendingAdequacyStore::default());
+        let recorder = AdequacySettlementRecorder::new(pending.clone());
+        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let route_key = "bitrouter:moonshotai/kimi-k2.7-code";
+
+        for index in 1..=2 {
+            pending.insert(PendingAdequacyDecision {
+                request_id: format!("req-{index}"),
+                request_key: request_key.to_string(),
+                ledger_key: request_key.to_string(),
+                static_tier: Some("capable".to_string()),
+                selected_tier: Some("cheap".to_string()),
+                exploration_allowed: true,
+                table: table.clone(),
+                ledger: ledger.clone(),
+            });
+            let mut failed = settlement(
+                &format!("req-{index}"),
+                "bitrouter",
+                "moonshotai/kimi-k2.7-code",
+            );
+            failed.error = Some(bitrouter_sdk::BitrouterError::UpstreamTimeout);
+            recorder
+                .record(&mut failed)
+                .await
+                .expect("transient settlement observation");
+        }
+
+        assert!(!ledger.is_pinned(request_key));
+        assert_eq!(ledger.reliability_permit(route_key), RoutePermit::Open);
     }
 }

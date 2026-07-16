@@ -723,6 +723,10 @@ policy_table:
     escalation_tier: capable
     escalation_threshold: 3
     pin_cooldown_secs: 600
+    reliability_window_size: 23
+    reliability_consecutive_failures: 2
+    reliability_error_rate_percent: 35
+    reliability_cooldown_secs: 300
 "#;
     let cfg = parse_with(yaml, |_| None).unwrap();
     let adequacy = &cfg.policy_table.adequacy;
@@ -730,6 +734,10 @@ policy_table:
     assert_eq!(adequacy.escalation_tier.as_deref(), Some("capable"));
     assert_eq!(adequacy.escalation_threshold, 3);
     assert_eq!(adequacy.pin_cooldown_secs, 600);
+    assert_eq!(adequacy.reliability_window_size, 23);
+    assert_eq!(adequacy.reliability_consecutive_failures, 2);
+    assert_eq!(adequacy.reliability_error_rate_percent, 35);
+    assert_eq!(adequacy.reliability_cooldown_secs, 300);
 }
 
 #[test]
@@ -745,9 +753,51 @@ policy_table:
     assert!(!adequacy.enabled);
     assert_eq!(adequacy.escalation_threshold, 1);
     assert_eq!(adequacy.pin_cooldown_secs, 1800);
+    assert_eq!(adequacy.reliability_window_size, 23);
+    assert_eq!(adequacy.reliability_consecutive_failures, 2);
+    assert_eq!(adequacy.reliability_error_rate_percent, 35);
+    assert_eq!(adequacy.reliability_cooldown_secs, 300);
     assert!(!adequacy.explore_opening);
     assert_eq!(adequacy.min_semantic_successes_for_lock, 0);
     assert_eq!(adequacy.min_semantic_successes_for_opening, 1);
+}
+
+#[test]
+fn invalid_reliability_window_is_a_400() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  default_tier: cheap
+  adequacy:
+    enabled: true
+    reliability_window_size: 0
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("reliability_window_size must be positive"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn invalid_reliability_error_rate_is_a_400() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+  default_tier: cheap
+  adequacy:
+    enabled: true
+    reliability_error_rate_percent: 101
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("reliability_error_rate_percent must be between 1 and 100"),
+        "got: {err}"
+    );
 }
 
 #[test]
