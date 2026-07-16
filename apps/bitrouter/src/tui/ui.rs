@@ -719,23 +719,14 @@ fn render_pane(
     } else {
         format!(" · {}", pane.harness)
     };
-    // Context-window occupancy + cumulative cost, when the upstream reports them.
-    let usage = match pane.usage {
-        Some((used, size)) => format!(" · {}/{}", fmt_tokens(used), fmt_tokens(size)),
-        None => String::new(),
-    };
-    let cost = match &pane.cost {
-        Some(c) => format!(" ·{}", fmt_cost(c)),
-        None => String::new(),
-    };
+    // Context occupancy + cost live in the status bar's left zone
+    // (TUI_SPEC_V3 §6) — the header stays identity + attention only.
     let title = format!(
-        " [{}] {}{} · {}{}{}{} ",
+        " [{}] {}{} · {}{} ",
         slot + 1,
         pane.agent_id,
         harness,
         short,
-        usage,
-        cost,
         markers
     );
     let block = pane_block(title, focused, nc);
@@ -900,11 +891,37 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
         Mode::Command => "COMMAND  type to filter · up/down select · Enter run · Esc",
         Mode::Confirm => "CONFIRM  y run bootstrap · n skip · Esc cancel spawn",
     };
-    // A live notice takes the whole left zone (full width, never clipped at
-    // the edge mid-word by the hints).
+    // The left zone follows the focused pane (TUI_SPEC_V3 §6): context
+    // gauge + model + cost, when the upstream reports them — the numbers
+    // you actually watch. A live notice takes the whole zone (full width,
+    // never clipped at the edge mid-word); mode hints trail the gauge.
     let left = match &state.notice {
         Some(n) => format!("! {n}"),
-        None => hints.to_string(),
+        None => {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(pane) = state.focused() {
+                match pane.usage {
+                    Some((used, size)) if size > 0 => {
+                        parts.push(format!("ctx {}%", used * 100 / size));
+                    }
+                    Some((used, _)) if used > 0 => {
+                        parts.push(format!("ctx {}", fmt_tokens(used)));
+                    }
+                    _ => {}
+                }
+                if let Some(model) = &pane.model {
+                    parts.push(model.clone());
+                }
+                if let Some(cost) = &pane.cost {
+                    parts.push(fmt_cost(cost).trim_start().to_string());
+                }
+            }
+            if parts.is_empty() {
+                hints.to_string()
+            } else {
+                format!("{}  {}", parts.join(" · "), hints)
+            }
+        }
     };
 
     // Right zone: only segments that carry information right now.
@@ -1282,6 +1299,35 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_left_zone_follows_the_focused_pane() {
+        let mut st = with_session();
+        // Focus the ACP monitor and report upstream numbers on it.
+        st.detail = DetailLayout {
+            shown: vec!["r0".into()],
+            split: crate::tui::state::Split::H,
+            focus: 0,
+        };
+        st.agents[0].usage = Some((62_000, 100_000));
+        st.agents[0].model = Some("claude-opus-4-8".into());
+        st.agents[0].cost = Some(bitrouter_substrate::translate::UsageCost {
+            amount: 0.41,
+            currency: "USD".into(),
+        });
+        let text = draw(&mut st, 140, 24);
+        assert!(
+            text.contains("ctx 62%"),
+            "context gauge in the bar: {text:?}"
+        );
+        assert!(text.contains("claude-opus-4-8"), "model tag in the bar");
+        assert!(text.contains("$0.41"), "pane cost in the bar");
+        // A transient notice still claims the whole zone.
+        st.notice = Some("previous fleet remembered".into());
+        let text = draw(&mut st, 140, 24);
+        assert!(text.contains("! previous fleet remembered"));
+        assert!(!text.contains("ctx 62%"), "notice preempts the gauge");
+    }
+
+    #[test]
     fn status_bar_right_zone_reports_global_state() {
         let mut st = with_session();
         st.serve_ok = Some(true);
@@ -1588,7 +1634,7 @@ mod tests {
     }
 
     #[test]
-    fn cost_shows_in_rail_and_pane_header() {
+    fn cost_shows_in_rail_and_status_bar() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
         st.agents[0].cost = Some(bitrouter_substrate::translate::UsageCost {
             amount: 0.25,
