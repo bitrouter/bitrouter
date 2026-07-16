@@ -163,6 +163,14 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     // ── Initial state. ──
     let mut state = AppState::new(initial_pane);
     state.bootstrap_cmd = cfg.worktrees.bootstrap.clone();
+    // The one-shot leader chord (`tui.leader`), falling back to Ctrl-Space
+    // when unset or unparseable.
+    if let Some(spec) = &cfg.tui.leader {
+        match crate::tui::state::parse_leader(spec) {
+            Some(leader) => state.leader = leader,
+            None => tracing::warn!(spec, "unparseable tui.leader — using ctrl-space"),
+        }
+    }
     state.set_available_agents(agent_ids);
     // The `new session` picker offers every harness with an interactive
     // binary — the same set `--agent` accepts.

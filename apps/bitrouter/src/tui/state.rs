@@ -43,6 +43,26 @@ pub enum Mode {
 /// owns.
 pub const DEFAULT_LEADER: (KeyCode, KeyModifiers) = (KeyCode::Char(' '), KeyModifiers::CONTROL);
 
+/// Parse a `tui.leader` spec (`ctrl-<key>`, `<key>` = one char or `space`)
+/// into the chord the reducer matches. `None` = unparseable — the caller
+/// falls back to [`DEFAULT_LEADER`].
+pub fn parse_leader(spec: &str) -> Option<(KeyCode, KeyModifiers)> {
+    let rest = spec.trim().to_ascii_lowercase();
+    let rest = rest.strip_prefix("ctrl-")?;
+    let code = match rest {
+        "space" => KeyCode::Char(' '),
+        _ => {
+            let mut chars = rest.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() {
+                return None; // exactly one key after the modifier
+            }
+            KeyCode::Char(c)
+        }
+    };
+    Some((code, KeyModifiers::CONTROL))
+}
+
 /// One palette command. The table is static; actions map onto existing
 /// reducer paths so the palette adds discoverability, not new behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -770,6 +790,10 @@ pub struct AppState {
     /// these).
     pub sessions_collapsed: bool,
     pub subagents_collapsed: bool,
+    /// The configured one-shot leader chord (`tui.leader`, default
+    /// [`DEFAULT_LEADER`]) — the only key NORMAL intercepts before PTY
+    /// passthrough.
+    pub leader: (KeyCode, KeyModifiers),
     /// Monotonic permission-arrival counter backing `PaneState.pending_seq`.
     perm_seq: u64,
     /// agent_id → harness tag, from the config catalog.
@@ -828,6 +852,7 @@ impl AppState {
             detail,
             sessions_collapsed: false,
             subagents_collapsed: false,
+            leader: DEFAULT_LEADER,
             perm_seq: 0,
             harness_by_agent: HashMap::new(),
             should_quit: false,
@@ -1585,7 +1610,7 @@ fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Effect> {
     // The one-shot leader (TUI_SPEC_V3 §3): intercepted before PTY
     // passthrough so it never reaches the orchestrator child. It opens the
     // which-key overlay; the next key runs one leaf and returns to NORMAL.
-    if (key.code, key.modifiers) == DEFAULT_LEADER {
+    if (key.code, key.modifiers) == state.leader {
         state.mode = Mode::Leader;
         return Vec::new();
     }
@@ -3236,6 +3261,64 @@ mod tests {
         );
         assert!(fx.is_empty());
         assert_eq!(st.mode, Mode::Leader, "leader → which-key prefix");
+    }
+
+    #[test]
+    fn ctrl_a_is_not_a_leader() {
+        // A focused PTY session owns readline Home: Ctrl-A passes through
+        // untouched and enters no manager mode (TUI_SPEC_V3 §3).
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        assert!(
+            matches!(&fx[..], [Effect::PtyKey { .. }]),
+            "Ctrl-A is passthrough: {fx:?}"
+        );
+        assert_eq!(st.mode, Mode::Normal, "no mode change");
+    }
+
+    #[test]
+    fn configured_leader_replaces_the_default() {
+        let mut st = AppState::new(pane());
+        st.agents[0].kind = PaneKind::Pty;
+        st.leader = parse_leader("ctrl-]").expect("parseable");
+        // The configured chord arms the prefix…
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL)),
+        );
+        assert!(fx.is_empty());
+        assert_eq!(st.mode, Mode::Leader);
+        // …and the default no longer does: Ctrl-Space reaches the child.
+        st.mode = Mode::Normal;
+        let fx = reduce(
+            &mut st,
+            &AppEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+        );
+        assert!(
+            matches!(&fx[..], [Effect::PtyKey { .. }]),
+            "unconfigured chord passes through: {fx:?}"
+        );
+        assert_eq!(st.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn parse_leader_accepts_ctrl_chords_and_rejects_garbage() {
+        assert_eq!(parse_leader("ctrl-space"), Some(DEFAULT_LEADER));
+        assert_eq!(
+            parse_leader("Ctrl-]"),
+            Some((KeyCode::Char(']'), KeyModifiers::CONTROL))
+        );
+        assert_eq!(
+            parse_leader("ctrl-\\"),
+            Some((KeyCode::Char('\\'), KeyModifiers::CONTROL))
+        );
+        assert_eq!(parse_leader("space"), None, "modifier required");
+        assert_eq!(parse_leader("ctrl-abc"), None, "one key only");
+        assert_eq!(parse_leader(""), None);
     }
 
     #[test]
