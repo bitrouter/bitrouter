@@ -179,7 +179,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   the review + diff.
 
 ### Gate B — Fable-5 review (mandatory)
-- [ ] **Launch a reviewer subagent on Fable-5.** Use the **Agent tool** with
+- [x] **Launch a reviewer subagent on Fable-5.** Use the **Agent tool** with
   `subagent_type: general-purpose` (or `feature-dev:code-reviewer`), **`model: fable`**,
   `run_in_background: false`, and this prompt:
 
@@ -193,7 +193,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   > (`unwrap`/`expect`/`panic!`/`#[allow]`/dead code/public re-export in `src/tui`); (4) the
   > docs lockstep is complete and accurate. Rank findings most-severe first.
 
-- [ ] **Resolve every CONFIRMED finding.** For each: fix it, re-run §1 gates, and **re-run
+- [x] **Resolve every CONFIRMED finding.** For each: fix it, re-run §1 gates, and **re-run
   the Fable-5 reviewer** on the updated diff. Repeat until the reviewer returns **zero
   CONFIRMED** findings. Record each round's summary + resolutions in the Build Log.
 
@@ -348,4 +348,13 @@ DECISION: CLI.md had no tui section at all (the task assumed one) — added a
   PLAUSIBLE Ctrl-C dead-pane docs nit. PLAUSIBLE finding 9 (review verbs on
   an exited pane) accepted as pre-existing v2 baseline. Gates green (1925).
   Reviewer re-running on the updated diff.
+2026-07-16 a41c99e2 — Gate B rounds 2-3 — round 2: all 7 prior findings verified
+  resolved; 2 low CONFIRMED stragglers (stale empty-detail placeholder chord;
+  stale Ctrl-C quit comment) + 1 PLAUSIBLE (affordances hardcode ⌃space under a
+  custom tui.leader). Fixed: placeholder/comment updated; AppState::leader_label()
+  threads the configured chord through status-bar hints, which-key, sessions
+  footer, attach/read-only notices. Round 3: reviewer verified all three,
+  regression pass clean — **ZERO CONFIRMED findings**. Remaining PLAUSIBLE notes
+  (dead-pane review verbs = pre-existing v2 baseline; leader_label only needs
+  ctrl- grammar) accepted, no action. Gates green (1925). GATE B DONE.
 ```
