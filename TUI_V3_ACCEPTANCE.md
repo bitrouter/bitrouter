@@ -124,7 +124,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 
 ### V3.3 — Status bar (active pane | global fleet)
 
-- [ ] **Left zone follows the focused pane:** context-window gauge (`used/size` or `%`) +
+- [x] **Left zone follows the focused pane:** context-window gauge (`used/size` or `%`) +
   model tag + pane cost, when the upstream reports them. Promote context occupancy out of
   the pane header ([`ui.rs:778`](apps/bitrouter/src/tui/ui.rs)). A transient notice still
   claims this zone and decays.
@@ -299,4 +299,7 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
 2026-07-16 81c8b1ff — V3.2 spawn hatch + phase gates box — COMMANDS entry renamed
   to "spawn subagent"; PickerPurpose::Subagent reachable only via the palette
   (run_command) + picker resolution; fmt+clippy+1920 nextest green. V3.2 done.
+2026-07-16 cb878030 — V3.3 left zone — ctx gauge (% or raw tokens) + model +
+  $cost promoted from the pane header to the bar's left zone; notice still
+  preempts; test status_bar_left_zone_follows_the_focused_pane; gates green (1921).
 ```
