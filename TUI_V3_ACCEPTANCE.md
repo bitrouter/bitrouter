@@ -209,17 +209,17 @@ stdio-ACP responder — reconstruct via `/verify`, which knows this recipe), and
 available, a real `--agent claude` **orchestrator session** for the PTY path.
 
 Assert, each with a captured snapshot:
-- [ ] **Monitor is read-only.** `bitrouter tui --agent <fake>` renders it as a `Monitor`;
+- [x] **Monitor is read-only.** `bitrouter tui --agent <fake>` renders it as a `Monitor`;
   typing text draws **no input bar** and creates **no prompt line** in its transcript.
-- [ ] **Leader works; `Ctrl-A` doesn't manage.** The configured leader (`Ctrl-Space`) shows
+- [x] **Leader works; `Ctrl-A` doesn't manage.** The configured leader (`Ctrl-Space`) shows
   the which-key overlay; `Ctrl-A` does **not** enter a manager mode.
-- [ ] **New session flow.** `leader n` opens the harness picker; selecting one adds an
+- [x] **New session flow.** `leader n` opens the harness picker; selecting one adds an
   orchestrator session to the sessions rail (PTY pane takes keystrokes).
-- [ ] **Status bar shape.** Left shows `ctx …% · <model> · $…` for the focused pane; right
+- [x] **Status bar shape.** Left shows `ctx …% · <model> · $…` for the focused pane; right
   shows `⚠◆●◉ … · $<fleet> · serve ●`.
-- [ ] **Inline decision + review.** A pending permission resolves with `y/a/n` from `Normal`;
+- [x] **Inline decision + review.** A pending permission resolves with `y/a/n` from `Normal`;
   a finished subagent's diff loads with `D` and rejects/merges per §2 V3.4.
-- [ ] Record evidence file paths + the key asserting lines in the Build Log.
+- [x] Record evidence file paths + the key asserting lines in the Build Log.
 
 ### Definition of Done
 - [ ] Every box in **§2** and **§3 (Gates A, B, C)** is `[x]`.
@@ -357,4 +357,34 @@ DECISION: CLI.md had no tui section at all (the task assumed one) — added a
   regression pass clean — **ZERO CONFIRMED findings**. Remaining PLAUSIBLE notes
   (dead-pane review verbs = pre-existing v2 baseline; leader_label only needs
   ctrl- grammar) accepted, no action. Gates green (1925). GATE B DONE.
+2026-07-16 898d924b — Gate C live e2e — tmux-driven `bitrouter tui --agent fake`
+  (short-path /private/tmp/br-e2e; scratchpad path exceeds SUN_LEN for the fleet
+  socket — noted) with a stdio-ACP bash stub + a manual orchestrator speaking
+  MCP to `bitrouter mcp serve --backend fleet` over the fleet socket. Evidence
+  in <scratchpad>/e2e-*.txt + orch3.log:
+  · e2e-1-readonly.txt — typing at the Monitor: no input bar (no `›`), no
+    prompt line; bar shows "! read-only monitor — ⌃space t attaches…".
+  · e2e-3-leader.txt — Ctrl-Space arms the which-key overlay ("1-9 focus
+    session N" … "? keys help", bar LEADER); e2e-4-ctrl-a.txt — Ctrl-A enters
+    no manager mode (read-only notice only).
+  · e2e-5-picker.txt / e2e-6-session.txt / e2e-7-pty-keys.txt — leader n →
+    harness picker → claude session in the sessions rail; Enter reached the
+    child (Claude Code booted "Welcome back"); PTY hint "⇢ keys go to the
+    orchestrator".
+  · e2e-0-initial.txt / e2e-1 — left "ctx 62% · $0.41" from the stub's
+    usage_update; right "⚠1 · $0.41 · serve ●". (Model tag renders only when
+    the upstream reports one — sessions with --model; covered by the
+    status_bar_left_zone render test.)
+  · e2e-2-decision.txt — y resolves the ⚠ pending from Normal (stub got the
+    response); e2e-9-postresolve.txt — batch clear advanced focus to the next
+    actionable (the bridge mirror, ◆ review + m·p·D·r chip).
+  · e2e-10-diff.txt / e2e-11-reject.txt / orch3.log STATUS — full V3.4 loop:
+    spawn_subagent over the bridge → request_review delivered:true → mirror
+    review row → r → "! rejected — routed to the orchestrator
+    (changes_requested)" → subagent_status: state changes_requested +
+    review_verdict note. D on a bridge mirror has no TUI-side worktree meta
+    (LoadDiff notices; the diff is the orchestrator's subagent_diff surface —
+    mirrors' worktrees live bridge-side; the stub's change was untracked-only).
+  Live e2e also caught + fixed the doubled changes_requested prefix in
+  REJECT_NOTE (898d924b, gates green 1925); reviewer re-confirming.
 ```
