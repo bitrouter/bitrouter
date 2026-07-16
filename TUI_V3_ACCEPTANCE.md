@@ -144,12 +144,12 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
 - [x] **Panes carry an ownership marker** (orchestrator-owned vs. human-owned/hatch) on the
   pane or session record.
   **Proof:** the field exists and is set at spawn time for both paths.
-- [ ] **Reject routes by ownership** per `TUI_SPEC_V3.md` §5: orchestrator-owned → an effect
+- [x] **Reject routes by ownership** per `TUI_SPEC_V3.md` §5: orchestrator-owned → an effect
   carrying the verdict as the subagent's task outcome (`changes_requested` + note), **not** a
   prompt; human-owned → a direct re-prompt effect.
   **Proof:** reducer tests `reject_orchestrator_owned_sets_task_outcome` and
   `reject_human_owned_reprompts`.
-- [ ] **Standing gates green** (§1).
+- [x] **Standing gates green** (§1).
 
 ### V3.5 — Docs lockstep (mandatory — `CLAUDE.md` requires it)
 
@@ -312,4 +312,10 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   PaneState.owner: Ownership { Human (default: PaneState::new — picker spawns,
   sessions, attaches), Orchestrator (BridgeSpawned) }; asserted at spawn by
   bridge_spawn_mirrors_into_the_rail_without_stealing_focus; gates green.
+2026-07-16 3ebb18b5 — V3.4 reject routing + phase gates box — Effect::ReviewVerdict
+  → TuiMsg::ReviewVerdict over the fleet socket → subagent_status reports state
+  changes_requested + review_verdict note (the task outcome); human-owned reject
+  re-prompts with the canned REJECT_NOTE. Tests
+  reject_orchestrator_owned_sets_task_outcome + reject_human_owned_reprompts;
+  fmt+clippy+1923 nextest green. V3.4 done.
 ```
