@@ -111,7 +111,7 @@ do them in order. `apps/…` paths are under `apps/bitrouter/src/tui/` unless no
   actionable · `n` new session (Picker/Session) · `p` palette · `c` close · `a` autonomy ·
   `t` attach · `?` keys.
   **Proof:** reducer tests asserting each leaf's `Effect`/mode transition.
-- [ ] **Inline supervision unchanged.** From `Normal`: `y/a/n` resolve the top pending
+- [x] **Inline supervision unchanged.** From `Normal`: `y/a/n` resolve the top pending
   decision; `D/m/p/r` review the focused `Monitor`; `Ctrl-C` interrupts the focused agent;
   `PgUp/PgDn` scroll. Mouse click still focuses rows.
   **Proof:** existing decision/review reducer tests still pass (update, don't delete).
@@ -291,4 +291,9 @@ DECISION: dissolving AGENT also deletes Panel/rail_cursor/session_cursor/
   leader_p_opens_the_command_palette / leader_c_* (×3) /
   leader_a_cycles_autonomy_and_logs / leader_t_attaches_the_focused_live_monitor_only /
   leader_question_mark_opens_keys_help; 14 leader tests pass; gates green (1919).
+2026-07-16 a4a5255f — V3.2 inline supervision — y/a/n now resolve the TOP pending
+  (roster head) and advance focus to the next (batch clear) per spec §3/§5;
+  new test y_resolves_the_top_pending_and_advances_to_the_next; all ported
+  decision/review tests (resolve, D/m/p/r inline, Ctrl-C, PgUp/PgDn, click
+  focus) pass unmodified this round; gates green (1920).
 ```
