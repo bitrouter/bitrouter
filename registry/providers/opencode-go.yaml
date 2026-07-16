@@ -65,6 +65,10 @@ models:
     provider_model_id: glm-5
   - id: qwen/qwen3.6-plus
     provider_model_id: qwen3.6-plus
+  - id: x-ai/grok-4.5
+    provider_model_id: grok-4.5
+  - id: moonshotai/kimi-k3
+    provider_model_id: kimi-k3
 status: active
 auto_sync:
   feed: models_dev
