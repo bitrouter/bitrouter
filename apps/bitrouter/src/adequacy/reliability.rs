@@ -1,7 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ReliabilityKey {
     pub provider: String,
     pub model: String,
@@ -10,10 +12,19 @@ pub struct ReliabilityKey {
     pub protocol: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReliabilityObservation {
     Success,
     TransientFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReliabilityEvent {
+    pub route_key: String,
+    pub endpoint_key: ReliabilityKey,
+    pub observation: ReliabilityObservation,
+    pub observed_at_unix: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +127,34 @@ impl ProviderReliabilityLedger {
             endpoint.phase = EntryPhase::HalfOpen;
         }
         self.apply_observation(endpoint, observation, now_unix);
+    }
+
+    pub fn observe_event(&self, event: ReliabilityEvent) {
+        self.observe(
+            &event.route_key,
+            event.endpoint_key,
+            event.observation,
+            event.observed_at_unix,
+        );
+    }
+
+    pub fn replay(
+        window_size: usize,
+        consecutive_failure_threshold: u32,
+        error_rate_percent: u32,
+        cooldown_secs: u64,
+        events: &[ReliabilityEvent],
+    ) -> Self {
+        let ledger = Self::new(
+            window_size,
+            consecutive_failure_threshold,
+            error_rate_percent,
+            cooldown_secs,
+        );
+        for event in events {
+            ledger.observe_event(event.clone());
+        }
+        ledger
     }
 
     pub fn permit(&self, route_key: &str, now_unix: u64) -> RoutePermit {

@@ -420,7 +420,8 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::reliability::{
-        ProviderReliabilityLedger, ReliabilityKey, ReliabilityObservation, RoutePermit,
+        ProviderReliabilityLedger, ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
+        RoutePermit,
     };
     use super::*;
 
@@ -535,6 +536,43 @@ mod tests {
         );
 
         assert_eq!(ledger.permit(route, 162), RoutePermit::Closed);
+    }
+
+    #[test]
+    fn deterministic_replay_matches_online_reliability_state() {
+        let route = "bitrouter:deepseek-v4-flash";
+        let events = vec![
+            ReliabilityEvent {
+                route_key: route.to_string(),
+                endpoint_key: endpoint("bitrouter"),
+                observation: ReliabilityObservation::TransientFailure,
+                observed_at_unix: 100,
+            },
+            ReliabilityEvent {
+                route_key: route.to_string(),
+                endpoint_key: endpoint("bitrouter"),
+                observation: ReliabilityObservation::Success,
+                observed_at_unix: 101,
+            },
+            ReliabilityEvent {
+                route_key: route.to_string(),
+                endpoint_key: endpoint("bitrouter"),
+                observation: ReliabilityObservation::TransientFailure,
+                observed_at_unix: 102,
+            },
+        ];
+        let online = ProviderReliabilityLedger::new(23, 2, 35, 60);
+        for event in &events {
+            online.observe_event(event.clone());
+        }
+        let replayed = ProviderReliabilityLedger::replay(23, 2, 35, 60, &events);
+
+        assert_eq!(online.route_snapshot(route), replayed.route_snapshot(route));
+        assert_eq!(
+            online.endpoint_snapshot(&endpoint("bitrouter")),
+            replayed.endpoint_snapshot(&endpoint("bitrouter"))
+        );
+        assert_eq!(online.permit(route, 102), replayed.permit(route, 102));
     }
 
     // ---- safety half (pins) ----
