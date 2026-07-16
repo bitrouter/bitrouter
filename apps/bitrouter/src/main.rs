@@ -28,7 +28,7 @@ use bitrouter::output::reports::agents::{
     AgentCheckRow, AgentInstallReport, AgentRegistryRow, AgentRow, AgentsCheckReport,
     AgentsListReport,
 };
-use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
+use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
@@ -55,8 +55,11 @@ struct Cli {
     /// Compatibility spelling for `--human` when placed before the subcommand.
     #[arg(short = 'H', hide = true, conflicts_with = "json")]
     human_short: bool,
+    /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
+    /// the wizard when unconfigured, a one-line status + `bitrouter launch`
+    /// hint when configured.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -142,11 +145,66 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Write a starter `bitrouter.yaml` (with `skip_auth: true`).
+    /// Guided onboarding wizard that sequences credential, harness, and finish
+    /// steps to first value. Interactive by default; `--yes` (or no TTY) runs
+    /// it headlessly, emitting the JSON result envelope and never blocking on a
+    /// human. Every prompt has a flag equivalent (below) so an agent can drive
+    /// the whole thing. With `--yes` this also reproduces the classic
+    /// starter-`bitrouter.yaml` scaffold (refusing to overwrite unless
+    /// `--force`).
     Init {
-        /// Path to write.
+        /// Path for the starter `bitrouter.yaml` write.
         #[arg(short, long, default_value = "bitrouter.yaml")]
         config: PathBuf,
+        /// Run non-interactively: process the flags below, never block, emit
+        /// the JSON envelope, and scaffold the starter config.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Allow overwriting an existing `bitrouter.yaml` when scaffolding.
+        #[arg(long)]
+        force: bool,
+        /// Clear stored onboarding credentials (cloud session always; provider
+        /// credentials after a confirm, or unconditionally under `--yes`) before
+        /// running.
+        #[arg(long)]
+        reset: bool,
+        /// (Step 1) Sign in to BitRouter Cloud via device-flow OAuth. Skipped
+        /// and reported under `--yes` (a machine can't complete the device flow).
+        #[arg(long)]
+        cloud_login: bool,
+        /// (Step 1) Seed the cloud credential from a `brk_` API key
+        /// (non-interactive).
+        #[arg(long, value_name = "BRK_KEY")]
+        api_key: Option<String>,
+        /// (Step 1) Log in to an upstream provider by id (repeatable). A paired
+        /// `--provider-api-key` seeds it non-interactively; otherwise it is
+        /// reported-and-skipped under `--yes`.
+        #[arg(long = "provider", value_name = "ID")]
+        providers: Vec<String>,
+        /// (Step 1) API key for the `--provider` at the same position
+        /// (repeatable).
+        #[arg(long = "provider-api-key", value_name = "KEY")]
+        provider_api_keys: Vec<String>,
+        /// (Step 1) Accept the auto-detected credential(s) without prompting.
+        #[arg(long)]
+        use_detected: bool,
+        /// (Step 2) Harness to drive: `claude` or `codex` (repeatable).
+        #[arg(long = "harness", value_enum)]
+        harnesses: Vec<bitrouter::spawn::SpawnAgent>,
+        /// (Step 2) Never install a missing harness.
+        #[arg(long)]
+        no_install: bool,
+        /// (Step 3) What to do at the end: `launch` | `serve` | `exit`.
+        #[arg(long, value_enum)]
+        after: Option<bitrouter::onboarding::AfterAction>,
+        /// (Step 3) Model handed to the harness for this session only (not
+        /// persisted).
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
+        /// (Step 3) Write a starter `bitrouter.yaml` (the one sanctioned config
+        /// write).
+        #[arg(long)]
+        write_config: bool,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -796,6 +854,16 @@ enum ProviderAction {
         /// Do not run a browser-based provider OAuth flow.
         #[arg(long)]
         no_browser: bool,
+        /// Seed a BYOK provider non-interactively from this API key — skips the
+        /// method menu and the stdin paste. The provider must accept a pasted
+        /// key (OAuth-only backends reject it).
+        #[arg(long, value_name = "KEY", conflicts_with_all = ["import_existing", "no_browser", "key_stdin"])]
+        api_key: Option<String>,
+        /// Read the API key from stdin (one line) instead of prompting — for
+        /// pipelines, e.g. `printf %s "$KEY" | bitrouter providers login openai
+        /// --key-stdin`.
+        #[arg(long, conflicts_with_all = ["import_existing", "no_browser"])]
+        key_stdin: bool,
     },
     /// Log out of an upstream provider — clears every stored credential for
     /// it. For the built-in `bitrouter` provider this is `cloud logout`.
@@ -936,9 +1004,9 @@ async fn main() {
     let cli = Cli::parse();
     let raw_cloud_api = matches!(
         &cli.command,
-        Command::Cloud {
+        Some(Command::Cloud {
             action: bitrouter::cloud::cli::CloudAction::Api(_)
-        }
+        })
     );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     match run(cli, &output).await {
@@ -972,8 +1040,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // would interleave with and corrupt that stream. The exclusion of
     // `Command::Serve` mirrors how it defers its subscriber init to after the
     // OTel exporter is available.
-    let is_acp = matches!(&cli.command, Command::Acp { .. });
-    if matches!(cli.command, Command::Serve { .. }) {
+    let is_acp = matches!(&cli.command, Some(Command::Acp { .. }));
+    if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
         // Any `acp` subcommand: init with stderr so stdout stays pristine.
@@ -982,7 +1050,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         init_basic_tracing_subscriber();
     }
 
-    match cli.command {
+    let Some(command) = cli.command else {
+        // Bare `bitrouter` — the onboarding front door (wizard when
+        // unconfigured; status + hint when configured). Never re-onboards a
+        // configured user, never silently spawns a daemon/harness.
+        return bitrouter::onboarding::entry(output).await;
+    };
+
+    match command {
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             serve(&source).await
@@ -1029,9 +1104,39 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&route(&model, &source, &socket).await?)?;
             Ok(())
         }
-        Command::Init { config } => {
-            output.emit(&init(&config).await?)?;
-            Ok(())
+        Command::Init {
+            config,
+            yes,
+            force,
+            reset,
+            cloud_login,
+            api_key,
+            providers,
+            provider_api_keys,
+            use_detected,
+            harnesses,
+            no_install,
+            after,
+            model,
+            write_config,
+        } => {
+            let flags = bitrouter::onboarding::OnboardingFlags {
+                config,
+                yes,
+                force,
+                reset,
+                cloud_login,
+                api_key,
+                providers,
+                provider_api_keys,
+                use_detected,
+                harnesses,
+                no_install,
+                after,
+                model,
+                write_config,
+            };
+            bitrouter::onboarding::run(flags, output).await
         }
         Command::Config { action } => {
             let report = config_cmd(action).await?;
@@ -2445,13 +2550,20 @@ fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteR
 
 // ===== management commands =====
 
-async fn init(config_path: &Path) -> Result<InitReport> {
-    commands::init(config_path).await?;
-    Ok(InitReport {
-        action: "init",
-        path: config_path.display().to_string(),
-        skip_auth: true,
-    })
+/// Read a provider API key from stdin (for `providers login --key-stdin`).
+/// Consumes the whole stream and trims surrounding whitespace/newline so a
+/// `printf %s "$KEY" | …` pipe and an `echo "$KEY" | …` pipe both work.
+fn read_api_key_from_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .context("reading API key from stdin")?;
+    let key = buf.trim().to_string();
+    if key.is_empty() {
+        anyhow::bail!("no API key on stdin (--key-stdin)");
+    }
+    Ok(key)
 }
 
 async fn key(action: KeyAction) -> Result<KeySignReport> {
@@ -2670,7 +2782,16 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             label,
             import_existing,
             no_browser,
+            api_key,
+            key_stdin,
         } => {
+            // `--key-stdin` reads the key from stdin (one line); it funnels into
+            // the same non-interactive API-key path as `--api-key`.
+            let api_key = if key_stdin {
+                Some(read_api_key_from_stdin()?)
+            } else {
+                api_key
+            };
             // The built-in `bitrouter` provider authenticates with the cloud
             // OAuth credential, so logging into it IS the cloud sign-in
             // (`cloud login`); other providers use the per-provider store.
@@ -2681,12 +2802,14 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                          --import-existing/--no-browser apply to upstream provider logins"
                     );
                 }
+                // A supplied key seeds the cloud credential the same way
+                // `cloud login --api-key` does.
                 bitrouter::cloud::cli::run(
                     bitrouter::cloud::cli::CloudAction::Login {
                         authorization_server: None,
                         client_id: None,
                         scope: None,
-                        api_key: None,
+                        api_key,
                     },
                     output.format(),
                 )
@@ -2698,6 +2821,7 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                     bitrouter::commands::ProviderLoginOptions {
                         import_existing,
                         no_browser,
+                        api_key,
                     },
                 )
                 .await?;
@@ -3152,14 +3276,14 @@ mod tests {
         ])
         .expect("parse");
         match cli.command {
-            Command::Mcp {
+            Some(Command::Mcp {
                 action:
                     McpAction::Serve {
                         backend,
                         budget_usd,
                         ..
                     },
-            } => {
+            }) => {
                 assert_eq!(backend, Some(McpBackend::Fleet));
                 assert_eq!(budget_usd, Some(12.5));
             }
@@ -3174,19 +3298,137 @@ mod tests {
             Cli::try_parse_from(["bitrouter", "update", "--check", "--tag", "1.0.0-alpha.18"])
                 .expect("parse");
         match cli.command {
-            Command::Update {
+            Some(Command::Update {
                 check,
                 tag,
                 stable,
                 restart,
                 yes,
-            } => {
+            }) => {
                 assert!(check);
                 assert_eq!(tag.as_deref(), Some("1.0.0-alpha.18"));
                 assert!(!stable && !restart && !yes);
             }
             _ => panic!("expected Update"),
         }
+    }
+
+    #[test]
+    fn bare_invocation_parses_to_no_subcommand() {
+        use clap::Parser;
+        // Bare `bitrouter` → no subcommand → onboarding entry dispatch.
+        let cli = Cli::try_parse_from(["bitrouter"]).expect("parse");
+        assert!(cli.command.is_none());
+        // Global flags still parse without a subcommand.
+        let human = Cli::try_parse_from(["bitrouter", "--human"]).expect("parse");
+        assert!(human.command.is_none() && human.human);
+    }
+
+    #[test]
+    fn init_wizard_flags_parse() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "init",
+            "--yes",
+            "--force",
+            "--reset",
+            "--api-key",
+            "brk_abc.secret",
+            "--provider",
+            "openai",
+            "--provider-api-key",
+            "sk-openai",
+            "--harness",
+            "claude",
+            "--harness",
+            "codex",
+            "--after",
+            "exit",
+            "--model",
+            "openai/gpt-5",
+            "--write-config",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Init {
+                yes,
+                force,
+                reset,
+                api_key,
+                providers,
+                provider_api_keys,
+                harnesses,
+                after,
+                model,
+                write_config,
+                ..
+            }) => {
+                assert!(yes && force && reset && write_config);
+                assert_eq!(api_key.as_deref(), Some("brk_abc.secret"));
+                assert_eq!(providers, vec!["openai"]);
+                assert_eq!(provider_api_keys, vec!["sk-openai"]);
+                assert_eq!(
+                    harnesses,
+                    vec![
+                        bitrouter::spawn::SpawnAgent::Claude,
+                        bitrouter::spawn::SpawnAgent::Codex
+                    ]
+                );
+                assert_eq!(after, Some(bitrouter::onboarding::AfterAction::Exit));
+                assert_eq!(model.as_deref(), Some("openai/gpt-5"));
+            }
+            _ => panic!("expected Init"),
+        }
+    }
+
+    #[test]
+    fn providers_login_api_key_flag_parses() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "providers",
+            "login",
+            "openai",
+            "--api-key",
+            "sk-abc",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Providers {
+                action:
+                    ProviderAction::Login {
+                        provider,
+                        api_key,
+                        key_stdin,
+                        ..
+                    },
+            }) => {
+                assert_eq!(provider, "openai");
+                assert_eq!(api_key.as_deref(), Some("sk-abc"));
+                assert!(!key_stdin);
+            }
+            _ => panic!("expected provider login"),
+        }
+    }
+
+    #[test]
+    fn providers_login_api_key_conflicts_with_oauth_flags() {
+        use clap::Parser;
+        let parsed = Cli::try_parse_from([
+            "bitrouter",
+            "providers",
+            "login",
+            "openai",
+            "--api-key",
+            "sk-abc",
+            "--no-browser",
+        ]);
+        let err = match parsed {
+            Ok(_) => panic!("api-key + oauth flags must conflict"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -3204,15 +3446,16 @@ mod tests {
         ])
         .expect("parse");
         match cli.command {
-            Command::Providers {
+            Some(Command::Providers {
                 action:
                     ProviderAction::Login {
                         provider,
                         label,
                         import_existing,
                         no_browser,
+                        ..
                     },
-            } => {
+            }) => {
                 assert_eq!(provider, "openai-codex");
                 assert_eq!(label, "work");
                 assert!(import_existing);
@@ -3239,7 +3482,7 @@ mod tests {
         ])
         .expect("parse init");
         match init.command {
-            Command::Policy {
+            Some(Command::Policy {
                 action:
                     PolicyAction::Init {
                         name,
@@ -3248,7 +3491,7 @@ mod tests {
                         economy,
                         config,
                     },
-            } => {
+            }) => {
                 assert_eq!(name, "terminal-bench");
                 assert_eq!(preset, "coding");
                 assert_eq!(strong, None);
@@ -3262,9 +3505,9 @@ mod tests {
             .expect("parse evolve");
         assert!(matches!(
             evolve.command,
-            Command::Policy {
+            Some(Command::Policy {
                 action: PolicyAction::Evolve { apply: true, .. }
-            }
+            })
         ));
     }
 
@@ -3281,9 +3524,9 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Command::Cloud {
+            Some(Command::Cloud {
                 action: bitrouter::cloud::cli::CloudAction::Api(args),
-            } => assert_eq!(args.headers, ["X-Test: value"]),
+            }) => assert_eq!(args.headers, ["X-Test: value"]),
             _ => panic!("expected cloud API command"),
         }
 

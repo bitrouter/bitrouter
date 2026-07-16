@@ -79,7 +79,7 @@ Verify: `bitrouter --version`. If `command not found`, see `references/diagnose.
 
 ## 3. Run (Local only)
 
-BitRouter has no interactive setup wizard — onboarding is two commands.
+**Guided onboarding.** Bare `bitrouter` (no subcommand) is the front door: a network-free credential probe launches a scripted wizard (credentials → harness → launch/serve/exit) when nothing is configured, or prints a one-line status + `bitrouter launch` hint when it already is (never re-onboards, never auto-spawns). `bitrouter init` re-runs it; every prompt has a flag, so `bitrouter init --yes [flags]` runs headlessly, emits the JSON envelope, never blocks, and scaffolds the starter `bitrouter.yaml` (`--force` overwrites, `--reset` clears credentials first). `--yes` reports-and-skips anything needing interactive OAuth (bare `--cloud-login`, provider PKCE/device) in `providers_skipped_interactive`. The two commands below remain the fast path.
 
 **Zero-config (BYOK).** Export any of the supported env vars and start the daemon. It auto-enables every provider whose key is present.
 
@@ -123,6 +123,8 @@ bitrouter providers login github-copilot    # browser device flow, token stored 
 bitrouter providers login supergrok         # SuperGrok via the Grok CLI session (~/.grok)
 bitrouter providers login google-ai         # Google AI (Antigravity) via the `agy` CLI keyring session
 ```
+
+Seed a BYOK provider (any that accepts a pasted key — `openai`, `anthropic`, `google`, `openrouter`, `opencode-*`) non-interactively with `--api-key sk-…` or `--key-stdin` (`printf %s "$KEY" | bitrouter providers login anthropic --key-stdin`). Both skip the method menu, conflict with the OAuth-only `--import-existing` / `--no-browser`, and error if the provider has no API-key method.
 
 ## 4. Connect your SDK
 

@@ -2,6 +2,8 @@
 
 Every subcommand the v1 binary actually exposes. Anything not listed here doesn't exist — don't suggest `bitrouter doctor`, `bitrouter providers add`, `bitrouter cloud connect`, or the old auth subcommand tree (cloud identity is `bitrouter cloud whoami`, see below).
 
+Bare `bitrouter` (no subcommand) is the onboarding front door: it runs the network-free credential probe and either launches the setup wizard (unconfigured) or prints a one-line status + a `bitrouter launch` hint (configured), exit 0 either way. See `bitrouter init` under *Setup helpers*.
+
 ## Daemon lifecycle
 
 | Command | Effect |
@@ -70,7 +72,7 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 
 | Command | Effect |
 |---|---|
-| `bitrouter init [--config PATH]` | Write a starter `bitrouter.yaml` (default `./bitrouter.yaml`). Refuses to overwrite. Mirrors the zero-config defaults — `skip_auth: true`, `listen: 127.0.0.1:4356`, and common registry providers stubbed as `{}` so they can inherit registry defaults and auto-enable when their credential is available. |
+| `bitrouter init [flags]` | Guided onboarding wizard: **credentials** → **harness** → **finish** (launch / serve+snippet / exit). Interactive by default; `--yes` runs it headlessly — process the flags below, never block on a human, emit the JSON result envelope (`action: onboarding`, `providers_configured`, `providers_skipped_interactive`, `harnesses_installed`, `after`, `snippet`), and scaffold the starter `bitrouter.yaml` (`skip_auth: true`, `listen: 127.0.0.1:4356`, common providers stubbed `{}`). The scaffold refuses to overwrite unless `--force`; `--reset` clears stored credentials first (cloud session always, provider creds after a confirm / unconditionally under `--yes`). Flags mirror every prompt: `--cloud-login`, `--api-key <brk_…>` (cloud), `--provider <id>` + `--provider-api-key <k>` (repeatable), `--use-detected`, `--harness claude\|codex` (repeatable), `--no-install`, `--after launch\|serve\|exit`, `--model <id>`, `--write-config`, `-c/--config PATH`. Under `--yes`, anything needing interactive OAuth (bare `--cloud-login`, a `--provider` with no key) is reported in `providers_skipped_interactive`, not attempted. |
 | `bitrouter config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. |
 | `bitrouter policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
 | `bitrouter policy init <name> --preset <preset> --economy <model> [--strong <model>] [--config PATH]` | Create or extend the deterministic `policy-lock.yaml`, bind the named policy to a preset, and leave programmatic writeback locked. The strong model is inferred from an existing preset when omitted. |
@@ -86,6 +88,7 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | Command | Effect |
 |---|---|
 | `bitrouter providers login <provider>` | Per-provider OAuth. Supported providers include **`claude-code`**, **`github-copilot`**, and **`openai-codex`** — runs or adopts the provider's login flow and stores the refreshing token under `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. |
+| `bitrouter providers login <provider> --api-key <KEY>` / `--key-stdin` | Seed a BYOK provider (any that accepts a pasted key — `openai`, `anthropic`, `google`, `openrouter`, `opencode-*`) non-interactively: skips the method menu and the stdin paste. `--key-stdin` reads one line from stdin instead. Both conflict with the OAuth-only `--import-existing` / `--no-browser`, and error if the provider has no API-key method. For `bitrouter`, the key seeds the cloud credential (same as `cloud login --api-key`). |
 | `bitrouter providers logout <provider>` | Remove the stored OAuth token or credential for `<provider>`. |
 
 ## BitRouter Cloud sign-in (`bitrouter cloud …`)
