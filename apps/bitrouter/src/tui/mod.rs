@@ -91,6 +91,13 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
         }
     });
     let base_url = crate::spawn::derive_base_url(&cfg.server.listen);
+    // The daemon's aggregate MCP route — the `bitrouter_tools` gateway URL
+    // tail. `None` (aggregate disabled) drops that server from every launch.
+    let mcp_route = cfg
+        .mcp
+        .aggregate
+        .enabled
+        .then(|| cfg.mcp.aggregate.route.clone());
     let initial_pane = if let Some(h) = orchestrator {
         // ── Orchestrator: the native harness TUI in a PTY pane. ──
         if worktree.is_some() {
@@ -106,6 +113,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
                 model,
                 models: &models,
                 fleet_sock: fleet_sock_path.as_deref(),
+                mcp_route: mcp_route.as_deref(),
             },
             tx.clone(),
             "orchestrator",
@@ -126,6 +134,9 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
                 remove_on_shutdown: false,
             }),
             env: crate::fleet::port_env(initial_port),
+            // The gateway servers (tools/skills) ride `session/new`, same
+            // surface as an orchestrator launch.
+            mcp_servers: gateway_acp_descriptors(&base_url, mcp_route.as_deref()),
             ..Default::default()
         };
         let session = Session::launch(&catalog, agent_id, base_repo.clone(), options)
@@ -220,6 +231,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
             catalog: &catalog,
             base_repo,
             gateway_base: base_url,
+            mcp_route,
             models,
             model: model.map(str::to_string),
             fleet_sock: fleet_sock_path,
@@ -415,22 +427,28 @@ fn attach_interactive(record_id: &str, state: &mut AppState, rt: &mut Runtime<'_
     )
     .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
     // Same overlay family as the orchestrator (synthesizes config for
-    // opencode/pi), but no MCP bridge — an attach drives one agent, it
-    // doesn't orchestrate. Synth files live under the BASE repo's
-    // .bitrouter (never the agent's worktree, where they would dirty the
-    // review diff), in a per-attach dir so attaches don't clobber the
-    // orchestrator's own synth config.
+    // opencode/pi), but no fleet bridge — an attach drives one agent, it
+    // doesn't orchestrate; the gateway servers (tools/skills) still ride
+    // along. Synth files live under the BASE repo's .bitrouter (never the
+    // agent's worktree, where they would dirty the review diff), in a
+    // per-attach dir so attaches don't clobber the orchestrator's own synth
+    // config.
     let state_dir = rt
         .spawner
         .base_repo
         .join(".bitrouter")
         .join(format!("attach-{record_id}"));
+    let gateways = crate::gateways::gateway_servers(
+        &rt.spawner.gateway_base,
+        &auth,
+        rt.spawner.mcp_route.as_deref(),
+    );
     let overlay = match h.orchestrator_overlay(
         &rt.spawner.gateway_base,
         &auth,
         None,
         &rt.spawner.models,
-        None,
+        &gateways,
         &state_dir,
     ) {
         Ok(o) => o,
@@ -475,6 +493,9 @@ struct OrchestratorCtx<'a> {
     model: Option<&'a str>,
     models: &'a [String],
     fleet_sock: Option<&'a std::path::Path>,
+    /// The aggregate MCP route (the `bitrouter_tools` gateway URL tail);
+    /// `None` when the aggregate endpoint is disabled.
+    mcp_route: Option<&'a str>,
 }
 
 /// Launch the orchestrator: the harness's interactive binary on a PTY, its
@@ -493,6 +514,7 @@ fn launch_orchestrator(
         model,
         models,
         fleet_sock,
+        mcp_route,
     } = *ctx;
     let Some(binary) = h.interactive_binary else {
         anyhow::bail!("harness '{}' has no interactive binary", h.id);
@@ -510,15 +532,12 @@ fn launch_orchestrator(
     } else {
         base_repo.join(".bitrouter").join(record_id)
     };
+    // The fleet bridge plus the gateway servers (tools/skills) — the
+    // orchestrator's full injected MCP surface.
+    let mut mcp_servers = vec![fleet_mcp_server()];
+    mcp_servers.extend(crate::gateways::gateway_servers(base_url, &auth, mcp_route));
     let overlay = h
-        .orchestrator_overlay(
-            base_url,
-            &auth,
-            model,
-            models,
-            Some(&fleet_mcp_server()),
-            &state_dir,
-        )
+        .orchestrator_overlay(base_url, &auth, model, models, &mcp_servers, &state_dir)
         .with_context(|| format!("assembling the '{}' orchestrator overlay", h.id))?;
     let args = overlay.args.clone();
     // The fleet-socket path rides the PTY env: the harness inherits it, and
@@ -644,13 +663,33 @@ async fn bridge_write(writer: &mut tokio::net::unix::OwnedWriteHalf, msg: &crate
 fn fleet_mcp_server() -> crate::harness::McpServer {
     crate::harness::McpServer {
         name: "bitrouter_fleet".to_string(),
-        command: std::env::current_exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "bitrouter".to_string()),
-        args: ["mcp", "serve", "--backend", "fleet"]
-            .map(str::to_string)
-            .to_vec(),
+        transport: crate::harness::McpTransport::Stdio {
+            command: std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "bitrouter".to_string()),
+            args: ["mcp", "serve", "--backend", "fleet"]
+                .map(str::to_string)
+                .to_vec(),
+        },
     }
+}
+
+/// The gateway servers (tools/skills) as ACP `session/new` descriptors, for
+/// the TUI's own ACP launches (the primary-agent pane and `Effect::SpawnAgent`
+/// subagents). Auth resolves by the same precedence as the routing overlay.
+fn gateway_acp_descriptors(
+    base_url: &str,
+    mcp_route: Option<&str>,
+) -> Vec<agent_client_protocol::schema::v1::McpServer> {
+    let auth = crate::harness::resolve_gateway_auth(
+        std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
+        false,
+    )
+    .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    crate::gateways::gateway_servers(base_url, &auth, mcp_route)
+        .iter()
+        .map(crate::gateways::to_acp)
+        .collect()
 }
 
 /// Best-effort fetch of the daemon's advertised model ids (`/v1/models`) —
@@ -805,6 +844,10 @@ struct Spawner<'a> {
     /// The daemon gateway base URL (derived from `server.listen`) — routing
     /// overlay for interactive attaches.
     gateway_base: String,
+    /// The daemon's aggregate MCP route (`mcp.aggregate.route` when enabled)
+    /// — the `bitrouter_tools` gateway URL tail for every launch; `None`
+    /// drops that server.
+    mcp_route: Option<String>,
     /// The daemon's advertised model ids at startup (may be empty) — fills
     /// synthesized provider catalogs on attach.
     models: Vec<String>,
@@ -1413,6 +1456,12 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     _ => None,
                 },
                 env: crate::fleet::port_env(port),
+                // The gateway servers (tools/skills) ride `session/new` —
+                // subagents get the same surface as the orchestrator.
+                mcp_servers: gateway_acp_descriptors(
+                    &rt.spawner.gateway_base,
+                    rt.spawner.mcp_route.as_deref(),
+                ),
                 ..Default::default()
             };
             let catalog = (*rt.spawner.catalog).clone();
@@ -1464,6 +1513,7 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
                     model: model.as_deref(),
                     models: &rt.spawner.models,
                     fleet_sock: rt.spawner.fleet_sock.as_deref(),
+                    mcp_route: rt.spawner.mcp_route.as_deref(),
                 },
                 rt.spawner.tx.clone(),
                 &record_id,
@@ -1856,8 +1906,13 @@ mod tests {
     fn fleet_mcp_server_spec_names_the_fleet_backend() {
         let mcp = super::fleet_mcp_server();
         assert_eq!(mcp.name, "bitrouter_fleet");
-        assert_eq!(mcp.args, vec!["mcp", "serve", "--backend", "fleet"]);
-        assert!(!mcp.command.is_empty());
+        match mcp.transport {
+            crate::harness::McpTransport::Stdio { command, args } => {
+                assert_eq!(args, vec!["mcp", "serve", "--backend", "fleet"]);
+                assert!(!command.is_empty());
+            }
+            other => panic!("fleet bridge must be stdio, got {other:?}"),
+        }
     }
 
     #[tokio::test]

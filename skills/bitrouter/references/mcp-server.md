@@ -18,7 +18,7 @@ Starts the origin MCP server.
 | Flag | Default | Description |
 |---|---|---|
 | `--transport` | `stdio` | `stdio` or `http` |
-| `--backend` | *(derived)* | `local`, `cloud`, or `fleet`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon), the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`), `fleet_cost`, the routing-preview tool (`route_preview`), the skills tools (`skills_search`/`skills_get`), and the human-bridge tools (`notify_human`/`request_attach`/`request_review`). It is **stdio-only** |
+| `--backend` | *(derived)* | `local`, `cloud`, `fleet`, or `skills`. Omit to auto-derive: `stdio`→`local`, `http`→`cloud`. `fleet` is the **orchestrator profile** — the *union* of the completion tools (`complete`/`list_models`/`status`, routed to the local daemon), the subagent spawn/manage tools over the ACP substrate (see `references/orchestration.md`), `fleet_cost`, the routing-preview tool (`route_preview`), and the human-bridge tools (`notify_human`/`request_attach`/`request_review`). `skills` is the **origin AgentSkills server** — just `skills_search`/`skills_get` over the installed-skills root of the current directory; it is the `bitrouter_skills` server the TUI injects into every launched harness. Both `fleet` and `skills` are **stdio-only** |
 | `--allow-writes` | off | (`fleet` only) grant the orchestrator write autonomy: `apply_subagent`/`merge_subagent` may integrate into the base repo. Off = writes are human-gated |
 | `--budget-usd` | *(unlimited)* | (`fleet` only) spend ceiling in USD. `spawn_subagent`/`prompt_subagent` refuse once **today's machine-wide spend** reaches it (a circuit breaker, TUI_SPEC §5); `fleet_cost` reports `budget_usd`/`remaining_usd`. Not scoped to one session — other spend today counts; a new UTC day is the fresh window. Ignored (with a note) off `--backend fleet` |
 | `--local-url` | `http://127.0.0.1:4356` | Root URL of the local BitRouter daemon |
@@ -45,6 +45,9 @@ bitrouter mcp serve --transport http --backend local --local-url http://127.0.0.
 bitrouter mcp serve --backend fleet            # writes human-gated
 bitrouter mcp serve --backend fleet --allow-writes
 bitrouter mcp serve --backend fleet --budget-usd 20   # refuse spawns past $20 today
+
+# stdio — origin AgentSkills server (skills_search/skills_get over ./skills installs)
+bitrouter mcp serve --backend skills
 ```
 
 ### `bitrouter mcp install`

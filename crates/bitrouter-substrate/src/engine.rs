@@ -98,6 +98,12 @@ pub struct LaunchOptions {
     /// cooperatively (`session/cancel`); if it does not comply within
     /// `TURN_CANCEL_GRACE` (3s) the turn errors.
     pub turn_timeout: Option<Duration>,
+    /// MCP servers passed to the agent in `session/new` (`mcpServers`) — the
+    /// caller's tool surface for the session, e.g. the TUI's gateway servers.
+    /// Only the immediate-open launch path consumes this; a deferred launch
+    /// (`launch_deferred`) relays the **manager's** descriptors via
+    /// [`Session::open`] instead.
+    pub mcp_servers: Vec<McpServer>,
 }
 
 impl Default for LaunchOptions {
@@ -108,6 +114,7 @@ impl Default for LaunchOptions {
             env: Vec::new(),
             transcript: true,
             turn_timeout: None,
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -130,6 +137,9 @@ struct BuildArgs {
     env: Vec<(String, String)>,
     transcript: bool,
     turn_timeout: Option<Duration>,
+    /// `mcpServers` for the immediate `session/new` (unused when deferring —
+    /// [`Session::open`] then carries the manager's descriptors).
+    mcp_servers: Vec<McpServer>,
     /// Run the upstream `session/new` right away (headless/prompt path) rather
     /// than deferring to [`Session::open`] (serve path).
     open_now: bool,
@@ -196,9 +206,10 @@ impl Session {
     /// Launch a session and **open it immediately**: resolve `agent_id` in
     /// `catalog`, optionally provision a worktree, spawn the upstream
     /// connection, run `initialize` + `session/new` (cwd = worktree or
-    /// `base_repo`, no MCP servers), build the pipeline, turn queue, and
-    /// transcript, and record the session identity. Used by the headless
-    /// `prompt` path and library callers that have no manager to relay from.
+    /// `base_repo`, `mcpServers` from [`LaunchOptions::mcp_servers`]), build
+    /// the pipeline, turn queue, and transcript, and record the session
+    /// identity. Used by the headless `prompt` path and library callers that
+    /// have no manager to relay from.
     pub async fn launch(
         catalog: &ConfigAcpRoutingTable,
         agent_id: &str,
@@ -236,6 +247,7 @@ impl Session {
             env,
             transcript,
             turn_timeout,
+            mcp_servers,
         } = options;
         // ── Resolve the agent's stdio transport ────────────────────────────
         let transport = catalog
@@ -299,6 +311,7 @@ impl Session {
                     env,
                     transcript,
                     turn_timeout,
+                    mcp_servers,
                     open_now,
                 },
             )
@@ -377,6 +390,7 @@ impl Session {
             env: extra_env,
             transcript,
             turn_timeout,
+            mcp_servers,
             open_now,
         } = args;
         let AcpTransport::Stdio { command, args, env } = &transport;
@@ -409,7 +423,7 @@ impl Session {
         let wire: Arc<OnceLock<UpstreamSessionIds>> = Arc::new(OnceLock::new());
         if open_now {
             let cwd = worktree_path.clone().unwrap_or_else(|| base_repo.clone());
-            let ids = conn.new_session(cwd, Vec::new()).await?;
+            let ids = conn.new_session(cwd, mcp_servers).await?;
             state.set_acp_session_id(ids.acp_session_id.clone());
             if let Some(agent_sid) = &ids.agent_session_id {
                 state.set_agent_session_id(agent_sid.clone());
@@ -1311,6 +1325,61 @@ mod tests {
             .await
             .expect("second open is a no-op");
 
+        session.shutdown().await.expect("shutdown");
+    }
+
+    /// Immediate launch: `LaunchOptions::mcp_servers` rides the upstream
+    /// `session/new` — the same stub echoes a marker session id when the
+    /// request carried the probe server.
+    #[tokio::test]
+    async fn launch_passes_options_mcp_servers_in_session_new() {
+        use agent_client_protocol_schema::v1::{McpServer, McpServerStdio};
+
+        const RELAY_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)
+                    case "$line" in
+                      *launch-probe-server*) sid="saw-mcp";;
+                      *) sid="no-mcp";;
+                    esac
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"%s"}}\n' "$id" "$sid";;
+              esac
+            done
+        "#;
+        let cfg = bitrouter_sdk::acp::AcpAgentConfig {
+            name: "relay".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "bash".to_string(),
+                args: vec!["-c".to_string(), RELAY_STUB.to_string()],
+                env: HashMap::new(),
+            },
+        };
+        let catalog =
+            ConfigAcpRoutingTable::from_configs([("relay".to_string(), cfg)]).expect("catalog");
+        let base = tempfile::tempdir().expect("tempdir");
+
+        let session = Session::launch(
+            &catalog,
+            "relay",
+            base.path().to_path_buf(),
+            LaunchOptions {
+                mcp_servers: vec![McpServer::Stdio(McpServerStdio::new(
+                    "launch-probe-server",
+                    "probe-cmd",
+                ))],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("launch");
+        assert_eq!(
+            session.state().acp_session_id.as_deref(),
+            Some("saw-mcp"),
+            "immediate session/new must carry LaunchOptions::mcp_servers"
+        );
         session.shutdown().await.expect("shutdown");
     }
 

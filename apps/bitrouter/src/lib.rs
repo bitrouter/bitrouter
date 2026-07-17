@@ -24,6 +24,7 @@ pub mod db;
 pub mod error_report;
 pub mod fleet;
 pub mod fleet_mcp;
+pub mod gateways;
 pub mod harness;
 pub mod metering;
 pub mod onboarding;

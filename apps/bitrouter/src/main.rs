@@ -565,7 +565,8 @@ enum McpAction {
         /// `stdio` (local daemon) or `http` (cloud).
         #[arg(long, value_enum, default_value_t = McpTransport::Stdio)]
         transport: McpTransport,
-        /// `local` or `cloud`. Defaults: stdio→local, http→cloud.
+        /// `local`, `cloud`, `fleet`, or `skills`. Defaults: stdio→local,
+        /// http→cloud.
         #[arg(long, value_enum)]
         backend: Option<McpBackend>,
         /// Local daemon root.
@@ -621,6 +622,10 @@ enum McpBackend {
     /// The fleet bridge: tools that spawn/manage worktree-isolated ACP
     /// subagents for an orchestrating harness (TUI_SPEC §4). Stdio only.
     Fleet,
+    /// The origin AgentSkills server: `skills_search`/`skills_get` over the
+    /// installed-skills root (the `bitrouter_skills` gateway server every
+    /// TUI-launched harness gets). Stdio only.
+    Skills,
 }
 
 /// MCP client targeted by `bitrouter mcp install`.
@@ -1747,9 +1752,6 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                     &cfg,
                     route_socket,
                 ));
-                let skills = std::sync::Arc::new(bitrouter::skills_query::InstalledSkills::new(
-                    base_repo.clone(),
-                ));
                 // Spend circuit breaker (TUI_SPEC §5). The ceiling is enforced
                 // (in `SubstrateFleet`) and displayed (in `fleet_cost`) against
                 // the same figure — today's machine-wide spend — so both agree.
@@ -1770,6 +1772,28 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 // permission path. Off for every client that hasn't declared
                 // the capability — default escalation behavior is unchanged.
                 let escalation = bitrouter_mcp::capabilities::escalation::EscalationState::new();
+                // Gateway descriptors for every spawned subagent's
+                // `session/new`: the aggregate MCP endpoint (when enabled)
+                // and the skills origin server — the same pair the
+                // orchestrator gets via config synthesis.
+                let auth = bitrouter::harness::resolve_gateway_auth(
+                    std::env::var(bitrouter::harness::BITROUTER_API_KEY_ENV).ok(),
+                    false,
+                )
+                .unwrap_or_else(|| bitrouter::harness::PLACEHOLDER_API_KEY.to_string());
+                let aggregate_route = cfg
+                    .mcp
+                    .aggregate
+                    .enabled
+                    .then(|| cfg.mcp.aggregate.route.clone());
+                let subagent_mcp: Vec<_> = bitrouter::gateways::gateway_servers(
+                    &local_url,
+                    &auth,
+                    aggregate_route.as_deref(),
+                )
+                .iter()
+                .map(bitrouter::gateways::to_acp)
+                .collect();
                 // One `SubstrateFleet` backs both the `Fleet` and `HumanBridge`
                 // ports (the human bridge rides the same fleet socket).
                 let fleet = std::sync::Arc::new(
@@ -1780,15 +1804,18 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                         allow_writes,
                         budget,
                         Some(escalation.clone()),
+                        subagent_mcp,
                     )
                     .await,
                 );
                 // The orchestrator profile is the union — completion + fleet +
                 // cost + the tier-2 introspection/escalation ports, stdio-only.
                 // Completion routes to the same local daemon the TUI runs; cost
-                // reads the shared metering database; routing/skills read the
-                // config + installed skills; the human bridge rides the fleet
-                // socket.
+                // reads the shared metering database; routing reads the config;
+                // the human bridge rides the fleet socket. Skills are NOT wired
+                // here: they ship as the separate `bitrouter_skills` server
+                // (`--backend skills`) every harness gets, so wiring them into
+                // this bridge too would list the tools twice.
                 let server = bitrouter_mcp::server::BitrouterMcp::builder()
                     .completion_local(&local_url)
                     .fleet(fleet.clone())
@@ -1798,7 +1825,6 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                         budget_micro_usd,
                     )))
                     .routing(routing)
-                    .skills(skills)
                     // Source the cap value from the app so the instructions
                     // quote the real cap (no cross-crate magic number).
                     .subagent_cap(bitrouter::fleet_mcp::MAX_CONCURRENT_SUBAGENTS)
@@ -1815,14 +1841,33 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             for flag in non_fleet_flag_notes(allow_writes, budget_usd) {
                 eprintln!("note: {flag} only applies to --backend fleet; ignored");
             }
+            // The skills backend is the origin AgentSkills server
+            // (`skills_search`/`skills_get` over the installed-skills root) —
+            // the `bitrouter_skills` gateway server harnesses launch as a
+            // subprocess. Stdio-only, mirroring the fleet bridge's transport
+            // posture.
+            if backend == Some(McpBackend::Skills) {
+                if matches!(transport, McpTransport::Http) {
+                    anyhow::bail!(
+                        "the skills backend is stdio-only (harnesses launch it as a subprocess)"
+                    );
+                }
+                let base_repo = std::env::current_dir().context("resolving current directory")?;
+                let server = bitrouter_mcp::server::BitrouterMcp::builder()
+                    .skills(std::sync::Arc::new(
+                        bitrouter::skills_query::InstalledSkills::new(base_repo),
+                    ))
+                    .build();
+                return bitrouter_mcp::server::serve_stdio(server, None).await;
+            }
             let transport = bitrouter_mcp::Transport::from(transport);
-            // Fleet was handled and returned above. Local/Cloud map straight
-            // across; an unset backend takes the transport default
-            // (stdio→local, http→cloud).
+            // Fleet and skills were handled and returned above. Local/Cloud
+            // map straight across; an unset backend takes the transport
+            // default (stdio→local, http→cloud).
             let backend = match backend {
                 Some(McpBackend::Local) => bitrouter_mcp::BackendKind::Local,
                 Some(McpBackend::Cloud) => bitrouter_mcp::BackendKind::Cloud,
-                Some(McpBackend::Fleet) | None => match transport {
+                Some(McpBackend::Fleet) | Some(McpBackend::Skills) | None => match transport {
                     bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
                     bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
                 },
