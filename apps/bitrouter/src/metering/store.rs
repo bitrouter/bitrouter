@@ -130,7 +130,9 @@ pub struct ReconciliationRecord {
 impl MeteringUsageRecord {
     pub fn apply_price_overrides(records: &mut [Self], prices: &[UsagePriceOverride]) {
         for record in records {
-            if record.charge_status == ChargeStatus::Computed {
+            if record.charge_status == ChargeStatus::Computed
+                || record.reconciliation_status != ReconciliationStatus::NotApplicable
+            {
                 continue;
             }
             let Some(price) = prices.iter().find(|price| {

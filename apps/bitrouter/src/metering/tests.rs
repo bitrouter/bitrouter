@@ -586,6 +586,37 @@ fn usage_price_override_imputes_missing_charges() {
 }
 
 #[test]
+fn price_override_preserves_authoritative_reconciliation_records() -> Result<()> {
+    let mut records = [
+        super::ReconciliationStatus::Pending,
+        super::ReconciliationStatus::NotCharged,
+        super::ReconciliationStatus::Unknown,
+    ]
+    .into_iter()
+    .map(|reconciliation_status| super::MeteringUsageRecord {
+        provider_id: "mock-provider".to_string(),
+        model_id: "mock-weak".to_string(),
+        prompt_tokens: 12,
+        completion_tokens: 5,
+        charge_status: if reconciliation_status == super::ReconciliationStatus::NotCharged {
+            super::ChargeStatus::NotCharged
+        } else {
+            super::ChargeStatus::Unknown
+        },
+        reconciliation_status,
+        ..Default::default()
+    })
+    .collect::<Vec<_>>();
+    let original = records.clone();
+    let price = super::UsagePriceOverride::parse("mock-provider:mock-weak=1,1")?;
+
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+
+    assert_eq!(records, original);
+    Ok(())
+}
+
+#[test]
 fn four_rate_override_prices_cache_buckets() {
     let mut records = vec![super::MeteringUsageRecord {
         provider_id: "anthropic".to_string(),
