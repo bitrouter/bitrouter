@@ -775,6 +775,12 @@ fn has_bearer(value: Option<&str>) -> bool {
 /// local backend). Binding the unauthenticated local backend to a public
 /// address would expose the BYOK daemon — running on the user's own provider
 /// keys — to the whole network.
+///
+/// Loopback means "this machine", not "this user": on a multi-user host any
+/// local user can reach the bound port and spend through the daemon's keys.
+/// That is the same trust boundary as the daemon's own `127.0.0.1:4356`
+/// listener, so it is accepted here deliberately — "loopback" is being relied
+/// on as *trusted*, not as *mine*.
 pub(crate) fn ensure_loopback_bind(bind: &str) -> anyhow::Result<()> {
     use std::net::ToSocketAddrs;
     let addrs: Vec<_> = bind
