@@ -18,7 +18,7 @@ use self::pane::{Ownership, PaneKind, PaneState};
 pub mod overlay;
 use self::overlay::{DEFAULT_LEADER, Mode, PaletteState, PickerState};
 pub mod layout;
-use self::layout::{ClickZone, DetailLayout};
+use self::layout::{ClickZone, DetailLayout, PtyArea};
 pub mod events;
 pub mod keys;
 use self::events::reduce_inner;
@@ -129,10 +129,11 @@ pub struct AppState {
     pub bootstrap_decision: Option<bool>,
     /// The spawn awaiting the bootstrap decision (present in `Mode::Confirm`).
     pub confirm_agent: Option<String>,
-    /// Each PTY pane's inner size `(cols, rows)` as last drawn — the loop
-    /// resizes the emulator + PTY (SIGWINCH) when one changes. Rebuilt every
+    /// Each PTY pane's drawn content rectangle — the loop resizes the emulator
+    /// and PTY (SIGWINCH) when one changes, and hit-tests the pointer against
+    /// it to forward mouse events to a mouse-reporting inner app. Rebuilt every
     /// frame by the renderer.
-    pub pty_areas: Vec<(String, (u16, u16))>,
+    pub pty_areas: Vec<PtyArea>,
     /// Clickable regions recorded by the renderer for the current frame (mouse
     /// hit-test targets: sidebar toggle buttons + roster rows). Rebuilt every
     /// frame, like [`AppState::pty_areas`].

@@ -15,7 +15,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bitrouter_substrate::engine::Session;
 use bitrouter_substrate::translate::PermissionOutcome;
-use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent};
+use crossterm::event::{
+    Event as CtEvent, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -1008,9 +1010,9 @@ async fn event_loop(
         }
         // Resize recovery (§9): the drawn pane rect is authoritative — resize
         // the emulator and SIGWINCH the child whenever it changes.
-        for (rid, (cols, rows)) in &state.pty_areas {
-            if let Some(pane) = rt.ptys.get_mut(rid) {
-                pane.resize(*cols, *rows);
+        for area in &state.pty_areas {
+            if let Some(pane) = rt.ptys.get_mut(&area.record_id) {
+                pane.resize(area.cols, area.rows);
             }
         }
         if state.should_quit {
@@ -1033,19 +1035,9 @@ async fn event_loop(
                 Some(Ok(CtEvent::Paste(text))) => Some(AppEvent::Paste(text)),
                 // Wheel scroll pages the focused pane's scrollback; a left
                 // click hit-tests the frame's recorded zones (reducer-side).
-                Some(Ok(CtEvent::Mouse(m))) => match m.kind {
-                    crossterm::event::MouseEventKind::ScrollUp =>
-                        Some(AppEvent::Scroll { up: true }),
-                    crossterm::event::MouseEventKind::ScrollDown =>
-                        Some(AppEvent::Scroll { up: false }),
-                    crossterm::event::MouseEventKind::Down(
-                        crossterm::event::MouseButton::Left,
-                    ) => Some(AppEvent::Click {
-                        col: m.column,
-                        row: m.row,
-                    }),
-                    _ => None,
-                },
+                // Over a mouse-reporting inner app the pointer is forwarded to
+                // it verbatim instead (loop-side, like OSC-52 passthrough).
+                Some(Ok(CtEvent::Mouse(m))) => forward_or_map_mouse(&m, &state, &mut rt),
                 // Focus drives away-notifications; regaining it marks the
                 // shown panes seen (the done → idle decay).
                 Some(Ok(CtEvent::FocusGained)) => Some(AppEvent::Focus(true)),
@@ -1109,6 +1101,39 @@ async fn event_loop(
             handles.retain(|h| !h.is_finished());
             !handles.is_empty()
         });
+    }
+}
+
+/// Route a mouse event. When the pointer is over a PTY pane whose inner app
+/// has enabled mouse reporting, encode the event pane-relative and write it to
+/// the child (a loop-side side effect, like OSC-52 passthrough), consuming it
+/// — the app scrolls/selects/clicks natively. Otherwise map it to the
+/// manager's own pointer semantics (`Scroll`/`Click`) for the reducer.
+fn forward_or_map_mouse(
+    m: &MouseEvent,
+    state: &AppState,
+    rt: &mut Runtime<'_>,
+) -> Option<AppEvent> {
+    if let Some(area) = state.pty_areas.iter().find(|a| a.contains(m.column, m.row))
+        && let Some(pane) = rt.ptys.get_mut(&area.record_id)
+        && pane.backend.mouse_enabled()
+    {
+        // Pane-relative, 1-based — xterm's cell origin is (1, 1).
+        let col = m.column - area.x + 1;
+        let row = m.row - area.y + 1;
+        if let Some(bytes) = pane.backend.encode_mouse(m.kind, col, row, m.modifiers) {
+            pane.write_input(&bytes);
+        }
+        return None; // forwarded to the child; the next draw re-renders
+    }
+    match m.kind {
+        MouseEventKind::ScrollUp => Some(AppEvent::Scroll { up: true }),
+        MouseEventKind::ScrollDown => Some(AppEvent::Scroll { up: false }),
+        MouseEventKind::Down(MouseButton::Left) => Some(AppEvent::Click {
+            col: m.column,
+            row: m.row,
+        }),
+        _ => None,
     }
 }
 

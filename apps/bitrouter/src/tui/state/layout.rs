@@ -108,3 +108,45 @@ impl ClickZone {
         col >= self.x && col < self.x + self.w && row >= self.y && row < self.y + self.h
     }
 }
+
+/// A PTY pane's drawn **content** rectangle (inside its border), recorded by
+/// the renderer each frame. Drives two loop-side jobs: resizing the emulator +
+/// PTY (SIGWINCH) when the layout changes, and hit-testing the pointer so
+/// mouse events over a mouse-reporting inner app forward to it (pane-relative).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtyArea {
+    pub record_id: String,
+    pub x: u16,
+    pub y: u16,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl PtyArea {
+    /// Whether cell `(col, row)` falls inside the content area.
+    pub fn contains(&self, col: u16, row: u16) -> bool {
+        col >= self.x && col < self.x + self.cols && row >= self.y && row < self.y + self.rows
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pty_area_contains_is_half_open() {
+        // Content area at (2,1), 4 cols × 3 rows → cols [2,6), rows [1,4).
+        let area = PtyArea {
+            record_id: "rec".into(),
+            x: 2,
+            y: 1,
+            cols: 4,
+            rows: 3,
+        };
+        assert!(area.contains(2, 1), "top-left inclusive");
+        assert!(area.contains(5, 3), "bottom-right inclusive");
+        assert!(!area.contains(6, 3), "one past the last column is outside");
+        assert!(!area.contains(5, 4), "one past the last row is outside");
+        assert!(!area.contains(1, 1), "the border column is outside");
+    }
+}

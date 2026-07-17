@@ -595,12 +595,16 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
         if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
             match pane.kind {
                 crate::tui::state::pane::PaneKind::Pty => {
-                    // Record the drawn inner size so the loop can resize the
-                    // emulator + PTY (SIGWINCH) when the layout changes.
-                    pty_areas.push((
-                        rid.clone(),
-                        (rect.width.saturating_sub(2), rect.height.saturating_sub(2)),
-                    ));
+                    // Record the drawn content rect (inside the border) so the
+                    // loop can resize the emulator + PTY (SIGWINCH) on layout
+                    // changes and hit-test the pointer for mouse forwarding.
+                    pty_areas.push(crate::tui::state::layout::PtyArea {
+                        record_id: rid.clone(),
+                        x: rect.x.saturating_add(1),
+                        y: rect.y.saturating_add(1),
+                        cols: rect.width.saturating_sub(2),
+                        rows: rect.height.saturating_sub(2),
+                    });
                     let view = pty.iter().find(|v| &v.record_id == rid);
                     render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
                 }
@@ -1756,9 +1760,13 @@ mod tests {
             text.contains("keys go to the orchestrator"),
             "passthrough hint replaces the prompt line"
         );
-        let (rid, (cols, rows)) = st.pty_areas.first().expect("drawn size recorded");
-        assert_eq!(rid, "orchestrator");
-        assert!(*cols > 0 && *rows > 0);
+        let area = st.pty_areas.first().expect("drawn size recorded");
+        assert_eq!(area.record_id, "orchestrator");
+        assert!(area.cols > 0 && area.rows > 0);
+        assert!(
+            area.x > 0 && area.y > 0,
+            "content origin sits inside the border"
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Line as TermLine;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as VtColor, NamedColor, Processor, Rgb};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line as TuiLine, Span};
 use termwiz::escape::csi::KittyKeyboardFlags;
@@ -69,6 +69,21 @@ pub trait TerminalBackend: Send {
     /// there is no scrollback to page, so the host forwards the scroll gesture
     /// as keys instead of paging its own (empty) history.
     fn alt_screen(&self) -> bool;
+    /// Whether the inner app has enabled mouse reporting (any of the DECSET
+    /// click/drag/motion modes). When it has, the host forwards real pointer
+    /// events (`encode_mouse`) instead of synthesizing scroll keys.
+    fn mouse_enabled(&self) -> bool;
+    /// Encode a pointer event for the inner app in the protocol it negotiated
+    /// (SGR 1006 when set, else legacy X10), at **pane-relative 1-based**
+    /// `(col, row)`. `None` when the app isn't tracking this event (e.g. bare
+    /// motion without any-motion mode) — the caller then does nothing.
+    fn encode_mouse(
+        &self,
+        kind: MouseEventKind,
+        col: u16,
+        row: u16,
+        mods: KeyModifiers,
+    ) -> Option<Vec<u8>>;
 }
 
 /// Wheel notch → lines scrolled (a page is the pane height instead).
@@ -257,6 +272,82 @@ impl TerminalBackend for AlacrittyBackend {
 
     fn alt_screen(&self) -> bool {
         self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    fn mouse_enabled(&self) -> bool {
+        self.term.mode().intersects(TermMode::MOUSE_MODE)
+    }
+
+    fn encode_mouse(
+        &self,
+        kind: MouseEventKind,
+        col: u16,
+        row: u16,
+        mods: KeyModifiers,
+    ) -> Option<Vec<u8>> {
+        let mode = self.term.mode();
+        if !mode.intersects(TermMode::MOUSE_MODE) {
+            return None; // the inner app isn't tracking the mouse
+        }
+        // Button base (low 2 bits), whether this is a release, and whether it
+        // carries the motion flag. Events the current tracking mode doesn't
+        // report are dropped — sending them would be noise the app didn't ask
+        // for (bare motion only under any-motion; drag only under drag/motion).
+        let (mut cb, release, motion) = match kind {
+            MouseEventKind::Down(b) => (button_code(b), false, false),
+            MouseEventKind::Up(b) => (button_code(b), true, false),
+            MouseEventKind::Drag(b) => {
+                if !mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) {
+                    return None;
+                }
+                (button_code(b), false, true)
+            }
+            MouseEventKind::Moved => {
+                if !mode.contains(TermMode::MOUSE_MOTION) {
+                    return None;
+                }
+                (3, false, true) // 3 = no button held
+            }
+            MouseEventKind::ScrollUp => (64, false, false),
+            MouseEventKind::ScrollDown => (65, false, false),
+            MouseEventKind::ScrollLeft => (66, false, false),
+            MouseEventKind::ScrollRight => (67, false, false),
+        };
+        if motion {
+            cb += 32;
+        }
+        // xterm modifier bits: Shift 4, Meta/Alt 8, Control 16.
+        if mods.contains(KeyModifiers::SHIFT) {
+            cb += 4;
+        }
+        if mods.contains(KeyModifiers::ALT) {
+            cb += 8;
+        }
+        if mods.contains(KeyModifiers::CONTROL) {
+            cb += 16;
+        }
+
+        if mode.contains(TermMode::SGR_MOUSE) {
+            // ESC [ < Cb ; Px ; Py (M press | m release) — no coordinate cap.
+            let suffix = if release { 'm' } else { 'M' };
+            Some(format!("\x1b[<{cb};{col};{row}{suffix}").into_bytes())
+        } else {
+            // Legacy X10: ESC [ M, then (Cb, Px, Py) each +32 as bytes. A
+            // release reports the "no button" code (3), keeping modifier/motion
+            // bits; coordinates are capped at 223 (255 − 32) by the wire format.
+            let cb = if release { (cb & !0b11) | 0b11 } else { cb };
+            let byte = |v: u16| (v.min(223) as u8).saturating_add(32);
+            Some(vec![0x1b, b'[', b'M', byte(cb), byte(col), byte(row)])
+        }
+    }
+}
+
+/// SGR/X10 base button code (low 2 bits) for a crossterm button.
+fn button_code(b: MouseButton) -> u16 {
+    match b {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
     }
 }
 
@@ -595,6 +686,125 @@ mod tests {
         assert!(b.alt_screen(), "alt screen negotiated");
         b.feed(b"\x1b[?1049l"); // leave it
         assert!(!b.alt_screen(), "back to the main screen");
+    }
+
+    #[test]
+    fn mouse_enabled_tracks_reporting_modes() {
+        let mut b = AlacrittyBackend::new(20, 4);
+        assert!(!b.mouse_enabled(), "off until negotiated");
+        b.feed(b"\x1b[?1000h"); // click tracking
+        assert!(b.mouse_enabled());
+        b.feed(b"\x1b[?1000l");
+        assert!(!b.mouse_enabled(), "cleared when the app disables it");
+    }
+
+    #[test]
+    fn sgr_mouse_encodes_wheel_click_and_modifiers() {
+        let mut b = AlacrittyBackend::new(40, 10);
+        assert_eq!(
+            b.encode_mouse(MouseEventKind::ScrollUp, 5, 3, KeyModifiers::NONE),
+            None,
+            "nothing to encode until the app tracks the mouse"
+        );
+        // claude's set: any-motion tracking + SGR encoding.
+        b.feed(b"\x1b[?1003h\x1b[?1006h");
+        assert_eq!(
+            b.encode_mouse(MouseEventKind::ScrollUp, 5, 3, KeyModifiers::NONE),
+            Some(b"\x1b[<64;5;3M".to_vec()),
+            "wheel up is button 64 at pane-relative coords"
+        );
+        assert_eq!(
+            b.encode_mouse(MouseEventKind::ScrollDown, 5, 3, KeyModifiers::NONE),
+            Some(b"\x1b[<65;5;3M".to_vec())
+        );
+        assert_eq!(
+            b.encode_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                1,
+                1,
+                KeyModifiers::NONE
+            ),
+            Some(b"\x1b[<0;1;1M".to_vec()),
+            "press ends in M"
+        );
+        assert_eq!(
+            b.encode_mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                1,
+                1,
+                KeyModifiers::NONE
+            ),
+            Some(b"\x1b[<0;1;1m".to_vec()),
+            "release ends in m"
+        );
+        assert_eq!(
+            b.encode_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                2,
+                2,
+                KeyModifiers::CONTROL
+            ),
+            Some(b"\x1b[<16;2;2M".to_vec()),
+            "Ctrl adds 16"
+        );
+        assert_eq!(
+            b.encode_mouse(MouseEventKind::Moved, 4, 4, KeyModifiers::NONE),
+            Some(b"\x1b[<35;4;4M".to_vec()),
+            "bare motion is no-button (3) + motion flag (32)"
+        );
+    }
+
+    #[test]
+    fn mouse_events_gate_on_the_negotiated_tracking_mode() {
+        let mut b = AlacrittyBackend::new(40, 10);
+        b.feed(b"\x1b[?1000h\x1b[?1006h"); // click-only + SGR
+        assert_eq!(
+            b.encode_mouse(MouseEventKind::Moved, 3, 3, KeyModifiers::NONE),
+            None,
+            "no bare motion under click-only tracking"
+        );
+        assert_eq!(
+            b.encode_mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                3,
+                3,
+                KeyModifiers::NONE
+            ),
+            None,
+            "no drag under click-only tracking"
+        );
+        b.feed(b"\x1b[?1002h"); // enable drag tracking
+        assert_eq!(
+            b.encode_mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                3,
+                3,
+                KeyModifiers::NONE
+            ),
+            Some(b"\x1b[<32;3;3M".to_vec()),
+            "drag now reports button 0 + motion flag 32"
+        );
+    }
+
+    #[test]
+    fn legacy_mouse_encodes_without_sgr() {
+        let mut b = AlacrittyBackend::new(40, 10);
+        b.feed(b"\x1b[?1000h"); // click tracking, no SGR
+        // ESC [ M then (Cb, Px, Py) each +32: wheel-up 64→96, (1,1)→(33,33).
+        assert_eq!(
+            b.encode_mouse(MouseEventKind::ScrollUp, 1, 1, KeyModifiers::NONE),
+            Some(vec![0x1b, b'[', b'M', 96, 33, 33])
+        );
+        // A release reports the no-button code 3 → 3+32 = 35.
+        assert_eq!(
+            b.encode_mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                1,
+                1,
+                KeyModifiers::NONE
+            ),
+            Some(vec![0x1b, b'[', b'M', 35, 33, 33])
+        );
     }
 
     #[test]
