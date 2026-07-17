@@ -440,6 +440,18 @@ enum WorkflowStateAction {
         #[arg(long)]
         until: Option<String>,
     },
+    /// Replay persisted provider reliability state into a deterministic JSON report.
+    ReliabilityReport {
+        /// Database URL for the daemon policy DB.
+        #[arg(long)]
+        database_url: String,
+        /// Frozen BitRouter config that defines the reliability thresholds.
+        #[arg(long)]
+        config: PathBuf,
+        /// Output JSON report path.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Reconcile selected metering rows against request-scoped receipts.
     ReconcileMetering {
         /// Database URL for the daemon metering DB.
@@ -1311,6 +1323,36 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             println!(
                 "✓ wrote {} metering usage records to {}",
                 records.len(),
+                output.display()
+            );
+            Ok(())
+        }
+        WorkflowStateAction::ReliabilityReport {
+            database_url,
+            config,
+            output,
+        } => {
+            use bitrouter::adequacy::report::ReliabilityReport;
+            use bitrouter::adequacy::store::AdequacyStore;
+
+            let config_document = bitrouter_sdk::config::load(&config)
+                .await
+                .with_context(|| format!("load reliability config {}", config.display()))?;
+            let db = bitrouter::db::connect(&database_url)
+                .await
+                .with_context(|| format!("connect reliability database {database_url}"))?;
+            let rows = AdequacyStore::new(db)
+                .load_reliability_events()
+                .await
+                .with_context(|| format!("load reliability events from {database_url}"))?;
+            let report = ReliabilityReport::build(&config_document.policy_table.adequacy, &rows)
+                .context("replay provider reliability events")?;
+            report
+                .write(&output)
+                .with_context(|| format!("write reliability report {}", output.display()))?;
+            println!(
+                "✓ wrote {} reliability events to {}",
+                report.event_count,
                 output.display()
             );
             Ok(())
@@ -3059,6 +3101,40 @@ mod tests {
                 action: PolicyAction::Evolve { apply: true, .. }
             }
         ));
+    }
+
+    #[test]
+    fn workflow_state_reliability_report_flags_parse() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "reliability-report",
+            "--database-url",
+            "sqlite:///tmp/bitrouter.db",
+            "--config",
+            "/tmp/bitrouter.yaml",
+            "--output",
+            "/tmp/reliability.json",
+        ])
+        .expect("parse reliability report");
+
+        match cli.command {
+            Command::WorkflowState {
+                action:
+                    WorkflowStateAction::ReliabilityReport {
+                        database_url,
+                        config,
+                        output,
+                    },
+            } => {
+                assert_eq!(database_url, "sqlite:///tmp/bitrouter.db");
+                assert_eq!(config, PathBuf::from("/tmp/bitrouter.yaml"));
+                assert_eq!(output, PathBuf::from("/tmp/reliability.json"));
+            }
+            _ => panic!("expected reliability report"),
+        }
     }
 
     #[tokio::test]

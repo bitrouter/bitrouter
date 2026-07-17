@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::routing::post;
 use axum_test::TestServer;
+use bitrouter::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
+use bitrouter::adequacy::store::AdequacyStore;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
@@ -79,6 +81,80 @@ fn temp_path(name: &str) -> PathBuf {
         "bitrouter-workflow-state-{name}-{}-{unique}",
         std::process::id()
     ))
+}
+
+#[tokio::test]
+async fn reliability_report_cli_replays_persisted_events_without_mutating_database() {
+    let root = temp_path("reliability-report");
+    std::fs::create_dir_all(&root).unwrap();
+    let database_path = root.join("bitrouter.db");
+    let database_url = format!("sqlite://{}", database_path.display());
+    let config_path = root.join("bitrouter.yaml");
+    let first_output = root.join("reliability-first.json");
+    let second_output = root.join("reliability-second.json");
+    std::fs::write(
+        &config_path,
+        r#"policy_table:
+  adequacy:
+    enabled: true
+    reliability_window_size: 23
+    reliability_consecutive_failures: 2
+    reliability_error_rate_percent: 35
+    reliability_cooldown_secs: 300
+"#,
+    )
+    .unwrap();
+    let db = bitrouter::db::connect(&database_url).await.unwrap();
+    bitrouter::db::run_migrations(&db).await.unwrap();
+    let store = AdequacyStore::new(db);
+    store
+        .append_reliability_event(&ReliabilityEvent {
+            request_id: "request-1".to_string(),
+            route_key: "bitrouter:economy-model".to_string(),
+            endpoint_key: ReliabilityKey {
+                provider: "bitrouter".to_string(),
+                model: "economy-model".to_string(),
+                credential_class: "default:oauth".to_string(),
+                endpoint_scope: "api.example.test:443".to_string(),
+                protocol: "responses".to_string(),
+            },
+            observation: ReliabilityObservation::TransientFailure,
+            half_open_probe: false,
+            observed_at_unix: 100,
+        })
+        .await
+        .unwrap();
+
+    for output_path in [&first_output, &second_output] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+            .args([
+                "workflow-state",
+                "reliability-report",
+                "--database-url",
+                &database_url,
+                "--config",
+                config_path.to_str().unwrap(),
+                "--output",
+                output_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "reliability report failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let first = std::fs::read(&first_output).unwrap();
+    let second = std::fs::read(&second_output).unwrap();
+    assert_eq!(first, second);
+    let report: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(report["event_count"], 1);
+    assert_eq!(report["events"][0]["request_id"], "request-1");
+    assert_eq!(store.load_reliability_events().await.unwrap().len(), 1);
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 fn computed_usage(

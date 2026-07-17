@@ -27,6 +27,7 @@
 mod eval;
 pub mod observer;
 pub mod reliability;
+pub mod report;
 pub mod settlement;
 pub mod store;
 

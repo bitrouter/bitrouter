@@ -55,6 +55,22 @@ Each new metering row retains:
 Historical rows created before this evidence schema are marked
 `legacy_unknown`. They do not become zero-cost requests during export.
 
+Provider transport reliability observations are stored separately from task
+reward and metering rows. Export their deterministically replayed circuit state
+with the same frozen config used by the daemon:
+
+```bash
+bitrouter workflow-state reliability-report \
+  --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
+  --config $HOME/.bitrouter/bitrouter.yaml \
+  --output artifacts/reliability-report.json
+```
+
+This command is read-only with respect to the database. Its JSON output is
+stable for the same ordered event log and config, includes route and endpoint
+classifications plus an event-log SHA-256, and contains no credential material,
+prompt/response content, or tool commands.
+
 ## Export an auditable usage snapshot
 
 ```bash

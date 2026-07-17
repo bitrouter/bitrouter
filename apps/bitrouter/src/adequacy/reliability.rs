@@ -4,7 +4,7 @@ use std::sync::{Mutex, PoisonError};
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReliabilityKey {
     pub provider: String,
     pub model: String,
@@ -37,19 +37,25 @@ pub enum RoutePermit {
     Open,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CircuitPhase {
     Closed,
     Open,
     HalfOpen,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReliabilitySnapshot {
     pub phase: CircuitPhase,
     pub window_size: usize,
     pub failure_count: usize,
     pub consecutive_failures: u32,
+}
+
+pub struct ReliabilitySnapshots {
+    pub routes: Vec<(String, ReliabilitySnapshot)>,
+    pub endpoints: Vec<(ReliabilityKey, ReliabilitySnapshot)>,
 }
 
 pub struct ProviderReliabilityLedger {
@@ -221,6 +227,23 @@ impl ProviderReliabilityLedger {
     pub fn endpoint_snapshot(&self, endpoint_key: &ReliabilityKey) -> Option<ReliabilitySnapshot> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.endpoints.get(endpoint_key).map(snapshot)
+    }
+
+    pub fn snapshots(&self) -> ReliabilitySnapshots {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut routes = state
+            .routes
+            .iter()
+            .map(|(route_key, entry)| (route_key.clone(), snapshot(entry)))
+            .collect::<Vec<_>>();
+        routes.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut endpoints = state
+            .endpoints
+            .iter()
+            .map(|(endpoint, entry)| (endpoint.clone(), snapshot(entry)))
+            .collect::<Vec<_>>();
+        endpoints.sort_by(|left, right| left.0.cmp(&right.0));
+        ReliabilitySnapshots { routes, endpoints }
     }
 
     fn apply_observation(
