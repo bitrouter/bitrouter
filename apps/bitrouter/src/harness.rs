@@ -12,7 +12,7 @@
 //! The crucial fact this module encodes once: **both facets route through the
 //! daemon with the same [`Routing`]**, because the interactive binary and the
 //! ACP adapter of a given harness share a config/env surface (verified against
-//! adapter source — see `SPAWN_SPEC.md` §6). So the routing knowledge that used
+//! adapter source — see `internal/SPAWN_SPEC.md` §6). So the routing knowledge that used
 //! to live in `spawn::AgentSpec` *and* would have been duplicated onto the ACP
 //! side lives here exactly once, and `launch`, `spawn`, and `agents install`
 //! all read it.
