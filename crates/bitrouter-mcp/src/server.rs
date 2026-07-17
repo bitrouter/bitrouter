@@ -736,7 +736,7 @@ impl Builder {
     }
 
     /// Compose the handler, merging each wired capability's router from
-    /// [`CAPABILITIES`].
+    /// `CAPABILITIES`.
     pub fn build(self) -> BitrouterMcp {
         let mut tool_router = ToolRouter::new();
         for spec in CAPABILITIES {
