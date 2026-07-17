@@ -1308,6 +1308,8 @@ mod hop_tests {
             api_key: "k".to_string(),
             api_protocol: ApiProtocol::ChatCompletions,
             chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
             account_label: Some("primary".to_string()),
             api_key_override: None,
             api_base_override: None,

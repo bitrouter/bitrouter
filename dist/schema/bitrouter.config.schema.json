@@ -454,7 +454,9 @@
           "$ref": "#/$defs/ModelCompatibility",
           "default": {
             "chat_completions": {
-              "token_limit_field": null
+              "token_limit_field": null,
+              "supports_store": null,
+              "supports_stream_options": null
             }
           }
         }
@@ -523,7 +525,9 @@
           "description": "Chat Completions-specific request settings.",
           "$ref": "#/$defs/ChatCompletionsCompatibility",
           "default": {
-            "token_limit_field": null
+            "token_limit_field": null,
+            "supports_store": null,
+            "supports_stream_options": null
           }
         }
       }
@@ -541,6 +545,22 @@
             {
               "type": "null"
             }
+          ],
+          "default": null
+        },
+        "supports_store": {
+          "description": "Whether this target accepts the optional `store` request field. `None`\npreserves the OpenAI-compatible default (supported).",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "supports_stream_options": {
+          "description": "Whether this target accepts `stream_options`. `None` preserves the\nOpenAI-compatible default (supported, with `include_usage` injected).\nSetting this to `false` also disables the router's usage-chunk request,\nso it is appropriate only when the target rejects the entire object.",
+          "type": [
+            "boolean",
+            "null"
           ],
           "default": null
         }

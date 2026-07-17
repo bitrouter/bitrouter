@@ -2075,7 +2075,12 @@ struct ModelCompatibility {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChatCompletionsCompatibility {
-    token_limit_field: ChatTokenLimitField,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_limit_field: Option<ChatTokenLimitField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supports_store: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supports_stream_options: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]

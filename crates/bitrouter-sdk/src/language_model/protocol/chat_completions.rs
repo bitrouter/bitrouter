@@ -19,10 +19,10 @@ use crate::language_model::protocol::{
 };
 use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
-    ApiProtocol, ChatTokenLimitField, Content, DataContent, FinishReason, GenerateResult,
-    GenerationParams, Message, Modality, Prompt, ProviderMetadata, ResponseFormat, Role,
-    RoutingTarget, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput,
-    Usage, provider_namespace, set_provider_metadata,
+    ApiProtocol, ChatStreamOptions, ChatTokenLimitField, Content, DataContent, FinishReason,
+    GenerateResult, GenerationParams, Message, Modality, Prompt, ProviderMetadata, ResponseFormat,
+    Role, RoutingTarget, Source, StreamPart, Tool, ToolChoice, ToolResultContentPart,
+    ToolResultOutput, Usage, provider_namespace, set_provider_metadata,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -84,8 +84,17 @@ pub struct ChatRequest {
     frequency_penalty: Option<f64>,
     #[serde(default)]
     stream: bool,
+    /// Whether OpenAI may retain the request and response.
+    #[serde(default)]
+    store: Option<bool>,
+    /// Whether the model may issue tool calls in parallel.
+    #[serde(default)]
+    parallel_tool_calls: Option<bool>,
+    /// Streaming response controls.
+    #[serde(default)]
+    stream_options: Option<ChatStreamOptions>,
     /// Every other field — `tool_choice`, `n`, `logit_bias`, `logprobs`,
-    /// `top_logprobs`, `user`, `stream_options`, `parallel_tool_calls`, … —
+    /// `top_logprobs`, `user`, … —
     /// survives parse/render via `extra`. v0 passed these through; v1 must too.
     /// Skipped from the published schema so the documented contract is the set
     /// of typed fields; pass-through behavior is preserved at runtime.
@@ -609,6 +618,11 @@ impl InboundAdapter for ChatCompletionsAdapter {
                 stop: parse_chat_stop(req.stop),
                 presence_penalty: req.presence_penalty,
                 frequency_penalty: req.frequency_penalty,
+                store: req.store,
+                parallel_tool_calls: req.parallel_tool_calls,
+                chat_stream_options: req.stream_options,
+                extra_protocol: Some(ApiProtocol::ChatCompletions),
+                supplemental_extra: HashMap::new(),
                 // Every remaining Chat Completions field without a typed slot —
                 // n, logit_bias, … — rides in `extra` and is splatted back on
                 // render.
@@ -820,11 +834,25 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         if let Some(fp) = prompt.params.frequency_penalty {
             req.insert("frequency_penalty".into(), fp.into());
         }
+        if let Some(store) = prompt.params.store {
+            req.insert("store".into(), store.into());
+        }
+        if let Some(parallel) = prompt.params.parallel_tool_calls {
+            req.insert("parallel_tool_calls".into(), parallel.into());
+        }
+        if let Some(options) = &prompt.params.chat_stream_options
+            && let Ok(value) = serde_json::to_value(options)
+        {
+            req.insert("stream_options".into(), value);
+        }
         // Splat the extras back into the outbound request — this is how
-        // remaining untyped fields (`parallel_tool_calls`, n, logit_bias, …)
-        // survive the round trip. Typed fields above win over any same-named
-        // extra.
-        for (k, v) in &prompt.params.extra {
+        // remaining Chat-specific untyped fields (`n`, `logit_bias`, …)
+        // survive a native round trip. A different inbound wire's leftovers
+        // are never replayed onto this protocol. Typed fields above win.
+        for (k, v) in prompt
+            .params
+            .extras_for_protocol(&ApiProtocol::ChatCompletions)
+        {
             if matches!(k.as_str(), "max_tokens" | "max_completion_tokens") {
                 continue;
             }
@@ -841,9 +869,11 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             let entry = req
                 .entry("stream_options".to_string())
                 .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if !entry.is_object() {
+                *entry = serde_json::Value::Object(serde_json::Map::new());
+            }
             if let Some(map) = entry.as_object_mut() {
-                map.entry("include_usage".to_string())
-                    .or_insert(serde_json::Value::Bool(true));
+                map.insert("include_usage".to_string(), serde_json::Value::Bool(true));
             }
         }
         Ok(serde_json::Value::Object(req))
@@ -854,11 +884,26 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         prompt: &Prompt,
         target: &RoutingTarget,
     ) -> Result<serde_json::Value> {
+        if target.chat_supports_store == Some(false) && prompt.params.store == Some(true) {
+            return Err(BitrouterError::bad_request(format!(
+                "store: true is not supported by Chat Completions target {}/{}",
+                target.provider_name, target.service_id
+            )));
+        }
         let mut prompt = prompt.clone();
         if let Some(field) = target.chat_token_limit_field {
             prompt.params.chat_token_limit_field = Some(field);
         }
-        self.render_request(&prompt)
+        let mut rendered = self.render_request(&prompt)?;
+        if let Some(object) = rendered.as_object_mut() {
+            if target.chat_supports_store == Some(false) {
+                object.remove("store");
+            }
+            if target.chat_supports_stream_options == Some(false) {
+                object.remove("stream_options");
+            }
+        }
+        Ok(rendered)
     }
 
     fn parse_response(&self, body: serde_json::Value) -> Result<GenerateResult> {
