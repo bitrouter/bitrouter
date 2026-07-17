@@ -2686,6 +2686,20 @@
             }
           },
           "provider_model_id": "meituan/longcat-2.0"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k3"
         }
       ],
       "name": "bitrouter",
@@ -4756,6 +4770,16 @@
           "api_protocol": "openai",
           "id": "qwen/qwen3.6-plus",
           "provider_model_id": "qwen3.6-plus"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.5",
+          "provider_model_id": "grok-4.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "provider_model_id": "kimi-k3"
         }
       ],
       "name": "opencode-go",
@@ -6162,6 +6186,24 @@
             }
           },
           "provider_model_id": "x-ai/grok-4.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k3"
         }
       ],
       "name": "openrouter",
