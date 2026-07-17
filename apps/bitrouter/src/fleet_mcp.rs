@@ -12,10 +12,17 @@
 //! (TUI_SPEC §15-Q2).
 //!
 //! The internal lifecycle is Task-shaped (MCP Tasks vocabulary — `working /
-//! completed / failed`), but no shipping harness consumes the Tasks extension
-//! yet, so every tool runs **blocking-with-summary**: `spawn` and `prompt`
-//! return when the turn ends, carrying the reply, the typed stop reason, and
-//! the worktree diff stat.
+//! completed / failed`). `spawn` and `prompt` are **non-blocking**: they
+//! reserve + launch synchronously (so capacity/budget errors and the handle
+//! come back at once), then run the turn in the background and return a
+//! `working` ack. The orchestrator polls `subagent_status` for the reply, the
+//! typed stop reason, and the worktree diff stat once the turn ends — the
+//! summary is stored on the registry entry. A blocking tool would return only
+//! when the turn ends, which for a long task outlasts the orchestrator's MCP
+//! tool-call timeout: the client reports a false "timed out", retries, and
+//! spawns a duplicate subagent (no shipping harness consumes the MCP Tasks
+//! extension that would let this be a first-class async task instead of a
+//! poll).
 //!
 //! **Writes are human-gated by default** (TUI_SPEC §5/§7): `apply` and `merge`
 //! integrate a subagent's work into the base repository and therefore refuse
@@ -236,6 +243,10 @@ struct Subagent {
     /// `completed`/`failed` (MCP Tasks vocabulary, adopted internally now so
     /// the wire protocol is a capability flag later, not a rewrite).
     state: &'static str,
+    /// The finished turn's summary (reply / result / stop reason / diff stat),
+    /// stored by the background runner when the turn ends so `subagent_status`
+    /// can return it. `None` while `state == "working"`.
+    outcome: Option<serde_json::Value>,
 }
 
 /// A freshly launched-and-registered subagent, handed back to `do_spawn` so it
@@ -253,6 +264,10 @@ struct Launched {
 
 /// The substrate-backed fleet: a registry of worktree-isolated ACP subagents.
 /// Injected into `bitrouter-mcp`'s orchestrator profile as the `Fleet` port.
+/// `Clone` is a cheap `Arc` bump — the background turn runners
+/// (`spawn_background` / `prompt_background`) own a handle to store their
+/// summaries back on the registry when the turn ends.
+#[derive(Clone)]
 pub struct SubstrateFleet {
     inner: Arc<FleetInner>,
 }
@@ -498,7 +513,10 @@ impl SubstrateFleet {
         }
     }
 
-    async fn do_spawn(&self, args: SpawnArgs) -> Result<serde_json::Value> {
+    /// Reserve a fleet slot (budget + capacity gated) and launch + register the
+    /// subagent — the **synchronous** half of a spawn, so budget/capacity errors
+    /// and the handle come back to the caller before any turn runs.
+    async fn reserve_and_launch(&self, args: SpawnArgs) -> Result<Launched> {
         let inner = &self.inner;
         // Spend circuit breaker (TUI_SPEC §5): refuse to launch once the
         // machine-wide budget ceiling is reached. Checked before reserving a
@@ -528,14 +546,20 @@ impl SubstrateFleet {
         // Launch under the guard: any failure (or a cancelled future) drops the
         // reservation and releases the slot; success commits it inside
         // `launch_and_register` alongside the registry insert.
+        self.launch_and_register(args, reservation).await
+    }
+
+    /// Run a launched subagent's opening turn to completion and assemble its
+    /// summary — the **blocking** half of a spawn, driven in the background by
+    /// [`spawn_background`](Self::spawn_background).
+    async fn run_opening_turn(&self, launched: Launched) -> Result<serde_json::Value> {
         let Launched {
             handle,
             session,
             task,
             contract,
             bootstrap_skipped,
-        } = self.launch_and_register(args, reservation).await?;
-
+        } = launched;
         let mut summary = self
             .run_blocking_turn(&handle, session, &task, contract)
             .await?;
@@ -546,6 +570,57 @@ impl SubstrateFleet {
             );
         }
         Ok(summary)
+    }
+
+    /// Non-blocking spawn (TUI_SPEC §4): reserve + launch synchronously (so the
+    /// handle and any capacity/budget error come back now), then drive the
+    /// opening turn in the **background**, storing its summary on the registry
+    /// entry for `subagent_status` to return. This is what stops a long task
+    /// from outlasting the orchestrator's MCP tool-call timeout — the failure
+    /// that used to be reported as "spawn timed out", retried, and end up
+    /// spawning a duplicate subagent.
+    async fn spawn_background(&self, args: SpawnArgs) -> Result<serde_json::Value> {
+        let launched = self.reserve_and_launch(args).await?;
+        let handle = launched.handle.clone();
+        let (agent_id, worktree, branch, _base_ref, port) = self.meta(&handle).await?;
+        let this = self.clone();
+        let runner = handle.clone();
+        tokio::spawn(async move {
+            let outcome = match this.run_opening_turn(launched).await {
+                Ok(summary) => summary,
+                // `run_blocking_turn` already marks the turn `failed`, but a
+                // later bail (repair / meta) could leave it `working` — pin it
+                // here so a poll never hangs on a dead turn.
+                Err(e) => {
+                    this.set_state(&runner, "failed").await;
+                    serde_json::json!({ "state": "failed", "error": format!("{e:#}") })
+                }
+            };
+            this.store_outcome(&runner, outcome).await;
+        });
+        Ok(serde_json::json!({
+            "handle": handle,
+            "agent": agent_id,
+            "state": "working",
+            "worktree": worktree,
+            "branch": branch,
+            "port": port,
+            "note": format!(
+                "launched and running in the background. Poll subagent_status(\"{handle}\") for \
+                 its state, reply, and diff — state becomes \"completed\" when the turn ends; it \
+                 also appears in the fleet rail for the human. Do not re-spawn if this seems slow: \
+                 the subagent is already running."
+            ),
+        }))
+    }
+
+    /// Store a finished turn's summary on the registry entry so
+    /// `subagent_status` returns the reply/result/diff once the background turn
+    /// ends (`None` while working).
+    async fn store_outcome(&self, handle: &str, outcome: serde_json::Value) {
+        if let Some(sub) = self.inner.registry.lock().await.agents.get_mut(handle) {
+            sub.outcome = Some(outcome);
+        }
     }
 
     /// Launch the subagent and register it, converting the caller's
@@ -638,6 +713,7 @@ impl SubstrateFleet {
                     base_ref: base_ref.clone(),
                     port,
                     state: "working",
+                    outcome: None,
                 },
             );
             reservation.commit();
@@ -664,7 +740,10 @@ impl SubstrateFleet {
         })
     }
 
-    async fn do_prompt(&self, args: PromptArgs) -> Result<serde_json::Value> {
+    /// Ready a subagent for a new turn: budget-gated, refuse while it's still
+    /// working (one turn per ACP session — concurrent turns would interleave),
+    /// clear the prior summary + review verdict, and hand back its session.
+    async fn prompt_prepare(&self, handle: &str) -> Result<Arc<Session>> {
         // A prompt turn also spends, so it honors the same ceiling as spawn.
         if let Some(budget) = &self.inner.budget {
             budget.check().await?;
@@ -673,9 +752,16 @@ impl SubstrateFleet {
             let mut reg = self.inner.registry.lock().await;
             let sub = reg
                 .agents
-                .get_mut(&args.handle)
-                .with_context(|| format!("no subagent with handle '{}'", args.handle))?;
+                .get_mut(handle)
+                .with_context(|| format!("no subagent with handle '{handle}'"))?;
+            if sub.state == "working" {
+                anyhow::bail!(
+                    "subagent '{handle}' is still working — wait for it to reach `completed` \
+                     (poll subagent_status) before prompting again."
+                );
+            }
             sub.state = "working";
+            sub.outcome = None; // the new turn supersedes the stored summary
             Arc::clone(&sub.session)
         };
         // Re-prompting consumes the human's review verdict (TUI_SPEC_V3 §5):
@@ -684,10 +770,37 @@ impl SubstrateFleet {
         // `subagent_status` — a sticky verdict would mask it forever.
         #[cfg(unix)]
         if let Some(link) = &self.inner.link {
-            link.verdicts.lock().await.remove(&args.handle);
+            link.verdicts.lock().await.remove(handle);
         }
-        self.run_blocking_turn(&args.handle, session, &args.text, None)
-            .await
+        Ok(session)
+    }
+
+    /// Non-blocking follow-up prompt: the same background-turn model as spawn,
+    /// so a long revision turn never outlasts the caller's tool-call timeout.
+    async fn prompt_background(&self, args: PromptArgs) -> Result<serde_json::Value> {
+        let session = self.prompt_prepare(&args.handle).await?;
+        let this = self.clone();
+        let handle = args.handle.clone();
+        let text = args.text;
+        tokio::spawn(async move {
+            let outcome = match this.run_blocking_turn(&handle, session, &text, None).await {
+                Ok(summary) => summary,
+                Err(e) => {
+                    this.set_state(&handle, "failed").await;
+                    serde_json::json!({ "state": "failed", "error": format!("{e:#}") })
+                }
+            };
+            this.store_outcome(&handle, outcome).await;
+        });
+        Ok(serde_json::json!({
+            "handle": args.handle,
+            "state": "working",
+            "note": format!(
+                "prompt delivered — running in the background. Poll subagent_status(\"{}\") for \
+                 the reply and diff.",
+                args.handle
+            ),
+        }))
     }
 
     /// Drive one blocking turn (with the optional result contract's repair
@@ -919,12 +1032,14 @@ impl SubstrateFleet {
             base_ref,
             port,
             state,
+            outcome,
         } = sub;
         let only = match Arc::try_unwrap(session) {
             Ok(only) => only,
             Err(session) => {
-                // A turn is in flight — put the entry back; removing it here
-                // would orphan the child process and its worktree lease.
+                // A turn is in flight — the background runner still holds a
+                // session `Arc` — so put the entry back; removing it here would
+                // orphan the child process and its worktree lease.
                 reg.agents.insert(
                     handle.to_string(),
                     Subagent {
@@ -935,6 +1050,7 @@ impl SubstrateFleet {
                         base_ref,
                         port,
                         state,
+                        outcome,
                     },
                 );
                 anyhow::bail!(
@@ -1054,11 +1170,11 @@ fn to_tool_error(e: anyhow::Error) -> ToolError {
 #[async_trait::async_trait]
 impl Fleet for SubstrateFleet {
     async fn spawn(&self, args: SpawnArgs) -> Result<serde_json::Value, ToolError> {
-        self.do_spawn(args).await.map_err(to_tool_error)
+        self.spawn_background(args).await.map_err(to_tool_error)
     }
 
     async fn prompt(&self, args: PromptArgs) -> Result<serde_json::Value, ToolError> {
-        self.do_prompt(args).await.map_err(to_tool_error)
+        self.prompt_background(args).await.map_err(to_tool_error)
     }
 
     async fn status(&self, handle: Option<&str>) -> Result<serde_json::Value, ToolError> {
@@ -1222,24 +1338,60 @@ async fn collect_turn(
 
 /// One subagent's status snapshot.
 async fn snapshot(handle: &str, sub: &Subagent, verdict: Option<&str>) -> serde_json::Value {
-    serde_json::json!({
-        "handle": handle,
-        "agent": sub.agent_id,
-        // A human review verdict is the task outcome — it outranks the
-        // lifecycle state so the orchestrator can't miss it.
-        "state": match verdict {
-            Some(_) => "changes_requested",
-            None => sub.state,
-        },
-        "review_verdict": verdict,
-        "worktree": sub.worktree,
-        "branch": sub.branch,
-        "port": sub.port.as_ref().map(|l| l.port()),
-        "diff_stat": match &sub.worktree {
-            Some(wt) => crate::fleet::diff_stat(wt, &sub.base_ref).await,
-            None => None,
-        },
-    })
+    // Once the background turn ends, its stored summary (reply / result /
+    // stop_reason / diff_stat) IS the snapshot — that's how the orchestrator
+    // reads the result it used to get inline from a blocking spawn. While the
+    // turn is still working there is no summary yet, so report a live view of
+    // the lifecycle + current worktree diff.
+    let mut snap = match &sub.outcome {
+        Some(outcome) => outcome.clone(),
+        None => serde_json::json!({
+            "state": sub.state,
+            "worktree": sub.worktree,
+            "branch": sub.branch,
+            "port": sub.port.as_ref().map(|l| l.port()),
+            "diff_stat": match &sub.worktree {
+                Some(wt) => crate::fleet::diff_stat(wt, &sub.base_ref).await,
+                None => None,
+            },
+        }),
+    };
+    // Identity fields, always present regardless of the outcome shape (a
+    // `failed` summary carries only state + error).
+    snap["handle"] = serde_json::json!(handle);
+    snap["agent"] = serde_json::json!(sub.agent_id);
+    // A human review verdict is the task outcome — it outranks the lifecycle
+    // state so the orchestrator can't miss it.
+    match verdict {
+        Some(v) => {
+            snap["state"] = serde_json::json!("changes_requested");
+            snap["review_verdict"] = serde_json::json!(v);
+        }
+        None => {
+            snap["review_verdict"] = serde_json::Value::Null;
+        }
+    }
+    snap
+}
+
+/// Blocking spawn/prompt for the lifecycle tests: reserve + launch + run the
+/// turn to completion inline, so a test can assert on the finished summary and
+/// drive apply/merge/diff without polling. Production goes through the
+/// non-blocking [`spawn_background`](SubstrateFleet::spawn_background) /
+/// [`prompt_background`](SubstrateFleet::prompt_background); the non-blocking
+/// contract is covered by its own tests below.
+#[cfg(test)]
+impl SubstrateFleet {
+    async fn do_spawn(&self, args: SpawnArgs) -> Result<serde_json::Value> {
+        let launched = self.reserve_and_launch(args).await?;
+        self.run_opening_turn(launched).await
+    }
+
+    async fn do_prompt(&self, args: PromptArgs) -> Result<serde_json::Value> {
+        let session = self.prompt_prepare(&args.handle).await?;
+        self.run_blocking_turn(&args.handle, session, &args.text, None)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -1439,6 +1591,33 @@ mod e2e_tests {
         done
     "#;
 
+    /// A stub that answers `initialize`/`session/new` but never responds to a
+    /// prompt — the turn stays in-flight, so `state` stays `working`. Lets the
+    /// non-blocking tests observe the working window deterministically.
+    const HANG_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+            *session/prompt*) : ;;
+          esac
+        done
+    "#;
+
+    /// Poll `subagent_status` the way an orchestrator does, until the turn
+    /// leaves `working`. Bounded so a hung turn fails the test loudly.
+    async fn poll_until_done(fleet: &SubstrateFleet, handle: &str) -> serde_json::Value {
+        for _ in 0..300 {
+            let s = fleet.do_status(Some(handle)).await.expect("status");
+            if s["state"] != "working" {
+                return s;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("subagent {handle} never left `working`");
+    }
+
     fn catalog_from(name: &str, script: &str) -> ConfigAcpRoutingTable {
         let cfg = bitrouter_sdk::acp::AcpAgentConfig {
             name: name.to_string(),
@@ -1480,6 +1659,100 @@ mod e2e_tests {
             .status()
             .expect("git");
         d
+    }
+
+    /// The production entry (`Fleet::spawn`) is non-blocking: it returns a
+    /// `working` ack at once — not the finished summary — so a long turn can't
+    /// outlast the caller's MCP tool-call timeout (the false "timed out" that
+    /// used to be retried into a duplicate subagent). The result lands on
+    /// `subagent_status` when the background turn ends.
+    #[tokio::test]
+    async fn spawn_is_nonblocking_and_status_carries_the_result() {
+        let repo = init_repo();
+        let fleet = SubstrateFleet::connect(
+            worker_catalog(),
+            repo.path().to_path_buf(),
+            WorktreesConfig::default(),
+            true,
+            None,
+            None,
+            Vec::new(),
+        )
+        .await;
+        let ack = fleet
+            .spawn(SpawnArgs {
+                agent: "stub".into(),
+                task: "write made.txt".into(),
+                worktree: None,
+                result_schema: None,
+            })
+            .await
+            .expect("spawn ack");
+        assert_eq!(
+            ack["state"], "working",
+            "returns before the turn ends: {ack}"
+        );
+        assert!(
+            ack["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("subagent_status")),
+            "the ack points the orchestrator at the poll surface: {ack}"
+        );
+        let handle = ack["handle"].as_str().expect("handle").to_string();
+
+        // Poll to completion the way an orchestrator would; the stored summary
+        // (reply + stop reason + diff) surfaces on the status snapshot.
+        let status = poll_until_done(&fleet, &handle).await;
+        assert_eq!(status["state"], "completed");
+        assert_eq!(status["stop_reason"], "end_turn");
+        assert!(
+            status["reply"].as_str().is_some_and(|r| r.contains("done")),
+            "reply on status: {status}"
+        );
+        assert_eq!(status["diff_stat"]["files"], 1, "diff via status: {status}");
+        assert_eq!(status["handle"], handle);
+        fleet.do_close(&handle).await.expect("close");
+    }
+
+    /// One turn per session: a follow-up prompt is refused while the opening
+    /// turn is still in flight (two concurrent turns on one ACP session would
+    /// interleave). The orchestrator waits for `completed` before prompting.
+    #[tokio::test]
+    async fn prompt_is_refused_while_the_subagent_is_working() {
+        let repo = init_repo();
+        let fleet = SubstrateFleet::connect(
+            catalog_from("hang", HANG_STUB),
+            repo.path().to_path_buf(),
+            WorktreesConfig::default(),
+            true,
+            None,
+            None,
+            Vec::new(),
+        )
+        .await;
+        let ack = fleet
+            .spawn(SpawnArgs {
+                agent: "hang".into(),
+                task: "noop".into(),
+                worktree: Some(false),
+                result_schema: None,
+            })
+            .await
+            .expect("spawn ack");
+        let handle = ack["handle"].as_str().expect("handle").to_string();
+        assert_eq!(ack["state"], "working");
+        // The opening turn never completes (hang stub), so state stays working.
+        let err = fleet
+            .prompt(PromptArgs {
+                handle: handle.clone(),
+                text: "again".into(),
+            })
+            .await
+            .expect_err("a prompt is refused while a turn is in flight");
+        assert!(
+            format!("{err:?}").contains("still working"),
+            "actionable refusal: {err:?}"
+        );
     }
 
     #[tokio::test]

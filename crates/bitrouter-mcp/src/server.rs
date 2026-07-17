@@ -316,10 +316,13 @@ impl BitrouterMcp {
 #[tool_router(router = fleet_router)]
 impl BitrouterMcp {
     #[tool(
-        description = "Spawn a worktree-isolated ACP subagent, send it the task, and block until \
-                       its turn ends. Returns a summary: handle, stop_reason, reply, diff stat \
-                       (and result/schema_ok under result_schema). Subagents don't spawn \
-                       subagents — keep delegation depth 1.",
+        description = "Spawn a worktree-isolated ACP subagent and send it the task. Returns \
+                       immediately with {handle, state:\"working\"} — the turn runs in the \
+                       background. Poll subagent_status(handle) for the reply, stop_reason, and \
+                       diff stat (and result/schema_ok under result_schema); state becomes \
+                       \"completed\" when the turn ends. Do NOT re-spawn if a call seems slow — \
+                       the subagent is already running, a second spawn just duplicates it. \
+                       Subagents don't spawn subagents — keep delegation depth 1.",
         annotations(
             read_only_hint = false,
             // Additive: a fresh worktree + branch; the base tree is untouched.
@@ -342,8 +345,10 @@ impl BitrouterMcp {
     }
 
     #[tool(
-        description = "Send a follow-up prompt to a running subagent and block until the turn \
-                       ends. Same summary shape as spawn_subagent.",
+        description = "Send a follow-up prompt to a subagent whose previous turn has finished \
+                       (poll subagent_status until its state isn't \"working\"). Returns \
+                       immediately with {handle, state:\"working\"}; poll subagent_status(handle) \
+                       for the reply and diff. Refused while the subagent is still working.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -362,7 +367,9 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Fleet snapshot (or one subagent with handle): agent, state, worktree, \
-                       branch, diff stat.",
+                       branch, diff stat. This is the poll surface for spawn_subagent / \
+                       prompt_subagent — once a subagent's state is \"completed\" its entry also \
+                       carries the turn's reply, stop_reason, and result/schema_ok.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
