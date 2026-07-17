@@ -10,9 +10,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 use crossterm::event::KeyCode;
 
+use crate::tui::state::diff::{DiffLine, Line, diff_lines};
 use crate::tui::state::{
-    AppState, ClickTarget, ClickZone, DiffLine, LEADER_LEAVES, Line, Mode, PaneState, PendingView,
-    PickerPurpose, PickerState, Split, TailKind, diff_lines,
+    AppState, ClickTarget, ClickZone, LEADER_LEAVES, Mode, PaneState, PendingView, PickerPurpose,
+    PickerState, Split, TailKind,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
@@ -1156,9 +1157,8 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::state::{
-        AppState, DetailLayout, Line, Mode, PaneState, PickerPurpose, PickerState,
-    };
+    use crate::tui::state::diff::Line;
+    use crate::tui::state::{AppState, DetailLayout, Mode, PaneState, PickerPurpose, PickerState};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -1652,7 +1652,7 @@ mod tests {
     #[test]
     fn diff_lines_render_with_prefixes_and_chips() {
         let mut st = AppState::new(PaneState::new("r0".into(), "a0".into()));
-        for l in crate::tui::state::diff_lines(&crate::tui::event::DiffData {
+        for l in crate::tui::state::diff::diff_lines(&crate::tui::event::DiffData {
             path: "src/x.rs".into(),
             old: "old line\n".into(),
             new: "new line\n".into(),
