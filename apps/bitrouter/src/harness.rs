@@ -375,31 +375,44 @@ impl Harness {
     /// synthesized providers' model lists so the harness's own model picker
     /// shows what the daemon can serve. `model` pins the model (and becomes
     /// the synthesized default); when absent, the first catalog entry is
-    /// the default. `mcp` is the bridge to inject where the harness has an
-    /// MCP mechanism — pi has none, so its orchestrator runs without fleet
-    /// tools.
+    /// the default. `mcp` lists the servers to inject where the harness has
+    /// an MCP mechanism — pi has none, so its orchestrator runs without
+    /// them.
     pub fn orchestrator_overlay(
         &self,
         base_url: &str,
         auth: &str,
         model: Option<&str>,
         catalog: &[String],
-        mcp: Option<&McpServer>,
+        mcp: &[McpServer],
         state_dir: &std::path::Path,
     ) -> anyhow::Result<RoutingOverlay> {
         match self.id {
             // Claude Code loads extra MCP servers from `--mcp-config <file>`.
+            // Stdio entries are `{command, args}`; HTTP entries need an
+            // explicit `"type": "http"` (a `url` without `type` is a hard
+            // error) plus a `headers` object.
             "claude-acp" => {
                 let mut overlay = self.routing_overlay(base_url, auth, model);
-                if let Some(mcp) = mcp {
+                if !mcp.is_empty() {
                     std::fs::create_dir_all(state_dir)
                         .with_context(|| format!("creating {}", state_dir.display()))?;
-                    let path = state_dir.join("fleet-mcp.json");
-                    let config = serde_json::json!({
-                        "mcpServers": {
-                            &mcp.name: { "command": mcp.command, "args": mcp.args }
-                        }
-                    });
+                    let path = state_dir.join("mcp.json");
+                    let mut servers = serde_json::Map::new();
+                    for s in mcp {
+                        let entry = match &s.transport {
+                            McpTransport::Stdio { command, args } => {
+                                serde_json::json!({ "command": command, "args": args })
+                            }
+                            McpTransport::Http { url, headers } => serde_json::json!({
+                                "type": "http",
+                                "url": url,
+                                "headers": headers_map(headers),
+                            }),
+                        };
+                        servers.insert(s.name.clone(), entry);
+                    }
+                    let config = serde_json::json!({ "mcpServers": servers });
                     std::fs::write(&path, serde_json::to_string_pretty(&config)?)
                         .context("writing claude MCP config")?;
                     overlay
@@ -409,20 +422,39 @@ impl Harness {
                 Ok(overlay)
             }
             // codex takes MCP servers as `-c mcp_servers.*` TOML overrides.
+            // `url` presence selects the streamable-HTTP transport (codex
+            // 0.144+); auth rides `http_headers.<Name>` overrides.
             "codex-acp" => {
                 let mut overlay = self.routing_overlay(base_url, auth, model);
-                if let Some(mcp) = mcp {
-                    let items: Vec<String> = mcp.args.iter().map(|a| toml_string(a)).collect();
-                    overlay.args.extend([
-                        "-c".to_string(),
-                        format!(
-                            "mcp_servers.{}.command={}",
-                            mcp.name,
-                            toml_string(&mcp.command)
-                        ),
-                        "-c".to_string(),
-                        format!("mcp_servers.{}.args=[{}]", mcp.name, items.join(",")),
-                    ]);
+                for s in mcp {
+                    match &s.transport {
+                        McpTransport::Stdio { command, args } => {
+                            let items: Vec<String> = args.iter().map(|a| toml_string(a)).collect();
+                            overlay.args.extend([
+                                "-c".to_string(),
+                                format!("mcp_servers.{}.command={}", s.name, toml_string(command)),
+                                "-c".to_string(),
+                                format!("mcp_servers.{}.args=[{}]", s.name, items.join(",")),
+                            ]);
+                        }
+                        McpTransport::Http { url, headers } => {
+                            overlay.args.extend([
+                                "-c".to_string(),
+                                format!("mcp_servers.{}.url={}", s.name, toml_string(url)),
+                            ]);
+                            for (name, value) in headers {
+                                overlay.args.extend([
+                                    "-c".to_string(),
+                                    format!(
+                                        "mcp_servers.{}.http_headers.{}={}",
+                                        s.name,
+                                        name,
+                                        toml_string(value)
+                                    ),
+                                ]);
+                            }
+                        }
+                    }
                 }
                 Ok(overlay)
             }
@@ -514,10 +546,23 @@ impl Harness {
                 if let Some(default) = default {
                     config["model"]["default"] = serde_json::Value::String(default);
                 }
-                if let Some(mcp) = mcp {
-                    config["mcp_servers"] = serde_json::json!({
-                        &mcp.name: { "command": mcp.command, "args": mcp.args }
-                    });
+                if !mcp.is_empty() {
+                    let mut entries = serde_json::Map::new();
+                    for s in mcp {
+                        let entry = match &s.transport {
+                            McpTransport::Stdio { command, args } => {
+                                serde_json::json!({ "command": command, "args": args })
+                            }
+                            // hermes selects the HTTP transport by `url`
+                            // presence.
+                            McpTransport::Http { url, headers } => serde_json::json!({
+                                "url": url,
+                                "headers": headers_map(headers),
+                            }),
+                        };
+                        entries.insert(s.name.clone(), entry);
+                    }
+                    config["mcp_servers"] = serde_json::Value::Object(entries);
                 }
                 std::fs::write(
                     dir.join("config.yaml"),
@@ -616,25 +661,49 @@ impl Harness {
     }
 }
 
-/// A stdio MCP server to inject into an orchestrator harness (the TUI's
-/// fleet bridge).
+/// An MCP server to inject into an orchestrator harness — the TUI's fleet
+/// bridge plus the gateway servers (`bitrouter_tools` / `bitrouter_skills`,
+/// see `crate::gateways`).
 #[derive(Debug, Clone)]
 pub struct McpServer {
     /// Server name as the harness will list it (e.g. `bitrouter_fleet`).
     pub name: String,
-    pub command: String,
-    pub args: Vec<String>,
+    /// How the harness dials it.
+    pub transport: McpTransport,
+}
+
+/// How a harness dials an injected MCP server. Headers are an ordered list
+/// (not a map) so synthesized configs and `-c` overrides stay deterministic.
+#[derive(Debug, Clone)]
+pub enum McpTransport {
+    /// Spawn `command` with `args` and exchange JSON-RPC over stdio.
+    Stdio { command: String, args: Vec<String> },
+    /// Streamable HTTP at `url`, sending the static request `headers`
+    /// (e.g. `Authorization`) on every call.
+    Http {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
+}
+
+/// Render ordered header pairs as the JSON object shape harness config files
+/// expect (`{"Authorization": "Bearer …"}`).
+fn headers_map(headers: &[(String, String)]) -> serde_json::Map<String, serde_json::Value> {
+    headers
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect()
 }
 
 /// The synthesized opencode config: a `bitrouter` provider over the OpenAI
 /// wire, the daemon's catalog as its model list, an optional default model,
-/// and the MCP bridge.
+/// and the injected MCP servers.
 fn opencode_config(
     base_url: &str,
     auth: &str,
     model: Option<&str>,
     catalog: &[String],
-    mcp: Option<&McpServer>,
+    mcp: &[McpServer],
 ) -> serde_json::Value {
     let mut models = serde_json::Map::new();
     for id in catalog {
@@ -662,12 +731,26 @@ fn opencode_config(
     {
         config["model"] = serde_json::json!(format!("bitrouter/{default}"));
     }
-    if let Some(mcp) = mcp {
-        let mut command = vec![mcp.command.clone()];
-        command.extend(mcp.args.iter().cloned());
-        config["mcp"] = serde_json::json!({
-            &mcp.name: { "type": "local", "command": command, "enabled": true }
-        });
+    if !mcp.is_empty() {
+        let mut entries = serde_json::Map::new();
+        for s in mcp {
+            let entry = match &s.transport {
+                // opencode folds command+args into one invocation array.
+                McpTransport::Stdio { command, args } => {
+                    let mut invocation = vec![command.clone()];
+                    invocation.extend(args.iter().cloned());
+                    serde_json::json!({ "type": "local", "command": invocation, "enabled": true })
+                }
+                McpTransport::Http { url, headers } => serde_json::json!({
+                    "type": "remote",
+                    "url": url,
+                    "enabled": true,
+                    "headers": headers_map(headers),
+                }),
+            };
+            entries.insert(s.name.clone(), entry);
+        }
+        config["mcp"] = serde_json::Value::Object(entries);
     }
     config
 }
@@ -802,14 +885,14 @@ mod tests {
                     "t",
                     Some("some-model"),
                     &[],
-                    Some(&mcp()),
+                    &[mcp()],
                     dir.path(),
                 )
                 .expect("overlay");
             assert!(o.env.is_empty(), "{id}: no redirection env");
             assert_eq!(o.args, vec![flag, "some-model"], "{id}");
             let bare = h
-                .orchestrator_overlay("http://x:1", "t", None, &[], None, dir.path())
+                .orchestrator_overlay("http://x:1", "t", None, &[], &[], dir.path())
                 .expect("overlay");
             assert_eq!(bare, RoutingOverlay::default(), "{id}: bare launch");
         }
@@ -975,13 +1058,27 @@ mod tests {
     fn mcp() -> McpServer {
         McpServer {
             name: "bitrouter_fleet".into(),
-            command: "/bin/bitrouter".into(),
-            args: vec![
-                "mcp".into(),
-                "serve".into(),
-                "--backend".into(),
-                "fleet".into(),
-            ],
+            transport: McpTransport::Stdio {
+                command: "/bin/bitrouter".into(),
+                args: vec![
+                    "mcp".into(),
+                    "serve".into(),
+                    "--backend".into(),
+                    "fleet".into(),
+                ],
+            },
+        }
+    }
+
+    /// An HTTP gateway server (the `bitrouter_tools` shape) for the
+    /// synthesizer tests.
+    fn tools() -> McpServer {
+        McpServer {
+            name: "bitrouter_tools".into(),
+            transport: McpTransport::Http {
+                url: "http://127.0.0.1:4356/mcp".into(),
+                headers: vec![("Authorization".into(), "Bearer tok".into())],
+            },
         }
     }
 
@@ -990,12 +1087,24 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("claude-acp").unwrap();
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &[], Some(&mcp()), dir.path())
+            .orchestrator_overlay("http://x:1", "t", None, &[], &[mcp(), tools()], dir.path())
             .expect("overlay");
         assert_eq!(o.args[0], "--mcp-config");
-        let written = std::fs::read_to_string(&o.args[1]).expect("config written");
-        assert!(written.contains("bitrouter_fleet"), "{written}");
-        assert!(written.contains("\"fleet\""), "fleet backend: {written}");
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&o.args[1]).expect("config written"))
+                .expect("json");
+        // Stdio entry: bare command/args.
+        assert_eq!(
+            config["mcpServers"]["bitrouter_fleet"]["command"],
+            "/bin/bitrouter"
+        );
+        assert_eq!(config["mcpServers"]["bitrouter_fleet"]["args"][3], "fleet");
+        // HTTP entry: explicit type (a url without type is a hard error in
+        // Claude Code) plus the auth header as an object.
+        let tools = &config["mcpServers"]["bitrouter_tools"];
+        assert_eq!(tools["type"], "http");
+        assert_eq!(tools["url"], "http://127.0.0.1:4356/mcp");
+        assert_eq!(tools["headers"]["Authorization"], "Bearer tok");
         // Routing env comes through unchanged.
         assert!(o.env.iter().any(|(k, _)| k == "ANTHROPIC_BASE_URL"));
     }
@@ -1005,7 +1114,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("codex-acp").unwrap();
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &[], Some(&mcp()), dir.path())
+            .orchestrator_overlay("http://x:1", "t", None, &[], &[mcp(), tools()], dir.path())
             .expect("overlay");
         assert!(
             o.args
@@ -1016,6 +1125,23 @@ mod tests {
         assert!(
             o.args.contains(
                 &"mcp_servers.bitrouter_fleet.args=[\"mcp\",\"serve\",\"--backend\",\"fleet\"]"
+                    .to_string()
+            ),
+            "{:?}",
+            o.args
+        );
+        // HTTP entry: url selects the streamable-HTTP transport, auth rides
+        // http_headers.
+        assert!(
+            o.args.contains(
+                &"mcp_servers.bitrouter_tools.url=\"http://127.0.0.1:4356/mcp\"".to_string()
+            ),
+            "{:?}",
+            o.args
+        );
+        assert!(
+            o.args.contains(
+                &"mcp_servers.bitrouter_tools.http_headers.Authorization=\"Bearer tok\""
                     .to_string()
             ),
             "{:?}",
@@ -1033,7 +1159,7 @@ mod tests {
                 "tok",
                 Some("supergrok:grok-4.5"),
                 &[],
-                Some(&mcp()),
+                &[mcp(), tools()],
                 dir.path(),
             )
             .expect("overlay");
@@ -1052,6 +1178,11 @@ mod tests {
             config["mcp_servers"]["bitrouter_fleet"]["command"],
             "/bin/bitrouter"
         );
+        // HTTP entry: url presence selects the transport; auth is a header.
+        let tools = &config["mcp_servers"]["bitrouter_tools"];
+        assert_eq!(tools["url"], "http://127.0.0.1:4356/mcp");
+        assert_eq!(tools["headers"]["Authorization"], "Bearer tok");
+        assert!(tools.get("command").is_none(), "http entry has no command");
     }
 
     #[test]
@@ -1064,7 +1195,7 @@ mod tests {
                 "tok",
                 Some("supergrok:grok-4.5"),
                 &["x-ai/grok-4.5".to_string()],
-                None,
+                &[],
                 dir.path(),
             )
             .expect("overlay");
@@ -1105,7 +1236,7 @@ mod tests {
                 "tok",
                 Some("supergrok:grok-4.5"),
                 &catalog,
-                Some(&mcp()),
+                &[mcp(), tools()],
                 dir.path(),
             )
             .expect("overlay");
@@ -1122,12 +1253,19 @@ mod tests {
         assert_eq!(config["model"], "bitrouter/supergrok:grok-4.5");
         assert!(config["provider"]["bitrouter"]["models"]["supergrok:grok-4.5"].is_object());
         assert!(config["provider"]["bitrouter"]["models"]["x-ai/grok-4.5"].is_object());
-        // The MCP bridge rides the same file.
+        // The MCP bridge rides the same file, command+args folded into one
+        // invocation array.
         assert_eq!(config["mcp"]["bitrouter_fleet"]["type"], "local");
         assert_eq!(
             config["mcp"]["bitrouter_fleet"]["command"][0],
             "/bin/bitrouter"
         );
+        // HTTP entry: opencode's remote type with the auth header.
+        let tools = &config["mcp"]["bitrouter_tools"];
+        assert_eq!(tools["type"], "remote");
+        assert_eq!(tools["url"], "http://127.0.0.1:4356/mcp");
+        assert_eq!(tools["enabled"], true);
+        assert_eq!(tools["headers"]["Authorization"], "Bearer tok");
     }
 
     #[test]
@@ -1136,13 +1274,13 @@ mod tests {
         let h = by_id("opencode").unwrap();
         let catalog = vec!["a/one".to_string(), "b/two".to_string()];
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &catalog, None, dir.path())
+            .orchestrator_overlay("http://x:1", "t", None, &catalog, &[], dir.path())
             .expect("overlay");
         let config: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&o.env[0].1).expect("written"))
                 .expect("json");
         assert_eq!(config["model"], "bitrouter/a/one");
-        assert!(config.get("mcp").is_none(), "no bridge requested");
+        assert!(config.get("mcp").is_none(), "no servers requested");
     }
 
     #[test]
@@ -1156,7 +1294,7 @@ mod tests {
                 "tok",
                 Some("supergrok:grok-4.5"),
                 &catalog,
-                Some(&mcp()), // pi has no MCP mechanism — ignored
+                &[mcp(), tools()], // pi has no MCP mechanism — ignored
                 dir.path(),
             )
             .expect("overlay");
@@ -1185,7 +1323,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let h = by_id("pi-acp").unwrap();
         let o = h
-            .orchestrator_overlay("http://x:1", "t", None, &[], None, dir.path())
+            .orchestrator_overlay("http://x:1", "t", None, &[], &[], dir.path())
             .expect("overlay");
         assert!(
             o.args.is_empty(),

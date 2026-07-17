@@ -271,6 +271,10 @@ struct FleetInner {
     /// conversation instead of the human-bridge / deny fallback. `None` when the
     /// seam isn't wired (default behavior unchanged).
     escalation: Option<Arc<EscalationState>>,
+    /// Gateway MCP descriptors (`bitrouter_tools`/`bitrouter_skills`, see
+    /// `crate::gateways`) passed to every spawned subagent's `session/new`,
+    /// so subagents reach the same tool/skill surface as the orchestrator.
+    subagent_mcp: Vec<agent_client_protocol::schema::v1::McpServer>,
     /// The live subagent registry, under one lock. Also serializes
     /// integration: `apply`/`merge` hold this lock, so branches integrate one
     /// at a time.
@@ -469,6 +473,7 @@ impl SubstrateFleet {
         allow_writes: bool,
         budget: Option<BudgetCeiling>,
         escalation: Option<Arc<EscalationState>>,
+        subagent_mcp: Vec<agent_client_protocol::schema::v1::McpServer>,
     ) -> Self {
         #[cfg(unix)]
         let link = match std::env::var(crate::fleet::TUI_SOCK_ENV) {
@@ -482,6 +487,7 @@ impl SubstrateFleet {
             allow_writes,
             budget,
             escalation,
+            subagent_mcp,
             registry: tokio::sync::Mutex::new(Registry::default()),
             reserving: Arc::new(AtomicUsize::new(0)),
             #[cfg(unix)]
@@ -586,6 +592,9 @@ impl SubstrateFleet {
             worktree: isolate.then(|| crate::fleet::worktree_spec(&tag)),
             worktree_bootstrap: if bootstrap_gated { None } else { bootstrap_cmd },
             env: crate::fleet::port_env(port.as_ref().map(|l| l.port())),
+            // Subagents get the gateway servers (tools/skills) in their
+            // `session/new` — the same surface the orchestrator has.
+            mcp_servers: inner.subagent_mcp.clone(),
             ..Default::default()
         };
         let base_ref = crate::fleet::base_head(&inner.base_repo).await;
@@ -1244,8 +1253,9 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         let err = fleet
@@ -1260,8 +1270,9 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             true,
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         assert!(granted.require_write_grant("merge_subagent").is_ok());
@@ -1278,8 +1289,9 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         let out = fleet.notify("heads up").await.expect("notify ok");
@@ -1304,8 +1316,9 @@ mod tests {
             PathBuf::from("/tmp"),
             WorktreesConfig::default(),
             false,
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         for res in [
@@ -1476,9 +1489,10 @@ mod e2e_tests {
             worker_catalog(),
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
-            true, // write autonomy granted for this test
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            true,       // write autonomy granted for this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
 
@@ -1557,8 +1571,9 @@ mod e2e_tests {
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             true,
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         let summary = fleet
@@ -1598,8 +1613,9 @@ mod e2e_tests {
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             false,
-            None, // no budget ceiling in this test
-            None, // no escalation seam in this test
+            None,       // no budget ceiling in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         // Fill the fleet to the cap (no worktrees: keep the test light).
@@ -1665,8 +1681,9 @@ mod e2e_tests {
                 repo.path().to_path_buf(),
                 WorktreesConfig::default(),
                 false,
-                None, // no budget ceiling in this test
-                None, // no escalation seam in this test
+                None,       // no budget ceiling in this test
+                None,       // no escalation seam in this test
+                Vec::new(), // no gateway descriptors in this test
             )
             .await,
         );
@@ -1796,7 +1813,8 @@ mod e2e_tests {
             WorktreesConfig::default(),
             false,
             Some(BudgetCeiling::new(10_000_000, spend.clone())),
-            None, // no escalation seam in this test
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
 
@@ -1858,8 +1876,9 @@ mod e2e_tests {
             repo.path().to_path_buf(),
             WorktreesConfig::default(),
             false,
-            None, // no ceiling
-            None, // no escalation seam in this test
+            None,       // no ceiling
+            None,       // no escalation seam in this test
+            Vec::new(), // no gateway descriptors in this test
         )
         .await;
         let summary = fleet

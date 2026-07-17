@@ -155,6 +155,9 @@ bitrouter mcp serve
 # no --token on the server side; each MCP client sets "Authorization: Bearer brk_..." in its remote config
 bitrouter mcp serve --transport http
 
+# stdio: origin AgentSkills server (skills_search/skills_get over installed skills)
+bitrouter mcp serve --backend skills
+
 # print the Claude/Cursor mcpServers config block
 bitrouter mcp install --client claude
 

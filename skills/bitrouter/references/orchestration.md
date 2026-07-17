@@ -30,6 +30,14 @@ completion tools (`complete` / `list_models` / `status`, routed to the local
 daemon) **plus** `fleet_cost`. So the one bridge lets you both delegate and run
 your own completions / check spend without a second MCP server.
 
+Under `bitrouter tui`, the bridge is injected alongside two **gateway
+servers** — `bitrouter_tools` (streamable HTTP to the daemon's aggregate
+`/mcp`, fanning out to every `mcp_servers` upstream with `{server}__` tool
+prefixes) and `bitrouter_skills` (stdio `mcp serve --backend skills`, the
+`skills_search`/`skills_get` pair) — and every spawned subagent receives the
+same two in its `session/new`, so the fleet shares your tool and skill
+surface. Use `skills_get` to paste a skill into a `spawn_subagent` task.
+
 ## Tools
 
 | Tool | Effect |
@@ -49,8 +57,6 @@ escalation** tools:
 | Tool | Effect |
 |---|---|
 | `route_preview(model, prompt?)` | Preview how BitRouter would route `model` (with the opening `prompt`, if given): the resolved provider fallback chain and the registry's per-token rates for the top hop. Resolves through the **live daemon first** (like `bitrouter route`) so it reflects `reload`s and subscription-backed providers, falling back to static config when the daemon is unreachable — `resolved_via` (`live daemon`/`config`) records which. When config-resolved it also reports the static policy decision. Nothing is sent upstream. Use it to pick a model/tier before delegating. |
-| `skills_search(query)` | Installed skills whose name/description match `query` (`{name, description, path}`). |
-| `skills_get(name)` | One skill's frontmatter + SKILL.md body — paste it into a `spawn_subagent` task to hand the subagent a skill. |
 | `notify_human(message)` | Post a one-line notice in the human's TUI. Headless (no TUI), it returns `{"delivered": false}` — no error. |
 | `request_attach(handle)` | Ask the human to attach to a subagent's pane and drive it. The subagent is flagged for attention in the rail. |
 | `request_review(handle)` | Flag a subagent's work into the human's review queue. **Advisory when bridge-mirrored:** a subagent surfaced into the TUI over the fleet socket has no review-queue metadata there, so the queue's load-diff/merge/apply verbs no-op on it — the human drives integration from the owning process (this bridge's `merge_subagent`/`apply_subagent`, or the orchestrator). |
