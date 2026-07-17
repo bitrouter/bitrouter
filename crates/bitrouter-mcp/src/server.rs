@@ -96,7 +96,18 @@ pub struct CompleteArgs {
 // ── the public profile: completion tools (guarded on `self.backend`) ──
 #[tool_router(router = completion_router)]
 impl BitrouterMcp {
-    #[tool(description = "Route a completion through BitRouter and return the full result.")]
+    #[tool(
+        description = "Route a completion through BitRouter and return the full result.",
+        annotations(
+            read_only_hint = false,
+            // Additive, not destructive: it spends credits and appends to the
+            // metering log, but destroys nothing. Each call bills again, so
+            // never idempotent; open-world because it reaches upstream LLMs.
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn complete(
         &self,
         Parameters(args): Parameters<CompleteArgs>,
@@ -130,7 +141,15 @@ impl BitrouterMcp {
         }
     }
 
-    #[tool(description = "List models routable through BitRouter.")]
+    #[tool(
+        description = "List models routable through BitRouter.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_models(
         &self,
         ctx: RequestContext<RoleServer>,
@@ -151,7 +170,13 @@ impl BitrouterMcp {
     }
 
     #[tool(
-        description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance)."
+        description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let backend = self.backend()?;
@@ -183,7 +208,15 @@ impl BitrouterMcp {
         description = "Spawn a worktree-isolated ACP subagent, send it the task, and block until \
                        its turn ends. Returns a summary: handle, stop_reason, reply, diff stat \
                        (and result/schema_ok under result_schema). Subagents don't spawn \
-                       subagents — keep delegation depth 1."
+                       subagents — keep delegation depth 1.",
+        annotations(
+            read_only_hint = false,
+            // Additive: a fresh worktree + branch; the base tree is untouched.
+            // Open-world: it launches an autonomous agent that acts on its own.
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn spawn_subagent(
         &self,
@@ -199,7 +232,13 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Send a follow-up prompt to a running subagent and block until the turn \
-                       ends. Same summary shape as spawn_subagent."
+                       ends. Same summary shape as spawn_subagent.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn prompt_subagent(
         &self,
@@ -212,7 +251,13 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Fleet snapshot (or one subagent with handle): agent, state, worktree, \
-                       branch, diff stat."
+                       branch, diff stat.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn subagent_status(
         &self,
@@ -225,7 +270,13 @@ impl BitrouterMcp {
 
     #[tool(
         description = "The subagent's full diff against its spawn base (committed + uncommitted \
-                       work in its worktree)."
+                       work in its worktree).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn subagent_diff(
         &self,
@@ -240,7 +291,15 @@ impl BitrouterMcp {
     #[tool(
         description = "Apply the subagent's diff onto the base repository working tree, \
                        UNCOMMITTED (the human writes the commit). Human-gated: requires the \
-                       bridge to have been started with --allow-writes."
+                       bridge to have been started with --allow-writes.",
+        annotations(
+            read_only_hint = false,
+            // Destructive: overwrites files in the base working tree, which can
+            // clobber uncommitted local work.
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn apply_subagent(
         &self,
@@ -253,7 +312,14 @@ impl BitrouterMcp {
         description = "Merge the subagent's branch into the base repository, keeping history. \
                        Requires the subagent to have committed its work (clean worktree). \
                        Serialized: one integration at a time. Human-gated: requires \
-                       --allow-writes."
+                       --allow-writes.",
+        annotations(
+            read_only_hint = false,
+            // Destructive: mutates the base repository's refs and history.
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn merge_subagent(
         &self,
@@ -264,7 +330,16 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Shut the subagent down. Its worktree is RETAINED (cleanup is gated on \
-                       merged-or-discarded, never automatic)."
+                       merged-or-discarded, never automatic).",
+        annotations(
+            read_only_hint = false,
+            // Non-destructive by design: the work product (worktree + branch)
+            // is retained; only the live session ends. Idempotent: a second
+            // close of the same handle changes nothing further.
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn close_subagent(
         &self,
@@ -280,7 +355,13 @@ impl BitrouterMcp {
     #[tool(
         description = "BitRouter spend snapshot from the local metering database (machine-wide, \
                        not scoped to one session): today's spend and request count plus all-time \
-                       totals. Keeps in-session model arbitrage cost-visible."
+                       totals. Keeps in-session model arbitrage cost-visible.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn fleet_cost(&self) -> Result<CallToolResult, McpError> {
         Ok(json_tool_result(self.cost()?.snapshot().await))
@@ -292,7 +373,13 @@ impl BitrouterMcp {
 impl BitrouterMcp {
     #[tool(
         description = "Preview how BitRouter would route a model/prompt: resolved provider(s), \
-                       policy decision, and estimated cost. Read-only — nothing is sent upstream."
+                       policy decision, and estimated cost. Read-only — nothing is sent upstream.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn route_preview(
         &self,
@@ -305,7 +392,15 @@ impl BitrouterMcp {
 // ── the orchestrator profile's skills slice (guarded on `self.skills`) ──
 #[tool_router(router = skills_router)]
 impl BitrouterMcp {
-    #[tool(description = "Search installed BitRouter skills by name/description.")]
+    #[tool(
+        description = "Search installed BitRouter skills by name/description.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn skills_search(
         &self,
         Parameters(args): Parameters<SkillsSearchArgs>,
@@ -313,7 +408,15 @@ impl BitrouterMcp {
         Ok(json_tool_result(self.skills()?.search(&args.query).await))
     }
 
-    #[tool(description = "Fetch a skill's frontmatter + body so you can hand it to a subagent.")]
+    #[tool(
+        description = "Fetch a skill's frontmatter + body so you can hand it to a subagent.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn skills_get(
         &self,
         Parameters(args): Parameters<SkillsGetArgs>,
@@ -325,7 +428,17 @@ impl BitrouterMcp {
 // ── the orchestrator profile's human-bridge slice (guarded on `self.human`) ──
 #[tool_router(router = human_router)]
 impl BitrouterMcp {
-    #[tool(description = "Send the supervising human a one-line notice in the TUI.")]
+    #[tool(
+        description = "Send the supervising human a one-line notice in the TUI.",
+        annotations(
+            read_only_hint = false,
+            // Additive: posts a notice; repeating it posts another (not
+            // idempotent). Closed-world: delivery rides the local TUI socket.
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn notify_human(
         &self,
         Parameters(args): Parameters<NotifyArgs>,
@@ -333,7 +446,15 @@ impl BitrouterMcp {
         Ok(json_tool_result(self.human()?.notify(&args.message).await))
     }
 
-    #[tool(description = "Ask the human to attach to a subagent's pane to drive it directly.")]
+    #[tool(
+        description = "Ask the human to attach to a subagent's pane to drive it directly.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn request_attach(
         &self,
         Parameters(args): Parameters<HumanHandleArgs>,
@@ -343,7 +464,15 @@ impl BitrouterMcp {
         ))
     }
 
-    #[tool(description = "Flag a subagent's work for the human's review queue.")]
+    #[tool(
+        description = "Flag a subagent's work for the human's review queue.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn request_review(
         &self,
         Parameters(args): Parameters<HumanHandleArgs>,
@@ -988,6 +1117,63 @@ mod tests {
             .cost(Arc::new(StubCost))
             .build();
         assert_eq!(tool_names(&server).len(), 11);
+    }
+
+    #[test]
+    fn annotations_classify_the_tool_surface() {
+        // The full surface: every tool declares explicit annotations, the
+        // read-only set is exactly the introspection tools, and the two
+        // human-gated integration tools are the only destructive ones.
+        let server = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .fleet(Arc::new(StubFleet))
+            .cost(Arc::new(StubCost))
+            .routing(Arc::new(StubRouting))
+            .skills(Arc::new(StubSkills))
+            .human(Arc::new(StubHuman))
+            .build();
+        let tools = server.tool_router.list_all();
+        assert_eq!(tools.len(), 17);
+        for tool in &tools {
+            assert!(
+                tool.annotations.is_some(),
+                "`{}` declares no annotations",
+                tool.name
+            );
+        }
+        let with_hint = |pick: fn(&rmcp::model::ToolAnnotations) -> Option<bool>| {
+            let mut names: Vec<String> = tools
+                .iter()
+                .filter(|t| t.annotations.as_ref().and_then(pick) == Some(true))
+                .map(|t| t.name.to_string())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            with_hint(|a| a.read_only_hint),
+            [
+                "fleet_cost",
+                "list_models",
+                "route_preview",
+                "skills_get",
+                "skills_search",
+                "status",
+                "subagent_diff",
+                "subagent_status",
+            ],
+            "the read-only set is exactly the introspection tools"
+        );
+        assert_eq!(
+            with_hint(|a| a.destructive_hint),
+            ["apply_subagent", "merge_subagent"],
+            "only the human-gated integration tools are destructive"
+        );
+        assert_eq!(
+            with_hint(|a| a.open_world_hint),
+            ["complete", "prompt_subagent", "spawn_subagent"],
+            "open-world = reaches upstream LLMs or launches autonomous agents"
+        );
     }
 
     #[test]
