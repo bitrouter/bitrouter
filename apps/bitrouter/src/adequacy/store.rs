@@ -11,13 +11,15 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use bitrouter_sdk::{BitrouterError, Result};
 
 use self::adequacy_exploration::Entity as Exploration;
 use self::adequacy_pins::Entity as Pins;
+use self::adequacy_reliability_events::Entity as ReliabilityEvents;
 use self::adequacy_semantic_success::Entity as SemanticSuccess;
+use super::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
 
 /// sea-orm entity for the `adequacy_pins` table.
 pub mod adequacy_pins {
@@ -92,12 +94,51 @@ pub mod adequacy_semantic_success {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+pub mod adequacy_reliability_events {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "adequacy_reliability_events")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub sequence: i64,
+        #[sea_orm(unique)]
+        pub request_id: String,
+        pub route_key: String,
+        pub provider: String,
+        pub model: String,
+        pub credential_class: String,
+        pub endpoint_scope: String,
+        pub protocol: String,
+        pub observation: String,
+        pub observed_at_unix: i64,
+        pub created_at: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedExplorationState {
     pub fingerprint: String,
     pub observed: u32,
     pub adequate_trials: u32,
     pub locked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedReliabilityEvent {
+    pub sequence: i64,
+    pub event: ReliabilityEvent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliabilityAppendOutcome {
+    Inserted,
+    Duplicate,
 }
 
 /// sea-orm-backed store over the `adequacy_pins` table.
@@ -192,6 +233,78 @@ impl AdequacyStore {
         Ok(())
     }
 
+    pub async fn append_reliability_event(
+        &self,
+        event: &ReliabilityEvent,
+    ) -> Result<ReliabilityAppendOutcome> {
+        let observed_at_unix = i64::try_from(event.observed_at_unix).map_err(|_| {
+            BitrouterError::bad_request("reliability observation timestamp exceeds storage range")
+        })?;
+        let row = adequacy_reliability_events::ActiveModel {
+            sequence: Default::default(),
+            request_id: Set(event.request_id.clone()),
+            route_key: Set(event.route_key.clone()),
+            provider: Set(event.endpoint_key.provider.clone()),
+            model: Set(event.endpoint_key.model.clone()),
+            credential_class: Set(event.endpoint_key.credential_class.clone()),
+            endpoint_scope: Set(event.endpoint_key.endpoint_scope.clone()),
+            protocol: Set(event.endpoint_key.protocol.clone()),
+            observation: Set(reliability_observation_str(event.observation).to_string()),
+            observed_at_unix: Set(observed_at_unix),
+            created_at: Set(Utc::now().to_rfc3339()),
+        };
+        match ReliabilityEvents::insert(row)
+            .on_conflict(
+                OnConflict::column(adequacy_reliability_events::Column::RequestId)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(&self.db)
+            .await
+        {
+            Ok(_) => Ok(ReliabilityAppendOutcome::Inserted),
+            Err(DbErr::RecordNotInserted) => {
+                let existing = ReliabilityEvents::find()
+                    .filter(adequacy_reliability_events::Column::RequestId.eq(&event.request_id))
+                    .one(&self.db)
+                    .await
+                    .map_err(|error| {
+                        BitrouterError::internal(format!(
+                            "load duplicate reliability event: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        BitrouterError::internal(
+                            "duplicate reliability insert did not leave an existing row",
+                        )
+                    })?;
+                let existing = reliability_event_from_row(existing)?;
+                if existing.event == *event {
+                    Ok(ReliabilityAppendOutcome::Duplicate)
+                } else {
+                    Err(BitrouterError::bad_request(format!(
+                        "conflicting reliability event for request {}",
+                        event.request_id
+                    )))
+                }
+            }
+            Err(error) => Err(BitrouterError::internal(format!(
+                "append reliability event: {error}"
+            ))),
+        }
+    }
+
+    pub async fn load_reliability_events(&self) -> Result<Vec<PersistedReliabilityEvent>> {
+        let rows = ReliabilityEvents::find()
+            .order_by_asc(adequacy_reliability_events::Column::Sequence)
+            .all(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("load reliability events: {error}"))
+            })?;
+        rows.into_iter().map(reliability_event_from_row).collect()
+    }
+
     /// Upsert a pin, refreshing the cooldown clock (`pinned_at_unix`) without
     /// resetting `created_at`.
     pub async fn upsert_pin(&self, fingerprint: &str, pinned_at_unix: i64) -> Result<()> {
@@ -245,9 +358,50 @@ impl AdequacyStore {
     }
 }
 
+fn reliability_observation_str(observation: ReliabilityObservation) -> &'static str {
+    match observation {
+        ReliabilityObservation::Success => "success",
+        ReliabilityObservation::TransientFailure => "transient_failure",
+    }
+}
+
+fn reliability_event_from_row(
+    row: adequacy_reliability_events::Model,
+) -> Result<PersistedReliabilityEvent> {
+    let observation = match row.observation.as_str() {
+        "success" => ReliabilityObservation::Success,
+        "transient_failure" => ReliabilityObservation::TransientFailure,
+        other => {
+            return Err(BitrouterError::internal(format!(
+                "unknown persisted reliability observation: {other}"
+            )));
+        }
+    };
+    let observed_at_unix = u64::try_from(row.observed_at_unix).map_err(|_| {
+        BitrouterError::internal("persisted reliability observation has a negative timestamp")
+    })?;
+    Ok(PersistedReliabilityEvent {
+        sequence: row.sequence,
+        event: ReliabilityEvent {
+            request_id: row.request_id,
+            route_key: row.route_key,
+            endpoint_key: ReliabilityKey {
+                provider: row.provider,
+                model: row.model,
+                credential_class: row.credential_class,
+                endpoint_scope: row.endpoint_scope,
+                protocol: row.protocol,
+            },
+            observation,
+            observed_at_unix,
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
     use crate::adequacy::{AdequacyLedger, Outcome};
     use crate::db;
     use bitrouter_sdk::config::AdequacyConfig;
@@ -256,6 +410,71 @@ mod tests {
         let db = db::connect("sqlite::memory:").await.unwrap();
         db::run_migrations(&db).await.unwrap();
         AdequacyStore::new(db)
+    }
+
+    fn reliability_event(
+        request_id: &str,
+        observation: ReliabilityObservation,
+        observed_at_unix: u64,
+    ) -> ReliabilityEvent {
+        ReliabilityEvent {
+            request_id: request_id.to_string(),
+            route_key: "bitrouter:canary-weak".to_string(),
+            endpoint_key: ReliabilityKey {
+                provider: "bitrouter".to_string(),
+                model: "canary-weak".to_string(),
+                credential_class: "default:x_api_key".to_string(),
+                endpoint_scope: "127.0.0.1:18090".to_string(),
+                protocol: "chat_completions".to_string(),
+            },
+            observation,
+            observed_at_unix,
+        }
+    }
+
+    #[tokio::test]
+    async fn reliability_events_round_trip_in_database_order_and_are_idempotent() {
+        let store = store().await;
+        let first = reliability_event("request-1", ReliabilityObservation::TransientFailure, 100);
+        let second = reliability_event("request-2", ReliabilityObservation::Success, 101);
+
+        assert_eq!(
+            store.append_reliability_event(&first).await.unwrap(),
+            ReliabilityAppendOutcome::Inserted,
+        );
+        assert_eq!(
+            store.append_reliability_event(&second).await.unwrap(),
+            ReliabilityAppendOutcome::Inserted,
+        );
+        assert_eq!(
+            store.append_reliability_event(&first).await.unwrap(),
+            ReliabilityAppendOutcome::Duplicate,
+        );
+
+        let rows = store.load_reliability_events().await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].sequence < rows[1].sequence);
+        assert_eq!(rows[0].event, first);
+        assert_eq!(rows[1].event, second);
+    }
+
+    #[tokio::test]
+    async fn reliability_conflicting_duplicate_is_rejected() {
+        let store = store().await;
+        let first = reliability_event("request-1", ReliabilityObservation::TransientFailure, 100);
+        store.append_reliability_event(&first).await.unwrap();
+        let conflicting = reliability_event("request-1", ReliabilityObservation::Success, 100);
+
+        let error = store
+            .append_reliability_event(&conflicting)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting reliability event for request request-1")
+        );
     }
 
     #[tokio::test]

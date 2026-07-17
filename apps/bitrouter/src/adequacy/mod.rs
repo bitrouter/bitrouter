@@ -543,18 +543,21 @@ mod tests {
         let route = "bitrouter:deepseek-v4-flash";
         let events = vec![
             ReliabilityEvent {
+                request_id: "request-1".to_string(),
                 route_key: route.to_string(),
                 endpoint_key: endpoint("bitrouter"),
                 observation: ReliabilityObservation::TransientFailure,
                 observed_at_unix: 100,
             },
             ReliabilityEvent {
+                request_id: "request-2".to_string(),
                 route_key: route.to_string(),
                 endpoint_key: endpoint("bitrouter"),
                 observation: ReliabilityObservation::Success,
                 observed_at_unix: 101,
             },
             ReliabilityEvent {
+                request_id: "request-3".to_string(),
                 route_key: route.to_string(),
                 endpoint_key: endpoint("bitrouter"),
                 observation: ReliabilityObservation::TransientFailure,

@@ -21,6 +21,7 @@ pub enum ReliabilityObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReliabilityEvent {
+    pub request_id: String,
     pub route_key: String,
     pub endpoint_key: ReliabilityKey,
     pub observation: ReliabilityObservation,
