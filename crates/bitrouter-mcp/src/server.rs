@@ -62,8 +62,11 @@ fn json_tool_result(result: Result<serde_json::Value, ToolError>) -> CallToolRes
     }
 }
 
-#[derive(Clone)]
-pub struct BitrouterMcp {
+/// The capability ports plus their port-adjacent state, declared once and
+/// shared between [`Builder`] (which fills it) and the built handler (which
+/// reads it) — a capability is never a pair of parallel field declarations.
+#[derive(Clone, Default)]
+struct Caps {
     backend: Option<Arc<dyn Backend>>,
     fleet: Option<Arc<dyn Fleet>>,
     cost: Option<Arc<dyn CostQuery>>,
@@ -78,6 +81,97 @@ pub struct BitrouterMcp {
     /// elicitation). Populated at the first fleet tool call with the client's
     /// capability + the server→client peer; the same `Arc` is held app-side.
     escalation: Option<Arc<EscalationState>>,
+}
+
+/// One tool-contributing capability: whether it's wired, the tool router it
+/// contributes, and the server-instruction fragment describing its tools.
+/// [`Builder::build`] and [`BitrouterMcp::instructions`] iterate the same
+/// table, so a capability's registration and its guidance can't drift apart —
+/// adding a capability is one entry here plus its [`Caps`] field and
+/// [`Builder`] setter.
+struct CapSpec {
+    wired: fn(&Caps) -> bool,
+    router: fn() -> ToolRouter<BitrouterMcp>,
+    /// The instruction fragment. Takes [`Caps`] because the fleet fragment
+    /// interpolates the app-sourced subagent cap.
+    instructions: fn(&Caps) -> String,
+}
+
+/// The tool-contributing capabilities, in registration + instruction order.
+/// State-only capabilities (`subagent_cap`, `escalation`, the transport-side
+/// cost footer) contribute no router and stay plain fields.
+const CAPABILITIES: &[CapSpec] = &[
+    CapSpec {
+        wired: |caps| caps.backend.is_some(),
+        router: BitrouterMcp::completion_router,
+        instructions: |_| {
+            "BitRouter origin MCP server. Use `list_models` to discover routable \
+             models, `complete` to run a completion, `status` for health/credits."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.fleet.is_some(),
+        router: BitrouterMcp::fleet_router,
+        instructions: fleet_instructions,
+    },
+    CapSpec {
+        wired: |caps| caps.cost.is_some(),
+        router: BitrouterMcp::cost_router,
+        instructions: |_| "Use `fleet_cost` to keep spend visible mid-session.".to_string(),
+    },
+    CapSpec {
+        wired: |caps| caps.routing.is_some(),
+        router: BitrouterMcp::routing_router,
+        instructions: |_| {
+            "`route_preview` shows how a model/prompt would route (provider chain, \
+             policy decision, cost estimate) without sending anything."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.skills.is_some(),
+        router: BitrouterMcp::skills_router,
+        instructions: |_| {
+            "`skills_search` / `skills_get` browse installed skills to hand one to a \
+             subagent."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.human.is_some(),
+        router: BitrouterMcp::human_router,
+        instructions: |_| {
+            "Reach the supervising human with `notify_human` (a one-line notice), \
+             `request_attach` (ask them to drive a subagent), or `request_review` \
+             (flag work for their review queue)."
+                .to_string()
+        },
+    },
+];
+
+/// The fleet instruction fragment, a named fn because it interpolates the
+/// subagent cap. The cap value is sourced from the app (`Caps::subagent_cap`)
+/// so this guidance can't drift from the enforced `MAX_CONCURRENT_SUBAGENTS`;
+/// without one the guidance stays generic rather than inventing a number.
+fn fleet_instructions(caps: &Caps) -> String {
+    let cap = match caps.subagent_cap {
+        Some(cap) => format!("a {cap}-subagent cap"),
+        None => "the concurrency cap".to_string(),
+    };
+    format!(
+        "Fleet: spawn and manage worktree-isolated ACP subagents. `spawn_subagent` \
+         blocks and returns a summary; review with `subagent_diff`; \
+         `apply_subagent`/`merge_subagent` are human-gated unless the bridge was \
+         started with --allow-writes. Subagents don't spawn subagents (delegation \
+         depth 1), and a spawn is rejected past {cap} — integrate or close one \
+         before fanning out further."
+    )
+}
+
+#[derive(Clone)]
+pub struct BitrouterMcp {
+    caps: Caps,
     cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
 }
@@ -483,6 +577,20 @@ impl BitrouterMcp {
     }
 }
 
+/// The typed accessor for a capability port: the port, or a wired-capability
+/// error (unreachable in practice — each capability's router is merged only
+/// when its port is `Some`, so a routed tool call implies a wired port).
+macro_rules! port_accessor {
+    ($field:ident, $port:ty, $what:literal) => {
+        fn $field(&self) -> Result<&Arc<$port>, McpError> {
+            self.caps
+                .$field
+                .as_ref()
+                .ok_or_else(|| McpError::internal_error(concat!($what, " not wired"), None))
+        }
+    };
+}
+
 impl BitrouterMcp {
     /// Start assembling a handler. `build()` merges only the routers whose
     /// capability was wired.
@@ -497,53 +605,12 @@ impl BitrouterMcp {
         self
     }
 
-    /// The completion backend, or a wired-capability error (unreachable in
-    /// practice — the completion router is merged only when it is `Some`).
-    fn backend(&self) -> Result<&Arc<dyn Backend>, McpError> {
-        self.backend
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("completion backend not wired", None))
-    }
-
-    /// The fleet port, or a wired-capability error (unreachable in practice —
-    /// the fleet router is merged only when it is `Some`).
-    fn fleet(&self) -> Result<&Arc<dyn Fleet>, McpError> {
-        self.fleet
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("fleet capability not wired", None))
-    }
-
-    /// The cost port, or a wired-capability error (unreachable in practice —
-    /// the cost router is merged only when it is `Some`).
-    fn cost(&self) -> Result<&Arc<dyn CostQuery>, McpError> {
-        self.cost
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("cost capability not wired", None))
-    }
-
-    /// The routing port, or a wired-capability error (unreachable in practice —
-    /// the routing router is merged only when it is `Some`).
-    fn routing(&self) -> Result<&Arc<dyn RoutingQuery>, McpError> {
-        self.routing
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("routing capability not wired", None))
-    }
-
-    /// The skills port, or a wired-capability error (unreachable in practice —
-    /// the skills router is merged only when it is `Some`).
-    fn skills(&self) -> Result<&Arc<dyn SkillsQuery>, McpError> {
-        self.skills
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("skills capability not wired", None))
-    }
-
-    /// The human-bridge port, or a wired-capability error (unreachable in
-    /// practice — the human router is merged only when it is `Some`).
-    fn human(&self) -> Result<&Arc<dyn HumanBridge>, McpError> {
-        self.human
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("human bridge not wired", None))
-    }
+    port_accessor!(backend, dyn Backend, "completion backend");
+    port_accessor!(fleet, dyn Fleet, "fleet capability");
+    port_accessor!(cost, dyn CostQuery, "cost capability");
+    port_accessor!(routing, dyn RoutingQuery, "routing capability");
+    port_accessor!(skills, dyn SkillsQuery, "skills capability");
+    port_accessor!(human, dyn HumanBridge, "human bridge");
 
     /// Record the connecting client's escalation capability + capture the
     /// server→client peer for the capability-gated Tasks elicitation seam.
@@ -551,7 +618,7 @@ impl BitrouterMcp {
     /// the recorded peer handshake info). A no-op when no escalation state is
     /// wired (public profile) or before the peer info is recorded.
     fn record_escalation(&self, ctx: &RequestContext<RoleServer>) {
-        if let Some(escalation) = &self.escalation
+        if let Some(escalation) = &self.caps.escalation
             && let Some(info) = ctx.peer.peer_info()
         {
             escalation.record(&info.capabilities, ctx.peer.clone());
@@ -565,53 +632,20 @@ impl BitrouterMcp {
         footer.line().await.map(ContentBlock::text)
     }
 
-    /// Server instructions, composed from the wired capabilities. The public
-    /// profile gets only the completion base; the orchestrator profile adds the
-    /// fleet / cost guidance the old `FleetMcp::get_info` carried, so a client
-    /// is told about the tools it can actually call (and the human-gating of
-    /// apply/merge).
+    /// Server instructions, composed by walking [`CAPABILITIES`] — the same
+    /// table `build()` merges routers from, so a client is told about exactly
+    /// the tools it can call (the public profile gets only the completion
+    /// base; the orchestrator profile adds the fleet / cost / tier-2 guidance,
+    /// including the human-gating of apply/merge).
     fn instructions(&self) -> String {
-        let mut s = String::from(
-            "BitRouter origin MCP server. Use `list_models` to discover routable \
-             models, `complete` to run a completion, `status` for health/credits.",
-        );
-        if self.fleet.is_some() {
-            s.push_str(
-                " Fleet: spawn and manage worktree-isolated ACP subagents. \
-                 `spawn_subagent` blocks and returns a summary; review with \
-                 `subagent_diff`; `apply_subagent`/`merge_subagent` are human-gated \
-                 unless the bridge was started with --allow-writes. Subagents don't \
-                 spawn subagents (delegation depth 1), and a spawn is rejected past ",
-            );
-            // The cap value is sourced from the app (`subagent_cap`) so this
-            // guidance can't drift from the enforced `MAX_CONCURRENT_SUBAGENTS`.
-            match self.subagent_cap {
-                Some(cap) => s.push_str(&format!("a {cap}-subagent cap")),
-                None => s.push_str("the concurrency cap"),
+        let mut s = String::new();
+        for spec in CAPABILITIES {
+            if (spec.wired)(&self.caps) {
+                if !s.is_empty() {
+                    s.push(' ');
+                }
+                s.push_str(&(spec.instructions)(&self.caps));
             }
-            s.push_str(" — integrate or close one before fanning out further.");
-        }
-        if self.cost.is_some() {
-            s.push_str(" Use `fleet_cost` to keep spend visible mid-session.");
-        }
-        if self.routing.is_some() {
-            s.push_str(
-                " `route_preview` shows how a model/prompt would route (provider chain, \
-                 policy decision, cost estimate) without sending anything.",
-            );
-        }
-        if self.skills.is_some() {
-            s.push_str(
-                " `skills_search` / `skills_get` browse installed skills to hand one to a \
-                 subagent.",
-            );
-        }
-        if self.human.is_some() {
-            s.push_str(
-                " Reach the supervising human with `notify_human` (a one-line notice), \
-                 `request_attach` (ask them to drive a subagent), or `request_review` \
-                 (flag work for their review queue).",
-            );
         }
         s
     }
@@ -622,57 +656,50 @@ impl BitrouterMcp {
 /// server's whole tool surface, so unwired tools are never registered.
 #[derive(Default)]
 pub struct Builder {
-    backend: Option<Arc<dyn Backend>>,
-    fleet: Option<Arc<dyn Fleet>>,
-    cost: Option<Arc<dyn CostQuery>>,
-    routing: Option<Arc<dyn RoutingQuery>>,
-    skills: Option<Arc<dyn SkillsQuery>>,
-    human: Option<Arc<dyn HumanBridge>>,
-    subagent_cap: Option<usize>,
-    escalation: Option<Arc<EscalationState>>,
+    caps: Caps,
 }
 
 impl Builder {
     /// Wire completion against a ready-made backend.
     pub fn completion(mut self, backend: Arc<dyn Backend>) -> Self {
-        self.backend = Some(backend);
+        self.caps.backend = Some(backend);
         self
     }
 
     /// Wire completion against the local BYOK daemon at `url`.
     pub fn completion_local(mut self, url: &str) -> Self {
-        self.backend = Some(Arc::new(LocalBackend::new(url)));
+        self.caps.backend = Some(Arc::new(LocalBackend::new(url)));
         self
     }
 
     /// Wire the fleet capability (spawn/manage subagents).
     pub fn fleet(mut self, fleet: Arc<dyn Fleet>) -> Self {
-        self.fleet = Some(fleet);
+        self.caps.fleet = Some(fleet);
         self
     }
 
     /// Wire the cost capability (the `fleet_cost` tool).
     pub fn cost(mut self, cost: Arc<dyn CostQuery>) -> Self {
-        self.cost = Some(cost);
+        self.caps.cost = Some(cost);
         self
     }
 
     /// Wire the routing-introspection capability (the `route_preview` tool).
     pub fn routing(mut self, routing: Arc<dyn RoutingQuery>) -> Self {
-        self.routing = Some(routing);
+        self.caps.routing = Some(routing);
         self
     }
 
     /// Wire the skills-introspection capability (`skills_search`/`skills_get`).
     pub fn skills(mut self, skills: Arc<dyn SkillsQuery>) -> Self {
-        self.skills = Some(skills);
+        self.caps.skills = Some(skills);
         self
     }
 
     /// Wire the human-escalation capability (`notify_human`/`request_attach`/
     /// `request_review`).
     pub fn human(mut self, human: Arc<dyn HumanBridge>) -> Self {
-        self.human = Some(human);
+        self.caps.human = Some(human);
         self
     }
 
@@ -680,7 +707,7 @@ impl Builder {
     /// hardcoded in the crate) so the server instructions quote the real
     /// `MAX_CONCURRENT_SUBAGENTS` and can't drift from it.
     pub fn subagent_cap(mut self, cap: usize) -> Self {
-        self.subagent_cap = Some(cap);
+        self.caps.subagent_cap = Some(cap);
         self
     }
 
@@ -690,44 +717,25 @@ impl Builder {
     /// path. Capability-gated: default behavior is unchanged when no client
     /// declares the Tasks/elicitation capability.
     pub fn escalation(mut self, escalation: Arc<EscalationState>) -> Self {
-        self.escalation = Some(escalation);
+        self.caps.escalation = Some(escalation);
         self
     }
 
-    /// Compose the handler, merging each wired capability's router.
+    /// Compose the handler, merging each wired capability's router from
+    /// [`CAPABILITIES`].
     pub fn build(self) -> BitrouterMcp {
-        let mut router = ToolRouter::new();
-        if self.backend.is_some() {
-            router += BitrouterMcp::completion_router();
-        }
-        if self.fleet.is_some() {
-            router += BitrouterMcp::fleet_router();
-        }
-        if self.cost.is_some() {
-            router += BitrouterMcp::cost_router();
-        }
-        if self.routing.is_some() {
-            router += BitrouterMcp::routing_router();
-        }
-        if self.skills.is_some() {
-            router += BitrouterMcp::skills_router();
-        }
-        if self.human.is_some() {
-            router += BitrouterMcp::human_router();
+        let mut tool_router = ToolRouter::new();
+        for spec in CAPABILITIES {
+            if (spec.wired)(&self.caps) {
+                tool_router += (spec.router)();
+            }
         }
         BitrouterMcp {
-            backend: self.backend,
-            fleet: self.fleet,
-            cost: self.cost,
-            routing: self.routing,
-            skills: self.skills,
-            human: self.human,
-            subagent_cap: self.subagent_cap,
-            escalation: self.escalation,
+            caps: self.caps,
             // The footer is attached later, transport-side, via
             // `with_cost_footer` (stdio only) — never through the builder.
             cost_footer: None,
-            tool_router: router,
+            tool_router,
         }
     }
 }
