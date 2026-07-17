@@ -28,7 +28,7 @@ use bitrouter::output::reports::agents::{
     AgentCheckRow, AgentInstallReport, AgentRegistryRow, AgentRow, AgentsCheckReport,
     AgentsListReport,
 };
-use bitrouter::output::reports::config::{InitReport, UnsetVar, ValidateReport};
+use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
@@ -55,8 +55,11 @@ struct Cli {
     /// Compatibility spelling for `--human` when placed before the subcommand.
     #[arg(short = 'H', hide = true, conflicts_with = "json")]
     human_short: bool,
+    /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
+    /// the wizard when unconfigured, a one-line status + `bitrouter launch`
+    /// hint when configured.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -142,11 +145,66 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Write a starter `bitrouter.yaml` (with `skip_auth: true`).
+    /// Guided onboarding wizard that sequences credential, harness, and finish
+    /// steps to first value. Interactive by default; `--yes` (or no TTY) runs
+    /// it headlessly, emitting the JSON result envelope and never blocking on a
+    /// human. Every prompt has a flag equivalent (below) so an agent can drive
+    /// the whole thing. With `--yes` this also reproduces the classic
+    /// starter-`bitrouter.yaml` scaffold (refusing to overwrite unless
+    /// `--force`).
     Init {
-        /// Path to write.
+        /// Path for the starter `bitrouter.yaml` write.
         #[arg(short, long, default_value = "bitrouter.yaml")]
         config: PathBuf,
+        /// Run non-interactively: process the flags below, never block, emit
+        /// the JSON envelope, and scaffold the starter config.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Allow overwriting an existing `bitrouter.yaml` when scaffolding.
+        #[arg(long)]
+        force: bool,
+        /// Clear stored onboarding credentials (cloud session always; provider
+        /// credentials after a confirm, or unconditionally under `--yes`) before
+        /// running.
+        #[arg(long)]
+        reset: bool,
+        /// (Step 1) Sign in to BitRouter Cloud via device-flow OAuth. Skipped
+        /// and reported under `--yes` (a machine can't complete the device flow).
+        #[arg(long)]
+        cloud_login: bool,
+        /// (Step 1) Seed the cloud credential from a `brk_` API key
+        /// (non-interactive).
+        #[arg(long, value_name = "BRK_KEY")]
+        api_key: Option<String>,
+        /// (Step 1) Log in to an upstream provider by id (repeatable). A paired
+        /// `--provider-api-key` seeds it non-interactively; otherwise it is
+        /// reported-and-skipped under `--yes`.
+        #[arg(long = "provider", value_name = "ID")]
+        providers: Vec<String>,
+        /// (Step 1) API key for the `--provider` at the same position
+        /// (repeatable).
+        #[arg(long = "provider-api-key", value_name = "KEY")]
+        provider_api_keys: Vec<String>,
+        /// (Step 1) Accept the auto-detected credential(s) without prompting.
+        #[arg(long)]
+        use_detected: bool,
+        /// (Step 2) Harness to drive: `claude` or `codex` (repeatable).
+        #[arg(long = "harness", value_enum)]
+        harnesses: Vec<bitrouter::spawn::SpawnAgent>,
+        /// (Step 2) Never install a missing harness.
+        #[arg(long)]
+        no_install: bool,
+        /// (Step 3) What to do at the end: `launch` | `serve` | `exit`.
+        #[arg(long, value_enum)]
+        after: Option<bitrouter::onboarding::AfterAction>,
+        /// (Step 3) Model handed to the harness for this session only (not
+        /// persisted).
+        #[arg(long, value_name = "ID")]
+        model: Option<String>,
+        /// (Step 3) Write a starter `bitrouter.yaml` (the one sanctioned config
+        /// write).
+        #[arg(long)]
+        write_config: bool,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -298,6 +356,17 @@ enum Command {
         /// (with `-p`) Return immediately after submitting the prompt.
         #[arg(long, requires = "prompt")]
         no_wait: bool,
+        /// (with `-p`) JSON Schema — inline JSON or `@path` — the subagent's
+        /// final reply must satisfy. The schema rides the prompt; the terminal
+        /// NDJSON `result` line gains `result`/`schema_ok` fields, with one
+        /// repair re-prompt on invalid output (then `schema_ok:false` + raw).
+        #[arg(
+            long,
+            value_name = "JSON|@PATH",
+            requires = "prompt",
+            conflicts_with = "no_wait"
+        )]
+        result_schema: Option<String>,
         /// (with `--serve`) Keep the session alive for reattach after the
         /// manager disconnects. Unix-only.
         #[arg(long, requires = "serve")]
@@ -374,6 +443,36 @@ enum Command {
     Acp {
         #[command(subcommand)]
         cmd: AcpCmd,
+    },
+    /// Launch the composite multi-agent TUI: a left rail (roster sorted by
+    /// who needs you, radar strip, decision + review queues) beside the
+    /// primary pane. `--agent claude|codex|opencode|pi|hermes|openclaw|grok|agy`
+    /// hosts that harness's REAL native TUI in a PTY pane (the orchestrator —
+    /// keys pass through; `Ctrl-A` is the one manager leader; `Ctrl-C`
+    /// interrupts the agent, not the TUI) with the fleet MCP bridge injected
+    /// where the harness supports MCP (pi/openclaw/grok/agy have no
+    /// mechanism). grok and agy
+    /// launch with their own subscription auth (the daemon borrows those
+    /// same sessions as providers). A configured `agents:` id instead
+    /// renders that ACP agent from typed events. `Ctrl-A n` spawns
+    /// worktree-isolated ACP subagents either way.
+    #[cfg(feature = "tui")]
+    Tui {
+        /// The primary agent: a native harness (`claude`, `codex`,
+        /// `opencode`, `pi`, `grok`, `agy`/`antigravity`) hosted in a PTY
+        /// as the orchestrator, or a configured `agents:` entry rendered
+        /// from ACP events.
+        #[arg(short, long)]
+        agent: String,
+        /// Optional git worktree name for the first session (ACP agents only).
+        #[arg(short, long)]
+        worktree: Option<String>,
+        /// Pin the orchestrator's model (a daemon-routable id, e.g.
+        /// `anthropic/claude-sonnet-5` or the explicit `provider:model`
+        /// form). Defaults to the harness's own configuration (claude,
+        /// codex) or the daemon's first advertised model (opencode, pi).
+        #[arg(short, long)]
+        model: Option<String>,
     },
 }
 
@@ -481,6 +580,16 @@ enum McpAction {
         /// HTTP bind address.
         #[arg(long, default_value = "127.0.0.1:4357")]
         bind: String,
+        /// (fleet backend only) Grant the orchestrator write autonomy:
+        /// apply_subagent/merge_subagent may integrate into the base repo.
+        /// Off by default — writes are human-gated.
+        #[arg(long)]
+        allow_writes: bool,
+        /// (fleet backend only) Spend ceiling in USD. spawn_subagent/
+        /// prompt_subagent refuse once today's machine-wide spend reaches it.
+        /// Unset = unlimited.
+        #[arg(long)]
+        budget_usd: Option<f64>,
     },
     /// Write/print the client config block.
     Install {
@@ -503,12 +612,15 @@ enum McpTransport {
 }
 
 /// Backend the MCP tools route to.
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum McpBackend {
     /// The local BYOK daemon at `127.0.0.1:4356`.
     Local,
     /// BitRouter Cloud at `api.bitrouter.ai`.
     Cloud,
+    /// The fleet bridge: tools that spawn/manage worktree-isolated ACP
+    /// subagents for an orchestrating harness (TUI_SPEC §4). Stdio only.
+    Fleet,
 }
 
 /// MCP client targeted by `bitrouter mcp install`.
@@ -523,15 +635,6 @@ impl From<McpTransport> for bitrouter_mcp::Transport {
         match t {
             McpTransport::Stdio => bitrouter_mcp::Transport::Stdio,
             McpTransport::Http => bitrouter_mcp::Transport::Http,
-        }
-    }
-}
-
-impl From<McpBackend> for bitrouter_mcp::BackendKind {
-    fn from(b: McpBackend) -> Self {
-        match b {
-            McpBackend::Local => bitrouter_mcp::BackendKind::Local,
-            McpBackend::Cloud => bitrouter_mcp::BackendKind::Cloud,
         }
     }
 }
@@ -751,6 +854,16 @@ enum ProviderAction {
         /// Do not run a browser-based provider OAuth flow.
         #[arg(long)]
         no_browser: bool,
+        /// Seed a BYOK provider non-interactively from this API key — skips the
+        /// method menu and the stdin paste. The provider must accept a pasted
+        /// key (OAuth-only backends reject it).
+        #[arg(long, value_name = "KEY", conflicts_with_all = ["import_existing", "no_browser", "key_stdin"])]
+        api_key: Option<String>,
+        /// Read the API key from stdin (one line) instead of prompting — for
+        /// pipelines, e.g. `printf %s "$KEY" | bitrouter providers login openai
+        /// --key-stdin`.
+        #[arg(long, conflicts_with_all = ["import_existing", "no_browser"])]
+        key_stdin: bool,
     },
     /// Log out of an upstream provider — clears every stored credential for
     /// it. For the built-in `bitrouter` provider this is `cloud logout`.
@@ -891,12 +1004,19 @@ async fn main() {
     let cli = Cli::parse();
     let raw_cloud_api = matches!(
         &cli.command,
-        Command::Cloud {
+        Some(Command::Cloud {
             action: bitrouter::cloud::cli::CloudAction::Api(_)
-        }
+        })
     );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
-    match run(cli, &output).await {
+    // Box the dispatch future onto the heap. `run` is a large `async fn` whose
+    // state machine inlines the biggest per-command futures (the onboarding
+    // wizard, `spawn`, …), and `#[tokio::main]` polls it on the main thread —
+    // whose stack is only ~1 MiB on Windows. Keeping that state off the stack
+    // leaves headroom for the deep synchronous call chains (rustls/reqwest on
+    // the `cloud` path) that would otherwise overflow the main-thread stack on
+    // Windows (macOS/Linux's 8 MiB default hides it).
+    match Box::pin(run(cli, &output)).await {
         Ok(()) => {}
         Err(e) => {
             if raw_cloud_api {
@@ -927,8 +1047,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     // would interleave with and corrupt that stream. The exclusion of
     // `Command::Serve` mirrors how it defers its subscriber init to after the
     // OTel exporter is available.
-    let is_acp = matches!(&cli.command, Command::Acp { .. });
-    if matches!(cli.command, Command::Serve { .. }) {
+    let is_acp = matches!(&cli.command, Some(Command::Acp { .. }));
+    if matches!(cli.command, Some(Command::Serve { .. })) {
         // `Command::Serve` defers its init — handled inside `serve()`.
     } else if is_acp {
         // Any `acp` subcommand: init with stderr so stdout stays pristine.
@@ -937,7 +1057,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         init_basic_tracing_subscriber();
     }
 
-    match cli.command {
+    let Some(command) = cli.command else {
+        // Bare `bitrouter` — the onboarding front door (wizard when
+        // unconfigured; status + hint when configured). Never re-onboards a
+        // configured user, never silently spawns a daemon/harness.
+        return bitrouter::onboarding::entry(output).await;
+    };
+
+    match command {
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             serve(&source).await
@@ -984,9 +1111,39 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             output.emit(&route(&model, &source, &socket).await?)?;
             Ok(())
         }
-        Command::Init { config } => {
-            output.emit(&init(&config).await?)?;
-            Ok(())
+        Command::Init {
+            config,
+            yes,
+            force,
+            reset,
+            cloud_login,
+            api_key,
+            providers,
+            provider_api_keys,
+            use_detected,
+            harnesses,
+            no_install,
+            after,
+            model,
+            write_config,
+        } => {
+            let flags = bitrouter::onboarding::OnboardingFlags {
+                config,
+                yes,
+                force,
+                reset,
+                cloud_login,
+                api_key,
+                providers,
+                provider_api_keys,
+                use_detected,
+                harnesses,
+                no_install,
+                after,
+                model,
+                write_config,
+            };
+            bitrouter::onboarding::run(flags, output).await
         }
         Command::Config { action } => {
             let report = config_cmd(action).await?;
@@ -1044,6 +1201,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             no_transcript,
             turn_timeout,
             no_wait,
+            result_schema,
             warm,
             idle_timeout,
             config,
@@ -1131,6 +1289,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     no_transcript,
                     turn_timeout,
                 );
+                // A malformed schema fails fast, before any session side effect.
+                let contract = result_schema
+                    .as_deref()
+                    .map(bitrouter::result_contract::ResultContract::from_flag)
+                    .transpose()?;
                 let mut stdout = tokio::io::stdout();
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
@@ -1139,7 +1302,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     options,
                     routing,
                 };
-                bitrouter::acp_cli::prompt(ctx, &text, no_wait, &mut stdout).await
+                bitrouter::acp_cli::prompt(ctx, &text, no_wait, contract, &mut stdout).await
             } else {
                 anyhow::bail!(
                     "spawn: choose a mode — `-p \"<prompt>\"` (NDJSON), \
@@ -1152,6 +1315,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
+        #[cfg(feature = "tui")]
+        Command::Tui {
+            agent,
+            worktree,
+            model,
+        } => bitrouter::tui::run(&agent, worktree.as_deref(), model.as_deref()).await,
         Command::Update {
             check,
             tag,
@@ -1449,6 +1618,95 @@ impl bitrouter_mcp::server::CostFooter for LocalCostFooter {
     }
 }
 
+/// `CostQuery` over the local metering database — backs the orchestrator
+/// profile's `fleet_cost` tool. Reuses the same read-side query as
+/// [`LocalCostFooter`] (today's spend) and adds an all-time total, so the
+/// orchestrator can weigh spend against progress mid-session. No substrate.
+struct MeteringCost {
+    source: bitrouter::paths::ConfigSource,
+    /// The `--budget-usd` ceiling in micro-USD, surfaced as `budget_usd` /
+    /// `remaining_usd` so the orchestrator can self-pace. `None` = unlimited.
+    budget_micro_usd: Option<u64>,
+}
+
+impl MeteringCost {
+    fn new(source: bitrouter::paths::ConfigSource, budget_micro_usd: Option<u64>) -> Self {
+        Self {
+            source,
+            budget_micro_usd,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl bitrouter_mcp::capabilities::cost::CostQuery for MeteringCost {
+    async fn snapshot(&self) -> Result<serde_json::Value, bitrouter_mcp::error::ToolError> {
+        use bitrouter::metering::store::TimeWindow;
+        let store = bitrouter::metering::reader::open_readonly(&self.source)
+            .await
+            .ok_or_else(|| {
+                bitrouter_mcp::error::ToolError::new(
+                    "metering database unavailable (no requests recorded yet)",
+                )
+            })?;
+        let today = store.spend_summary(TimeWindow::Today).await.map_err(|e| {
+            bitrouter_mcp::error::ToolError::new(format!("reading today's spend: {e}"))
+        })?;
+        // All-time: a Custom window from the epoch (spend_summary filters on
+        // `created_at >= start`, so an epoch start counts every settled row).
+        let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap_or_else(chrono::Utc::now);
+        let total = store
+            .spend_summary(TimeWindow::Custom {
+                start: epoch,
+                end: chrono::Utc::now(),
+            })
+            .await
+            .map_err(|e| {
+                bitrouter_mcp::error::ToolError::new(format!("reading total spend: {e}"))
+            })?;
+        let mut snapshot = serde_json::json!({
+            "today": {
+                "spend_micro_usd": today.spend_micro_usd,
+                "spend_usd": bitrouter::metering::fmt_usd(today.spend_micro_usd),
+                "requests": today.requests,
+            },
+            "total": {
+                "spend_micro_usd": total.spend_micro_usd,
+                "spend_usd": bitrouter::metering::fmt_usd(total.spend_micro_usd),
+                "requests": total.requests,
+            },
+        });
+        // Surface the spend ceiling (TUI_SPEC §5) so the orchestrator can
+        // self-pace. Enforced against the same `today` figure in `SubstrateFleet`.
+        if let Some(ceiling) = self.budget_micro_usd {
+            let remaining = ceiling.saturating_sub(today.spend_micro_usd);
+            snapshot["budget"] = serde_json::json!({
+                "budget_micro_usd": ceiling,
+                "budget_usd": bitrouter::metering::fmt_usd(ceiling),
+                "remaining_micro_usd": remaining,
+                "remaining_usd": bitrouter::metering::fmt_usd(remaining),
+                "over_budget": today.spend_micro_usd >= ceiling,
+                "note": "ceiling applies to today's machine-wide spend; spawn/prompt refuse once reached",
+            });
+        }
+        Ok(snapshot)
+    }
+}
+
+/// The fleet-only `mcp serve` flags that were set on a non-fleet backend, so
+/// the caller can print an "ignored" note for each (mirroring `--allow-writes`).
+/// Returned rather than printed inline so the applicability rule is unit-testable.
+fn non_fleet_flag_notes(allow_writes: bool, budget_usd: Option<f64>) -> Vec<&'static str> {
+    let mut notes = Vec::new();
+    if allow_writes {
+        notes.push("--allow-writes");
+    }
+    if budget_usd.is_some() {
+        notes.push("--budget-usd");
+    }
+    notes
+}
+
 async fn mcp_cmd(action: McpAction) -> Result<()> {
     match action {
         McpAction::Serve {
@@ -1458,12 +1716,117 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
             cloud_url,
             token,
             bind,
+            allow_writes,
+            budget_usd,
         } => {
+            // The fleet bridge is a different server (subagent tools over the
+            // substrate), not a completion backend — and stdio-only: its
+            // tools mutate (spawn processes, write the repo), so they must
+            // inherit the orchestrator's process identity rather than ride
+            // the unauthenticated HTTP→local path.
+            if backend == Some(McpBackend::Fleet) {
+                if matches!(transport, McpTransport::Http) {
+                    anyhow::bail!(
+                        "the fleet backend is stdio-only (its tools mutate; HTTP has no local auth story yet)"
+                    );
+                }
+                let source = bitrouter::paths::resolve_config(None)?;
+                let cfg = bitrouter::paths::load_config(&source).await?;
+                let catalog = bitrouter_sdk::acp::ConfigAcpRoutingTable::from_configs(
+                    cfg.agents.iter().map(|(k, v)| (k.clone(), v.clone())),
+                )
+                .context("building acp catalog from config.agents")?;
+                let base_repo = std::env::current_dir().context("resolving current directory")?;
+                // Resolve the daemon control socket so `route_preview` prefers
+                // the live daemon (subscription providers, reloads) and only
+                // falls back to static config when it's unreachable — the same
+                // order `bitrouter route` uses. Best-effort: an unresolved
+                // socket just means config-only resolution.
+                let route_socket = resolve_client_socket_from(&source, None).await.ok();
+                let routing = std::sync::Arc::new(bitrouter::routing_preview::RoutingPreview::new(
+                    &cfg,
+                    route_socket,
+                ));
+                let skills = std::sync::Arc::new(bitrouter::skills_query::InstalledSkills::new(
+                    base_repo.clone(),
+                ));
+                // Spend circuit breaker (TUI_SPEC §5). The ceiling is enforced
+                // (in `SubstrateFleet`) and displayed (in `fleet_cost`) against
+                // the same figure — today's machine-wide spend — so both agree.
+                let budget_micro_usd = budget_usd
+                    .map(bitrouter::fleet_mcp::budget_usd_to_micro)
+                    .transpose()?;
+                let budget = budget_micro_usd.map(|micro| {
+                    bitrouter::fleet_mcp::BudgetCeiling::new(
+                        micro,
+                        std::sync::Arc::new(bitrouter::fleet_mcp::MeteringSpend::new(
+                            source.clone(),
+                        )),
+                    )
+                });
+                // Capability-gated Tasks elicitation seam (PR-3 B2): one shared
+                // state, populated handler-side at the first fleet tool call
+                // (client capability + peer) and read app-side from the
+                // permission path. Off for every client that hasn't declared
+                // the capability — default escalation behavior is unchanged.
+                let escalation = bitrouter_mcp::capabilities::escalation::EscalationState::new();
+                // One `SubstrateFleet` backs both the `Fleet` and `HumanBridge`
+                // ports (the human bridge rides the same fleet socket).
+                let fleet = std::sync::Arc::new(
+                    bitrouter::fleet_mcp::SubstrateFleet::connect(
+                        catalog,
+                        base_repo,
+                        cfg.worktrees.clone(),
+                        allow_writes,
+                        budget,
+                        Some(escalation.clone()),
+                    )
+                    .await,
+                );
+                // The orchestrator profile is the union — completion + fleet +
+                // cost + the tier-2 introspection/escalation ports, stdio-only.
+                // Completion routes to the same local daemon the TUI runs; cost
+                // reads the shared metering database; routing/skills read the
+                // config + installed skills; the human bridge rides the fleet
+                // socket.
+                let server = bitrouter_mcp::server::BitrouterMcp::builder()
+                    .completion_local(&local_url)
+                    .fleet(fleet.clone())
+                    .human(fleet)
+                    .cost(std::sync::Arc::new(MeteringCost::new(
+                        source,
+                        budget_micro_usd,
+                    )))
+                    .routing(routing)
+                    .skills(skills)
+                    // Source the cap value from the app so the instructions
+                    // quote the real cap (no cross-crate magic number).
+                    .subagent_cap(bitrouter::fleet_mcp::MAX_CONCURRENT_SUBAGENTS)
+                    // Share the escalation state so the handler can record the
+                    // client capability + peer for the (gated) elicitation seam.
+                    .escalation(escalation)
+                    .build();
+                // No `complete`/`status` cost footer here (unlike the public
+                // stdio path): the orchestrator profile carries the richer
+                // `fleet_cost` tool, so the per-result footer would be
+                // redundant. Intentional asymmetry.
+                return bitrouter_mcp::server::serve_stdio(server, None).await;
+            }
+            for flag in non_fleet_flag_notes(allow_writes, budget_usd) {
+                eprintln!("note: {flag} only applies to --backend fleet; ignored");
+            }
             let transport = bitrouter_mcp::Transport::from(transport);
-            let backend = backend.map(Into::into).unwrap_or(match transport {
-                bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
-                bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
-            });
+            // Fleet was handled and returned above. Local/Cloud map straight
+            // across; an unset backend takes the transport default
+            // (stdio→local, http→cloud).
+            let backend = match backend {
+                Some(McpBackend::Local) => bitrouter_mcp::BackendKind::Local,
+                Some(McpBackend::Cloud) => bitrouter_mcp::BackendKind::Cloud,
+                Some(McpBackend::Fleet) | None => match transport {
+                    bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
+                    bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
+                },
+            };
             let cloud_token = token.or_else(|| std::env::var("BITROUTER_TOKEN").ok());
             if matches!(transport, bitrouter_mcp::Transport::Http) && cloud_token.is_some() {
                 eprintln!(
@@ -2194,13 +2557,20 @@ fn route_report(model: &str, resolved_via: &str, chain: Vec<RouteHop>) -> RouteR
 
 // ===== management commands =====
 
-async fn init(config_path: &Path) -> Result<InitReport> {
-    commands::init(config_path).await?;
-    Ok(InitReport {
-        action: "init",
-        path: config_path.display().to_string(),
-        skip_auth: true,
-    })
+/// Read a provider API key from stdin (for `providers login --key-stdin`).
+/// Consumes the whole stream and trims surrounding whitespace/newline so a
+/// `printf %s "$KEY" | …` pipe and an `echo "$KEY" | …` pipe both work.
+fn read_api_key_from_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .context("reading API key from stdin")?;
+    let key = buf.trim().to_string();
+    if key.is_empty() {
+        anyhow::bail!("no API key on stdin (--key-stdin)");
+    }
+    Ok(key)
 }
 
 async fn key(action: KeyAction) -> Result<KeySignReport> {
@@ -2419,7 +2789,16 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             label,
             import_existing,
             no_browser,
+            api_key,
+            key_stdin,
         } => {
+            // `--key-stdin` reads the key from stdin (one line); it funnels into
+            // the same non-interactive API-key path as `--api-key`.
+            let api_key = if key_stdin {
+                Some(read_api_key_from_stdin()?)
+            } else {
+                api_key
+            };
             // The built-in `bitrouter` provider authenticates with the cloud
             // OAuth credential, so logging into it IS the cloud sign-in
             // (`cloud login`); other providers use the per-provider store.
@@ -2430,12 +2809,14 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                          --import-existing/--no-browser apply to upstream provider logins"
                     );
                 }
+                // A supplied key seeds the cloud credential the same way
+                // `cloud login --api-key` does.
                 bitrouter::cloud::cli::run(
                     bitrouter::cloud::cli::CloudAction::Login {
                         authorization_server: None,
                         client_id: None,
                         scope: None,
-                        api_key: None,
+                        api_key,
                     },
                     output.format(),
                 )
@@ -2447,6 +2828,7 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                     bitrouter::commands::ProviderLoginOptions {
                         import_existing,
                         no_browser,
+                        api_key,
                     },
                 )
                 .await?;
@@ -2784,7 +3166,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 options,
                 routing,
             };
-            bitrouter::acp_cli::prompt(ctx, &text, no_wait, &mut stdout).await
+            bitrouter::acp_cli::prompt(ctx, &text, no_wait, None, &mut stdout).await
         }
         AcpCmd::Sessions => {
             let mut stdout = tokio::io::stdout();
@@ -2875,25 +3257,185 @@ mod tests {
     }
 
     #[test]
+    fn fleet_only_flags_are_noted_ignored_off_fleet() {
+        // On a non-fleet backend, `--allow-writes` / `--budget-usd` are
+        // politely ignored (a note is printed for each), never enforced.
+        assert!(non_fleet_flag_notes(false, None).is_empty());
+        assert_eq!(non_fleet_flag_notes(true, None), ["--allow-writes"]);
+        assert_eq!(non_fleet_flag_notes(false, Some(10.0)), ["--budget-usd"]);
+        assert_eq!(
+            non_fleet_flag_notes(true, Some(10.0)),
+            ["--allow-writes", "--budget-usd"]
+        );
+    }
+
+    #[test]
+    fn budget_usd_flag_parses_for_fleet_serve() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "mcp",
+            "serve",
+            "--backend",
+            "fleet",
+            "--budget-usd",
+            "12.5",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Mcp {
+                action:
+                    McpAction::Serve {
+                        backend,
+                        budget_usd,
+                        ..
+                    },
+            }) => {
+                assert_eq!(backend, Some(McpBackend::Fleet));
+                assert_eq!(budget_usd, Some(12.5));
+            }
+            _ => panic!("expected `mcp serve` to parse with --budget-usd"),
+        }
+    }
+
+    #[test]
     fn update_flags_parse() {
         use clap::Parser;
         let cli =
             Cli::try_parse_from(["bitrouter", "update", "--check", "--tag", "1.0.0-alpha.18"])
                 .expect("parse");
         match cli.command {
-            Command::Update {
+            Some(Command::Update {
                 check,
                 tag,
                 stable,
                 restart,
                 yes,
-            } => {
+            }) => {
                 assert!(check);
                 assert_eq!(tag.as_deref(), Some("1.0.0-alpha.18"));
                 assert!(!stable && !restart && !yes);
             }
             _ => panic!("expected Update"),
         }
+    }
+
+    #[test]
+    fn bare_invocation_parses_to_no_subcommand() {
+        use clap::Parser;
+        // Bare `bitrouter` → no subcommand → onboarding entry dispatch.
+        let cli = Cli::try_parse_from(["bitrouter"]).expect("parse");
+        assert!(cli.command.is_none());
+        // Global flags still parse without a subcommand.
+        let human = Cli::try_parse_from(["bitrouter", "--human"]).expect("parse");
+        assert!(human.command.is_none() && human.human);
+    }
+
+    #[test]
+    fn init_wizard_flags_parse() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "init",
+            "--yes",
+            "--force",
+            "--reset",
+            "--api-key",
+            "brk_abc.secret",
+            "--provider",
+            "openai",
+            "--provider-api-key",
+            "sk-openai",
+            "--harness",
+            "claude",
+            "--harness",
+            "codex",
+            "--after",
+            "exit",
+            "--model",
+            "openai/gpt-5",
+            "--write-config",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Init {
+                yes,
+                force,
+                reset,
+                api_key,
+                providers,
+                provider_api_keys,
+                harnesses,
+                after,
+                model,
+                write_config,
+                ..
+            }) => {
+                assert!(yes && force && reset && write_config);
+                assert_eq!(api_key.as_deref(), Some("brk_abc.secret"));
+                assert_eq!(providers, vec!["openai"]);
+                assert_eq!(provider_api_keys, vec!["sk-openai"]);
+                assert_eq!(
+                    harnesses,
+                    vec![
+                        bitrouter::spawn::SpawnAgent::Claude,
+                        bitrouter::spawn::SpawnAgent::Codex
+                    ]
+                );
+                assert_eq!(after, Some(bitrouter::onboarding::AfterAction::Exit));
+                assert_eq!(model.as_deref(), Some("openai/gpt-5"));
+            }
+            _ => panic!("expected Init"),
+        }
+    }
+
+    #[test]
+    fn providers_login_api_key_flag_parses() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "providers",
+            "login",
+            "openai",
+            "--api-key",
+            "sk-abc",
+        ])
+        .expect("parse");
+        match cli.command {
+            Some(Command::Providers {
+                action:
+                    ProviderAction::Login {
+                        provider,
+                        api_key,
+                        key_stdin,
+                        ..
+                    },
+            }) => {
+                assert_eq!(provider, "openai");
+                assert_eq!(api_key.as_deref(), Some("sk-abc"));
+                assert!(!key_stdin);
+            }
+            _ => panic!("expected provider login"),
+        }
+    }
+
+    #[test]
+    fn providers_login_api_key_conflicts_with_oauth_flags() {
+        use clap::Parser;
+        let parsed = Cli::try_parse_from([
+            "bitrouter",
+            "providers",
+            "login",
+            "openai",
+            "--api-key",
+            "sk-abc",
+            "--no-browser",
+        ]);
+        let err = match parsed {
+            Ok(_) => panic!("api-key + oauth flags must conflict"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -2911,15 +3453,16 @@ mod tests {
         ])
         .expect("parse");
         match cli.command {
-            Command::Providers {
+            Some(Command::Providers {
                 action:
                     ProviderAction::Login {
                         provider,
                         label,
                         import_existing,
                         no_browser,
+                        ..
                     },
-            } => {
+            }) => {
                 assert_eq!(provider, "openai-codex");
                 assert_eq!(label, "work");
                 assert!(import_existing);
@@ -2946,7 +3489,7 @@ mod tests {
         ])
         .expect("parse init");
         match init.command {
-            Command::Policy {
+            Some(Command::Policy {
                 action:
                     PolicyAction::Init {
                         name,
@@ -2955,7 +3498,7 @@ mod tests {
                         economy,
                         config,
                     },
-            } => {
+            }) => {
                 assert_eq!(name, "terminal-bench");
                 assert_eq!(preset, "coding");
                 assert_eq!(strong, None);
@@ -2969,9 +3512,9 @@ mod tests {
             .expect("parse evolve");
         assert!(matches!(
             evolve.command,
-            Command::Policy {
+            Some(Command::Policy {
                 action: PolicyAction::Evolve { apply: true, .. }
-            }
+            })
         ));
     }
 
@@ -2988,9 +3531,9 @@ mod tests {
         .unwrap();
 
         match cli.command {
-            Command::Cloud {
+            Some(Command::Cloud {
                 action: bitrouter::cloud::cli::CloudAction::Api(args),
-            } => assert_eq!(args.headers, ["X-Test: value"]),
+            }) => assert_eq!(args.headers, ["X-Test: value"]),
             _ => panic!("expected cloud API command"),
         }
 

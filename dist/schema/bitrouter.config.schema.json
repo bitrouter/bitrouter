@@ -74,6 +74,14 @@
       },
       "default": {}
     },
+    "worktrees": {
+      "description": "Worktree isolation settings for fleet-managed subagents\n(`bitrouter tui` spawns). All fields default — `worktrees:` is\noptional in `bitrouter.yaml`.",
+      "$ref": "#/$defs/WorktreesConfig"
+    },
+    "tui": {
+      "description": "`bitrouter tui` settings. All fields default — `tui:` is optional\nin `bitrouter.yaml`.",
+      "$ref": "#/$defs/TuiConfig"
+    },
     "inherit_defaults": {
       "description": "Whether providers inherit workspace defaults.",
       "type": "boolean",
@@ -1431,6 +1439,68 @@
           ]
         }
       ]
+    },
+    "WorktreesConfig": {
+      "description": "Worktree isolation settings for fleet-managed subagents (`bitrouter tui`).",
+      "type": "object",
+      "properties": {
+        "bootstrap": {
+          "description": "Shell command run inside each **newly created** worktree before its\nagent launches — the bootstrap hook for untracked files a worktree\ndoesn't carry (copy `.env`, install deps). It executes code: the TUI\nshows it for human approval on first use each session. The hook runs\nwith cwd = the worktree, `BITROUTER_BASE_REPO` = the base repository,\nand the subagent's allocated `PORT`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "ports": {
+          "description": "Port pool for per-subagent `PORT` allocation, so N dev servers don't\ncollide. Defaults to 3100–3199.",
+          "$ref": "#/$defs/PortPoolConfig"
+        },
+        "checks": {
+          "description": "Verification checks (shell commands, run in the subagent's worktree)\nthat must pass before its finished turn is \"ready to review\". A\nfailing check loops back to the subagent, not the human. Empty by\ndefault.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      }
+    },
+    "PortPoolConfig": {
+      "description": "An inclusive port range fleet-managed subagents draw their `PORT` from.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "First port in the pool (inclusive).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 3100
+        },
+        "to": {
+          "description": "Last port in the pool (inclusive).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 3199
+        }
+      }
+    },
+    "TuiConfig": {
+      "description": "`bitrouter tui` settings.",
+      "type": "object",
+      "properties": {
+        "leader": {
+          "description": "The one-shot leader key that opens the TUI's which-key menu\n(TUI_SPEC_V3 §3). `ctrl-<key>` form, where `<key>` is a single\ncharacter or `space` — e.g. `ctrl-space` (the default), `ctrl-]`,\n`ctrl-\\`. Unset or unparseable falls back to `ctrl-space`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
     },
     "RegistryConfig": {
       "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",

@@ -245,11 +245,21 @@ pub async fn build_app_with_path(
     // Read from the user's `config` — per-provider timeouts are a user-only
     // field, never set by the registry/builtin-defaults merge.
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
+    // The `google-ai` subscription provider (Antigravity / `agy`) speaks a custom
+    // protocol (Gemini generateContent retargeted at cloudcode-pa's `v1internal:*`
+    // method endpoints), registered on the dispatch only when it is configured.
+    let mut dispatch = OutboundDispatch::builtin();
+    if config
+        .providers
+        .contains_key(bitrouter_providers::antigravity::PROVIDER_ID)
+    {
+        bitrouter_providers::antigravity::protocol::register(&mut dispatch);
+    }
     let executor = Arc::new(
         HttpExecutor::with_provider_timeouts(
             global_timeouts,
             provider_timeouts,
-            OutboundDispatch::builtin(),
+            dispatch,
             auth_appliers,
         )
         .context("building the upstream HTTP executor")?,
@@ -939,10 +949,24 @@ fn build_auth_appliers(config: &Config) -> Result<AuthAppliers> {
             .context("building the supergrok AuthApplier")?;
         appliers.register("supergrok", Arc::new(applier));
     }
+    // The `google-ai` subscription applier (Google OAuth imported from the `agy`
+    // CLI session). The custom protocol adapter is registered separately on the
+    // dispatch above.
+    if config
+        .providers
+        .contains_key(bitrouter_providers::antigravity::PROVIDER_ID)
+    {
+        let applier = bitrouter_providers::antigravity::AntigravityAuthApplier::new(&store_path)
+            .context("building the google-ai AuthApplier")?;
+        appliers.register(
+            bitrouter_providers::antigravity::PROVIDER_ID,
+            Arc::new(applier),
+        );
+    }
     Ok(appliers)
 }
 
-fn build_pricing_table(config: &Config) -> PricingTable {
+pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
     let mut table = PricingTable::new();
     for (provider_id, provider) in &config.providers {
         for model in &provider.models {

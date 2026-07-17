@@ -25,6 +25,11 @@ rmcp = { workspace = true, features = [
     "macros",
     "transport-io",
     "transport-streamable-http-server",
+    # Server→client elicitation, for the capability-gated Tasks escalation seam
+    # (capabilities/escalation.rs). Detection + fallback are always active; the
+    # actual `elicitation/create` call fires only when a client declares the
+    # capability (no shipping harness does yet).
+    "elicitation",
 ] }
 async-trait.workspace = true
 http = { workspace = true }

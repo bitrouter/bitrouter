@@ -3635,7 +3635,7 @@
     },
     {
       "access": "local_oauth",
-      "api_base": "https://generativelanguage.googleapis.com/v1beta",
+      "api_base": "https://cloudcode-pa.googleapis.com",
       "auth": {
         "handler": "google-ai",
         "kind": "oauth"
@@ -3645,6 +3645,7 @@
       "byok": false,
       "community": false,
       "display_name": "Google AI (subscription)",
+      "doc_url": "https://antigravity.google/docs/cli/install",
       "id": "google-ai",
       "kind": "first_party",
       "metadata": {
@@ -3657,45 +3658,36 @@
       },
       "models": [
         {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
+          "api_protocol": "antigravity",
           "capabilities": [
-            "reasoning",
-            "tools"
+            "tools",
+            "image_input"
           ],
-          "id": "google/gemini-3.1-pro-preview",
-          "provider_model_id": "gemini-3.1-pro-preview"
+          "id": "google/gemini-2.5-flash",
+          "provider_model_id": "gemini-2.5-flash"
         },
         {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
+          "api_protocol": "antigravity",
           "capabilities": [
             "reasoning",
-            "tools"
+            "tools",
+            "image_input"
           ],
-          "id": "google/gemini-3.5-flash",
-          "provider_model_id": "gemini-3.5-flash"
+          "id": "google/gemini-3-flash",
+          "provider_model_id": "gemini-3-flash"
         },
         {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
+          "api_protocol": "antigravity",
           "capabilities": [
-            "tools"
+            "reasoning",
+            "tools",
+            "image_input"
           ],
-          "id": "google/gemini-3.1-flash-lite-preview",
-          "provider_model_id": "gemini-3.1-flash-lite-preview"
+          "id": "google/gemini-3-pro",
+          "provider_model_id": "gemini-3-pro-high"
         }
       ],
       "name": "google-ai",
-      "protocol_endpoints": {
-        "chat_completions": "https://generativelanguage.googleapis.com/v1beta/openai"
-      },
       "required_config": [
         "local_oauth"
       ],

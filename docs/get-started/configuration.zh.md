@@ -61,7 +61,7 @@ npx skills add bitrouter/bitrouter
 bitrouter
 ```
 
-向导会询问 **Cloud 还是本地？**（默认 Cloud），如果选择本地则提示输入密钥，随后在 `http://127.0.0.1:4356` 启动代理。按一个键即可在两种模式间切换。
+向导分为三步——**凭据**（默认登录 BitRouter Cloud，或登录某个提供方，或粘贴 BYOK 密钥）、**Harness**（Claude Code 或 Codex）、**收尾**（立即启动 agent、在 `http://127.0.0.1:4356` 启动代理，或退出）。随时用 `bitrouter init` 重新运行；加上 `--yes` 即可非交互式驱动（它会输出 JSON 结果信封且从不阻塞）。
 
 ## 自托管运行
 

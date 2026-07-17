@@ -300,7 +300,7 @@ fn render_generate_content_tools(tools: &[Tool]) -> serde_json::Value {
             } => function_declarations.push(serde_json::json!({
                 "name": name,
                 "description": description,
-                "parameters": parameters,
+                "parameters": sanitize_gemini_schema(parameters),
             })),
             Tool::ProviderDefined { id, name, args, .. } => {
                 entries.push(provider_defined_native(id, name, args));
@@ -315,6 +315,113 @@ fn render_generate_content_tools(tools: &[Tool]) -> serde_json::Value {
     }
     out.extend(entries);
     serde_json::Value::Array(out)
+}
+
+/// The fields Gemini's `GenerationConfig` declares — the extras splat on
+/// render forwards only these (the wire rejects unknown names with a 400).
+/// <https://ai.google.dev/api/generate-content#GenerationConfig>
+const GEMINI_GENERATION_CONFIG_KEYS: &[&str] = &[
+    "stopSequences",
+    "responseMimeType",
+    "responseSchema",
+    "responseJsonSchema",
+    "responseModalities",
+    "candidateCount",
+    "maxOutputTokens",
+    "temperature",
+    "topP",
+    "topK",
+    "seed",
+    "presencePenalty",
+    "frequencyPenalty",
+    "responseLogprobs",
+    "logprobs",
+    "enableEnhancedCivicAnswers",
+    "speechConfig",
+    "thinkingConfig",
+    "imageConfig",
+    "mediaResolution",
+    "audioTimestamp",
+];
+
+/// Gemini's `Schema` accepts a restricted OpenAPI subset and hard-rejects
+/// unknown fields (`Invalid JSON payload received. Unknown name "$schema" …`),
+/// while OpenAI-side tool parameters are arbitrary JSON Schema — agents
+/// (opencode, claude adapters, …) routinely ship `$schema`,
+/// `exclusiveMinimum`, `additionalProperties`, `$defs`, and similar.
+/// Recursively keep only the fields Gemini declares, descending through
+/// `properties` / `items` / `anyOf`; dropping a constraint only loosens
+/// validation, never breaks the call. A JSON-Schema `type: [T, "null"]`
+/// union collapses to `T` + `nullable: true` (unions aren't a Gemini
+/// concept). <https://ai.google.dev/api/caching#Schema>
+fn sanitize_gemini_schema(schema: &serde_json::Value) -> serde_json::Value {
+    const KEEP: &[&str] = &[
+        "type",
+        "format",
+        "title",
+        "description",
+        "nullable",
+        "enum",
+        "maxItems",
+        "minItems",
+        "properties",
+        "required",
+        "items",
+        "minProperties",
+        "maxProperties",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "example",
+        "anyOf",
+        "propertyOrdering",
+        "default",
+        "minimum",
+        "maximum",
+    ];
+    let serde_json::Value::Object(obj) = schema else {
+        return schema.clone();
+    };
+    let mut out = serde_json::Map::new();
+    for (key, value) in obj {
+        if !KEEP.contains(&key.as_str()) {
+            continue;
+        }
+        let value = match key.as_str() {
+            "properties" => match value {
+                serde_json::Value::Object(props) => serde_json::Value::Object(
+                    props
+                        .iter()
+                        .map(|(name, sub)| (name.clone(), sanitize_gemini_schema(sub)))
+                        .collect(),
+                ),
+                other => other.clone(),
+            },
+            "items" => sanitize_gemini_schema(value),
+            "anyOf" => match value {
+                serde_json::Value::Array(list) => {
+                    serde_json::Value::Array(list.iter().map(sanitize_gemini_schema).collect())
+                }
+                other => other.clone(),
+            },
+            "type" => match value {
+                serde_json::Value::Array(types) => {
+                    if types.iter().any(|t| t == "null") {
+                        out.insert("nullable".to_string(), serde_json::Value::Bool(true));
+                    }
+                    types
+                        .iter()
+                        .find(|t| *t != "null")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::String("string".to_string()))
+                }
+                other => other.clone(),
+            },
+            _ => value.clone(),
+        };
+        out.insert(key.clone(), value);
+    }
+    serde_json::Value::Object(out)
 }
 
 /// Lift a Gemini part's `thoughtSignature` into a [`ProviderMetadata`] under the
@@ -994,9 +1101,17 @@ impl OutboundAdapter for GenerateContentAdapter {
         // Splat remaining Google generation-config extras (responseLogprobs,
         // candidateCount, …) back into the outbound config. Typed fields above
         // win over a same-named extra; the sentinel key carries top-level fields
-        // and is skipped here.
+        // and is skipped here. Only fields Gemini's `GenerationConfig` declares
+        // are forwarded: on a cross-protocol route the extras are the SOURCE
+        // wire's leftovers (a Chat client's `stream_options`,
+        // `parallel_tool_calls`, `user`, …) and Gemini hard-rejects any unknown
+        // name with a 400 — dropping them is the only way the request lands.
+        // (Cost: a Gemini field newer than this list no longer passes through;
+        // extend the list when Google adds one.)
         for (k, v) in &prompt.params.extra {
-            if k == GOOGLE_TOP_LEVEL_EXTRA_KEY {
+            if k == GOOGLE_TOP_LEVEL_EXTRA_KEY
+                || !GEMINI_GENERATION_CONFIG_KEYS.contains(&k.as_str())
+            {
                 continue;
             }
             gen_config.entry(k.clone()).or_insert_with(|| v.clone());

@@ -2092,6 +2092,9 @@ enum ApiProtocol {
     Anthropic,
     Google,
     Responses,
+    /// Google Antigravity Code Assist — a custom, externally-registered runtime
+    /// protocol (`bitrouter_providers::antigravity`). No models.dev source.
+    Antigravity,
 }
 
 impl ApiProtocol {
@@ -2101,6 +2104,7 @@ impl ApiProtocol {
             Self::Anthropic => "anthropic",
             Self::Google => "google",
             Self::Responses => "responses",
+            Self::Antigravity => "antigravity",
         }
     }
 
@@ -2110,6 +2114,9 @@ impl ApiProtocol {
             Self::Anthropic => "messages",
             Self::Google => "generate_content",
             Self::Responses => "responses",
+            // The runtime maps any unknown protocol string to `Custom(_)`; this
+            // is the name the antigravity adapter registers under.
+            Self::Antigravity => "antigravity",
         }
     }
 }

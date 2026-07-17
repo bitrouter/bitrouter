@@ -6981,6 +6981,55 @@ fn generate_content_mixed_function_and_builtin_tools_round_trip() {
     assert_eq!(reparsed.tools, parsed.tools);
 }
 
+/// Gemini's `Schema` rejects unknown JSON-Schema fields with a 400
+/// (`Unknown name "$schema" …`), so the render must strip everything outside
+/// its declared subset — recursively — and collapse `type: [T, "null"]`
+/// unions to `T` + `nullable`. Agents (opencode, …) ship such schemas
+/// routinely; without this, every tool-bearing request 400s.
+#[test]
+fn generate_content_render_sanitizes_tool_schemas_for_gemini() {
+    let tools = vec![Tool::Function {
+        name: "read_file".to_string(),
+        description: Some("r".to_string()),
+        parameters: serde_json::json!({
+            "$schema": "https://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "path": { "type": "string", "minLength": 1 },
+                "limit": {
+                    "type": ["integer", "null"],
+                    "exclusiveMinimum": 0,
+                    "description": "max lines"
+                },
+                "matches": {
+                    "type": "array",
+                    "items": { "type": "string", "$comment": "drop me" }
+                }
+            },
+            "required": ["path"]
+        }),
+        strict: None,
+        provider_metadata: Default::default(),
+    }];
+    let rendered = rendered_tools_json(&ApiProtocol::GenerateContent, tools);
+    let params = &rendered[0]["functionDeclarations"][0]["parameters"];
+    assert!(params.get("$schema").is_none(), "{params}");
+    assert!(params.get("additionalProperties").is_none());
+    let limit = &params["properties"]["limit"];
+    assert!(limit.get("exclusiveMinimum").is_none(), "{limit}");
+    assert_eq!(limit["type"], "integer", "union collapses to its base type");
+    assert_eq!(limit["nullable"], true, "…and null-ness survives");
+    assert_eq!(limit["description"], "max lines", "kept fields survive");
+    assert!(
+        params["properties"]["matches"]["items"]
+            .get("$comment")
+            .is_none(),
+        "sanitization recurses through items"
+    );
+    assert_eq!(params["required"], serde_json::json!(["path"]));
+}
+
 /// A Responses array mixing a function tool and a server tool keeps both, in
 /// order, with the function/provider split intact.
 #[test]
