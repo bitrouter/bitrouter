@@ -14,7 +14,7 @@ use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
-use crate::backend::{Backend, CallerAuth, CompleteRequest};
+use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
 use crate::capabilities::cost::CostQuery;
 use crate::capabilities::escalation::EscalationState;
 use crate::capabilities::fleet::{Fleet, HandleArgs, PromptArgs, SpawnArgs, StatusArgs};
@@ -37,10 +37,15 @@ fn caller_from_extensions(ext: &rmcp::model::Extensions) -> CallerAuth {
 }
 
 /// Token from a `Bearer <token>` Authorization value. The scheme is matched
-/// case-insensitively per RFC 7235 (`bearer`/`BEARER` are equally valid).
+/// case-insensitively per RFC 7235 (`bearer`/`BEARER` are equally valid). A
+/// whitespace-only token (`"Bearer "`) is `None`: an empty credential must
+/// not count as "present" at the pre-auth gate.
 fn parse_bearer(value: &str) -> Option<&str> {
     let (scheme, token) = value.split_once(' ')?;
-    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|token| !token.is_empty())
 }
 
 /// One-line cost annotator appended to tool results — the origin
@@ -62,8 +67,46 @@ fn json_tool_result(result: Result<serde_json::Value, ToolError>) -> CallToolRes
     }
 }
 
-#[derive(Clone)]
-pub struct BitrouterMcp {
+/// [`json_tool_result`]'s sibling for capability results that are already
+/// plain text (the diff).
+fn text_tool_result(result: Result<String, ToolError>) -> CallToolResult {
+    match result {
+        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
+    }
+}
+
+/// Wrap a typed backend result into a tool result: `Ok`→serialized JSON text
+/// plus `footer` when given, `Err`→error text. The one shaping path for the
+/// three completion tools; the footer choice stays explicit at each call site
+/// (`complete`/`status` are spend-feed events and pass one, `list_models`
+/// passes `None` — intentional asymmetry).
+fn serialize_tool_result<T: serde::Serialize>(
+    result: Result<T, BackendError>,
+    footer: Option<ContentBlock>,
+) -> CallToolResult {
+    match result {
+        Ok(v) => match serde_json::to_string(&v) {
+            Ok(json) => {
+                let mut contents = vec![ContentBlock::text(json)];
+                if let Some(footer) = footer {
+                    contents.push(footer);
+                }
+                CallToolResult::success(contents)
+            }
+            Err(e) => CallToolResult::error(vec![ContentBlock::text(format!(
+                "serialization error: {e}"
+            ))]),
+        },
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
+    }
+}
+
+/// The capability ports plus their port-adjacent state, declared once and
+/// shared between [`Builder`] (which fills it) and the built handler (which
+/// reads it) — a capability is never a pair of parallel field declarations.
+#[derive(Clone, Default)]
+struct Caps {
     backend: Option<Arc<dyn Backend>>,
     fleet: Option<Arc<dyn Fleet>>,
     cost: Option<Arc<dyn CostQuery>>,
@@ -78,6 +121,97 @@ pub struct BitrouterMcp {
     /// elicitation). Populated at the first fleet tool call with the client's
     /// capability + the server→client peer; the same `Arc` is held app-side.
     escalation: Option<Arc<EscalationState>>,
+}
+
+/// One tool-contributing capability: whether it's wired, the tool router it
+/// contributes, and the server-instruction fragment describing its tools.
+/// [`Builder::build`] and [`BitrouterMcp::instructions`] iterate the same
+/// table, so a capability's registration and its guidance can't drift apart —
+/// adding a capability is one entry here plus its [`Caps`] field and
+/// [`Builder`] setter.
+struct CapSpec {
+    wired: fn(&Caps) -> bool,
+    router: fn() -> ToolRouter<BitrouterMcp>,
+    /// The instruction fragment. Takes [`Caps`] because the fleet fragment
+    /// interpolates the app-sourced subagent cap.
+    instructions: fn(&Caps) -> String,
+}
+
+/// The tool-contributing capabilities, in registration + instruction order.
+/// State-only capabilities (`subagent_cap`, `escalation`, the transport-side
+/// cost footer) contribute no router and stay plain fields.
+const CAPABILITIES: &[CapSpec] = &[
+    CapSpec {
+        wired: |caps| caps.backend.is_some(),
+        router: BitrouterMcp::completion_router,
+        instructions: |_| {
+            "BitRouter origin MCP server. Use `list_models` to discover routable \
+             models, `complete` to run a completion, `status` for health/credits."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.fleet.is_some(),
+        router: BitrouterMcp::fleet_router,
+        instructions: fleet_instructions,
+    },
+    CapSpec {
+        wired: |caps| caps.cost.is_some(),
+        router: BitrouterMcp::cost_router,
+        instructions: |_| "Use `fleet_cost` to keep spend visible mid-session.".to_string(),
+    },
+    CapSpec {
+        wired: |caps| caps.routing.is_some(),
+        router: BitrouterMcp::routing_router,
+        instructions: |_| {
+            "`route_preview` shows how a model/prompt would route (provider chain, \
+             policy decision, cost estimate) without sending anything."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.skills.is_some(),
+        router: BitrouterMcp::skills_router,
+        instructions: |_| {
+            "`skills_search` / `skills_get` browse installed skills to hand one to a \
+             subagent."
+                .to_string()
+        },
+    },
+    CapSpec {
+        wired: |caps| caps.human.is_some(),
+        router: BitrouterMcp::human_router,
+        instructions: |_| {
+            "Reach the supervising human with `notify_human` (a one-line notice), \
+             `request_attach` (ask them to drive a subagent), or `request_review` \
+             (flag work for their review queue)."
+                .to_string()
+        },
+    },
+];
+
+/// The fleet instruction fragment, a named fn because it interpolates the
+/// subagent cap. The cap value is sourced from the app (`Caps::subagent_cap`)
+/// so this guidance can't drift from the enforced `MAX_CONCURRENT_SUBAGENTS`;
+/// without one the guidance stays generic rather than inventing a number.
+fn fleet_instructions(caps: &Caps) -> String {
+    let cap = match caps.subagent_cap {
+        Some(cap) => format!("a {cap}-subagent cap"),
+        None => "the concurrency cap".to_string(),
+    };
+    format!(
+        "Fleet: spawn and manage worktree-isolated ACP subagents. `spawn_subagent` \
+         blocks and returns a summary; review with `subagent_diff`; \
+         `apply_subagent`/`merge_subagent` are human-gated unless the bridge was \
+         started with --allow-writes. Subagents don't spawn subagents (delegation \
+         depth 1), and a spawn is rejected past {cap} — integrate or close one \
+         before fanning out further."
+    )
+}
+
+#[derive(Clone)]
+pub struct BitrouterMcp {
+    caps: Caps,
     cost_footer: Option<Arc<dyn CostFooter>>,
     tool_router: ToolRouter<BitrouterMcp>,
 }
@@ -96,7 +230,18 @@ pub struct CompleteArgs {
 // ── the public profile: completion tools (guarded on `self.backend`) ──
 #[tool_router(router = completion_router)]
 impl BitrouterMcp {
-    #[tool(description = "Route a completion through BitRouter and return the full result.")]
+    #[tool(
+        description = "Route a completion through BitRouter and return the full result.",
+        annotations(
+            read_only_hint = false,
+            // Additive, not destructive: it spends credits and appends to the
+            // metering log, but destroys nothing. Each call bills again, so
+            // never idempotent; open-world because it reaches upstream LLMs.
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
     async fn complete(
         &self,
         Parameters(args): Parameters<CompleteArgs>,
@@ -111,68 +256,59 @@ impl BitrouterMcp {
             temperature: args.temperature,
             system: args.system,
         };
-        match backend.complete(&caller, req).await {
-            Ok(r) => match serde_json::to_string(&r) {
-                Ok(json) => {
-                    let mut contents = vec![ContentBlock::text(json)];
-                    if let Some(footer) = self.footer_content().await {
-                        contents.push(footer);
-                    }
-                    Ok(CallToolResult::success(contents))
-                }
-                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "serialization error: {e}"
-                ))])),
-            },
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                e.to_string(),
-            )])),
-        }
+        let result = backend.complete(&caller, req).await;
+        // A completion is a spend event → successful results carry the footer.
+        let footer = if result.is_ok() {
+            self.footer_content().await
+        } else {
+            None
+        };
+        Ok(serialize_tool_result(result, footer))
     }
 
-    #[tool(description = "List models routable through BitRouter.")]
+    #[tool(
+        description = "List models routable through BitRouter.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_models(
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let backend = self.backend()?;
         let caller = caller_from_extensions(&ctx.extensions);
-        match backend.list_models(&caller).await {
-            Ok(m) => match serde_json::to_string(&m) {
-                Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
-                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "serialization error: {e}"
-                ))])),
-            },
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                e.to_string(),
-            )])),
-        }
+        // No footer: listing models is not a spend event, unlike
+        // `complete`/`status` (intentional asymmetry).
+        Ok(serialize_tool_result(
+            backend.list_models(&caller).await,
+            None,
+        ))
     }
 
     #[tool(
-        description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance)."
+        description = "Report BitRouter status (local: liveness/models/providers; cloud: credit balance).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let backend = self.backend()?;
         let caller = caller_from_extensions(&ctx.extensions);
-        match backend.status(&caller).await {
-            Ok(s) => match serde_json::to_string(&s) {
-                Ok(json) => {
-                    let mut contents = vec![ContentBlock::text(json)];
-                    if let Some(footer) = self.footer_content().await {
-                        contents.push(footer);
-                    }
-                    Ok(CallToolResult::success(contents))
-                }
-                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "serialization error: {e}"
-                ))])),
-            },
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                e.to_string(),
-            )])),
-        }
+        let result = backend.status(&caller).await;
+        // Status is the health check agents poll → keep spend visible on it.
+        let footer = if result.is_ok() {
+            self.footer_content().await
+        } else {
+            None
+        };
+        Ok(serialize_tool_result(result, footer))
     }
 }
 
@@ -183,7 +319,15 @@ impl BitrouterMcp {
         description = "Spawn a worktree-isolated ACP subagent, send it the task, and block until \
                        its turn ends. Returns a summary: handle, stop_reason, reply, diff stat \
                        (and result/schema_ok under result_schema). Subagents don't spawn \
-                       subagents — keep delegation depth 1."
+                       subagents — keep delegation depth 1.",
+        annotations(
+            read_only_hint = false,
+            // Additive: a fresh worktree + branch; the base tree is untouched.
+            // Open-world: it launches an autonomous agent that acts on its own.
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn spawn_subagent(
         &self,
@@ -199,7 +343,13 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Send a follow-up prompt to a running subagent and block until the turn \
-                       ends. Same summary shape as spawn_subagent."
+                       ends. Same summary shape as spawn_subagent.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
     async fn prompt_subagent(
         &self,
@@ -212,7 +362,13 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Fleet snapshot (or one subagent with handle): agent, state, worktree, \
-                       branch, diff stat."
+                       branch, diff stat.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn subagent_status(
         &self,
@@ -225,22 +381,33 @@ impl BitrouterMcp {
 
     #[tool(
         description = "The subagent's full diff against its spawn base (committed + uncommitted \
-                       work in its worktree)."
+                       work in its worktree).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn subagent_diff(
         &self,
         Parameters(args): Parameters<HandleArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(match self.fleet()?.diff(&args.handle).await {
-            Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
-            Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
-        })
+        Ok(text_tool_result(self.fleet()?.diff(&args.handle).await))
     }
 
     #[tool(
         description = "Apply the subagent's diff onto the base repository working tree, \
                        UNCOMMITTED (the human writes the commit). Human-gated: requires the \
-                       bridge to have been started with --allow-writes."
+                       bridge to have been started with --allow-writes.",
+        annotations(
+            read_only_hint = false,
+            // Destructive: overwrites files in the base working tree, which can
+            // clobber uncommitted local work.
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn apply_subagent(
         &self,
@@ -253,7 +420,14 @@ impl BitrouterMcp {
         description = "Merge the subagent's branch into the base repository, keeping history. \
                        Requires the subagent to have committed its work (clean worktree). \
                        Serialized: one integration at a time. Human-gated: requires \
-                       --allow-writes."
+                       --allow-writes.",
+        annotations(
+            read_only_hint = false,
+            // Destructive: mutates the base repository's refs and history.
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn merge_subagent(
         &self,
@@ -264,7 +438,16 @@ impl BitrouterMcp {
 
     #[tool(
         description = "Shut the subagent down. Its worktree is RETAINED (cleanup is gated on \
-                       merged-or-discarded, never automatic)."
+                       merged-or-discarded, never automatic).",
+        annotations(
+            read_only_hint = false,
+            // Non-destructive by design: the work product (worktree + branch)
+            // is retained; only the live session ends. Idempotent: a second
+            // close of the same handle changes nothing further.
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn close_subagent(
         &self,
@@ -280,7 +463,13 @@ impl BitrouterMcp {
     #[tool(
         description = "BitRouter spend snapshot from the local metering database (machine-wide, \
                        not scoped to one session): today's spend and request count plus all-time \
-                       totals. Keeps in-session model arbitrage cost-visible."
+                       totals. Keeps in-session model arbitrage cost-visible.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn fleet_cost(&self) -> Result<CallToolResult, McpError> {
         Ok(json_tool_result(self.cost()?.snapshot().await))
@@ -292,7 +481,13 @@ impl BitrouterMcp {
 impl BitrouterMcp {
     #[tool(
         description = "Preview how BitRouter would route a model/prompt: resolved provider(s), \
-                       policy decision, and estimated cost. Read-only — nothing is sent upstream."
+                       policy decision, and estimated cost. Read-only — nothing is sent upstream.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn route_preview(
         &self,
@@ -305,7 +500,15 @@ impl BitrouterMcp {
 // ── the orchestrator profile's skills slice (guarded on `self.skills`) ──
 #[tool_router(router = skills_router)]
 impl BitrouterMcp {
-    #[tool(description = "Search installed BitRouter skills by name/description.")]
+    #[tool(
+        description = "Search installed BitRouter skills by name/description.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn skills_search(
         &self,
         Parameters(args): Parameters<SkillsSearchArgs>,
@@ -313,7 +516,15 @@ impl BitrouterMcp {
         Ok(json_tool_result(self.skills()?.search(&args.query).await))
     }
 
-    #[tool(description = "Fetch a skill's frontmatter + body so you can hand it to a subagent.")]
+    #[tool(
+        description = "Fetch a skill's frontmatter + body so you can hand it to a subagent.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn skills_get(
         &self,
         Parameters(args): Parameters<SkillsGetArgs>,
@@ -325,7 +536,17 @@ impl BitrouterMcp {
 // ── the orchestrator profile's human-bridge slice (guarded on `self.human`) ──
 #[tool_router(router = human_router)]
 impl BitrouterMcp {
-    #[tool(description = "Send the supervising human a one-line notice in the TUI.")]
+    #[tool(
+        description = "Send the supervising human a one-line notice in the TUI.",
+        annotations(
+            read_only_hint = false,
+            // Additive: posts a notice; repeating it posts another (not
+            // idempotent). Closed-world: delivery rides the local TUI socket.
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn notify_human(
         &self,
         Parameters(args): Parameters<NotifyArgs>,
@@ -333,7 +554,15 @@ impl BitrouterMcp {
         Ok(json_tool_result(self.human()?.notify(&args.message).await))
     }
 
-    #[tool(description = "Ask the human to attach to a subagent's pane to drive it directly.")]
+    #[tool(
+        description = "Ask the human to attach to a subagent's pane to drive it directly.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn request_attach(
         &self,
         Parameters(args): Parameters<HumanHandleArgs>,
@@ -343,7 +572,15 @@ impl BitrouterMcp {
         ))
     }
 
-    #[tool(description = "Flag a subagent's work for the human's review queue.")]
+    #[tool(
+        description = "Flag a subagent's work for the human's review queue.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn request_review(
         &self,
         Parameters(args): Parameters<HumanHandleArgs>,
@@ -352,6 +589,20 @@ impl BitrouterMcp {
             self.human()?.request_review(&args.handle).await,
         ))
     }
+}
+
+/// The typed accessor for a capability port: the port, or a wired-capability
+/// error (unreachable in practice — each capability's router is merged only
+/// when its port is `Some`, so a routed tool call implies a wired port).
+macro_rules! port_accessor {
+    ($field:ident, $port:ty, $what:literal) => {
+        fn $field(&self) -> Result<&Arc<$port>, McpError> {
+            self.caps
+                .$field
+                .as_ref()
+                .ok_or_else(|| McpError::internal_error(concat!($what, " not wired"), None))
+        }
+    };
 }
 
 impl BitrouterMcp {
@@ -368,53 +619,12 @@ impl BitrouterMcp {
         self
     }
 
-    /// The completion backend, or a wired-capability error (unreachable in
-    /// practice — the completion router is merged only when it is `Some`).
-    fn backend(&self) -> Result<&Arc<dyn Backend>, McpError> {
-        self.backend
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("completion backend not wired", None))
-    }
-
-    /// The fleet port, or a wired-capability error (unreachable in practice —
-    /// the fleet router is merged only when it is `Some`).
-    fn fleet(&self) -> Result<&Arc<dyn Fleet>, McpError> {
-        self.fleet
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("fleet capability not wired", None))
-    }
-
-    /// The cost port, or a wired-capability error (unreachable in practice —
-    /// the cost router is merged only when it is `Some`).
-    fn cost(&self) -> Result<&Arc<dyn CostQuery>, McpError> {
-        self.cost
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("cost capability not wired", None))
-    }
-
-    /// The routing port, or a wired-capability error (unreachable in practice —
-    /// the routing router is merged only when it is `Some`).
-    fn routing(&self) -> Result<&Arc<dyn RoutingQuery>, McpError> {
-        self.routing
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("routing capability not wired", None))
-    }
-
-    /// The skills port, or a wired-capability error (unreachable in practice —
-    /// the skills router is merged only when it is `Some`).
-    fn skills(&self) -> Result<&Arc<dyn SkillsQuery>, McpError> {
-        self.skills
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("skills capability not wired", None))
-    }
-
-    /// The human-bridge port, or a wired-capability error (unreachable in
-    /// practice — the human router is merged only when it is `Some`).
-    fn human(&self) -> Result<&Arc<dyn HumanBridge>, McpError> {
-        self.human
-            .as_ref()
-            .ok_or_else(|| McpError::internal_error("human bridge not wired", None))
-    }
+    port_accessor!(backend, dyn Backend, "completion backend");
+    port_accessor!(fleet, dyn Fleet, "fleet capability");
+    port_accessor!(cost, dyn CostQuery, "cost capability");
+    port_accessor!(routing, dyn RoutingQuery, "routing capability");
+    port_accessor!(skills, dyn SkillsQuery, "skills capability");
+    port_accessor!(human, dyn HumanBridge, "human bridge");
 
     /// Record the connecting client's escalation capability + capture the
     /// server→client peer for the capability-gated Tasks elicitation seam.
@@ -422,7 +632,7 @@ impl BitrouterMcp {
     /// the recorded peer handshake info). A no-op when no escalation state is
     /// wired (public profile) or before the peer info is recorded.
     fn record_escalation(&self, ctx: &RequestContext<RoleServer>) {
-        if let Some(escalation) = &self.escalation
+        if let Some(escalation) = &self.caps.escalation
             && let Some(info) = ctx.peer.peer_info()
         {
             escalation.record(&info.capabilities, ctx.peer.clone());
@@ -436,53 +646,20 @@ impl BitrouterMcp {
         footer.line().await.map(ContentBlock::text)
     }
 
-    /// Server instructions, composed from the wired capabilities. The public
-    /// profile gets only the completion base; the orchestrator profile adds the
-    /// fleet / cost guidance the old `FleetMcp::get_info` carried, so a client
-    /// is told about the tools it can actually call (and the human-gating of
-    /// apply/merge).
+    /// Server instructions, composed by walking [`CAPABILITIES`] — the same
+    /// table `build()` merges routers from, so a client is told about exactly
+    /// the tools it can call (the public profile gets only the completion
+    /// base; the orchestrator profile adds the fleet / cost / tier-2 guidance,
+    /// including the human-gating of apply/merge).
     fn instructions(&self) -> String {
-        let mut s = String::from(
-            "BitRouter origin MCP server. Use `list_models` to discover routable \
-             models, `complete` to run a completion, `status` for health/credits.",
-        );
-        if self.fleet.is_some() {
-            s.push_str(
-                " Fleet: spawn and manage worktree-isolated ACP subagents. \
-                 `spawn_subagent` blocks and returns a summary; review with \
-                 `subagent_diff`; `apply_subagent`/`merge_subagent` are human-gated \
-                 unless the bridge was started with --allow-writes. Subagents don't \
-                 spawn subagents (delegation depth 1), and a spawn is rejected past ",
-            );
-            // The cap value is sourced from the app (`subagent_cap`) so this
-            // guidance can't drift from the enforced `MAX_CONCURRENT_SUBAGENTS`.
-            match self.subagent_cap {
-                Some(cap) => s.push_str(&format!("a {cap}-subagent cap")),
-                None => s.push_str("the concurrency cap"),
+        let mut s = String::new();
+        for spec in CAPABILITIES {
+            if (spec.wired)(&self.caps) {
+                if !s.is_empty() {
+                    s.push(' ');
+                }
+                s.push_str(&(spec.instructions)(&self.caps));
             }
-            s.push_str(" — integrate or close one before fanning out further.");
-        }
-        if self.cost.is_some() {
-            s.push_str(" Use `fleet_cost` to keep spend visible mid-session.");
-        }
-        if self.routing.is_some() {
-            s.push_str(
-                " `route_preview` shows how a model/prompt would route (provider chain, \
-                 policy decision, cost estimate) without sending anything.",
-            );
-        }
-        if self.skills.is_some() {
-            s.push_str(
-                " `skills_search` / `skills_get` browse installed skills to hand one to a \
-                 subagent.",
-            );
-        }
-        if self.human.is_some() {
-            s.push_str(
-                " Reach the supervising human with `notify_human` (a one-line notice), \
-                 `request_attach` (ask them to drive a subagent), or `request_review` \
-                 (flag work for their review queue).",
-            );
         }
         s
     }
@@ -493,57 +670,50 @@ impl BitrouterMcp {
 /// server's whole tool surface, so unwired tools are never registered.
 #[derive(Default)]
 pub struct Builder {
-    backend: Option<Arc<dyn Backend>>,
-    fleet: Option<Arc<dyn Fleet>>,
-    cost: Option<Arc<dyn CostQuery>>,
-    routing: Option<Arc<dyn RoutingQuery>>,
-    skills: Option<Arc<dyn SkillsQuery>>,
-    human: Option<Arc<dyn HumanBridge>>,
-    subagent_cap: Option<usize>,
-    escalation: Option<Arc<EscalationState>>,
+    caps: Caps,
 }
 
 impl Builder {
     /// Wire completion against a ready-made backend.
     pub fn completion(mut self, backend: Arc<dyn Backend>) -> Self {
-        self.backend = Some(backend);
+        self.caps.backend = Some(backend);
         self
     }
 
     /// Wire completion against the local BYOK daemon at `url`.
     pub fn completion_local(mut self, url: &str) -> Self {
-        self.backend = Some(Arc::new(LocalBackend::new(url)));
+        self.caps.backend = Some(Arc::new(LocalBackend::new(url)));
         self
     }
 
     /// Wire the fleet capability (spawn/manage subagents).
     pub fn fleet(mut self, fleet: Arc<dyn Fleet>) -> Self {
-        self.fleet = Some(fleet);
+        self.caps.fleet = Some(fleet);
         self
     }
 
     /// Wire the cost capability (the `fleet_cost` tool).
     pub fn cost(mut self, cost: Arc<dyn CostQuery>) -> Self {
-        self.cost = Some(cost);
+        self.caps.cost = Some(cost);
         self
     }
 
     /// Wire the routing-introspection capability (the `route_preview` tool).
     pub fn routing(mut self, routing: Arc<dyn RoutingQuery>) -> Self {
-        self.routing = Some(routing);
+        self.caps.routing = Some(routing);
         self
     }
 
     /// Wire the skills-introspection capability (`skills_search`/`skills_get`).
     pub fn skills(mut self, skills: Arc<dyn SkillsQuery>) -> Self {
-        self.skills = Some(skills);
+        self.caps.skills = Some(skills);
         self
     }
 
     /// Wire the human-escalation capability (`notify_human`/`request_attach`/
     /// `request_review`).
     pub fn human(mut self, human: Arc<dyn HumanBridge>) -> Self {
-        self.human = Some(human);
+        self.caps.human = Some(human);
         self
     }
 
@@ -551,7 +721,7 @@ impl Builder {
     /// hardcoded in the crate) so the server instructions quote the real
     /// `MAX_CONCURRENT_SUBAGENTS` and can't drift from it.
     pub fn subagent_cap(mut self, cap: usize) -> Self {
-        self.subagent_cap = Some(cap);
+        self.caps.subagent_cap = Some(cap);
         self
     }
 
@@ -561,44 +731,25 @@ impl Builder {
     /// path. Capability-gated: default behavior is unchanged when no client
     /// declares the Tasks/elicitation capability.
     pub fn escalation(mut self, escalation: Arc<EscalationState>) -> Self {
-        self.escalation = Some(escalation);
+        self.caps.escalation = Some(escalation);
         self
     }
 
-    /// Compose the handler, merging each wired capability's router.
+    /// Compose the handler, merging each wired capability's router from
+    /// `CAPABILITIES`.
     pub fn build(self) -> BitrouterMcp {
-        let mut router = ToolRouter::new();
-        if self.backend.is_some() {
-            router += BitrouterMcp::completion_router();
-        }
-        if self.fleet.is_some() {
-            router += BitrouterMcp::fleet_router();
-        }
-        if self.cost.is_some() {
-            router += BitrouterMcp::cost_router();
-        }
-        if self.routing.is_some() {
-            router += BitrouterMcp::routing_router();
-        }
-        if self.skills.is_some() {
-            router += BitrouterMcp::skills_router();
-        }
-        if self.human.is_some() {
-            router += BitrouterMcp::human_router();
+        let mut tool_router = ToolRouter::new();
+        for spec in CAPABILITIES {
+            if (spec.wired)(&self.caps) {
+                tool_router += (spec.router)();
+            }
         }
         BitrouterMcp {
-            backend: self.backend,
-            fleet: self.fleet,
-            cost: self.cost,
-            routing: self.routing,
-            skills: self.skills,
-            human: self.human,
-            subagent_cap: self.subagent_cap,
-            escalation: self.escalation,
+            caps: self.caps,
             // The footer is attached later, transport-side, via
             // `with_cost_footer` (stdio only) — never through the builder.
             cost_footer: None,
-            tool_router: router,
+            tool_router,
         }
     }
 }
@@ -624,6 +775,12 @@ fn has_bearer(value: Option<&str>) -> bool {
 /// local backend). Binding the unauthenticated local backend to a public
 /// address would expose the BYOK daemon — running on the user's own provider
 /// keys — to the whole network.
+///
+/// Loopback means "this machine", not "this user": on a multi-user host any
+/// local user can reach the bound port and spend through the daemon's keys.
+/// That is the same trust boundary as the daemon's own `127.0.0.1:4356`
+/// listener, so it is accepted here deliberately — "loopback" is being relied
+/// on as *trusted*, not as *mine*.
 pub(crate) fn ensure_loopback_bind(bind: &str) -> anyhow::Result<()> {
     use std::net::ToSocketAddrs;
     let addrs: Vec<_> = bind
@@ -665,6 +822,16 @@ async fn require_bearer(
 
 /// Build the `/mcp-control` axum router for `backend`, optionally gated by the
 /// pre-auth bearer middleware. HTTP is the public profile: completion only.
+///
+/// That coupling is a crate-level invariant, deliberately: the orchestrator
+/// tools are semantically bound to one process and one repo (spawned
+/// subagents, the in-process fleet registry, connection-scoped escalation, a
+/// machine-wide metering DB), so no HTTP profile may carry them. Should a
+/// non-child client (e.g. a GUI orchestrator) ever need the *read-only*
+/// introspection surface without a stdio pipe, this is the single function to
+/// change — take a handler factory, keep the profile strictly loopback and
+/// incompatible with the cloud backend, and prefer modeling that read-only
+/// data as MCP resources over widening the tool surface.
 fn build_http_router(
     backend: Arc<dyn Backend>,
     require_auth: bool,
@@ -790,6 +957,8 @@ mod tests {
         assert!(has_bearer(Some("BEARER abc")));
         assert!(!has_bearer(Some("Basic abc")));
         assert!(!has_bearer(Some("Bearer")));
+        // A whitespace-only token is not a credential.
+        assert!(!has_bearer(Some("Bearer ")));
         assert!(!has_bearer(None));
     }
 
@@ -799,6 +968,9 @@ mod tests {
         assert_eq!(parse_bearer("bearer  xyz"), Some("xyz"));
         assert_eq!(parse_bearer("Basic xyz"), None);
         assert_eq!(parse_bearer("Bearer"), None);
+        // Whitespace-only tokens are rejected, not read as `Some("")`.
+        assert_eq!(parse_bearer("Bearer "), None);
+        assert_eq!(parse_bearer("Bearer   "), None);
     }
 
     #[test]
@@ -988,6 +1160,63 @@ mod tests {
             .cost(Arc::new(StubCost))
             .build();
         assert_eq!(tool_names(&server).len(), 11);
+    }
+
+    #[test]
+    fn annotations_classify_the_tool_surface() {
+        // The full surface: every tool declares explicit annotations, the
+        // read-only set is exactly the introspection tools, and the two
+        // human-gated integration tools are the only destructive ones.
+        let server = BitrouterMcp::builder()
+            .completion(Arc::new(StubBackend))
+            .fleet(Arc::new(StubFleet))
+            .cost(Arc::new(StubCost))
+            .routing(Arc::new(StubRouting))
+            .skills(Arc::new(StubSkills))
+            .human(Arc::new(StubHuman))
+            .build();
+        let tools = server.tool_router.list_all();
+        assert_eq!(tools.len(), 17);
+        for tool in &tools {
+            assert!(
+                tool.annotations.is_some(),
+                "`{}` declares no annotations",
+                tool.name
+            );
+        }
+        let with_hint = |pick: fn(&rmcp::model::ToolAnnotations) -> Option<bool>| {
+            let mut names: Vec<String> = tools
+                .iter()
+                .filter(|t| t.annotations.as_ref().and_then(pick) == Some(true))
+                .map(|t| t.name.to_string())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            with_hint(|a| a.read_only_hint),
+            [
+                "fleet_cost",
+                "list_models",
+                "route_preview",
+                "skills_get",
+                "skills_search",
+                "status",
+                "subagent_diff",
+                "subagent_status",
+            ],
+            "the read-only set is exactly the introspection tools"
+        );
+        assert_eq!(
+            with_hint(|a| a.destructive_hint),
+            ["apply_subagent", "merge_subagent"],
+            "only the human-gated integration tools are destructive"
+        );
+        assert_eq!(
+            with_hint(|a| a.open_world_hint),
+            ["complete", "prompt_subagent", "spawn_subagent"],
+            "open-world = reaches upstream LLMs or launches autonomous agents"
+        );
     }
 
     #[test]
