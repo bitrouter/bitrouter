@@ -26,7 +26,8 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::tui::event::{AppEvent, DiffData, Effect, Incoming, PermOption};
-use crate::tui::state::{AppState, PaneState, reduce};
+use crate::tui::state::pane::PaneState;
+use crate::tui::state::{AppState, reduce};
 
 /// Launch the TUI. `--agent` names either a native harness (`claude`,
 /// `codex`, `opencode`, `pi`) — the **orchestrator**, hosted at full
@@ -166,7 +167,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     // The one-shot leader chord (`tui.leader`), falling back to Ctrl-Space
     // when unset or unparseable.
     if let Some(spec) = &cfg.tui.leader {
-        match crate::tui::state::parse_leader(spec) {
+        match crate::tui::state::overlay::parse_leader(spec) {
             Some(leader) => state.leader = leader,
             None => tracing::warn!(spec, "unparseable tui.leader — using ctrl-space"),
         }
@@ -549,7 +550,7 @@ fn launch_orchestrator(
     .with_context(|| format!("launching orchestrator '{binary}' on a pty"))?;
 
     let mut pane_state = PaneState::new(record_id.to_string(), binary.to_string());
-    pane_state.kind = crate::tui::state::PaneKind::Pty;
+    pane_state.kind = crate::tui::state::pane::PaneKind::Pty;
     pane_state.harness = "pty".to_string();
     pane_state.model = model.map(str::to_string);
     Ok((record_id.to_string(), pane_state, pane))
