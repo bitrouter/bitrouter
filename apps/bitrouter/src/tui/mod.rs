@@ -167,7 +167,7 @@ pub async fn run(agent_id: &str, worktree: Option<&str>, model: Option<&str>) ->
     // The one-shot leader chord (`tui.leader`), falling back to Ctrl-Space
     // when unset or unparseable.
     if let Some(spec) = &cfg.tui.leader {
-        match crate::tui::state::parse_leader(spec) {
+        match crate::tui::state::overlay::parse_leader(spec) {
             Some(leader) => state.leader = leader,
             None => tracing::warn!(spec, "unparseable tui.leader — using ctrl-space"),
         }

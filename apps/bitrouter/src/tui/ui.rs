@@ -10,11 +10,11 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
 use crossterm::event::KeyCode;
 
+use crate::tui::state::AppState;
 use crate::tui::state::diff::{DiffLine, Line, diff_lines};
+use crate::tui::state::layout::{ClickTarget, ClickZone, Split};
+use crate::tui::state::overlay::{LEADER_LEAVES, Mode, PickerPurpose, PickerState};
 use crate::tui::state::pane::{PaneState, PendingView, TailKind};
-use crate::tui::state::{
-    AppState, ClickTarget, ClickZone, LEADER_LEAVES, Mode, PickerPurpose, PickerState, Split,
-};
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
 /// plus its expanded `└ y·a·d risk · title` line to stay readable.
@@ -140,7 +140,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
 
 /// Command palette: a filter line over the fuzzy-matched command list.
 fn render_palette(
-    palette: &crate::tui::state::PaletteState,
+    palette: &crate::tui::state::overlay::PaletteState,
     nc: bool,
     frame: &mut Frame,
     area: Rect,
@@ -1157,9 +1157,11 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::state::AppState;
     use crate::tui::state::diff::Line;
+    use crate::tui::state::layout::DetailLayout;
+    use crate::tui::state::overlay::{Mode, PickerPurpose, PickerState};
     use crate::tui::state::pane::PaneState;
-    use crate::tui::state::{AppState, DetailLayout, Mode, PickerPurpose, PickerState};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -1303,7 +1305,7 @@ mod tests {
         // routing hint lives in the status bar instead.
         st.detail = DetailLayout {
             shown: vec!["orchestrator".into()],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 0,
         };
         let text = draw(&mut st, 140, 24);
@@ -1318,7 +1320,7 @@ mod tests {
         // had one.
         st.detail = DetailLayout {
             shown: vec!["r0".into()],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 0,
         };
         let text = draw(&mut st, 140, 24);
@@ -1336,7 +1338,7 @@ mod tests {
         // Focus the ACP monitor and report upstream numbers on it.
         st.detail = DetailLayout {
             shown: vec!["r0".into()],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 0,
         };
         st.agents[0].usage = Some((62_000, 100_000));
@@ -1414,7 +1416,7 @@ mod tests {
         // Show r2's pane so the permission popup doesn't cover the rail.
         st.detail = DetailLayout {
             shown: vec!["r2".into()],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 0,
         };
         let text = draw(&mut st, 80, 24);
@@ -1445,7 +1447,7 @@ mod tests {
         let mut st = agents3();
         st.detail = DetailLayout {
             shown: vec!["r0".into(), "r1".into()],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 1,
         };
         st.agents[0]
@@ -1474,7 +1476,10 @@ mod tests {
     fn split_rects_h_columns_v_rows_no_overlap() {
         let area = Rect::new(0, 0, 80, 24);
         for n in 1..=4usize {
-            for split in [crate::tui::state::Split::H, crate::tui::state::Split::V] {
+            for split in [
+                crate::tui::state::layout::Split::H,
+                crate::tui::state::layout::Split::V,
+            ] {
                 let rects = split_rects(area, n, split);
                 assert_eq!(rects.len(), n, "n={n} rect count");
                 for i in 0..rects.len() {
@@ -1485,9 +1490,9 @@ mod tests {
             }
         }
         // Direction: H splits along x, V along y.
-        let h = split_rects(area, 2, crate::tui::state::Split::H);
+        let h = split_rects(area, 2, crate::tui::state::layout::Split::H);
         assert_eq!(h[0].y, h[1].y, "H = side-by-side");
-        let v = split_rects(area, 2, crate::tui::state::Split::V);
+        let v = split_rects(area, 2, crate::tui::state::layout::Split::V);
         assert_eq!(v[0].x, v[1].x, "V = stacked");
     }
 
@@ -1575,7 +1580,7 @@ mod tests {
         });
         st.detail = DetailLayout {
             shown: vec!["r1".into()],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 0,
         };
         let text = draw(&mut st, 100, 24);
@@ -1603,7 +1608,7 @@ mod tests {
     fn palette_popup_renders_filter_and_matches() {
         let mut st = agents3();
         st.mode = Mode::Command;
-        st.palette = Some(crate::tui::state::PaletteState {
+        st.palette = Some(crate::tui::state::overlay::PaletteState {
             input: "sp".into(),
             selected: 0,
         });
@@ -1616,7 +1621,7 @@ mod tests {
     fn palette_popup_handles_no_matches() {
         let mut st = agents3();
         st.mode = Mode::Command;
-        st.palette = Some(crate::tui::state::PaletteState {
+        st.palette = Some(crate::tui::state::overlay::PaletteState {
             input: "zzz".into(),
             selected: 3,
         });
@@ -1813,7 +1818,7 @@ mod tests {
         st.agents.clear();
         st.detail = DetailLayout {
             shown: vec![],
-            split: crate::tui::state::Split::H,
+            split: crate::tui::state::layout::Split::H,
             focus: 0,
         };
         // Tight width, nothing anywhere: the default (subagents) panel keeps
@@ -1834,7 +1839,7 @@ mod tests {
         let mut st = agents3();
         st.detail = DetailLayout {
             shown: vec!["r0".into(), "r1".into()],
-            split: crate::tui::state::Split::V,
+            split: crate::tui::state::layout::Split::V,
             focus: 0,
         };
         st.agents[0].pending = Some(PendingView {
