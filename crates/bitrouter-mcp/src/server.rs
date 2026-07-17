@@ -37,10 +37,15 @@ fn caller_from_extensions(ext: &rmcp::model::Extensions) -> CallerAuth {
 }
 
 /// Token from a `Bearer <token>` Authorization value. The scheme is matched
-/// case-insensitively per RFC 7235 (`bearer`/`BEARER` are equally valid).
+/// case-insensitively per RFC 7235 (`bearer`/`BEARER` are equally valid). A
+/// whitespace-only token (`"Bearer "`) is `None`: an empty credential must
+/// not count as "present" at the pre-auth gate.
 fn parse_bearer(value: &str) -> Option<&str> {
     let (scheme, token) = value.split_once(' ')?;
-    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|token| !token.is_empty())
 }
 
 /// One-line cost annotator appended to tool results — the origin
@@ -927,6 +932,8 @@ mod tests {
         assert!(has_bearer(Some("BEARER abc")));
         assert!(!has_bearer(Some("Basic abc")));
         assert!(!has_bearer(Some("Bearer")));
+        // A whitespace-only token is not a credential.
+        assert!(!has_bearer(Some("Bearer ")));
         assert!(!has_bearer(None));
     }
 
@@ -936,6 +943,9 @@ mod tests {
         assert_eq!(parse_bearer("bearer  xyz"), Some("xyz"));
         assert_eq!(parse_bearer("Basic xyz"), None);
         assert_eq!(parse_bearer("Bearer"), None);
+        // Whitespace-only tokens are rejected, not read as `Some("")`.
+        assert_eq!(parse_bearer("Bearer "), None);
+        assert_eq!(parse_bearer("Bearer   "), None);
     }
 
     #[test]
