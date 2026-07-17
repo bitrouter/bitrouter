@@ -34,12 +34,15 @@ use std::collections::HashMap;
 use std::sync::{PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use bitrouter_sdk::Result;
 use bitrouter_sdk::config::AdequacyConfig;
+use tokio::sync::Mutex as AsyncMutex;
 
 use self::reliability::{
-    ProviderReliabilityLedger, ReliabilityKey, ReliabilityObservation, RoutePermit,
+    ProviderReliabilityLedger, ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
+    RoutePermit,
 };
-use self::store::AdequacyStore;
+use self::store::{AdequacyStore, ReliabilityAppendOutcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InadequacyCause {
@@ -113,6 +116,8 @@ pub struct AdequacyLedger {
     /// Provider/endpoint transport reliability, intentionally separate from
     /// task-level semantic adequacy state.
     reliability: ProviderReliabilityLedger,
+    /// Serializes append-then-fold so durable order and online state cannot diverge.
+    reliability_write: AsyncMutex<()>,
 }
 
 #[derive(Default)]
@@ -142,7 +147,7 @@ struct Entry {
 impl AdequacyLedger {
     /// Build a ledger from config, warming the in-memory pin cache from the
     /// store. A failed warm-up read is non-fatal (the cache starts empty).
-    pub async fn load(config: &AdequacyConfig, store: AdequacyStore) -> Self {
+    pub async fn load(config: &AdequacyConfig, store: AdequacyStore) -> Result<Self> {
         let mut entries: HashMap<String, Entry> = HashMap::new();
         if let Ok(rows) = store.load_all().await {
             for (fingerprint, pinned_at) in rows {
@@ -162,7 +167,19 @@ impl AdequacyLedger {
                 entries.entry(fingerprint).or_default().semantic_successes = semantic_successes;
             }
         }
-        Self {
+        let persisted_reliability = store.load_reliability_events().await?;
+        let reliability_events = persisted_reliability
+            .into_iter()
+            .map(|persisted| persisted.event)
+            .collect::<Vec<_>>();
+        let reliability = ProviderReliabilityLedger::replay(
+            config.reliability_window_size as usize,
+            config.reliability_consecutive_failures,
+            config.reliability_error_rate_percent,
+            config.reliability_cooldown_secs,
+            &reliability_events,
+        )?;
+        Ok(Self {
             state: RwLock::new(State { entries }),
             store: Some(store),
             threshold: config.escalation_threshold.max(1),
@@ -170,13 +187,9 @@ impl AdequacyLedger {
             explore_interval: config.explore_interval.max(1),
             explore_threshold: config.explore_threshold.max(1),
             min_semantic_successes_for_lock: config.min_semantic_successes_for_lock,
-            reliability: ProviderReliabilityLedger::new(
-                config.reliability_window_size.max(1) as usize,
-                config.reliability_consecutive_failures.max(1),
-                config.reliability_error_rate_percent.clamp(1, 100),
-                config.reliability_cooldown_secs,
-            ),
-        }
+            reliability,
+            reliability_write: AsyncMutex::new(()),
+        })
     }
 
     /// An in-memory-only ledger (no persistence) with the given pin threshold /
@@ -203,18 +216,36 @@ impl AdequacyLedger {
             explore_interval: explore_interval.max(1),
             explore_threshold: explore_threshold.max(1),
             min_semantic_successes_for_lock: 0,
-            reliability: ProviderReliabilityLedger::new(23, 2, 35, 300),
+            reliability: ProviderReliabilityLedger::new_validated(23, 2, 35, 300),
+            reliability_write: AsyncMutex::new(()),
         }
     }
 
-    pub fn observe_provider_reliability(
+    pub async fn observe_provider_reliability(
         &self,
+        request_id: &str,
         route_key: &str,
         endpoint_key: ReliabilityKey,
         observation: ReliabilityObservation,
-    ) {
-        self.reliability
-            .observe(route_key, endpoint_key, observation, now_unix());
+        half_open_probe: bool,
+    ) -> Result<()> {
+        let _write = self.reliability_write.lock().await;
+        let event = ReliabilityEvent {
+            request_id: request_id.to_string(),
+            route_key: route_key.to_string(),
+            endpoint_key,
+            observation,
+            half_open_probe,
+            observed_at_unix: now_unix(),
+        };
+        match &self.store {
+            Some(store) => match store.append_reliability_event(&event).await? {
+                ReliabilityAppendOutcome::Inserted => self.reliability.observe_event(event),
+                ReliabilityAppendOutcome::Duplicate => {}
+            },
+            None => self.reliability.observe_event(event),
+        }
+        Ok(())
     }
 
     pub fn reliability_permit(&self, route_key: &str) -> RoutePermit {
@@ -470,7 +501,7 @@ mod tests {
 
     #[test]
     fn reliability_circuit_opens_after_two_consecutive_transient_failures() {
-        let ledger = ProviderReliabilityLedger::new(23, 2, 35, 60);
+        let ledger = ProviderReliabilityLedger::try_new(23, 2, 35, 60).unwrap();
         let route = "bitrouter:deepseek-v4-flash";
 
         ledger.observe(
@@ -492,7 +523,7 @@ mod tests {
 
     #[test]
     fn reliability_window_opens_on_nine_spaced_failures_out_of_twenty_three() {
-        let ledger = ProviderReliabilityLedger::new(23, 2, 35, 60);
+        let ledger = ProviderReliabilityLedger::try_new(23, 2, 35, 60).unwrap();
         let route = "bitrouter:deepseek-v4-flash";
         for index in 0..23 {
             let observation = if index <= 16 && index % 2 == 0 {
@@ -511,7 +542,7 @@ mod tests {
 
     #[test]
     fn reliability_half_open_allows_one_probe_and_success_closes() {
-        let ledger = ProviderReliabilityLedger::new(23, 2, 35, 60);
+        let ledger = ProviderReliabilityLedger::try_new(23, 2, 35, 60).unwrap();
         let route = "bitrouter:deepseek-v4-flash";
         ledger.observe(
             route,
@@ -547,6 +578,7 @@ mod tests {
                 route_key: route.to_string(),
                 endpoint_key: endpoint("bitrouter"),
                 observation: ReliabilityObservation::TransientFailure,
+                half_open_probe: false,
                 observed_at_unix: 100,
             },
             ReliabilityEvent {
@@ -554,6 +586,7 @@ mod tests {
                 route_key: route.to_string(),
                 endpoint_key: endpoint("bitrouter"),
                 observation: ReliabilityObservation::Success,
+                half_open_probe: false,
                 observed_at_unix: 101,
             },
             ReliabilityEvent {
@@ -561,14 +594,15 @@ mod tests {
                 route_key: route.to_string(),
                 endpoint_key: endpoint("bitrouter"),
                 observation: ReliabilityObservation::TransientFailure,
+                half_open_probe: false,
                 observed_at_unix: 102,
             },
         ];
-        let online = ProviderReliabilityLedger::new(23, 2, 35, 60);
+        let online = ProviderReliabilityLedger::try_new(23, 2, 35, 60).unwrap();
         for event in &events {
             online.observe_event(event.clone());
         }
-        let replayed = ProviderReliabilityLedger::replay(23, 2, 35, 60, &events);
+        let replayed = ProviderReliabilityLedger::replay(23, 2, 35, 60, &events).unwrap();
 
         assert_eq!(online.route_snapshot(route), replayed.route_snapshot(route));
         assert_eq!(

@@ -62,6 +62,11 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(
+                        ColumnDef::new(AdequacyReliabilityEvents::HalfOpenProbe)
+                            .boolean()
+                            .not_null(),
+                    )
+                    .col(
                         ColumnDef::new(AdequacyReliabilityEvents::ObservedAtUnix)
                             .big_integer()
                             .not_null(),
@@ -101,6 +106,7 @@ enum AdequacyReliabilityEvents {
     EndpointScope,
     Protocol,
     Observation,
+    HalfOpenProbe,
     ObservedAtUnix,
     CreatedAt,
 }

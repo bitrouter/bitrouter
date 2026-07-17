@@ -666,6 +666,10 @@ impl PolicyTableRouter {
                 ledger_key: self.ledger_key(&decision.request_key),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),
+                half_open_probe: matches!(
+                    decision.reason,
+                    PolicyDecisionReason::ReliabilityHalfOpenProbe
+                ),
                 exploration_allowed: self.exploration_allowed_for(&decision),
                 table: self.table.clone(),
                 ledger: ledger.clone(),
@@ -1363,7 +1367,11 @@ mod tests {
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
         let store = crate::adequacy::store::AdequacyStore::new(db);
-        let ledger = Arc::new(AdequacyLedger::load(&cfg.adequacy, store.clone()).await);
+        let ledger = Arc::new(
+            AdequacyLedger::load(&cfg.adequacy, store.clone())
+                .await
+                .unwrap(),
+        );
         ledger.observe("opening", trial_ok()).await;
         let table = PolicyTable::from_config(&cfg).expect("configured");
         let router = PolicyTableRouter::new(table, Some(ledger));
@@ -1381,7 +1389,11 @@ mod tests {
             .record_semantic_success("opening", "terminal-bench/regex-log")
             .await
             .unwrap();
-        let one_success = Arc::new(AdequacyLedger::load(&cfg.adequacy, store.clone()).await);
+        let one_success = Arc::new(
+            AdequacyLedger::load(&cfg.adequacy, store.clone())
+                .await
+                .unwrap(),
+        );
         let router = PolicyTableRouter::new(
             PolicyTable::from_config(&cfg).expect("configured"),
             Some(one_success),
@@ -1395,7 +1407,7 @@ mod tests {
             .record_semantic_success("opening", "terminal-bench/fix-git")
             .await
             .unwrap();
-        let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await);
+        let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await.unwrap());
         let router = PolicyTableRouter::new(
             PolicyTable::from_config(&cfg).expect("configured"),
             Some(reloaded),
@@ -1595,16 +1607,26 @@ mod tests {
             endpoint_scope: "us-east-2".to_string(),
             protocol: "responses".to_string(),
         };
-        ledger.observe_provider_reliability(
-            "vendor/cheap",
-            endpoint.clone(),
-            ReliabilityObservation::TransientFailure,
-        );
-        ledger.observe_provider_reliability(
-            "vendor/cheap",
-            endpoint,
-            ReliabilityObservation::TransientFailure,
-        );
+        ledger
+            .observe_provider_reliability(
+                "request-1",
+                "vendor/cheap",
+                endpoint.clone(),
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
+        ledger
+            .observe_provider_reliability(
+                "request-2",
+                "vendor/cheap",
+                endpoint,
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
         let router = exploring_router(ledger);
         let mut prompt = prompt("inbound");
         prompt.messages = vec![user("start")];

@@ -18,6 +18,7 @@ pub(crate) struct PendingAdequacyDecision {
     pub ledger_key: String,
     pub static_tier: Option<String>,
     pub selected_tier: Option<String>,
+    pub half_open_probe: bool,
     pub exploration_allowed: bool,
     pub table: Arc<PolicyTable>,
     pub ledger: Arc<AdequacyLedger>,
@@ -125,7 +126,14 @@ impl SettlementRecorder for AdequacySettlementRecorder {
             let endpoint_key = reliability_key(ctx);
             pending
                 .ledger
-                .observe_provider_reliability(route_key, endpoint_key, observation);
+                .observe_provider_reliability(
+                    &ctx.request_id,
+                    route_key,
+                    endpoint_key,
+                    observation,
+                    pending.half_open_probe,
+                )
+                .await?;
         }
         if cause == InadequacyCause::ProviderTransient {
             tracing::debug!(
@@ -292,6 +300,7 @@ mod tests {
             ledger_key: request_key.to_string(),
             static_tier: Some("capable".to_string()),
             selected_tier: Some("capable".to_string()),
+            half_open_probe: false,
             exploration_allowed: true,
             table: table.clone(),
             ledger: ledger.clone(),
@@ -307,6 +316,7 @@ mod tests {
             ledger_key: request_key.to_string(),
             static_tier: Some("capable".to_string()),
             selected_tier: Some("capable".to_string()),
+            half_open_probe: false,
             exploration_allowed: true,
             table,
             ledger: ledger.clone(),
@@ -338,6 +348,7 @@ mod tests {
                 ledger_key: request_key.to_string(),
                 static_tier: Some("capable".to_string()),
                 selected_tier: Some("cheap".to_string()),
+                half_open_probe: false,
                 exploration_allowed: true,
                 table: table.clone(),
                 ledger: ledger.clone(),

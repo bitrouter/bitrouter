@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
+use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -25,6 +26,7 @@ pub struct ReliabilityEvent {
     pub route_key: String,
     pub endpoint_key: ReliabilityKey,
     pub observation: ReliabilityObservation,
+    pub half_open_probe: bool,
     pub observed_at_unix: u64,
 }
 
@@ -88,21 +90,41 @@ impl Default for CircuitEntry {
 }
 
 impl ProviderReliabilityLedger {
-    pub fn new(
+    pub fn try_new(
+        window_size: usize,
+        consecutive_failure_threshold: u32,
+        error_rate_percent: u32,
+        cooldown_secs: u64,
+    ) -> Result<Self> {
+        if window_size == 0 {
+            return Err(BitrouterError::bad_request(
+                "reliability window must be positive",
+            ));
+        }
+        if consecutive_failure_threshold == 0 {
+            return Err(BitrouterError::bad_request(
+                "consecutive failure threshold must be positive",
+            ));
+        }
+        if !(1..=100).contains(&error_rate_percent) {
+            return Err(BitrouterError::bad_request(
+                "error-rate threshold must be between 1 and 100",
+            ));
+        }
+        Ok(Self::new_validated(
+            window_size,
+            consecutive_failure_threshold,
+            error_rate_percent,
+            cooldown_secs,
+        ))
+    }
+
+    pub(crate) fn new_validated(
         window_size: usize,
         consecutive_failure_threshold: u32,
         error_rate_percent: u32,
         cooldown_secs: u64,
     ) -> Self {
-        assert!(window_size > 0, "reliability window must be positive");
-        assert!(
-            consecutive_failure_threshold > 0,
-            "consecutive failure threshold must be positive"
-        );
-        assert!(
-            (1..=100).contains(&error_rate_percent),
-            "error-rate threshold must be between 1 and 100"
-        );
         Self {
             state: Mutex::new(ReliabilityState::default()),
             window_size,
@@ -119,9 +141,23 @@ impl ProviderReliabilityLedger {
         observation: ReliabilityObservation,
         now_unix: u64,
     ) {
+        self.observe_inner(route_key, endpoint_key, observation, false, now_unix);
+    }
+
+    fn observe_inner(
+        &self,
+        route_key: &str,
+        endpoint_key: ReliabilityKey,
+        observation: ReliabilityObservation,
+        half_open_probe: bool,
+        now_unix: u64,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let route = state.routes.entry(route_key.to_string()).or_default();
-        let route_was_half_open = matches!(route.phase, EntryPhase::HalfOpen);
+        if half_open_probe {
+            route.phase = EntryPhase::HalfOpen;
+        }
+        let route_was_half_open = half_open_probe || matches!(route.phase, EntryPhase::HalfOpen);
         self.apply_observation(route, observation, now_unix);
         let endpoint = state.endpoints.entry(endpoint_key).or_default();
         if route_was_half_open {
@@ -131,10 +167,11 @@ impl ProviderReliabilityLedger {
     }
 
     pub fn observe_event(&self, event: ReliabilityEvent) {
-        self.observe(
+        self.observe_inner(
             &event.route_key,
             event.endpoint_key,
             event.observation,
+            event.half_open_probe,
             event.observed_at_unix,
         );
     }
@@ -145,17 +182,17 @@ impl ProviderReliabilityLedger {
         error_rate_percent: u32,
         cooldown_secs: u64,
         events: &[ReliabilityEvent],
-    ) -> Self {
-        let ledger = Self::new(
+    ) -> Result<Self> {
+        let ledger = Self::try_new(
             window_size,
             consecutive_failure_threshold,
             error_rate_percent,
             cooldown_secs,
-        );
+        )?;
         for event in events {
             ledger.observe_event(event.clone());
         }
-        ledger
+        Ok(ledger)
     }
 
     pub fn permit(&self, route_key: &str, now_unix: u64) -> RoutePermit {

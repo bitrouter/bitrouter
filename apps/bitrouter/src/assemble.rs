@@ -453,7 +453,7 @@ pub async fn build_app_with_path(
         Some(_) if config.policy_table.adequacy.enabled => {
             let store = crate::adequacy::store::AdequacyStore::new(db.clone());
             Some(Arc::new(
-                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await,
+                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await?,
             ))
         }
         _ => None,

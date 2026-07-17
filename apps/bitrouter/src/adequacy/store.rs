@@ -111,6 +111,7 @@ pub mod adequacy_reliability_events {
         pub endpoint_scope: String,
         pub protocol: String,
         pub observation: String,
+        pub half_open_probe: bool,
         pub observed_at_unix: i64,
         pub created_at: String,
     }
@@ -250,6 +251,7 @@ impl AdequacyStore {
             endpoint_scope: Set(event.endpoint_key.endpoint_scope.clone()),
             protocol: Set(event.endpoint_key.protocol.clone()),
             observation: Set(reliability_observation_str(event.observation).to_string()),
+            half_open_probe: Set(event.half_open_probe),
             observed_at_unix: Set(observed_at_unix),
             created_at: Set(Utc::now().to_rfc3339()),
         };
@@ -279,7 +281,7 @@ impl AdequacyStore {
                         )
                     })?;
                 let existing = reliability_event_from_row(existing)?;
-                if existing.event == *event {
+                if reliability_events_are_semantically_equal(&existing.event, event) {
                     Ok(ReliabilityAppendOutcome::Duplicate)
                 } else {
                     Err(BitrouterError::bad_request(format!(
@@ -358,6 +360,17 @@ impl AdequacyStore {
     }
 }
 
+fn reliability_events_are_semantically_equal(
+    left: &ReliabilityEvent,
+    right: &ReliabilityEvent,
+) -> bool {
+    left.request_id == right.request_id
+        && left.route_key == right.route_key
+        && left.endpoint_key == right.endpoint_key
+        && left.observation == right.observation
+        && left.half_open_probe == right.half_open_probe
+}
+
 fn reliability_observation_str(observation: ReliabilityObservation) -> &'static str {
     match observation {
         ReliabilityObservation::Success => "success",
@@ -393,6 +406,7 @@ fn reliability_event_from_row(
                 protocol: row.protocol,
             },
             observation,
+            half_open_probe: row.half_open_probe,
             observed_at_unix,
         },
     })
@@ -428,6 +442,7 @@ mod tests {
                 protocol: "chat_completions".to_string(),
             },
             observation,
+            half_open_probe: false,
             observed_at_unix,
         }
     }
@@ -447,7 +462,13 @@ mod tests {
             ReliabilityAppendOutcome::Inserted,
         );
         assert_eq!(
-            store.append_reliability_event(&first).await.unwrap(),
+            store
+                .append_reliability_event(&ReliabilityEvent {
+                    observed_at_unix: 999,
+                    ..first.clone()
+                })
+                .await
+                .unwrap(),
             ReliabilityAppendOutcome::Duplicate,
         );
 
@@ -475,6 +496,110 @@ mod tests {
                 .to_string()
                 .contains("conflicting reliability event for request request-1")
         );
+    }
+
+    #[tokio::test]
+    async fn reliability_persists_open_half_open_and_closed_phases_across_restarts() {
+        use crate::adequacy::reliability::RoutePermit;
+
+        let db = db::connect("sqlite::memory:").await.unwrap();
+        db::run_migrations(&db).await.unwrap();
+        let store = AdequacyStore::new(db);
+        let cfg = AdequacyConfig {
+            enabled: true,
+            reliability_window_size: 23,
+            reliability_consecutive_failures: 2,
+            reliability_error_rate_percent: 35,
+            reliability_cooldown_secs: 0,
+            ..Default::default()
+        };
+        let route = "bitrouter:canary-weak";
+        let endpoint = reliability_event("unused", ReliabilityObservation::Success, 0).endpoint_key;
+
+        let ledger = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
+        ledger
+            .observe_provider_reliability(
+                "request-1",
+                route,
+                endpoint.clone(),
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
+        ledger
+            .observe_provider_reliability(
+                "request-1",
+                route,
+                endpoint.clone(),
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(ledger.reliability_permit(route), RoutePermit::Closed);
+        ledger
+            .observe_provider_reliability(
+                "request-2",
+                route,
+                endpoint.clone(),
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
+
+        let reopened = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
+        assert_eq!(
+            reopened.reliability_permit(route),
+            RoutePermit::HalfOpenProbe
+        );
+        assert_eq!(reopened.reliability_permit(route), RoutePermit::Open);
+        reopened
+            .observe_provider_reliability(
+                "request-3",
+                route,
+                endpoint,
+                ReliabilityObservation::Success,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let closed = AdequacyLedger::load(&cfg, store).await.unwrap();
+        assert_eq!(closed.reliability_permit(route), RoutePermit::Closed);
+    }
+
+    #[tokio::test]
+    async fn reliability_persistence_failure_leaves_online_state_unchanged() {
+        use crate::adequacy::reliability::RoutePermit;
+        use sea_orm::ConnectionTrait;
+
+        let db = db::connect("sqlite::memory:").await.unwrap();
+        db::run_migrations(&db).await.unwrap();
+        let store = AdequacyStore::new(db.clone());
+        let ledger = AdequacyLedger::load(&AdequacyConfig::default(), store)
+            .await
+            .unwrap();
+        db.execute_unprepared("DROP TABLE adequacy_reliability_events")
+            .await
+            .unwrap();
+        let route = "bitrouter:canary-weak";
+        let endpoint = reliability_event("unused", ReliabilityObservation::Success, 0).endpoint_key;
+
+        let error = ledger
+            .observe_provider_reliability(
+                "request-1",
+                route,
+                endpoint,
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("append reliability event"));
+        assert_eq!(ledger.reliability_permit(route), RoutePermit::Closed);
     }
 
     #[tokio::test]
@@ -516,7 +641,9 @@ mod tests {
             ..Default::default()
         };
         // First ledger: a failure pins the fingerprint and persists it.
-        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
+            .await
+            .unwrap();
         ledger
             .observe(
                 "after_edit",
@@ -527,7 +654,9 @@ mod tests {
             .await;
         assert!(ledger.is_pinned("after_edit"));
         // A fresh ledger over the same db warms its cache from the stored pin.
-        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
+            .await
+            .unwrap();
         assert!(
             reloaded.is_pinned("after_edit"),
             "the pin must survive via persistence"
@@ -550,7 +679,9 @@ mod tests {
             ..Default::default()
         };
 
-        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
+            .await
+            .unwrap();
         ledger
             .observe(
                 "tool_followup",
@@ -571,7 +702,9 @@ mod tests {
             .await;
         assert!(ledger.is_locked("tool_followup"));
 
-        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
+            .await
+            .unwrap();
         assert!(
             reloaded.is_locked("tool_followup"),
             "learned cheap-route locks should survive daemon restart"
@@ -594,7 +727,9 @@ mod tests {
             ..Default::default()
         };
 
-        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
+            .await
+            .unwrap();
         ledger
             .observe(
                 "tool_followup",
@@ -615,7 +750,9 @@ mod tests {
             .await;
         assert!(ledger.should_trial("tool_followup"));
 
-        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone())).await;
+        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
+            .await
+            .unwrap();
         assert!(
             reloaded.should_trial("tool_followup"),
             "trial cadence should survive daemon restart"
@@ -637,7 +774,7 @@ mod tests {
         };
         let request_key = "codex|responses|tool_followup|-|-|exec_command";
         let store = AdequacyStore::new(db.clone());
-        let ledger = AdequacyLedger::load(&cfg, store.clone()).await;
+        let ledger = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
 
         ledger
             .observe(
@@ -655,7 +792,7 @@ mod tests {
             .record_semantic_success(request_key, "terminal-bench/regex-log")
             .await
             .unwrap();
-        let one_success = AdequacyLedger::load(&cfg, store.clone()).await;
+        let one_success = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
         assert_eq!(one_success.semantic_successes(request_key), 1);
         assert!(!one_success.is_locked(request_key));
 
@@ -663,7 +800,7 @@ mod tests {
             .record_semantic_success(request_key, "terminal-bench/fix-git")
             .await
             .unwrap();
-        let two_successes = AdequacyLedger::load(&cfg, store).await;
+        let two_successes = AdequacyLedger::load(&cfg, store).await.unwrap();
         assert_eq!(two_successes.semantic_successes(request_key), 2);
         assert!(two_successes.is_locked(request_key));
     }
