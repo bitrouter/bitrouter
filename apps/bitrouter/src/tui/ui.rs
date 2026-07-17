@@ -11,9 +11,9 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use crossterm::event::KeyCode;
 
 use crate::tui::state::diff::{DiffLine, Line, diff_lines};
+use crate::tui::state::pane::{PaneState, PendingView, TailKind};
 use crate::tui::state::{
-    AppState, ClickTarget, ClickZone, LEADER_LEAVES, Mode, PaneState, PendingView, PickerPurpose,
-    PickerState, Split, TailKind,
+    AppState, ClickTarget, ClickZone, LEADER_LEAVES, Mode, PickerPurpose, PickerState, Split,
 };
 
 /// Preferred rail width; shrinks on narrow terminals. Wide enough for a row
@@ -57,7 +57,7 @@ pub fn render(state: &mut AppState, pty: &[PtyView], frame: &mut Frame) {
     let rail_content = state
         .agents
         .iter()
-        .any(|p| p.kind == crate::tui::state::PaneKind::Monitor);
+        .any(|p| p.kind == crate::tui::state::pane::PaneKind::Monitor);
     let fits_both = area.width >= SESSIONS_WIDTH + rail_w + CENTER_MIN_WIDTH;
     let (show_sessions, show_rail) = if fits_both {
         (sessions_allowed, rail_allowed)
@@ -485,9 +485,9 @@ fn render_rail(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Frame, 
         }
         // Non-default autonomy is worth knowing at a glance.
         match pane.autonomy {
-            crate::tui::state::Autonomy::Manual => {}
-            crate::tui::state::Autonomy::Assisted => words.push("[a]".to_string()),
-            crate::tui::state::Autonomy::Auto => words.push("[A]".to_string()),
+            crate::tui::state::pane::Autonomy::Manual => {}
+            crate::tui::state::pane::Autonomy::Assisted => words.push("[a]".to_string()),
+            crate::tui::state::pane::Autonomy::Auto => words.push("[A]".to_string()),
         }
         meta.push(Span::styled(words.join(" · "), tint(nc, Color::DarkGray)));
         lines.push(TuiLine::from(meta));
@@ -591,7 +591,7 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
     for (slot, (rid, rect)) in shown.iter().zip(rects.iter()).enumerate() {
         if let Some(pane) = state.agents.iter_mut().find(|p| &p.record_id == rid) {
             match pane.kind {
-                crate::tui::state::PaneKind::Pty => {
+                crate::tui::state::pane::PaneKind::Pty => {
                     // Record the drawn inner size so the loop can resize the
                     // emulator + PTY (SIGWINCH) when the layout changes.
                     pty_areas.push((
@@ -602,7 +602,7 @@ fn render_detail(state: &mut AppState, pty: &[PtyView], frame: &mut Frame, area:
                     render_pty_pane(pane, view, slot, slot == focus, nc, frame, *rect);
                 }
                 // Monitor panes: bitrouter-drawn lines, no PTY grid.
-                crate::tui::state::PaneKind::Monitor => {
+                crate::tui::state::pane::PaneKind::Monitor => {
                     render_pane(pane, slot, slot == focus, nc, frame, *rect)
                 }
             }
@@ -913,7 +913,7 @@ fn render_statusbar(state: &AppState, zones: &mut Vec<ClickZone>, frame: &mut Fr
     let nc = state.no_color;
     let pty_focused = state
         .focused()
-        .is_some_and(|p| p.kind == crate::tui::state::PaneKind::Pty);
+        .is_some_and(|p| p.kind == crate::tui::state::pane::PaneKind::Pty);
     // The bar is a gauge, not a cheat-sheet (TUI_SPEC_V3 §6): the one
     // persistent affordance is the leader; full bindings live in the
     // which-key overlay (leader / `?`) and the palette. The PTY routing
@@ -1158,7 +1158,8 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 mod tests {
     use super::*;
     use crate::tui::state::diff::Line;
-    use crate::tui::state::{AppState, DetailLayout, Mode, PaneState, PickerPurpose, PickerState};
+    use crate::tui::state::pane::PaneState;
+    use crate::tui::state::{AppState, DetailLayout, Mode, PickerPurpose, PickerState};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -1194,7 +1195,7 @@ mod tests {
     fn with_session() -> AppState {
         let mut st = agents3();
         let mut orch = PaneState::new("orchestrator".into(), "claude".into());
-        orch.kind = crate::tui::state::PaneKind::Pty;
+        orch.kind = crate::tui::state::pane::PaneKind::Pty;
         orch.harness = "pty".into();
         orch.model = Some("supergrok:grok-4.5".into());
         st.agents.push(orch);
@@ -1404,7 +1405,7 @@ mod tests {
     #[test]
     fn rail_sorts_actionable_agent_to_the_top() {
         let mut st = agents3();
-        st.agents[2].pending = Some(crate::tui::state::PendingView {
+        st.agents[2].pending = Some(crate::tui::state::pane::PendingView {
             title: "WRITE".into(),
             diff: None,
             options: vec![],
@@ -1566,7 +1567,7 @@ mod tests {
     #[test]
     fn rail_expands_pending_row_with_title_and_resolve_hint() {
         let mut st = agents3();
-        st.agents[1].pending = Some(crate::tui::state::PendingView {
+        st.agents[1].pending = Some(crate::tui::state::pane::PendingView {
             title: "rm -rf".into(),
             diff: None,
             options: vec![],
@@ -1586,13 +1587,13 @@ mod tests {
     #[test]
     fn rail_shows_risk_label_and_autonomy_tag() {
         let mut st = agents3();
-        st.agents[1].pending = Some(crate::tui::state::PendingView {
+        st.agents[1].pending = Some(crate::tui::state::pane::PendingView {
             title: "wants".into(),
             diff: None,
             options: vec![],
             risk: crate::risk::Risk::High,
         });
-        st.agents[2].autonomy = crate::tui::state::Autonomy::Auto;
+        st.agents[2].autonomy = crate::tui::state::pane::Autonomy::Auto;
         let text = draw(&mut st, 80, 24);
         assert!(text.contains("high ·"), "risk label on the expanded row");
         assert!(text.contains("[A]"), "auto tier tagged on the row");
@@ -1705,7 +1706,7 @@ mod tests {
     #[test]
     fn pty_pane_renders_the_grid_and_records_its_size() {
         let mut pane = PaneState::new("orchestrator".into(), "claude".into());
-        pane.kind = crate::tui::state::PaneKind::Pty;
+        pane.kind = crate::tui::state::pane::PaneKind::Pty;
         pane.harness = "pty".into();
         let mut st = AppState::new(pane);
         let view = PtyView {
@@ -1741,7 +1742,7 @@ mod tests {
     #[test]
     fn pty_pane_without_a_view_shows_a_calm_placeholder() {
         let mut pane = PaneState::new("orchestrator".into(), "claude".into());
-        pane.kind = crate::tui::state::PaneKind::Pty;
+        pane.kind = crate::tui::state::pane::PaneKind::Pty;
         let mut st = AppState::new(pane);
         let text = draw(&mut st, 60, 12);
         assert!(text.contains("starting…"), "{text:?}");
@@ -1825,7 +1826,7 @@ mod tests {
     #[test]
     fn tiny_terminals_render_every_surface_without_panic() {
         use crate::tui::event::PermOption;
-        use crate::tui::state::PendingView;
+        use crate::tui::state::pane::PendingView;
         use bitrouter_substrate::translate::PermissionOutcome;
 
         // Every render surface active at once: rail, split detail, input,
