@@ -822,6 +822,16 @@ async fn require_bearer(
 
 /// Build the `/mcp-control` axum router for `backend`, optionally gated by the
 /// pre-auth bearer middleware. HTTP is the public profile: completion only.
+///
+/// That coupling is a crate-level invariant, deliberately: the orchestrator
+/// tools are semantically bound to one process and one repo (spawned
+/// subagents, the in-process fleet registry, connection-scoped escalation, a
+/// machine-wide metering DB), so no HTTP profile may carry them. Should a
+/// non-child client (e.g. a GUI orchestrator) ever need the *read-only*
+/// introspection surface without a stdio pipe, this is the single function to
+/// change — take a handler factory, keep the profile strictly loopback and
+/// incompatible with the cloud backend, and prefer modeling that read-only
+/// data as MCP resources over widening the tool surface.
 fn build_http_router(
     backend: Arc<dyn Backend>,
     require_auth: bool,

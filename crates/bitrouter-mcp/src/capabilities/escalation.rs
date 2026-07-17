@@ -64,6 +64,14 @@ pub enum EscalationDecision {
 /// records the client capability + captures the server→client peer at the first
 /// fleet tool call) and the app-side permission path (which queries it). One
 /// per stdio connection — the fleet backend is stdio-only.
+///
+/// Forward-compat note: the MCP spec is moving toward a stateless core where
+/// continuation state rides in explicit, model-visible handles rather than
+/// connection/session scope. Holding this state in-process is sound *only*
+/// because the fleet backend is one stdio connection in one process; if the
+/// escalation seam ever rides a resumable or multi-instance transport, the
+/// capability flag + peer must move out of connection scope (keyed by an
+/// explicit handle bound to the verified caller, never a session id).
 #[derive(Default)]
 pub struct EscalationState {
     /// Whether the connected client declared the capability.
