@@ -14,7 +14,7 @@ use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
-use crate::backend::{Backend, CallerAuth, CompleteRequest};
+use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
 use crate::capabilities::cost::CostQuery;
 use crate::capabilities::escalation::EscalationState;
 use crate::capabilities::fleet::{Fleet, HandleArgs, PromptArgs, SpawnArgs, StatusArgs};
@@ -63,6 +63,41 @@ pub trait CostFooter: Send + Sync {
 fn json_tool_result(result: Result<serde_json::Value, ToolError>) -> CallToolResult {
     match result {
         Ok(v) => CallToolResult::success(vec![ContentBlock::text(v.to_string())]),
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
+    }
+}
+
+/// [`json_tool_result`]'s sibling for capability results that are already
+/// plain text (the diff).
+fn text_tool_result(result: Result<String, ToolError>) -> CallToolResult {
+    match result {
+        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
+    }
+}
+
+/// Wrap a typed backend result into a tool result: `Ok`→serialized JSON text
+/// plus `footer` when given, `Err`→error text. The one shaping path for the
+/// three completion tools; the footer choice stays explicit at each call site
+/// (`complete`/`status` are spend-feed events and pass one, `list_models`
+/// passes `None` — intentional asymmetry).
+fn serialize_tool_result<T: serde::Serialize>(
+    result: Result<T, BackendError>,
+    footer: Option<ContentBlock>,
+) -> CallToolResult {
+    match result {
+        Ok(v) => match serde_json::to_string(&v) {
+            Ok(json) => {
+                let mut contents = vec![ContentBlock::text(json)];
+                if let Some(footer) = footer {
+                    contents.push(footer);
+                }
+                CallToolResult::success(contents)
+            }
+            Err(e) => CallToolResult::error(vec![ContentBlock::text(format!(
+                "serialization error: {e}"
+            ))]),
+        },
         Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
     }
 }
@@ -221,23 +256,14 @@ impl BitrouterMcp {
             temperature: args.temperature,
             system: args.system,
         };
-        match backend.complete(&caller, req).await {
-            Ok(r) => match serde_json::to_string(&r) {
-                Ok(json) => {
-                    let mut contents = vec![ContentBlock::text(json)];
-                    if let Some(footer) = self.footer_content().await {
-                        contents.push(footer);
-                    }
-                    Ok(CallToolResult::success(contents))
-                }
-                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "serialization error: {e}"
-                ))])),
-            },
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                e.to_string(),
-            )])),
-        }
+        let result = backend.complete(&caller, req).await;
+        // A completion is a spend event → successful results carry the footer.
+        let footer = if result.is_ok() {
+            self.footer_content().await
+        } else {
+            None
+        };
+        Ok(serialize_tool_result(result, footer))
     }
 
     #[tool(
@@ -255,17 +281,12 @@ impl BitrouterMcp {
     ) -> Result<CallToolResult, McpError> {
         let backend = self.backend()?;
         let caller = caller_from_extensions(&ctx.extensions);
-        match backend.list_models(&caller).await {
-            Ok(m) => match serde_json::to_string(&m) {
-                Ok(json) => Ok(CallToolResult::success(vec![ContentBlock::text(json)])),
-                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "serialization error: {e}"
-                ))])),
-            },
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                e.to_string(),
-            )])),
-        }
+        // No footer: listing models is not a spend event, unlike
+        // `complete`/`status` (intentional asymmetry).
+        Ok(serialize_tool_result(
+            backend.list_models(&caller).await,
+            None,
+        ))
     }
 
     #[tool(
@@ -280,23 +301,14 @@ impl BitrouterMcp {
     async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, McpError> {
         let backend = self.backend()?;
         let caller = caller_from_extensions(&ctx.extensions);
-        match backend.status(&caller).await {
-            Ok(s) => match serde_json::to_string(&s) {
-                Ok(json) => {
-                    let mut contents = vec![ContentBlock::text(json)];
-                    if let Some(footer) = self.footer_content().await {
-                        contents.push(footer);
-                    }
-                    Ok(CallToolResult::success(contents))
-                }
-                Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "serialization error: {e}"
-                ))])),
-            },
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                e.to_string(),
-            )])),
-        }
+        let result = backend.status(&caller).await;
+        // Status is the health check agents poll → keep spend visible on it.
+        let footer = if result.is_ok() {
+            self.footer_content().await
+        } else {
+            None
+        };
+        Ok(serialize_tool_result(result, footer))
     }
 }
 
@@ -381,10 +393,7 @@ impl BitrouterMcp {
         &self,
         Parameters(args): Parameters<HandleArgs>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(match self.fleet()?.diff(&args.handle).await {
-            Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
-            Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
-        })
+        Ok(text_tool_result(self.fleet()?.diff(&args.handle).await))
     }
 
     #[tool(
