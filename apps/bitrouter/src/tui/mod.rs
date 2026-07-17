@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bitrouter_substrate::engine::Session;
 use bitrouter_substrate::translate::PermissionOutcome;
-use crossterm::event::{Event as CtEvent, EventStream};
+use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -998,6 +998,7 @@ async fn event_loop(
             .map(|(rid, pane)| ui::PtyView {
                 record_id: rid.clone(),
                 lines: pane.backend.lines(state.no_color),
+                scrolled: pane.backend.is_scrolled(),
             })
             .collect();
         if let Err(e) = terminal.draw(|f| ui::render(&mut state, &pty_views, f)) {
@@ -1563,10 +1564,43 @@ async fn apply_effect(effect: Effect, state: &mut AppState, rt: &mut Runtime<'_>
             }
         }
         Effect::PtyKey { record_id, key } => {
-            if let Some(pane) = rt.ptys.get_mut(&record_id)
-                && let Some(bytes) = pane.backend.encode_key(&key)
-            {
-                pane.write_input(&bytes);
+            if let Some(pane) = rt.ptys.get_mut(&record_id) {
+                // Typing returns the view to the live bottom before the
+                // keystroke lands — you cannot type into scrollback history.
+                pane.backend.scroll_to_bottom();
+                if let Some(bytes) = pane.backend.encode_key(&key) {
+                    pane.write_input(&bytes);
+                }
+            }
+        }
+        Effect::PtyScroll {
+            record_id,
+            up,
+            page,
+        } => {
+            if let Some(pane) = rt.ptys.get_mut(&record_id) {
+                if pane.backend.alt_screen() {
+                    // The alt screen keeps no scrollback and the inner app
+                    // owns its viewport: forward the gesture as keys, the way
+                    // a real terminal does with mouse reporting off — a page
+                    // as PgUp/PgDn, a wheel notch as a few arrow presses.
+                    let code = match (page, up) {
+                        (true, true) => KeyCode::PageUp,
+                        (true, false) => KeyCode::PageDown,
+                        (false, true) => KeyCode::Up,
+                        (false, false) => KeyCode::Down,
+                    };
+                    let key = KeyEvent::from(code);
+                    let repeat = if page { 1 } else { 3 };
+                    for _ in 0..repeat {
+                        if let Some(bytes) = pane.backend.encode_key(&key) {
+                            pane.write_input(&bytes);
+                        }
+                    }
+                } else {
+                    // Main screen: page the host-owned emulator history.
+                    pane.backend.scroll(up, page);
+                }
             }
         }
         Effect::PtyPaste { record_id, text } => {

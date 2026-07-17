@@ -26,7 +26,7 @@
 //!   PTY (delivering `SIGWINCH`) whenever the pane rect changes.
 
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Line as TermLine;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as VtColor, NamedColor, Processor, Rgb};
@@ -55,7 +55,24 @@ pub trait TerminalBackend: Send {
     /// attribute / status responses) — capability scoping happens here: the
     /// emulator answers with what it actually renders.
     fn drain_responses(&mut self) -> Vec<u8>;
+    /// Page the scrollback view: `up` moves toward older output, `page` moves
+    /// by a full screen (else `WHEEL_STEP` lines, for the wheel). The host —
+    /// not the inner app — owns pane scrollback (TUI_SPEC §9): agent harnesses
+    /// like `claude` rely on the terminal to hold history, so the manager must.
+    fn scroll(&mut self, up: bool, page: bool);
+    /// Jump the view back to the live bottom (display offset 0) — what typing
+    /// implies (you cannot type into history).
+    fn scroll_to_bottom(&mut self);
+    /// Whether the view is pinned above the live bottom (drives the indicator).
+    fn is_scrolled(&self) -> bool;
+    /// Whether the inner app is on the alternate screen (a full-screen TUI):
+    /// there is no scrollback to page, so the host forwards the scroll gesture
+    /// as keys instead of paging its own (empty) history.
+    fn alt_screen(&self) -> bool;
 }
+
+/// Wheel notch → lines scrolled (a page is the pane height instead).
+const WHEEL_STEP: i32 = 3;
 
 /// `alacritty_terminal`-backed [`TerminalBackend`].
 pub struct AlacrittyBackend {
@@ -139,15 +156,20 @@ impl TerminalBackend for AlacrittyBackend {
         let rows = self.term.screen_lines();
         let cursor = self.term.grid().cursor.point;
         let cursor_visible = self.term.mode().contains(TermMode::SHOW_CURSOR);
+        // When scrolled into history the display iter yields negative absolute
+        // lines (it starts at `Line(-display_offset - 1)`); rebase by the
+        // offset so the visible window always maps onto rows `0..screen_lines`.
+        // At offset 0 this is a no-op (rebase adds 0) — the live-tail path.
+        let offset = self.term.grid().display_offset() as i32;
         // Cell matrix defaulted to spaces; the display iter fills what exists.
         let mut cells: Vec<Vec<Span<'static>>> = (0..rows)
             .map(|_| vec![Span::raw(" ".to_string()); cols])
             .collect();
         for indexed in self.term.grid().display_iter() {
             let point = indexed.point;
-            let row = point.line.0;
+            let row = point.line.0 + offset;
             if row < 0 {
-                continue; // scrollback above the viewport
+                continue; // above the viewport (shouldn't occur after rebase)
             }
             let (row, col) = (row as usize, point.column.0);
             if row >= rows || col >= cols {
@@ -211,6 +233,30 @@ impl TerminalBackend for AlacrittyBackend {
             Ok(mut buf) => std::mem::take(&mut *buf),
             Err(_) => Vec::new(),
         }
+    }
+
+    fn scroll(&mut self, up: bool, page: bool) {
+        let magnitude = if page {
+            self.term.screen_lines() as i32
+        } else {
+            WHEEL_STEP
+        };
+        // `Scroll::Delta(+n)` moves up into older history, `-n` back down;
+        // alacritty clamps to `[0, history_size]`, so over-scroll is a no-op.
+        let delta = if up { magnitude } else { -magnitude };
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    fn is_scrolled(&self) -> bool {
+        self.term.grid().display_offset() != 0
+    }
+
+    fn alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 }
 
@@ -508,6 +554,47 @@ mod tests {
         let t = text(&b);
         assert!(t.contains("hello"), "{t:?}");
         assert!(t.contains("world"), "{t:?}");
+    }
+
+    #[test]
+    fn scrollback_pages_reveal_history_and_snap_back() {
+        // 4 visible rows; feed 20 numbered lines so 16 land in history.
+        let mut b = AlacrittyBackend::new(20, 4);
+        for i in 0..20 {
+            b.feed(format!("L{i}\r\n").as_bytes());
+        }
+        assert!(!b.is_scrolled(), "starts pinned to the live bottom");
+        let bottom = text(&b);
+        assert!(bottom.contains("L19"), "latest output visible: {bottom:?}");
+        assert!(
+            !bottom.contains("L0 "),
+            "oldest not visible yet: {bottom:?}"
+        );
+
+        // Page up past the top (clamped): the oldest line comes into view and
+        // the rebased renderer places it without dropping it as "negative".
+        for _ in 0..6 {
+            b.scroll(true, true);
+        }
+        assert!(b.is_scrolled(), "view is pinned into history");
+        let top = text(&b);
+        assert!(top.contains("L0"), "oldest output now visible: {top:?}");
+        assert!(!top.contains("L19"), "live tail scrolled away: {top:?}");
+
+        // Snapping to the bottom follows the live tail again.
+        b.scroll_to_bottom();
+        assert!(!b.is_scrolled(), "back at the live bottom");
+        assert!(text(&b).contains("L19"), "latest output visible again");
+    }
+
+    #[test]
+    fn alt_screen_flag_tracks_the_inner_app() {
+        let mut b = AlacrittyBackend::new(20, 4);
+        assert!(!b.alt_screen(), "main screen by default");
+        b.feed(b"\x1b[?1049h"); // enter alternate screen
+        assert!(b.alt_screen(), "alt screen negotiated");
+        b.feed(b"\x1b[?1049l"); // leave it
+        assert!(!b.alt_screen(), "back to the main screen");
     }
 
     #[test]

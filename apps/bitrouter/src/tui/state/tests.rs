@@ -495,11 +495,11 @@ fn force_quit_always_tears_down() {
 fn pty_pane_routes_every_key_except_the_leader() {
     let mut st = AppState::new(pane());
     st.agents[0].kind = PaneKind::Pty;
-    // Plain keys, Ctrl-B (readline), PgUp: all pass through.
+    // Plain keys, Ctrl-B (readline), arrows, Enter: all pass through.
     for key in [
         KeyEvent::from(KeyCode::Char('x')),
         KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
-        KeyEvent::from(KeyCode::PageUp),
+        KeyEvent::from(KeyCode::Up),
         KeyEvent::from(KeyCode::Enter),
     ] {
         let fx = reduce(&mut st, &AppEvent::Key(key));
@@ -508,6 +508,32 @@ fn pty_pane_routes_every_key_except_the_leader() {
             "{key:?} must pass through: {fx:?}"
         );
     }
+    // PgUp/PgDn are the exception: they page the host-owned emulator
+    // scrollback (a full screen) instead of reaching the child.
+    let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::PageUp)));
+    assert!(
+        matches!(
+            &fx[..],
+            [Effect::PtyScroll {
+                up: true,
+                page: true,
+                ..
+            }]
+        ),
+        "PgUp pages scrollback up: {fx:?}"
+    );
+    let fx = reduce(&mut st, &AppEvent::Key(KeyEvent::from(KeyCode::PageDown)));
+    assert!(
+        matches!(
+            &fx[..],
+            [Effect::PtyScroll {
+                up: false,
+                page: true,
+                ..
+            }]
+        ),
+        "PgDn pages scrollback down: {fx:?}"
+    );
     // Ctrl-A is readline Home — it passes through like any other key.
     let fx = reduce(
         &mut st,
@@ -1347,7 +1373,7 @@ fn leader_tab_focuses_the_next_actionable_agent() {
 }
 
 #[test]
-fn wheel_scroll_pages_acp_and_forwards_to_pty() {
+fn wheel_scroll_pages_acp_and_pty() {
     let mut st = AppState::new(pane());
     st.agents[0].viewport = 10;
     for i in 0..50 {
@@ -1361,8 +1387,17 @@ fn wheel_scroll_pages_acp_and_forwards_to_pty() {
     let mut st = AppState::new(pane());
     st.agents[0].kind = PaneKind::Pty;
     let fx = reduce(&mut st, &AppEvent::Scroll { up: true });
-    assert_eq!(fx.len(), 3, "PTY pane gets arrow presses");
-    assert!(matches!(&fx[0], Effect::PtyKey { .. }));
+    assert!(
+        matches!(
+            &fx[..],
+            [Effect::PtyScroll {
+                up: true,
+                page: false,
+                ..
+            }]
+        ),
+        "PTY wheel pages the emulator scrollback (a notch), not the child: {fx:?}"
+    );
 }
 
 // ── Attach (§13-B4). ──

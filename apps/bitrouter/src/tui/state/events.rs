@@ -590,17 +590,15 @@ fn on_scroll(state: &mut AppState, up: &bool) -> Vec<Effect> {
             }
             Vec::new()
         }
-        // PTY panes own their scrollback: forward as arrow presses.
-        PaneKind::Pty => {
-            let record_id = pane.record_id.clone();
-            let code = if *up { KeyCode::Up } else { KeyCode::Down };
-            (0..3)
-                .map(|_| Effect::PtyKey {
-                    record_id: record_id.clone(),
-                    key: KeyEvent::from(code),
-                })
-                .collect()
-        }
+        // PTY panes: page the emulator's own scrollback (the host owns
+        // history — the inner agent relies on the terminal to hold it). A
+        // wheel notch scrolls a few lines; the loop falls back to forwarding
+        // arrows on the alt screen, where there is no history to page.
+        PaneKind::Pty => vec![Effect::PtyScroll {
+            record_id: pane.record_id.clone(),
+            up: *up,
+            page: false,
+        }],
     }
 }
 

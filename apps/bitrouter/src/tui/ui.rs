@@ -34,6 +34,9 @@ const CENTER_MIN_WIDTH: u16 = 48;
 pub struct PtyView {
     pub record_id: String,
     pub lines: Vec<TuiLine<'static>>,
+    /// The emulator view is pinned above the live tail — surface a hint so a
+    /// stalled-looking pane reads as "scrolled", not "hung".
+    pub scrolled: bool,
 }
 
 /// Render the whole app for one frame. Takes `&mut` so panes can record the
@@ -655,6 +658,19 @@ fn render_pty_pane(
         markers
     );
     let block = pane_block(title, focused, nc);
+    // Pinned into history: a right-aligned bottom hint so the frozen tail
+    // reads as "scrolled" (with the way back), not "hung".
+    let block = if view.is_some_and(|v| v.scrolled) {
+        block.title_bottom(
+            TuiLine::from(Span::styled(
+                " ↑ SCROLLBACK · PgDn or type → live ",
+                tint(nc, Color::Yellow),
+            ))
+            .right_aligned(),
+        )
+    } else {
+        block
+    };
     let lines: Vec<TuiLine> = match view {
         Some(v) => v.lines.clone(),
         None => vec![TuiLine::styled(
@@ -1720,6 +1736,7 @@ mod tests {
                 ratatui::text::Line::raw("NATIVE_TUI_ROW_1"),
                 ratatui::text::Line::raw("NATIVE_TUI_ROW_2"),
             ],
+            scrolled: false,
         };
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).expect("terminal");
@@ -1742,6 +1759,35 @@ mod tests {
         let (rid, (cols, rows)) = st.pty_areas.first().expect("drawn size recorded");
         assert_eq!(rid, "orchestrator");
         assert!(*cols > 0 && *rows > 0);
+    }
+
+    #[test]
+    fn pty_pane_shows_a_scrollback_hint_when_pinned() {
+        let mut pane = PaneState::new("orchestrator".into(), "claude".into());
+        pane.kind = crate::tui::state::pane::PaneKind::Pty;
+        pane.harness = "pty".into();
+        let mut st = AppState::new(pane);
+        let view = PtyView {
+            record_id: "orchestrator".into(),
+            lines: vec![ratatui::text::Line::raw("OLD_HISTORY_ROW")],
+            scrolled: true,
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|f| render(&mut st, std::slice::from_ref(&view), f))
+            .expect("draw");
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("SCROLLBACK"),
+            "a pinned view surfaces the scrollback hint: {text:?}"
+        );
     }
 
     #[test]
