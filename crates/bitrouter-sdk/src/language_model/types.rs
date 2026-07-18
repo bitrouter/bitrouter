@@ -1924,10 +1924,10 @@ pub struct ExecutionResult {
     pub account_label: Option<String>,
     /// The generation result.
     pub result: GenerateResult,
-    /// End-to-end latency in milliseconds.
-    pub latency_ms: u64,
-    /// Upstream generation time in milliseconds.
-    pub generation_time_ms: u64,
+    /// End-to-end request duration in milliseconds.
+    pub request_duration_ms: u64,
+    /// Time spent in the final provider-facing operation.
+    pub upstream_duration_ms: Option<u64>,
     /// Server-tool calls observed during this execution (router-executed and
     /// provider-executed). Empty for a plain single-turn upstream call.
     /// Observability only.

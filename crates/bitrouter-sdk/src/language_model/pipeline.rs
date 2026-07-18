@@ -342,7 +342,6 @@ impl Pipeline {
         log_request_received(&ctx, chain.first(), false);
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
-        let execution_started_at = Instant::now();
         let exec_outcome = match &self.server_tool_loop {
             Some(server_loop) => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
@@ -356,11 +355,7 @@ impl Pipeline {
             None => self.execute_with_fallback(&chain, ctx.prompt(), &ctx).await,
         };
         match exec_outcome {
-            Ok(mut result) => {
-                if self.server_tool_loop.is_some() {
-                    result.generation_time_ms =
-                        crate::language_model::timing::elapsed_millis(execution_started_at);
-                }
+            Ok(result) => {
                 ctx.execution_result = Some(result);
                 self.observe_after(Phase::Execution, &ctx).await;
             }
@@ -484,8 +479,8 @@ impl Pipeline {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 0,
-            generation_time_ms: 0,
+            request_duration_ms: 0,
+            upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
         });
         self.observe_after(Phase::Execution, &ctx).await;
@@ -734,7 +729,7 @@ impl Pipeline {
         streamed: bool,
         error: Option<BitrouterError>,
     ) {
-        ctx.finalize_request_latency();
+        ctx.finalize_request_duration();
         let mut settle = ctx.settlement_context();
         settle.streamed = streamed;
         settle.error = error;
@@ -957,7 +952,7 @@ async fn finalize_stream(
     processor.finish(outcome).await;
     sync_execution_target(&mut ctx, &latest_attempt);
     ctx.absorb_stream(processor.into_context());
-    ctx.finalize_stream_generation_time();
+    ctx.finalize_stream_upstream_duration();
     pipeline
         .run_settlement(&mut ctx, true, settlement_error)
         .await;
@@ -1059,7 +1054,7 @@ fn log_request_finished(settle: &SettlementContext) {
             account,
             stream = settle.streamed,
             status = 200,
-            latency_ms = settle.latency_ms,
+            request_duration_ms = settle.request_duration_ms,
             input_tokens = settle.prompt_tokens,
             output_tokens = settle.completion_tokens,
             "request finished"
@@ -1071,7 +1066,7 @@ fn log_request_finished(settle: &SettlementContext) {
             model = %settle.model_id,
             account,
             stream = settle.streamed,
-            latency_ms = settle.latency_ms,
+            request_duration_ms = settle.request_duration_ms,
             error = %err,
             "request finished"
         ),

@@ -442,8 +442,8 @@ mod tests {
                 stop_details: None,
                 provider_metadata: ProviderMetadata::new(),
             },
-            latency_ms: 0,
-            generation_time_ms: 0,
+            request_duration_ms: 0,
+            upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
         }
     }

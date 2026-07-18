@@ -243,10 +243,12 @@ impl ModelSelector for CountingModelSelector {
 struct TimingSnapshot {
     provider_id: String,
     model_id: String,
-    latency_ms: u64,
-    generation_time_ms: u64,
-    first_token_latency_ms: Option<u64>,
+    request_duration_ms: u64,
+    upstream_duration_ms: Option<u64>,
+    ttft_ms: Option<u64>,
+    generation_duration_ms: Option<u64>,
     first_token_kind: Option<timing::FirstTokenKind>,
+    finish_reason: Option<FinishReason>,
     has_error: bool,
 }
 
@@ -258,10 +260,12 @@ impl SettlementRecorder for TimingSnapshotRecorder {
         self.0.lock().unwrap().push(TimingSnapshot {
             provider_id: ctx.provider_id.clone(),
             model_id: ctx.model_id.clone(),
-            latency_ms: ctx.latency_ms,
-            generation_time_ms: ctx.generation_time_ms,
-            first_token_latency_ms: ctx.first_token_latency_ms,
+            request_duration_ms: ctx.request_duration_ms,
+            upstream_duration_ms: ctx.upstream_duration_ms,
+            ttft_ms: ctx.ttft_ms,
+            generation_duration_ms: ctx.generation_duration_ms,
             first_token_kind: ctx.first_token_kind,
+            finish_reason: ctx.finish_reason.clone(),
             has_error: ctx.error.is_some(),
         });
         Ok(())
@@ -1135,18 +1139,80 @@ async fn streamed_settlement_has_positive_canonical_timing() {
     let snapshot = snapshots.first().expect("settlement snapshot");
     assert_eq!(snapshot.provider_id, "openai");
     assert_eq!(snapshot.model_id, "test-model");
-    assert!(snapshot.latency_ms >= 1);
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 1);
     assert!(
         snapshot
-            .first_token_latency_ms
+            .upstream_duration_ms
             .is_some_and(|value| value >= 1)
     );
+    assert!(snapshot.ttft_ms.is_some_and(|value| value >= 1));
+    assert_eq!(snapshot.generation_duration_ms, Some(0));
     assert_eq!(
         snapshot.first_token_kind,
         Some(timing::FirstTokenKind::Text)
     );
+    assert_eq!(snapshot.finish_reason, Some(FinishReason::Stop));
     assert!(!snapshot.has_error);
+}
+
+#[tokio::test]
+async fn nonstream_settlement_carries_finish_reason() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Generate(
+            GenerateResult {
+                content: Vec::new(),
+                usage: None,
+                finish_reason: Some(FinishReason::Length),
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+        )])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    pipeline.execute(request()).await.expect("request succeeds");
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert_eq!(snapshot.finish_reason, Some(FinishReason::Length));
+    assert_eq!(snapshot.ttft_ms, None);
+    assert_eq!(snapshot.generation_duration_ms, None);
+}
+
+#[tokio::test]
+async fn streamed_settlement_carries_finish_reason() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ToolCallDelta {
+                id: "call-1".into(),
+                name: Some("lookup".into()),
+                arguments: "{}".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ])])),
+        |builder| {
+            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+        },
+    );
+
+    let stream = pipeline
+        .execute_stream(stream_request())
+        .await
+        .expect("stream starts");
+    let _parts = collect_stream(stream).await;
+
+    let snapshots = captured.lock().unwrap();
+    let snapshot = snapshots.first().expect("settlement snapshot");
+    assert_eq!(snapshot.finish_reason, Some(FinishReason::ToolCalls));
 }
 
 #[tokio::test]
@@ -1180,7 +1246,11 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
     let snapshot = snapshots.first().expect("settlement snapshot");
     assert_eq!(snapshot.provider_id, "second");
     assert_eq!(snapshot.model_id, "test-model");
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(
+        snapshot
+            .upstream_duration_ms
+            .is_some_and(|value| value >= 1)
+    );
     assert_eq!(
         snapshot.first_token_kind,
         Some(timing::FirstTokenKind::Reasoning)
@@ -1208,8 +1278,12 @@ async fn streamed_upstream_error_finalizes_timing_before_settlement() {
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
-    assert!(snapshot.latency_ms >= 1);
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 1);
+    assert!(
+        snapshot
+            .upstream_duration_ms
+            .is_some_and(|value| value >= 1)
+    );
     assert!(snapshot.has_error);
 }
 
@@ -1248,8 +1322,12 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
-    assert!(snapshot.latency_ms >= 1);
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 1);
+    assert!(
+        snapshot
+            .upstream_duration_ms
+            .is_some_and(|value| value >= 1)
+    );
     assert_eq!(
         snapshot.first_token_kind,
         Some(timing::FirstTokenKind::Tool)
@@ -1283,13 +1361,17 @@ async fn dropped_stream_finalizes_timing_before_detached_settlement() {
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("detached settlement snapshot");
-    assert!(snapshot.latency_ms >= 1);
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 1);
+    assert!(
+        snapshot
+            .upstream_duration_ms
+            .is_some_and(|value| value >= 1)
+    );
     assert!(!snapshot.has_error);
 }
 
 #[tokio::test]
-async fn non_stream_latency_includes_pre_request_pipeline_time() {
+async fn non_stream_request_duration_includes_pre_request_pipeline_time() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -1305,8 +1387,12 @@ async fn non_stream_latency_includes_pre_request_pipeline_time() {
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
-    assert!(snapshot.latency_ms >= 20);
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 20);
+    assert!(
+        snapshot
+            .upstream_duration_ms
+            .is_some_and(|value| value >= 1)
+    );
 }
 
 #[tokio::test]
@@ -2238,8 +2324,8 @@ impl Executor for GatedExecutor {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 1,
-            generation_time_ms: 1,
+            request_duration_ms: 1,
+            upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
         })
     }
@@ -2604,6 +2690,7 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
             _arguments: &str,
             _c: &ToolContext,
         ) -> Result<ToolResultOutput> {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             Ok(ToolResultOutput::Text {
                 value: "tool ran".to_string(),
             })
@@ -2625,8 +2712,10 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
         ServerToolLoopConfig::default(),
         Arc::new(AllowAll),
     ));
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
-        b.server_tool_loop(server_loop);
+        b.server_tool_loop(server_loop)
+            .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
     });
 
     let resp = pipeline.execute(request()).await.expect("request succeeds");
@@ -2636,6 +2725,15 @@ async fn server_tool_loop_resolves_a_router_tool_call() {
         matches!(&resp.result.content[0], Content::Text { text, .. } if text == "final answer")
     );
     assert_eq!(resp.result.usage.unwrap().prompt_tokens, 6);
+    let snapshots = captured.lock().unwrap();
+    assert_eq!(
+        snapshots
+            .first()
+            .expect("server-tool settlement snapshot")
+            .upstream_duration_ms,
+        Some(1),
+        "upstream duration belongs to the final provider call, not the whole tool loop"
+    );
 }
 
 #[tokio::test]
@@ -2856,13 +2954,13 @@ async fn server_tool_loop_streams_router_tool_activity() {
     let snapshots = timings.lock().unwrap();
     let snapshot = snapshots.first().expect("server-tool settlement timing");
     assert_eq!(snapshot.provider_id, "second");
-    assert!(snapshot.latency_ms >= 1);
-    assert!(snapshot.generation_time_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 1);
     assert!(
         snapshot
-            .first_token_latency_ms
+            .upstream_duration_ms
             .is_some_and(|value| value >= 1)
     );
+    assert!(snapshot.ttft_ms.is_some_and(|value| value >= 1));
 
     assert_eq!(
         *hops.lock().unwrap(),
@@ -2918,7 +3016,7 @@ async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
     let snapshots = timings.lock().unwrap();
     let snapshot = snapshots.first().expect("failed stream still settles");
     assert!(snapshot.has_error);
-    assert!(snapshot.latency_ms >= 1);
+    assert!(snapshot.request_duration_ms >= 1);
     assert_eq!(
         *hops.lock().unwrap(),
         vec![

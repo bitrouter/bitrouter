@@ -1102,8 +1102,8 @@ async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
                     stop_details: None,
                     provider_metadata: ProviderMetadata::new(),
                 },
-                latency_ms: 1,
-                generation_time_ms: 1,
+                request_duration_ms: 1,
+                upstream_duration_ms: Some(1),
                 server_tool_calls: Vec::new(),
             })
         }

@@ -118,8 +118,8 @@ impl Executor for MockExecutor {
                 model_id: target.service_id.clone(),
                 account_label: target.account_label.clone(),
                 result,
-                latency_ms: 1,
-                generation_time_ms: 1,
+                request_duration_ms: 1,
+                upstream_duration_ms: Some(1),
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Stream(_) => Err(BitrouterError::internal(
@@ -706,8 +706,8 @@ impl Executor for HttpExecutor {
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
             result,
-            latency_ms: elapsed,
-            generation_time_ms: elapsed,
+            request_duration_ms: elapsed,
+            upstream_duration_ms: Some(elapsed),
             server_tool_calls: Vec::new(),
         })
     }

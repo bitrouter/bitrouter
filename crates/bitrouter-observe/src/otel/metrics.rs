@@ -147,7 +147,7 @@ impl OtelMetrics {
         // exposes elapsed time even when an early failure produced no
         // `ExecutionResult`, so failed preflight requests are included too.
         self.latency_histogram
-            .record(request_latency_seconds(ctx), &attributes);
+            .record(request_duration_seconds(ctx), &attributes);
 
         self.request_counter.add(1, &attributes);
 
@@ -180,8 +180,8 @@ impl OtelMetrics {
     }
 }
 
-fn request_latency_seconds(ctx: &PipelineContext) -> f64 {
-    ctx.request_latency_ms() as f64 / 1000.0
+fn request_duration_seconds(ctx: &PipelineContext) -> f64 {
+    ctx.request_duration_ms() as f64 / 1000.0
 }
 
 fn stream_part_type(part: &StreamPart) -> &'static str {
@@ -241,12 +241,12 @@ mod tests {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 42,
-            generation_time_ms: 40,
+            request_duration_ms: 42,
+            upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),
         });
 
-        assert_eq!(request_latency_seconds(&ctx), 0.042);
+        assert_eq!(request_duration_seconds(&ctx), 0.042);
     }
 
     #[test]
@@ -267,6 +267,6 @@ mod tests {
         let ctx = PipelineContext::new(request);
         std::thread::sleep(Duration::from_millis(2));
 
-        assert!(request_latency_seconds(&ctx) > 0.0);
+        assert!(request_duration_seconds(&ctx) > 0.0);
     }
 }
