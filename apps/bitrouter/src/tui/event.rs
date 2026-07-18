@@ -106,8 +106,9 @@ pub enum AppEvent {
     /// text — never N synthetic keypresses (a multi-line paste must not
     /// submit at every newline).
     Paste(String),
-    /// Mouse wheel over the detail: page the focused pane's scrollback
-    /// (ACP panes) or forward arrow presses to the child (PTY panes).
+    /// Mouse wheel over the detail: page the focused pane's scrollback —
+    /// the pane's own line ring for ACP panes, the emulator's history for
+    /// PTY panes (`Effect::PtyScroll`).
     Scroll { up: bool },
     /// A left-click at terminal cell `(col, row)`. The reducer hit-tests it
     /// against the click zones the renderer recorded for the current frame
@@ -190,6 +191,15 @@ pub enum Effect {
     /// Route pasted text to a PTY pane's child (bracketed when the inner
     /// app enabled DEC 2004, raw bytes otherwise).
     PtyPaste { record_id: String, text: String },
+    /// Page a PTY pane's emulator scrollback: `up` toward older output,
+    /// `page` by a full screen (else a wheel notch). The loop pages the
+    /// emulator on the main screen and forwards the gesture as keys on the
+    /// alt screen (where there is no history to page).
+    PtyScroll {
+        record_id: String,
+        up: bool,
+        page: bool,
+    },
     /// Cancel the ACP session's in-flight turn (`Ctrl-C` = interrupt the
     /// focused agent, not quit — TUI_SPEC §9/§12).
     CancelTurn { record_id: String },

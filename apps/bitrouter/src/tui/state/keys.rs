@@ -26,17 +26,34 @@ pub(super) fn reduce_key_normal(state: &mut AppState, key: &KeyEvent) -> Vec<Eff
     }
     // A focused PTY pane is locked-mode passthrough (TUI_SPEC §9): every key
     // except the leader (handled above) routes to the child — that includes
-    // `Ctrl-A`/`Ctrl-B` (readline) and PgUp/PgDn.
+    // `Ctrl-A`/`Ctrl-B` (readline) and the arrows the inner app drives its
+    // menus with. The exception is PgUp/PgDn: the host owns pane scrollback
+    // (the agent relies on the terminal to hold history), so those page the
+    // emulator instead of reaching the child. Typing snaps back to the live
+    // bottom loop-side — you cannot type into history.
     if let Some(pane) = state.focused()
         && pane.kind == PaneKind::Pty
     {
         if pane.exited {
             return Vec::new(); // dead child — nothing to type into
         }
-        return vec![Effect::PtyKey {
-            record_id: pane.record_id.clone(),
-            key: *key,
-        }];
+        let record_id = pane.record_id.clone();
+        return match key.code {
+            KeyCode::PageUp => vec![Effect::PtyScroll {
+                record_id,
+                up: true,
+                page: true,
+            }],
+            KeyCode::PageDown => vec![Effect::PtyScroll {
+                record_id,
+                up: false,
+                page: true,
+            }],
+            _ => vec![Effect::PtyKey {
+                record_id,
+                key: *key,
+            }],
+        };
     }
     let focus_id = match state.focused() {
         Some(p) => p.record_id.clone(),
