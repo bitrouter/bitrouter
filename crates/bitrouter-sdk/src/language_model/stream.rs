@@ -350,7 +350,7 @@ impl StreamProcessor {
     /// upstream part so usage is never lost to a rewrite.
     pub async fn process_part(&mut self, part: StreamPart) -> Result<Vec<StreamPart>> {
         self.ctx.accumulated_usage.observe(&part);
-        self.ctx.observe_first_token(&part);
+        self.ctx.observe_upstream_part(&part);
         self.ctx.parts_emitted += 1;
 
         let mut current = vec![part];
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_original_semantic_delta_sets_timing_once() {
+    async fn semantic_deltas_capture_ttft_and_generation_window() {
         let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
 
         processor
@@ -528,6 +528,7 @@ mod tests {
             })
             .await
             .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         processor
             .process_part(StreamPart::TextDelta {
                 text: "answer".into(),
@@ -540,7 +541,20 @@ mod tests {
             .first_token_timing()
             .expect("first token timing");
         assert_eq!(timing.kind, FirstTokenKind::Reasoning);
-        assert!(timing.latency_ms >= 1);
+        assert!(timing.ttft_ms >= 1);
+        assert!(processor.context().generation_duration_ms() >= Some(5));
+    }
+
+    #[tokio::test]
+    async fn one_semantic_delta_has_zero_generation_duration() {
+        let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
+
+        processor
+            .process_part(StreamPart::TextDelta { text: "x".into() })
+            .await
+            .unwrap();
+
+        assert_eq!(processor.context().generation_duration_ms(), Some(0));
     }
 
     #[tokio::test]
@@ -560,6 +574,29 @@ mod tests {
         }
 
         assert!(processor.context().first_token_timing().is_none());
+        assert_eq!(processor.context().generation_duration_ms(), None);
+    }
+
+    #[tokio::test]
+    async fn responses_terminal_status_maps_to_finish_reason() {
+        for (status, expected) in [
+            ("completed", FinishReason::Stop),
+            ("incomplete", FinishReason::Length),
+            ("failed", FinishReason::Other("failed".into())),
+        ] {
+            let mut processor =
+                StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
+            processor
+                .process_part(StreamPart::ResponseCompleted {
+                    id: "r".into(),
+                    status: status.into(),
+                    usage: None,
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(processor.context().finish_reason(), Some(&expected));
+        }
     }
 
     #[test]

@@ -473,7 +473,7 @@ impl OtelExporter {
 
         let span = hop.context.span();
         span.set_attribute(KeyValue::new(
-            "bitrouter.latency_ms",
+            "bitrouter.upstream_duration_ms",
             i64::try_from(duration_ms).unwrap_or(i64::MAX),
         ));
         match outcome {
@@ -818,8 +818,8 @@ impl ObserveHook for OtelExporter {
             };
             span.set_attribute(KeyValue::new("$screen_name", screen_name));
             span.set_attribute(KeyValue::new(
-                "bitrouter.latency_ms",
-                i64::try_from(ctx.request_latency_ms()).unwrap_or(i64::MAX),
+                "bitrouter.request_duration_ms",
+                i64::try_from(ctx.request_duration_ms()).unwrap_or(i64::MAX),
             ));
             if let Some(result) = &ctx.execution_result {
                 span.set_attribute(KeyValue::new(
@@ -827,10 +827,12 @@ impl ObserveHook for OtelExporter {
                     result.provider_id.clone(),
                 ));
                 span.set_attribute(KeyValue::new("bitrouter.model_id", result.model_id.clone()));
-                span.set_attribute(KeyValue::new(
-                    "bitrouter.generation_time_ms",
-                    result.generation_time_ms as i64,
-                ));
+                if let Some(upstream_duration_ms) = result.upstream_duration_ms {
+                    span.set_attribute(KeyValue::new(
+                        "bitrouter.upstream_duration_ms",
+                        upstream_duration_ms as i64,
+                    ));
+                }
                 if let Some(label) = &result.account_label {
                     span.set_attribute(KeyValue::new("bitrouter.account_label", label.clone()));
                 }
@@ -879,8 +881,8 @@ impl ObserveHook for OtelExporter {
 
             if let Some(first_token) = ctx.first_token_timing() {
                 span.set_attribute(KeyValue::new(
-                    "bitrouter.first_token_latency_ms",
-                    first_token.latency_ms as i64,
+                    "bitrouter.ttft_ms",
+                    first_token.ttft_ms as i64,
                 ));
                 span.set_attribute(KeyValue::new(
                     "bitrouter.first_token_kind",
@@ -890,7 +892,13 @@ impl ObserveHook for OtelExporter {
                 // source is the first reasoning/text/tool delta, never headers.
                 span.set_attribute(KeyValue::new(
                     "gen_ai.response.time_to_first_chunk",
-                    first_token.latency_ms as f64 / 1000.0,
+                    first_token.ttft_ms as f64 / 1000.0,
+                ));
+            }
+            if let Some(generation_duration_ms) = ctx.generation_duration_ms() {
+                span.set_attribute(KeyValue::new(
+                    "bitrouter.generation_duration_ms",
+                    generation_duration_ms as i64,
                 ));
             }
 
@@ -1149,14 +1157,12 @@ fn build_hop_client_attrs(target: &RoutingTarget) -> Vec<KeyValue> {
 /// it off the hop is what stops gen_ai-aware backends from counting two
 /// generations (and double-counting cost) per request.
 fn set_hop_client_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &ExecutionResult) {
-    span.set_attribute(KeyValue::new(
-        "bitrouter.latency_ms",
-        result.latency_ms as i64,
-    ));
-    span.set_attribute(KeyValue::new(
-        "bitrouter.generation_time_ms",
-        result.generation_time_ms as i64,
-    ));
+    if let Some(upstream_duration_ms) = result.upstream_duration_ms {
+        span.set_attribute(KeyValue::new(
+            "bitrouter.upstream_duration_ms",
+            upstream_duration_ms as i64,
+        ));
+    }
 }
 
 fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) -> String {
@@ -1358,8 +1364,8 @@ mod hop_tests {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 42,
-            generation_time_ms: 40,
+            request_duration_ms: 42,
+            upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),
         }
     }
@@ -1622,8 +1628,8 @@ mod hop_tests {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 0,
-            generation_time_ms: 0,
+            request_duration_ms: 0,
+            upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
         });
 
@@ -1691,8 +1697,8 @@ mod hop_tests {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 0,
-            generation_time_ms: 0,
+            request_duration_ms: 0,
+            upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
         });
 
@@ -1757,8 +1763,8 @@ mod hop_tests {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 0,
-            generation_time_ms: 0,
+            request_duration_ms: 0,
+            upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
         });
 
@@ -2000,7 +2006,10 @@ mod hop_tests {
             .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
             .expect("per-hop chat CLIENT span");
 
-        assert_eq!(i64_attr(hop_chat, "bitrouter.latency_ms"), Some(42));
+        assert_eq!(
+            i64_attr(hop_chat, "bitrouter.upstream_duration_ms"),
+            Some(40)
+        );
         assert!(
             root_chat
                 .attributes
@@ -2106,26 +2115,29 @@ mod hop_tests {
             .find(|s| s.name == "chat test-model" && s.span_kind == SpanKind::Client)
             .expect("provider CLIENT span");
 
-        let latency_ms = i64_attr(root_chat, "bitrouter.latency_ms")
-            .expect("root carries canonical request latency");
-        let generation_ms = i64_attr(root_chat, "bitrouter.generation_time_ms")
-            .expect("root carries canonical provider generation time");
-        let first_token_ms = i64_attr(root_chat, "bitrouter.first_token_latency_ms")
-            .expect("root carries canonical first semantic token latency");
-        assert!(latency_ms >= 1);
-        assert!(generation_ms >= 1);
-        assert!(first_token_ms >= 1);
+        let request_duration_ms = i64_attr(root_chat, "bitrouter.request_duration_ms")
+            .expect("root carries canonical request duration");
+        let upstream_duration_ms = i64_attr(root_chat, "bitrouter.upstream_duration_ms")
+            .expect("root carries canonical upstream duration");
+        let ttft_ms = i64_attr(root_chat, "bitrouter.ttft_ms")
+            .expect("root carries canonical first semantic output timing");
+        let generation_duration_ms = i64_attr(root_chat, "bitrouter.generation_duration_ms")
+            .expect("root carries canonical semantic generation duration");
+        assert!(request_duration_ms >= 1);
+        assert!(upstream_duration_ms >= 1);
+        assert!(ttft_ms >= 1);
+        assert_eq!(generation_duration_ms, 0);
         assert_eq!(
             str_attr(root_chat, "bitrouter.first_token_kind"),
             Some("text")
         );
         assert_eq!(
             f64_attr(root_chat, "gen_ai.response.time_to_first_chunk"),
-            Some(first_token_ms as f64 / 1000.0)
+            Some(ttft_ms as f64 / 1000.0)
         );
         assert_eq!(
-            i64_attr(hop_chat, "bitrouter.latency_ms"),
-            Some(latency_ms),
+            i64_attr(hop_chat, "bitrouter.upstream_duration_ms"),
+            Some(upstream_duration_ms),
             "streaming provider span closes with the finalized result"
         );
     }
@@ -2151,8 +2163,9 @@ mod hop_tests {
             .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
             .expect("root chat span");
         assert!(
-            i64_attr(root_chat, "bitrouter.latency_ms").is_some_and(|latency| latency >= 1),
-            "an early failure still carries end-to-end request latency"
+            i64_attr(root_chat, "bitrouter.request_duration_ms")
+                .is_some_and(|duration| duration >= 1),
+            "an early failure still carries end-to-end request duration"
         );
     }
 
@@ -2182,7 +2195,10 @@ mod hop_tests {
             .iter()
             .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
             .expect("rejected request still has a root chat span");
-        assert!(i64_attr(root_chat, "bitrouter.latency_ms").is_some_and(|latency| latency >= 1));
+        assert!(
+            i64_attr(root_chat, "bitrouter.request_duration_ms")
+                .is_some_and(|duration| duration >= 1)
+        );
     }
 
     #[tokio::test]
