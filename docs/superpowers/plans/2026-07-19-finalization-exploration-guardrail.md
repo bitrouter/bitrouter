@@ -198,7 +198,7 @@ Expected: all driver tests pass, the canary pin is unchanged, and no secret valu
 ### Task 3: Freeze a fresh policy-only short13 lineage
 
 **Files:**
-- Create remotely under `/home/ubuntu/bitrouter-bench/runtime-repair/runs/terminus2-terra-finalization-guard-short13-policy-20260718T170000Z/` via the driver.
+- Create remotely under `/home/ubuntu/bitrouter-bench/runtime-repair/runs/terminus2-terra-c0c1-short13-policy-finalization-guard-20260718T170000Z/` via the driver.
 - Do not modify the rejected lineage or immutable control run.
 
 **Interfaces:**
@@ -215,7 +215,7 @@ Expected: quota supports concurrency three, runtime pins match, IAM identity suc
 
 ```bash
 python3 /home/ubuntu/bitrouter-bench/runtime-repair/drivers/run_short13_policy_lineage.py \
-  prepare --run-id terminus2-terra-finalization-guard-short13-policy-20260718T170000Z
+  prepare --run-id terminus2-terra-c0c1-short13-policy-finalization-guard-20260718T170000Z
 ```
 
 Expected: `PREPARED` contains the exact OSS commit; `CONTROL_REFERENCED` contains the immutable artifact ID; metadata says `control_launches: 0`, `max_parallel_sandboxes: 3`, and a fresh shared policy database path.
@@ -263,7 +263,7 @@ If a round is runtime-invalid, first prove all five retry-eligibility conditions
 
 **Files:**
 - Modify: `/Users/archer/Documents/aimonetwork/product-engineering/cost-optimization/runs/terminus2-terra-cc4af6d-short13-20260714T194346Z/RUN-STATUS.md`
-- Create: `/Users/archer/Documents/aimonetwork/product-engineering/cost-optimization/runs/terminus2-terra-finalization-guard-short13-policy-20260718T170000Z/SHORT13-RESULT.md`
+- Create: `/Users/archer/Documents/aimonetwork/product-engineering/cost-optimization/runs/terminus2-terra-c0c1-short13-policy-finalization-guard-20260718T170000Z/SHORT13-RESULT.md`
 - Modify only if CLI drift occurred: `skills/bitrouter/`
 - Update: GitHub PR #717 body and evidence links.
 
