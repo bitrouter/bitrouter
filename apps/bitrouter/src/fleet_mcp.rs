@@ -586,17 +586,8 @@ impl SubstrateFleet {
         let this = self.clone();
         let runner = handle.clone();
         tokio::spawn(async move {
-            let outcome = match this.run_opening_turn(launched).await {
-                Ok(summary) => summary,
-                // `run_blocking_turn` already marks the turn `failed`, but a
-                // later bail (repair / meta) could leave it `working` — pin it
-                // here so a poll never hangs on a dead turn.
-                Err(e) => {
-                    this.set_state(&runner, "failed").await;
-                    serde_json::json!({ "state": "failed", "error": format!("{e:#}") })
-                }
-            };
-            this.store_outcome(&runner, outcome).await;
+            let result = this.run_opening_turn(launched).await;
+            let _ = this.complete_turn(&runner, result).await;
         });
         Ok(serde_json::json!({
             "handle": handle,
@@ -614,13 +605,31 @@ impl SubstrateFleet {
         }))
     }
 
-    /// Store a finished turn's summary on the registry entry so
-    /// `subagent_status` returns the reply/result/diff once the background turn
-    /// ends (`None` while working).
-    async fn store_outcome(&self, handle: &str, outcome: serde_json::Value) {
+    /// Finalize a turn: store its summary, **then** flip the terminal state.
+    /// Order matters — `subagent_status` reports a subagent as done the moment
+    /// its state leaves `working`, so the summary must be visible *before* the
+    /// state flips, or a poll can catch `completed` with no reply/diff yet (the
+    /// race the macOS CI runner exposed). Returns the turn's `result` so the
+    /// blocking test wrappers can propagate it.
+    async fn complete_turn(
+        &self,
+        handle: &str,
+        result: Result<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let (state, outcome) = match &result {
+            Ok(summary) => ("completed", summary.clone()),
+            Err(e) => (
+                "failed",
+                serde_json::json!({ "state": "failed", "error": format!("{e:#}") }),
+            ),
+        };
+        // Store the summary while the state is still `working`…
         if let Some(sub) = self.inner.registry.lock().await.agents.get_mut(handle) {
             sub.outcome = Some(outcome);
         }
+        // …then flip the state (which also mirrors to the TUI rail).
+        self.set_state(handle, state).await;
+        result
     }
 
     /// Launch the subagent and register it, converting the caller's
@@ -783,14 +792,8 @@ impl SubstrateFleet {
         let handle = args.handle.clone();
         let text = args.text;
         tokio::spawn(async move {
-            let outcome = match this.run_blocking_turn(&handle, session, &text, None).await {
-                Ok(summary) => summary,
-                Err(e) => {
-                    this.set_state(&handle, "failed").await;
-                    serde_json::json!({ "state": "failed", "error": format!("{e:#}") })
-                }
-            };
-            this.store_outcome(&handle, outcome).await;
+            let result = this.run_blocking_turn(&handle, session, &text, None).await;
+            let _ = this.complete_turn(&handle, result).await;
         });
         Ok(serde_json::json!({
             "handle": args.handle,
@@ -816,14 +819,10 @@ impl SubstrateFleet {
             Some(c) => format!("{text}{}", c.instruction()),
             None => text.to_string(),
         };
-        let turn = collect_turn(&session, &task).await;
-        let (response, reply) = match turn {
-            Ok(v) => v,
-            Err(e) => {
-                self.set_state(handle, "failed").await;
-                return Err(e);
-            }
-        };
+        // State transitions are the caller's job (`complete_turn`): the terminal
+        // state must flip only *after* the summary is stored, or a poll keyed on
+        // `state != "working"` can catch `completed` with no summary yet.
+        let (response, reply) = collect_turn(&session, &task).await?;
         let (response, result, schema_ok) = match &contract {
             None => (response, None, None),
             Some(c) => match c.check(&reply) {
@@ -839,8 +838,6 @@ impl SubstrateFleet {
                 }
             },
         };
-        self.set_state(handle, "completed").await;
-
         let (agent_id, worktree, branch, base_ref, port) = self.meta(handle).await?;
         let diff_stat = match &worktree {
             Some(wt) => crate::fleet::diff_stat(wt, &base_ref).await,
@@ -1379,18 +1376,24 @@ async fn snapshot(handle: &str, sub: &Subagent, verdict: Option<&str>) -> serde_
 /// drive apply/merge/diff without polling. Production goes through the
 /// non-blocking [`spawn_background`](SubstrateFleet::spawn_background) /
 /// [`prompt_background`](SubstrateFleet::prompt_background); the non-blocking
-/// contract is covered by its own tests below.
-#[cfg(test)]
+/// contract is covered by its own tests below. Gated to `unix` like the
+/// `e2e_tests` module that calls it — the bash ACP stubs are unix-only, so on
+/// other platforms these would be callerless dead code.
+#[cfg(all(test, unix))]
 impl SubstrateFleet {
     async fn do_spawn(&self, args: SpawnArgs) -> Result<serde_json::Value> {
         let launched = self.reserve_and_launch(args).await?;
-        self.run_opening_turn(launched).await
+        let handle = launched.handle.clone();
+        let result = self.run_opening_turn(launched).await;
+        self.complete_turn(&handle, result).await
     }
 
     async fn do_prompt(&self, args: PromptArgs) -> Result<serde_json::Value> {
         let session = self.prompt_prepare(&args.handle).await?;
-        self.run_blocking_turn(&args.handle, session, &args.text, None)
-            .await
+        let result = self
+            .run_blocking_turn(&args.handle, session, &args.text, None)
+            .await;
+        self.complete_turn(&args.handle, result).await
     }
 }
 
