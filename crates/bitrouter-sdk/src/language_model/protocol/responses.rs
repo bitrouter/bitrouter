@@ -263,9 +263,15 @@ pub struct ResponsesRequest {
     text: Option<ResponsesText>,
     #[serde(default)]
     stream: bool,
-    /// Every other field — `tool_choice`, `parallel_tool_calls`,
+    /// Whether OpenAI may retain the request and response.
+    #[serde(default)]
+    store: Option<bool>,
+    /// Whether the model may issue tool calls in parallel.
+    #[serde(default)]
+    parallel_tool_calls: Option<bool>,
+    /// Every other field — `tool_choice`,
     /// `max_tool_calls`, `metadata`, `include[]`, `previous_response_id`,
-    /// `store`, `stream_options`, … — rides through here and is splatted
+    /// `stream_options`, … — rides through here and is splatted
     /// back on render. Skipped from the published schema so the documented
     /// contract is the set of typed fields; pass-through behavior is
     /// preserved at runtime.
@@ -915,9 +921,14 @@ impl InboundAdapter for ResponsesAdapter {
                 stop: Vec::new(),
                 presence_penalty: None,
                 frequency_penalty: None,
+                store: req.store,
+                parallel_tool_calls: req.parallel_tool_calls,
+                chat_stream_options: None,
+                extra_protocol: Some(ApiProtocol::Responses),
+                supplemental_extra: HashMap::new(),
                 // Splat every remaining Responses-API field without a typed slot
-                // — parallel_tool_calls, max_tool_calls, metadata, include[],
-                // previous_response_id, store, stream_options, … — into `extra`
+                // — max_tool_calls, metadata, include[], previous_response_id,
+                // stream_options, … — into `extra`
                 // so render_request can put them back.
                 extra,
             },
@@ -1011,14 +1022,19 @@ impl OutboundAdapter for ResponsesAdapter {
         if let Some(re) = &prompt.params.reasoning_effort {
             req.insert("reasoning".into(), serde_json::json!({ "effort": re }));
         }
+        if let Some(store) = prompt.params.store {
+            req.insert("store".into(), store.into());
+        }
+        if let Some(parallel) = prompt.params.parallel_tool_calls {
+            req.insert("parallel_tool_calls".into(), parallel.into());
+        }
         // Render the canonical response_format into Responses' `text.format`.
         // Merge with any extras-supplied `text` blob so caller-supplied
         // sibling keys (e.g. `verbosity`) survive.
         if let Some(rf) = &prompt.response_format {
             let mut text = prompt
                 .params
-                .extra
-                .get("text")
+                .extra_value_for_protocol(&ApiProtocol::Responses, "text")
                 .and_then(|t| t.as_object().cloned())
                 .unwrap_or_default();
             text.insert("format".into(), render_responses_response_format(rf));
@@ -1029,9 +1045,9 @@ impl OutboundAdapter for ResponsesAdapter {
         if let Some(tc) = &prompt.tool_choice {
             req.insert("tool_choice".into(), render_responses_tool_choice(tc));
         }
-        // Splat Responses-API extras (parallel_tool_calls, metadata, include, …)
-        // back onto the outbound request. Typed fields win.
-        for (k, v) in &prompt.params.extra {
+        // Splat Responses-API extras (metadata, include, …) only for a native
+        // round trip. Typed fields win.
+        for (k, v) in prompt.params.extras_for_protocol(&ApiProtocol::Responses) {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
         req.insert("stream".into(), prompt.stream.into());

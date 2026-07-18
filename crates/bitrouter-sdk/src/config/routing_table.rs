@@ -124,11 +124,17 @@ fn build_targets(
         .find(|m| m.id == model_id)
         .and_then(|m| m.provider_model_id.as_deref())
         .unwrap_or(model_id);
-    let chat_token_limit_field = provider
+    let chat_compatibility = provider
         .models
         .iter()
         .find(|m| m.id == model_id)
-        .and_then(|m| m.compatibility.chat_completions.token_limit_field);
+        .map(|m| &m.compatibility.chat_completions);
+    let chat_token_limit_field =
+        chat_compatibility.and_then(|compatibility| compatibility.token_limit_field);
+    let chat_supports_store =
+        chat_compatibility.and_then(|compatibility| compatibility.supports_store);
+    let chat_supports_stream_options =
+        chat_compatibility.and_then(|compatibility| compatibility.supports_stream_options);
 
     if provider.accounts.is_empty() {
         let api_base = protocol_base
@@ -141,6 +147,8 @@ fn build_targets(
             api_key: provider.api_key.clone(),
             api_protocol: protocol,
             chat_token_limit_field,
+            chat_supports_store,
+            chat_supports_stream_options,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -179,6 +187,8 @@ fn build_targets(
                 api_key: account.api_key.clone(),
                 api_protocol: protocol.clone(),
                 chat_token_limit_field,
+                chat_supports_store,
+                chat_supports_stream_options,
                 account_label: Some(label),
                 api_key_override: None,
                 api_base_override: None,
@@ -1573,7 +1583,7 @@ providers:
     }
 
     #[tokio::test]
-    async fn model_chat_token_compatibility_reaches_routing_target() {
+    async fn model_chat_compatibility_reaches_routing_target() {
         let yaml = r#"
 providers:
   openai:
@@ -1585,6 +1595,8 @@ providers:
         compatibility:
           chat_completions:
             token_limit_field: max_completion_tokens
+            supports_store: false
+            supports_stream_options: false
 "#;
         let chain = table(yaml)
             .route_chain(
@@ -1598,6 +1610,8 @@ providers:
             chain[0].chat_token_limit_field,
             Some(crate::language_model::types::ChatTokenLimitField::MaxCompletionTokens)
         );
+        assert_eq!(chain[0].chat_supports_store, Some(false));
+        assert_eq!(chain[0].chat_supports_stream_options, Some(false));
     }
 
     #[tokio::test]

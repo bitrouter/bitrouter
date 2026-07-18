@@ -583,6 +583,8 @@ fn target_token_limit_override_wins_over_inbound_spelling() {
             api_key: "secret".into(),
             api_protocol: ApiProtocol::ChatCompletions,
             chat_token_limit_field: Some(override_field),
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -592,6 +594,72 @@ fn target_token_limit_override_wins_over_inbound_spelling() {
         assert_eq!(rendered[outbound_field], 99);
         assert!(rendered.get(inbound_field).is_none());
     }
+}
+
+#[test]
+fn chat_target_omits_explicitly_unsupported_optional_fields() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    let prompt = chat
+        .parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "store": false,
+            "stream": true,
+            "stream_options": {"include_usage": true, "include_obfuscation": false}
+        }))
+        .unwrap();
+    let target = RoutingTarget {
+        provider_name: "strict-provider".into(),
+        service_id: "m".into(),
+        api_base: "https://example.invalid/v1".into(),
+        api_key: "secret".into(),
+        api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
+        chat_supports_store: Some(false),
+        chat_supports_stream_options: Some(false),
+        account_label: None,
+        api_key_override: None,
+        api_base_override: None,
+        auth_scheme: Default::default(),
+    };
+
+    let rendered = chat.render_request_for_target(&prompt, &target).unwrap();
+    assert!(rendered.get("store").is_none(), "{rendered}");
+    assert!(rendered.get("stream_options").is_none(), "{rendered}");
+}
+
+#[test]
+fn chat_target_does_not_silently_drop_store_true() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    let prompt = chat
+        .parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "store": true
+        }))
+        .unwrap();
+    let target = RoutingTarget {
+        provider_name: "strict-provider".into(),
+        service_id: "m".into(),
+        api_base: "https://example.invalid/v1".into(),
+        api_key: "secret".into(),
+        api_protocol: ApiProtocol::ChatCompletions,
+        chat_token_limit_field: None,
+        chat_supports_store: Some(false),
+        chat_supports_stream_options: None,
+        account_label: None,
+        api_key_override: None,
+        api_base_override: None,
+        auth_scheme: Default::default(),
+    };
+
+    let error = chat
+        .render_request_for_target(&prompt, &target)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::error::BitrouterError::BadRequest { .. }
+    ));
 }
 
 #[test]
@@ -641,6 +709,8 @@ fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
                 api_key: "secret".into(),
                 api_protocol: ApiProtocol::ChatCompletions,
                 chat_token_limit_field: Some(override_field),
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
                 account_label: None,
                 api_key_override: None,
                 api_base_override: None,
@@ -657,9 +727,8 @@ fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
 
 #[test]
 fn chat_completions_passes_through_uncommon_params() {
-    // tool_choice, stop, seed, response_format, n, presence/frequency_penalty,
-    // logit_bias, logprobs, top_logprobs, user, parallel_tool_calls,
-    // stream_options — every field without a typed slot survives parse → render.
+    // Typed uncommon fields and raw same-protocol extras both survive a native
+    // parse/render round trip.
     let adapter = adapter_for(ApiProtocol::ChatCompletions);
     let body = serde_json::json!({
         "model": "gpt-5",
@@ -1530,6 +1599,8 @@ fn messages_no_beta_header_is_emitted() {
         api_key: "k".into(),
         api_protocol: ApiProtocol::Messages,
         chat_token_limit_field: None,
+        chat_supports_store: None,
+        chat_supports_stream_options: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -1558,6 +1629,8 @@ fn messages_auth_scheme_selects_one_credential_header() {
         api_key: "secret".into(),
         api_protocol: ApiProtocol::Messages,
         chat_token_limit_field: None,
+        chat_supports_store: None,
+        chat_supports_stream_options: None,
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -2841,6 +2914,221 @@ fn chat_completions_streaming_forces_include_usage() {
     let rendered = adapter.render_request(&prompt).unwrap();
     assert_eq!(rendered["stream_options"]["include_usage"], true);
     assert_eq!(rendered["stream_options"]["include_obfuscation"], false);
+
+    // The router requires usage for settlement, so an explicit false is a
+    // downstream response preference, not permission to suppress upstream
+    // accounting data.
+    let body = serde_json::json!({
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": true,
+        "stream_options": {"include_usage": false}
+    });
+    let prompt = adapter.parse_request(body).unwrap();
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["stream_options"]["include_usage"], true);
+
+    // A legacy/supplemental value with the wrong shape cannot suppress the
+    // router's accounting requirement.
+    let mut prompt = prompt;
+    prompt.params.chat_stream_options = None;
+    prompt
+        .params
+        .supplemental_extra
+        .insert("stream_options".to_string(), serde_json::json!("invalid"));
+    let rendered = adapter.render_request(&prompt).unwrap();
+    assert_eq!(rendered["stream_options"]["include_usage"], true);
+}
+
+#[test]
+fn chat_request_fields_survive_a_native_round_trip() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "gpt-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "store": false,
+        "parallel_tool_calls": false,
+        "stream": true,
+        "stream_options": {
+            "include_usage": true,
+            "include_obfuscation": false
+        }
+    });
+
+    let rendered = chat
+        .render_request(&chat.parse_request(body.clone()).unwrap())
+        .unwrap();
+    for field in ["store", "parallel_tool_calls", "stream_options"] {
+        assert_eq!(
+            rendered[field], body[field],
+            "native field `{field}` drifted"
+        );
+    }
+}
+
+#[test]
+fn chat_extras_do_not_leak_to_other_protocols() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    let prompt = chat
+        .parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true,
+            "stream_options": {"include_usage": true},
+            "user": "client-user",
+            "parallel_tool_calls": false
+        }))
+        .unwrap();
+
+    for protocol in [
+        ApiProtocol::Messages,
+        ApiProtocol::Responses,
+        ApiProtocol::GenerateContent,
+    ] {
+        let rendered = adapter_for(protocol.clone())
+            .render_request(&prompt)
+            .unwrap();
+        assert!(
+            rendered.get("stream_options").is_none(),
+            "Chat stream_options leaked to {protocol}: {rendered}"
+        );
+        assert!(
+            rendered.get("user").is_none(),
+            "Chat user field leaked to {protocol}: {rendered}"
+        );
+    }
+
+    let messages = adapter_for(ApiProtocol::Messages)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(
+        messages["tool_choice"]["disable_parallel_tool_use"], true,
+        "portable parallel-tool control must still translate"
+    );
+
+    let responses = adapter_for(ApiProtocol::Responses)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(responses["parallel_tool_calls"], false);
+}
+
+#[test]
+fn raw_extras_are_scoped_to_their_inbound_protocol() {
+    let cases = [
+        (
+            ApiProtocol::Messages,
+            "metadata",
+            serde_json::json!({"user_id": "messages-user"}),
+        ),
+        (
+            ApiProtocol::Responses,
+            "max_tool_calls",
+            serde_json::json!(3),
+        ),
+        (
+            ApiProtocol::GenerateContent,
+            "candidateCount",
+            serde_json::json!(2),
+        ),
+    ];
+
+    for (source, field, value) in cases {
+        let mut body = minimal_request(source.clone());
+        if source == ApiProtocol::GenerateContent {
+            body["generationConfig"] = serde_json::json!({});
+            body["generationConfig"][field] = value;
+        } else {
+            body[field] = value;
+        }
+        let prompt = adapter_for(source.clone()).parse_request(body).unwrap();
+
+        for target in all_protocols()
+            .into_iter()
+            .filter(|target| target != &source)
+        {
+            let rendered = adapter_for(target.clone()).render_request(&prompt).unwrap();
+            assert!(
+                rendered.get(field).is_none(),
+                "{source} extra `{field}` leaked to {target}: {rendered}"
+            );
+            assert!(
+                rendered
+                    .get("generationConfig")
+                    .and_then(|config| config.get(field))
+                    .is_none(),
+                "{source} extra `{field}` leaked into {target} generation config: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn server_supplied_extras_remain_available_after_protocol_scoping() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    let mut prompt = chat
+        .parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "user": "chat-client"
+        }))
+        .unwrap();
+    prompt.params.supplemental_extra.insert(
+        "metadata".to_string(),
+        serde_json::json!({"user_id": "preset-default"}),
+    );
+
+    let rendered = adapter_for(ApiProtocol::Messages)
+        .render_request(&prompt)
+        .unwrap();
+    assert_eq!(rendered["metadata"]["user_id"], "preset-default");
+    assert!(rendered.get("user").is_none(), "{rendered}");
+}
+
+#[test]
+fn extra_protocol_provenance_survives_canonical_serialization() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+    let prompt = chat
+        .parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "user": "chat-client"
+        }))
+        .unwrap();
+    let prompt: Prompt = serde_json::from_value(serde_json::to_value(prompt).unwrap()).unwrap();
+
+    let rendered = adapter_for(ApiProtocol::Messages)
+        .render_request(&prompt)
+        .unwrap();
+    assert!(rendered.get("user").is_none(), "{rendered}");
+}
+
+#[test]
+fn store_is_never_silently_discarded_cross_protocol() {
+    let chat = adapter_for(ApiProtocol::ChatCompletions);
+
+    for protocol in [ApiProtocol::Messages, ApiProtocol::GenerateContent] {
+        let mut false_body = minimal_request(ApiProtocol::ChatCompletions);
+        false_body["store"] = false.into();
+        let false_prompt = chat.parse_request(false_body).unwrap();
+        let rendered = adapter_for(protocol.clone())
+            .render_request(&false_prompt)
+            .unwrap();
+        assert!(
+            rendered.get("store").is_none(),
+            "store: false should be safely omitted for {protocol}: {rendered}"
+        );
+
+        let mut true_body = minimal_request(ApiProtocol::ChatCompletions);
+        true_body["store"] = true.into();
+        let true_prompt = chat.parse_request(true_body).unwrap();
+        let error = adapter_for(protocol.clone())
+            .render_request(&true_prompt)
+            .unwrap_err();
+        assert!(
+            matches!(error, crate::error::BitrouterError::BadRequest { .. }),
+            "store: true should fail clearly for {protocol}, got {error:?}"
+        );
+    }
 }
 
 #[test]

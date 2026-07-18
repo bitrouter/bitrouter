@@ -14,8 +14,8 @@ use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
 use crate::language_model::timing::{FirstTokenKind, FirstTokenTiming, elapsed_millis};
 use crate::language_model::types::{
-    ApiProtocol, Content, ExecutionResult, PipelineRequest, PipelineResponse, Prompt,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, PipelineRequest, PipelineResponse,
+    Prompt, RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -276,10 +276,11 @@ impl PipelineContext {
 
     /// Apply preset prompt-body overrides. `system_prompt`, when
     /// present, replaces the prompt's system; `params` is shallow-merged into
-    /// the prompt's `params.extra` so provider-specific knobs survive. Already-
-    /// set request fields take precedence — a preset is a *default*, not an
-    /// override of an explicit request value (except for `system` which has
-    /// no merging surface).
+    /// the prompt's supplemental params so provider-specific knobs survive
+    /// without inheriting the inbound wire's ownership. Already-set request
+    /// fields take precedence — a preset is a *default*, not an override of an
+    /// explicit request value (except for `system` which has no merging
+    /// surface).
     pub fn apply_preset_overrides(
         &mut self,
         overrides: &crate::language_model::routing::PromptOverrides,
@@ -295,9 +296,47 @@ impl PipelineContext {
         }
         for (k, v) in &overrides.params {
             // Don't clobber an explicit request value; presets are defaults.
+            if self.prompt.params.extra.contains_key(k) {
+                continue;
+            }
+
+            // Promote the protocol fields normalized by inbound adapters into
+            // the same typed slots when they come from a preset. Otherwise a
+            // preset `store: true`, for example, could bypass the cross-wire
+            // safety checks by remaining an untyped supplemental field.
+            match k.as_str() {
+                "store" => {
+                    if self.prompt.params.store.is_none() {
+                        self.prompt.params.store = v.as_bool();
+                    }
+                    if self.prompt.params.store.is_some() {
+                        continue;
+                    }
+                }
+                "parallel_tool_calls" => {
+                    if self.prompt.params.parallel_tool_calls.is_none() {
+                        self.prompt.params.parallel_tool_calls = v.as_bool();
+                    }
+                    if self.prompt.params.parallel_tool_calls.is_some() {
+                        continue;
+                    }
+                }
+                "stream_options" => {
+                    if self.prompt.params.chat_stream_options.is_none()
+                        && let Ok(options) = serde_json::from_value::<ChatStreamOptions>(v.clone())
+                    {
+                        self.prompt.params.chat_stream_options = Some(options);
+                    }
+                    if self.prompt.params.chat_stream_options.is_some() {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+
             self.prompt
                 .params
-                .extra
+                .supplemental_extra
                 .entry(k.clone())
                 .or_insert_with(|| v.clone());
         }
@@ -638,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_preset_overrides_merges_into_params_extra_without_clobbering() {
+    fn apply_preset_overrides_merges_into_supplemental_params_without_clobbering() {
         let mut prompt = empty_prompt();
         prompt
             .params
@@ -657,7 +696,39 @@ mod tests {
 
         // Existing key kept; new key filled in.
         assert_eq!(ctx.prompt().params.extra["temperature"], 0.7);
-        assert_eq!(ctx.prompt().params.extra["top_k"], 40);
+        assert_eq!(ctx.prompt().params.supplemental_extra["top_k"], 40);
+    }
+
+    #[test]
+    fn apply_preset_overrides_promotes_normalized_protocol_fields() {
+        let mut prompt = empty_prompt();
+        prompt.params.store = Some(false);
+        let mut ctx = ctx_from_prompt(prompt);
+
+        let overrides = PromptOverrides {
+            system_prompt: None,
+            params: serde_json::Map::from_iter([
+                ("store".to_string(), true.into()),
+                ("parallel_tool_calls".to_string(), false.into()),
+                (
+                    "stream_options".to_string(),
+                    serde_json::json!({"include_obfuscation": false}),
+                ),
+            ]),
+        };
+        ctx.apply_preset_overrides(&overrides);
+
+        assert_eq!(ctx.prompt().params.store, Some(false));
+        assert_eq!(ctx.prompt().params.parallel_tool_calls, Some(false));
+        assert_eq!(
+            ctx.prompt()
+                .params
+                .chat_stream_options
+                .as_ref()
+                .and_then(|options| options.include_obfuscation),
+            Some(false)
+        );
+        assert!(ctx.prompt().params.supplemental_extra.is_empty());
     }
 
     #[test]
@@ -666,6 +737,7 @@ mod tests {
         ctx.apply_preset_overrides(&PromptOverrides::default());
         assert!(ctx.prompt().system.is_none());
         assert!(ctx.prompt().params.extra.is_empty());
+        assert!(ctx.prompt().params.supplemental_extra.is_empty());
     }
 
     #[test]

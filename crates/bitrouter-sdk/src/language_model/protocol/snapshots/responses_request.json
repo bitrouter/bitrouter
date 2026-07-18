@@ -25,6 +25,14 @@
       "type": "string",
       "default": ""
     },
+    "parallel_tool_calls": {
+      "description": "Whether the model may issue tool calls in parallel.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
+    },
     "reasoning": {
       "anyOf": [
         {
@@ -38,6 +46,14 @@
     "stream": {
       "type": "boolean",
       "default": false
+    },
+    "store": {
+      "description": "Whether OpenAI may retain the request and response.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
     },
     "temperature": {
       "type": [

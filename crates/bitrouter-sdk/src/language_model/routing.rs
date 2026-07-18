@@ -165,7 +165,7 @@ pub trait RoutingTable: Send + Sync {
 /// *before* the request is dispatched: a non-empty `system_prompt` is set on
 /// the canonical [`Prompt`](crate::language_model::Prompt) when it has none,
 /// and `params` entries are inserted into
-/// [`GenerationParams::extra`](crate::language_model::GenerationParams::extra)
+/// [`GenerationParams::supplemental_extra`](crate::language_model::GenerationParams::supplemental_extra)
 /// for keys not already present.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PromptOverrides {

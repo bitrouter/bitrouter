@@ -192,6 +192,8 @@ mod tests {
             api_base_override: None,
             auth_scheme: Default::default(),
             chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
         }
     }
 
