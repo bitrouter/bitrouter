@@ -1087,6 +1087,55 @@ fn harbor_result_dir_exports_benchmark_outcomes_with_trial_windows() {
 }
 
 #[test]
+fn harbor_result_dir_exports_outcomes_from_nested_case_jobs() {
+    let run_dir = temp_path("harbor-nested-case-jobs");
+    let job_dir = run_dir.join("case-01-job");
+    let trial_dir = job_dir.join("regex-log__abc123");
+    std::fs::create_dir_all(&trial_dir).unwrap();
+    std::fs::write(
+        job_dir.join("result.json"),
+        json!({
+            "id": "job-1",
+            "n_total_trials": 1,
+            "stats": {
+                "evals": {
+                    "codex__gpt-5.6-terra__terminal-bench/terminal-bench-2-1": {
+                        "reward_stats": { "reward": { "1.0": ["regex-log__abc123"] } }
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        trial_dir.join("result.json"),
+        json!({
+            "task_name": "terminal-bench/regex-log",
+            "trial_name": "regex-log__abc123",
+            "finished_at": "2026-07-17T21:05:00Z",
+            "agent_execution": {
+                "started_at": "2026-07-17T21:00:00Z",
+                "finished_at": "2026-07-17T21:04:00Z"
+            },
+            "verifier_result": { "rewards": { "reward": 1.0 } },
+            "exception_info": null
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let outcomes = BenchmarkOutcomeRecord::load_harbor_run_dir(&run_dir).unwrap();
+
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].session_key, "regex-log__abc123");
+    assert_eq!(outcomes[0].task_id, "terminal-bench/regex-log");
+    assert_eq!(outcomes[0].reward, 1.0);
+
+    let _ = std::fs::remove_dir_all(&run_dir);
+}
+
+#[test]
 fn benchmark_outcome_jsonl_reader_parses_records() {
     let path = temp_path("benchmark-outcomes.jsonl");
     std::fs::write(

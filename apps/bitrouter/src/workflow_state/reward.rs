@@ -124,19 +124,8 @@ impl BenchmarkOutcomeRecord {
 
     pub fn load_harbor_run_dir(path: impl AsRef<Path>) -> Result<Vec<Self>> {
         let path = path.as_ref();
-        let entries = fs::read_dir(path).map_err(|e| {
-            BitrouterError::internal(format!("harbor run dir read {}: {e}", path.display()))
-        })?;
         let mut result_paths = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| {
-                BitrouterError::internal(format!("harbor run dir entry {}: {e}", path.display()))
-            })?;
-            let result_path = entry.path().join("result.json");
-            if result_path.is_file() {
-                result_paths.push(result_path);
-            }
-        }
+        collect_harbor_trial_results(path, &mut result_paths)?;
         result_paths.sort();
 
         result_paths
@@ -190,6 +179,47 @@ impl BenchmarkOutcomeRecord {
             agent_finished_at,
         })
     }
+}
+
+fn collect_harbor_trial_results(
+    path: &Path,
+    result_paths: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let entries = fs::read_dir(path).map_err(|e| {
+        BitrouterError::internal(format!("harbor run dir read {}: {e}", path.display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            BitrouterError::internal(format!("harbor run dir entry {}: {e}", path.display()))
+        })?;
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+        let result_path = entry_path.join("result.json");
+        if result_path.is_file() && harbor_result_is_trial(&result_path)? {
+            result_paths.push(result_path);
+        }
+        collect_harbor_trial_results(&entry_path, result_paths)?;
+    }
+    Ok(())
+}
+
+fn harbor_result_is_trial(path: &Path) -> Result<bool> {
+    let value =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(path).map_err(|e| {
+            BitrouterError::internal(format!("harbor result read {}: {e}", path.display()))
+        })?)
+        .map_err(|e| {
+            BitrouterError::bad_request(format!("harbor result parse {}: {e}", path.display()))
+        })?;
+    if json_str(&value, &["trial_name"]).is_some() {
+        return Ok(true);
+    }
+    if value.get("n_total_trials").is_some() || value.get("stats").is_some() {
+        return Ok(false);
+    }
+    Err(missing_harbor_field(path, "trial_name"))
 }
 
 impl RewardJoin {
