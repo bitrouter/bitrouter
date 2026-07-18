@@ -496,6 +496,16 @@ mod tests {
         headers
     }
 
+    fn terminus_main_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-harness",
+            HeaderValue::from_static("terminus_2"),
+        );
+        headers.insert("x-bitrouter-agent-role", HeaderValue::from_static("main"));
+        headers
+    }
+
     fn failed() -> RequestOutcome {
         RequestOutcome::Failed(BitrouterError::Upstream {
             status: 400,
@@ -512,6 +522,13 @@ mod tests {
 
     fn read_step() -> Vec<Message> {
         vec![user("fix the bug"), assistant_calls("read_file")]
+    }
+
+    fn terminus_finalization() -> Vec<Message> {
+        vec![
+            user("finish the task"),
+            Message::text(Role::Assistant, r#"{"commands":[],"task_complete":true}"#),
+        ]
     }
 
     fn bash_step() -> Vec<Message> {
@@ -646,6 +663,27 @@ mod tests {
         hook.on_request_end(&ctx("vendor/cheap", vec![user("start")]), &failed())
             .await;
         assert!(ledger.is_pinned("opening"));
+    }
+
+    #[tokio::test]
+    async fn finalization_does_not_advance_or_pin_exploration_state() {
+        let messages = terminus_finalization();
+        let headers = terminus_main_headers();
+        let online = OnlineWorkflowState::from_headers(&headers, &prompt(messages.clone()));
+        let key = online.routing_key().to_string();
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        let hook =
+            AdequacyObserveHook::new(explicit_route_workflow_explore_table(), ledger.clone());
+
+        hook.on_request_end(
+            &ctx_with_headers("bitrouter:moonshotai/kimi-k2.7-code", messages, headers),
+            &failed(),
+        )
+        .await;
+
+        assert_eq!(online.ir.state_kind.to_string(), "finalization");
+        assert!(!ledger.is_pinned(&key));
+        assert!(!ledger.is_request_qualified(&key));
     }
 
     #[tokio::test]
