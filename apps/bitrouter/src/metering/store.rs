@@ -468,6 +468,39 @@ impl MeteringStore {
         Ok(attempts as u32)
     }
 
+    /// Reopen a previously unknown row for a later bounded reconciliation
+    /// invocation while preserving its durable attempt budget.
+    pub async fn reopen_unknown_reconciliation(
+        &self,
+        request_id: &str,
+        max_attempts: u32,
+    ) -> Result<bool> {
+        let row = requests::Entity::find_by_id(request_id)
+            .one(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("load unknown reconciliation row: {error}"))
+            })?
+            .ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "reconciliation request not found: {request_id}"
+                ))
+            })?;
+        if ReconciliationStatus::from_persisted(&row.reconciliation_status)
+            != ReconciliationStatus::Unknown
+            || row.reconciliation_attempts.max(0) as u32 >= max_attempts
+        {
+            return Ok(false);
+        }
+        let mut active: requests::ActiveModel = row.into();
+        active.reconciliation_status = Set(ReconciliationStatus::Pending.as_str().to_string());
+        active.authoritative_settled_at = Set(None);
+        active.update(&self.db).await.map_err(|error| {
+            BitrouterError::internal(format!("reopen unknown reconciliation: {error}"))
+        })?;
+        Ok(true)
+    }
+
     /// Store a content-free receipt-fetch failure for operator diagnosis.
     pub async fn record_reconciliation_error(&self, request_id: &str, error: &str) -> Result<()> {
         let row = requests::Entity::find_by_id(request_id)

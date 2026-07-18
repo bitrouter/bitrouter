@@ -78,9 +78,16 @@ pub async fn reconcile_requests(
         for record in records {
             match record.status {
                 ReconciliationStatus::Pending => {}
-                ReconciliationStatus::Computed
-                | ReconciliationStatus::NotCharged
-                | ReconciliationStatus::Unknown => continue,
+                ReconciliationStatus::Computed | ReconciliationStatus::NotCharged => continue,
+                ReconciliationStatus::Unknown => {
+                    if store
+                        .reopen_unknown_reconciliation(&record.request_id, max_attempts)
+                        .await?
+                    {
+                        progressed = true;
+                    }
+                    continue;
+                }
                 ReconciliationStatus::NotApplicable => {
                     return Err(BitrouterError::bad_request(format!(
                         "request {} does not require authoritative reconciliation",

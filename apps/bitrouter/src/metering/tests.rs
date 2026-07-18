@@ -370,6 +370,98 @@ async fn bounded_reconciler_exhausts_absent_receipt_without_looping() -> Result<
 }
 
 #[tokio::test]
+async fn a_later_reconciliation_invocation_retries_authoritative_unknown() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder =
+        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
+    let mut settlement = ctx("eventually-computed", 0, 0);
+    settlement.provider_id = "bitrouter".to_string();
+    recorder.record(&mut settlement).await?;
+
+    let unknown_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/requests/{}/settlement",
+            settlement.request_id
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "request_id": settlement.request_id,
+            "state": "unknown",
+            "model_id": null,
+            "provider_id": null,
+            "usage": {
+                "uncached_input_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0
+            },
+            "final_charge_micro_usd": null
+        })))
+        .expect(1)
+        .mount(&unknown_server)
+        .await;
+    let unknown_client = SettlementClient::new(format!("{}/v1", unknown_server.uri()), "brk_test")
+        .expect("settlement client");
+    let first = super::reconcile_requests(
+        &store,
+        &unknown_client,
+        &[settlement.request_id.clone()],
+        &[],
+        3,
+        Duration::ZERO,
+    )
+    .await?;
+    assert_eq!(first.unknown, 1);
+    assert_eq!(first.attempts, 1);
+
+    let computed_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/requests/{}/settlement",
+            settlement.request_id
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "request_id": settlement.request_id,
+            "state": "computed",
+            "model_id": "model-a",
+            "provider_id": "provider-a",
+            "usage": {
+                "uncached_input_tokens": 1,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "output_tokens": 1,
+                "reasoning_tokens": 0
+            },
+            "final_charge_micro_usd": 12
+        })))
+        .expect(1)
+        .mount(&computed_server)
+        .await;
+    let computed_client =
+        SettlementClient::new(format!("{}/v1", computed_server.uri()), "brk_test")
+            .expect("settlement client");
+    let prices = [super::UsagePriceOverride::parse(
+        "provider-a:model-a=2,0,0,10",
+    )?];
+    let second = super::reconcile_requests(
+        &store,
+        &computed_client,
+        &[settlement.request_id],
+        &prices,
+        3,
+        Duration::ZERO,
+    )
+    .await?;
+
+    assert!(second.accepted());
+    assert_eq!(second.computed, 1);
+    assert_eq!(second.attempts, 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
