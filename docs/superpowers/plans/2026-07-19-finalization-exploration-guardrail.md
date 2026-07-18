@@ -184,8 +184,7 @@ Expected: release build exits zero. Record the commit and SHA-256 without printi
 Add assertions that the current OSS commit differs from the rejected lineage commit, the expected binary SHA is 64 lowercase hexadecimal characters, `CANARY_OSS_COMMIT` remains `9d3b94115d45622ab61c32d70932cde31b34907c`, and prepared metadata carries the new exact values. Run:
 
 ```bash
-python3 -m unittest \
-  /Users/archer/Documents/aimonetwork/product-engineering/cost-optimization/runs/benchmark-runtime-repair-20260716/drivers/test_run_short13_policy_lineage.py
+python3 /Users/archer/Documents/aimonetwork/product-engineering/cost-optimization/runs/benchmark-runtime-repair-20260716/drivers/test_run_short13_policy_lineage.py
 ```
 
 Expected RED before updating constants, then all tests pass after setting `OSS_COMMIT` and `EXPECTED_BINARY_SHA256` to the Linux build values.
