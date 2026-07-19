@@ -106,7 +106,7 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
     .unwrap();
     let db = bitrouter::db::connect(&database_url).await.unwrap();
     bitrouter::db::run_migrations(&db).await.unwrap();
-    let store = AdequacyStore::new(db);
+    let store = AdequacyStore::new(db.clone());
     store
         .append_reliability_event(&ReliabilityEvent {
             request_id: "request-1".to_string(),
@@ -154,9 +154,10 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
     assert_eq!(report["events"][0]["request_id"], "request-1");
     assert_eq!(store.load_reliability_events().await.unwrap().len(), 1);
 
-    // Windows keeps the SQLite file locked while the pool is alive. Release the
-    // store before deleting the temporary directory so this test is portable.
+    // Windows keeps the SQLite file locked while the pool is alive. Release all
+    // references and explicitly close the pool before deleting the temp directory.
     drop(store);
+    db.close().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
 
