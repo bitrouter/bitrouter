@@ -1027,7 +1027,8 @@ pub enum ResponseFormat {
 /// Parallel-tool-use control is a distinct concern, not part of this slot. The
 /// Messages adapter translates Anthropic's nested `disable_parallel_tool_use`
 /// to/from the protocol-neutral top-level `parallel_tool_calls` (the shape Chat
-/// Completions / Responses use), which rides `extra`.
+/// Completions / Responses use), stored in
+/// [`GenerationParams::parallel_tool_calls`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolChoice {
@@ -1174,6 +1175,34 @@ pub struct ModelCompatibility {
 pub struct ChatCompletionsCompatibility {
     /// Token-limit field required by this upstream model.
     pub token_limit_field: Option<ChatTokenLimitField>,
+    /// Whether this target accepts the optional `store` request field. `None`
+    /// preserves the OpenAI-compatible default (supported).
+    pub supports_store: Option<bool>,
+    /// Whether this target accepts `stream_options`. `None` preserves the
+    /// OpenAI-compatible default (supported, with `include_usage` injected).
+    /// Setting this to `false` also disables the router's usage-chunk request,
+    /// so it is appropriate only when the target rejects the entire object.
+    pub supports_stream_options: Option<bool>,
+}
+
+/// Chat Completions streaming request options.
+///
+/// These options belong to the Chat Completions wire rather than the
+/// protocol-neutral streaming response. Keeping them typed prevents a Chat
+/// client's top-level object from leaking into Messages, Responses, or Gemini
+/// requests while preserving same-protocol extensions through [`Self::extra`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChatStreamOptions {
+    /// Ask the upstream to emit a final usage-only streaming chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_usage: Option<bool>,
+    /// Ask OpenAI not to add obfuscation bytes to streaming deltas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_obfuscation: Option<bool>,
+    /// Provider extensions preserved on native Chat Completions routes.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Sampling / generation parameters, carried verbatim where possible.
@@ -1231,9 +1260,71 @@ pub struct GenerationParams {
     /// no wire field for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frequency_penalty: Option<f64>,
-    /// Any provider-specific extras passed through untouched.
+    /// Whether the provider may retain the request and response for later
+    /// retrieval or distillation. Chat Completions and Responses carry this as
+    /// `store`; protocols without that contract may safely omit `false` but
+    /// must reject `true` rather than silently changing the request's meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    /// Whether the model may issue tool calls in parallel. Chat Completions and
+    /// Responses use this top-level spelling; Messages uses the inverse nested
+    /// `tool_choice.disable_parallel_tool_use` flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// Chat Completions-only streaming controls. Deliberately not rendered by
+    /// any other outbound adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_stream_options: Option<ChatStreamOptions>,
+    /// The inbound wire that owns [`Self::extra`]. `None` preserves the legacy
+    /// behavior for callers that construct a canonical prompt directly. This
+    /// provenance is serialized with the canonical prompt so an internal
+    /// queue/cache round trip cannot accidentally make raw fields unscoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_protocol: Option<ApiProtocol>,
+    /// Extra defaults added after inbound parsing (for example by a preset).
+    /// These have no source-wire ownership and remain available to every
+    /// outbound adapter, preserving the pre-normalization preset contract
+    /// without making client-supplied extras cross protocol boundaries.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub supplemental_extra: HashMap<String, serde_json::Value>,
+    /// Any remaining provider-specific extras passed through only when the
+    /// outbound protocol matches [`Self::extra_protocol`].
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl GenerationParams {
+    /// Iterate extras applicable to `protocol`: source-owned fields only on a
+    /// matching wire, followed by server-supplied defaults on every wire.
+    pub fn extras_for_protocol<'a>(
+        &'a self,
+        protocol: &'a ApiProtocol,
+    ) -> impl Iterator<Item = (&'a String, &'a serde_json::Value)> + 'a {
+        let source_matches = self
+            .extra_protocol
+            .as_ref()
+            .is_none_or(|source| source == protocol);
+        self.extra
+            .iter()
+            .filter(move |_| source_matches)
+            .chain(self.supplemental_extra.iter())
+    }
+
+    /// Read one applicable extra, preferring an explicit source-wire value over
+    /// a server-supplied default with the same name.
+    pub fn extra_value_for_protocol(
+        &self,
+        protocol: &ApiProtocol,
+        key: &str,
+    ) -> Option<&serde_json::Value> {
+        let source_value = self
+            .extra_protocol
+            .as_ref()
+            .is_none_or(|source| source == protocol)
+            .then(|| self.extra.get(key))
+            .flatten();
+        source_value.or_else(|| self.supplemental_extra.get(key))
+    }
 }
 
 /// The canonical internal request representation. Inbound protocol adapters
@@ -1895,10 +1986,10 @@ pub struct ExecutionResult {
     pub account_label: Option<String>,
     /// The generation result.
     pub result: GenerateResult,
-    /// End-to-end latency in milliseconds.
-    pub latency_ms: u64,
-    /// Upstream generation time in milliseconds.
-    pub generation_time_ms: u64,
+    /// End-to-end request duration in milliseconds.
+    pub request_duration_ms: u64,
+    /// Time spent in the final provider-facing operation.
+    pub upstream_duration_ms: Option<u64>,
     /// Server-tool calls observed during this execution (router-executed and
     /// provider-executed). Empty for a plain single-turn upstream call.
     /// Observability only.
@@ -1948,6 +2039,10 @@ pub struct RoutingTarget {
     /// `None` preserves the inbound spelling, then falls back to legacy
     /// `max_tokens` when the request originated on another protocol.
     pub chat_token_limit_field: Option<ChatTokenLimitField>,
+    /// Whether this Chat Completions target accepts `store`.
+    pub chat_supports_store: Option<bool>,
+    /// Whether this Chat Completions target accepts `stream_options`.
+    pub chat_supports_stream_options: Option<bool>,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a
@@ -1976,6 +2071,11 @@ impl std::fmt::Debug for RoutingTarget {
             .field("api_key", &redacted(&self.api_key))
             .field("api_protocol", &self.api_protocol)
             .field("chat_token_limit_field", &self.chat_token_limit_field)
+            .field("chat_supports_store", &self.chat_supports_store)
+            .field(
+                "chat_supports_stream_options",
+                &self.chat_supports_stream_options,
+            )
             .field("account_label", &self.account_label)
             .field(
                 "api_key_override",

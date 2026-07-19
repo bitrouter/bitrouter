@@ -35,3 +35,15 @@
   knowledge_cutoff: 2025-01
   open_weights: true
   family: kimi-k2
+- id: moonshotai/kimi-k3
+  name: 'Kimi: K3'
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-07-16
+  open_weights: true
+  family: kimi-k3

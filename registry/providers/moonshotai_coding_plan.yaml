@@ -18,7 +18,7 @@ rate_limits:
 # coding model; it is mapped here to the flagship canonical id so the
 # model is routable.
 models:
-  - id: moonshotai/kimi-k2.6
+  - id: moonshotai/kimi-k3
     provider_model_id: kimi-for-coding
     capabilities:
       - reasoning

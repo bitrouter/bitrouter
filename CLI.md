@@ -4,11 +4,12 @@
 
 ## Output format
 
-Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags, accepted on any subcommand:
+Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags:
 
 - `-j`, `--json` — force JSON (the default).
-- `-H`, `--human` — render a human-readable view to stdout instead of JSON.
-- `-h`, `--help` — unchanged (`-h` is **not** human output; that's `-H`).
+- `--human` — render a human-readable view to stdout instead of JSON.
+- `-H` before the subcommand (for example, `bitrouter -H cloud whoami`) — compatibility spelling for `--human`. Under `bitrouter cloud api`, `-H` means `--header`, matching `gh api`.
+- `-h`, `--help` — unchanged (`-h` is **not** human output).
 
 All diagnostics — progress, warnings, internal logs, and a human echo of errors — go to **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). So:
 
@@ -24,7 +25,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol or the child's terminal, not a JSON result.
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, `cloud api` streams the remote response body, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol, raw response, or the child's terminal—not a JSON result envelope.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
@@ -101,13 +102,51 @@ Prints pid, listen address, number of routable models, and control socket path. 
 
 ## Config
 
-### `bitrouter init`
+### `bitrouter init` (onboarding wizard)
 
 ```
-bitrouter init [-c <path>]           # default: ./bitrouter.yaml
+bitrouter                            # bare: wizard when unconfigured, else status + hint
+bitrouter init                       # (re-)run the wizard interactively
+bitrouter init --yes [flags]         # headless: emit the JSON envelope, scaffold the config
+bitrouter init --force               # allow overwriting an existing bitrouter.yaml
+bitrouter init --reset               # clear stored credentials, then run
 ```
 
-Writes a commented starter `bitrouter.yaml` with `skip_auth: true`. Edit it to configure providers, routing, guardrails, MCP servers, and agents.
+Bare `bitrouter` (no subcommand) is the front door. It runs a **network-free credential probe** — BYOK env keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`), the cloud session file, and the local credential store — and either launches the guided wizard (nothing configured) or prints a one-line status + a `bitrouter launch` hint (already configured). It never re-onboards a configured user and never silently spawns a daemon or harness. Exit code 0 either way.
+
+The wizard is three steps, each mapping to a flag so an agent can drive it: **credentials** (sign in to BitRouter Cloud, log in to a provider, or paste a BYOK key), **harness** (`claude` / `codex`, installed via the native installer when missing), and **finish** — launch the harness now, start the daemon and print paste-in snippets, or exit. The only durable output is **credentials** (which zero-config auto-detects); the wizard never serializes `bitrouter.yaml` except the canned starter template.
+
+`bitrouter init --yes` runs the whole thing non-interactively and **never blocks on a human**: it consumes the flag-supplied keys, reports-and-skips anything that would need interactive OAuth (in `providers_skipped_interactive`), emits the JSON result envelope on stdout, and reproduces the classic starter-file scaffold (`skip_auth: true`; refuses to overwrite unless `--force`).
+
+| Flag | Step | Description |
+| --- | --- | --- |
+| `-c`, `--config <path>` | — | Starter-config write path (default `bitrouter.yaml`). |
+| `--yes`, `-y` | — | Headless: process the flags, never block, emit the envelope, scaffold the config. |
+| `--force` | — | Overwrite an existing `bitrouter.yaml` when scaffolding. |
+| `--reset` | — | Clear stored credentials first — cloud session always; provider credentials after a confirm, or unconditionally under `--yes`. |
+| `--cloud-login` | 1 | Sign in to BitRouter Cloud (device flow). Skipped-and-reported under `--yes`. |
+| `--api-key <brk_…>` | 1 | Seed the cloud credential from a `brk_` key (non-interactive). |
+| `--provider <id>` | 1 | Log in to an upstream provider (repeatable). |
+| `--provider-api-key <k>` | 1 | Key for the `--provider` at the same position (repeatable). |
+| `--use-detected` | 1 | Accept the auto-detected credential(s) without prompting. |
+| `--harness <claude\|codex>` | 2 | Harness to drive (repeatable). |
+| `--no-install` | 2 | Never install a missing harness. |
+| `--after <launch\|serve\|exit>` | 3 | Finish action (default `exit`; `launch` is honored only when the harness is present). |
+| `--model <id>` | 3 | Model handed to the harness for this session only (not persisted). |
+| `--write-config` | 3 | Write the starter `bitrouter.yaml`. |
+
+The result envelope:
+
+```json
+{
+  "action": "onboarding",
+  "providers_configured": ["bitrouter", "openai"],
+  "providers_skipped_interactive": ["github-copilot"],
+  "harnesses_installed": ["claude"],
+  "after": "launch",
+  "snippet": null
+}
+```
 
 ---
 
@@ -220,19 +259,35 @@ After the wrapped agent exits, `launch` prints a one-line session spend summary 
 
 `bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
 
+### `bitrouter tui`
+
+```
+bitrouter tui --agent <id> [--worktree <name>] [--model ID]
+```
+
+Launches the **composite multi-agent TUI** (TUI_SPEC_V3 — a pure control tower): a sessions sidebar (orchestrator PTY sessions), a subagents rail (ACP agents sorted by who needs you), and a focused detail pane over a one-line status bar. `--agent claude|codex|…` hosts that harness's real native TUI on a PTY as the *orchestrator*; a configured `agents:` id renders that ACP agent as a **read-only `Monitor`** — **there is no input bar anywhere**: the human never types into a subagent (the orchestrator steers subagents via the injected fleet MCP tools; `bitrouter serve` should be running alongside — the bar's `serve ●/✗` dot is live).
+
+**Keys.** NORMAL is the only hub — no sticky manager mode. A focused PTY session gets full key passthrough; the **only intercepted chord is the one-shot leader** (`tui.leader` in `bitrouter.yaml`, `ctrl-<key>` form, default `Ctrl-Space` — `Ctrl-A`/`Ctrl-B` reach the child as readline keys). Leader leaves (which-key overlay, one key, back to NORMAL): `1`-`9` focus session · `Tab` next actionable subagent · `n` new session (picker) · `p` command palette · `c` close · `a` autonomy tier · `t` attach · `?` keys help. Inline from NORMAL: `y`/`a`/`n` resolve the **top** pending permission (batch-clears, focus advances) · `D`/`m`/`p`/`r` review the focused Monitor's ready diff (diff / merge / apply / **reject — routed by ownership**: orchestrator-spawned → the verdict becomes the subagent's task outcome, `subagent_status` shows `changes_requested` + note; human-spawned via the palette's `spawn subagent` hatch → re-prompted directly) · `Ctrl-C` interrupts the focused agent (quits from NORMAL only when the focused pane's child has already exited) · `PgUp`/`PgDn` scroll · click any row to focus it. Quit via the palette's `quit` or by closing the last pane.
+
+**Status bar.** A gauge, not a cheat-sheet: the left zone follows the focused pane (`ctx N%` context occupancy · model · `$cost`; transient notices claim it and decay), plus the `⌃space menu` affordance; the right zone is global fleet (attention badges `⚠◆●◉` · summed `$` cost · `serve ●/✗`).
+
+Subagents spawned from the picker get worktree isolation + a `PORT` by default (retained on close); a configured `worktrees.bootstrap` hook is human-approved on first use per session. Durable fleet memory lives at `.bitrouter/fleet-state.json`; the TUI's stderr (and its agent children's) goes to `.bitrouter/tui.log` on Unix.
+
 ### `bitrouter spawn`
 
 ```
-bitrouter spawn <agent> -p "<text>" [--no-wait] [routing/session flags]      # one prompt → NDJSON
+bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [routing/session flags]   # one prompt → NDJSON
 bitrouter spawn <agent> --serve [--warm] [--idle-timeout SECS] [flags]        # ACP over stdio
 bitrouter spawn <agent> --check [routing flags]                              # preflight only
 ```
 
-Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent, a GUI, or `bitrouter tui`). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `pi-acp`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
+Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent, a GUI, or `bitrouter tui`). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
 
 **Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--worktree`/`--rm-worktree`/`--no-transcript`/`--turn-timeout`).
 
-Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses with no gateway mechanism (`pi-acp`) and non-catalog agents warn and run direct.
+Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter tui` orchestrator facet, not headless spawn yet) and non-catalog agents warn and run direct.
+
+`--result-schema '<JSON Schema>'` (or `@path`) adds a machine-consumable result contract to `-p` mode: the schema rides the prompt, the reply's last ```json block is extracted and validated (one repair re-prompt on invalid output), and the terminal `result` line gains `result`/`schema_ok` fields — `result:null, schema_ok:false, raw:"…"` after a failed repair, so the orchestrator is never blocked. Bare `-p` output is unchanged.
 
 In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line.
 
@@ -256,9 +311,13 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 bitrouter providers login claude-code     # Claude Pro/Max subscription via Claude Code
 bitrouter providers login openai-codex    # ChatGPT subscription via Codex
 bitrouter providers login github-copilot  # GitHub device-code flow
+bitrouter providers login openai --api-key sk-…        # BYOK, non-interactive
+printf %s "$KEY" | bitrouter providers login anthropic --key-stdin
 ```
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
+
+For a provider that accepts a pasted key, `--api-key <KEY>` (or `--key-stdin`, which reads one line from stdin) seeds it non-interactively — skipping the method menu and the paste prompt. Both conflict with the OAuth-only `--import-existing` / `--no-browser`, and error if the provider has no API-key method. For the built-in `bitrouter` provider the key seeds the cloud credential, exactly as `cloud login --api-key` does.
 
 For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 
@@ -274,10 +333,13 @@ Removes every stored credential for the provider (subscription OAuth tokens and 
 
 ### `bitrouter cloud login` / `logout` / `whoami`
 
-Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Signs the CLI into your BitRouter Cloud account via the RFC 8628 OAuth Device Authorization Grant. The browser approval page asks you to pick which workspace to grant the CLI access to — the resulting credential is **namespace-baked** (workspace-baked), and all subsequent `bitrouter cloud` calls target that workspace implicitly. To switch workspaces, re-run `bitrouter cloud login`. The credential is auto-refreshed on use; rotation preserves the namespace binding.
+Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Interactive login uses the RFC 8628 OAuth Device Authorization Grant. For CI and other non-interactive environments, pass an existing BitRouter API key with `--api-key`. Both forms persist to the same credential file and are reused by `cloud api`, management commands, the built-in `bitrouter` provider, and account-attributed telemetry.
+
+OAuth browser approval asks which workspace to bind; the resulting credential is **namespace-baked** (workspace-baked). To switch workspaces, re-run `bitrouter cloud login`. OAuth credentials auto-refresh on use. API-key login performs no network request and management commands use the server's `me` namespace alias.
 
 ```
 bitrouter cloud login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
+bitrouter cloud login --api-key <BRK_API_KEY> [--oauth-as <URL>]
 bitrouter cloud logout [--oauth-as <URL>] [--client-id <ID>]
 bitrouter cloud whoami
 ```
@@ -287,8 +349,9 @@ bitrouter cloud whoami
 | `--oauth-as` | `https://api.bitrouter.ai` (env: `BITROUTER_OAUTH_AS`) | Authorization server base URL — override only for a self-hosted deployment |
 | `--client-id` | `bitrouter-cli` (env: `BITROUTER_OAUTH_CLIENT_ID`) | Public OAuth client id |
 | `--scope` | broad developer set (env: `BITROUTER_OAUTH_SCOPE`) | Space-delimited scopes to request. Default includes `inference:invoke`, `usage:read`, `keys:read`/`write`, `billing:read`, `policy:read`/`write`, `byok:read`/`write`, `namespace:read`. Sensitive control-plane scopes such as `billing:write`, `user:write`, and `namespace:write` are opt-in. |
+| `--api-key` | *(none)* | Store a `brk_<token_id>.<secret>` credential without browser login or network discovery. Conflicts with `--client-id` and `--scope`; intended for CI. |
 
-Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). `whoami` answers from the local file with no network call; it also prints the bound namespace.
+Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). Existing untagged OAuth files remain compatible. `whoami` answers from the local file with no network call and reports `authentication: oauth|api_key` without printing a bearer. OAuth logout attempts RFC 7009 revocation before deleting the file; API-key logout is local-only.
 
 ---
 
@@ -310,11 +373,44 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud `/v1/*` management surface using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call any subcommand.
+`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command.
 
-The credential is **namespace-baked** — keys, usage, and policies are all scoped to the workspace chosen at login. The `{nsid}` path segment is resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all your workspaces regardless.
+OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
-Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, the CLI prints a copy-pasteable re-login hint that appends the missing scope to your current set.
+Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, OAuth users receive a copy-pasteable re-login hint that appends the missing scope; API-key users are told to mint or select a key with that scope and log in with it.
+
+### `bitrouter cloud api`
+
+Make an authenticated request to any **relative** endpoint on the origin recorded by `cloud login`, modeled after [`gh api`](https://cli.github.com/manual/gh_api):
+
+```bash
+bitrouter cloud api /v1/models
+bitrouter cloud api /v1/chat/completions --input request.json
+bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
+```
+
+```text
+bitrouter cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
+  [-f <KEY=VALUE>] [-F <KEY=VALUE>] [--input <FILE|->] \
+  [-i|--include] [--silent|--verbose]
+```
+
+| Flag | Behavior |
+| --- | --- |
+| `-X`, `--method` | Explicit HTTP method. Default is `GET`, or `POST` when fields or `--input` are present. |
+| `-H`, `--header` | Append a request header; repeat to send multiple values. A supplied `Authorization` overrides the stored bearer. |
+| `-f`, `--raw-field` | Add a string field. Supports `key[subkey]` and `key[]` nesting; `key[]` without `=` creates an empty array. |
+| `-F`, `--field` | Add a typed field. `true`, `false`, `null`, and integers become JSON types; `@file` and `@-` read a string value from a file or stdin. |
+| `--input` | Use exact file bytes (or stdin with `-`) as the request body. Fields become query parameters. |
+| `-i`, `--include` | Prepend the HTTP status line and response headers to stdout. |
+| `--silent` | Drain but do not print the response body. Conflicts with `--verbose`. |
+| `--verbose` | Print method, URL, status, and headers to stderr. Credential-like header values are redacted. |
+
+With explicit `GET`, fields are query parameters. Otherwise fields form a JSON body unless `--input` owns the body. Only one consumer may read stdin. Non-TTY response bytes and SSE are streamed unchanged; interactive JSON is pretty-printed. On HTTP 4xx/5xx, the response body remains on stdout, the diagnostic goes to stderr, and the process exits non-zero.
+
+Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are rejected. Redirect following is disabled, so a stored bearer is never forwarded to another origin. Initial documented endpoints are `/v1/models`, `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, and Google-style `:generateContent` / `:streamGenerateContent` routes under `/v1beta/models/*`.
+
+This first release intentionally omits `gh api`'s GraphQL, pagination/slurp, `--jq`, Go templates, cache, hostname, preview, and placeholder expansion features. See the [Cloud API guide](/docs/guides/cloud-api) for copyable requests.
 
 ### `bitrouter cloud whoami`
 

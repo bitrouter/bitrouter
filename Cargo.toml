@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.25"
+version = "1.0.0-alpha.27"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -14,14 +14,29 @@ repository = "https://github.com/bitrouter/bitrouter"
 rust-version = "1.93"
 
 [workspace.dependencies]
+# Cross-platform OS keyring reader (macOS Keychain / Linux Secret Service /
+# Windows Credential Manager). Used to import the Antigravity `agy` CLI session,
+# which stores its Google OAuth token in the OS keyring. The Linux backend is
+# `async-secret-service` (pure-Rust zbus — avoids the C `libdbus-1-dev` system
+# dependency `sync-secret-service` would pull) driven by `async-io`'s block-on
+# (independent of tokio, so the sync `Entry` API is safe to call from bitrouter's
+# async CLI); `crypto-rust` keeps the session crypto dependency-light.
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "async-secret-service",
+    "async-io",
+    "crypto-rust",
+] }
+
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.25", default-features = false }
-bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.25" }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.25" }
-bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.25" }
-bitrouter-substrate = { path = "crates/bitrouter-substrate", version = "1.0.0-alpha.25" }
-bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.25" }
-bitrouter-observe = { path = "crates/bitrouter-observe", version = "1.0.0-alpha.25", default-features = false }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.27", default-features = false }
+bitrouter-cloud-sdk = { path = "crates/bitrouter-cloud-sdk", version = "1.0.0-alpha.27" }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.27" }
+bitrouter-skills = { path = "crates/bitrouter-skills", version = "1.0.0-alpha.27" }
+bitrouter-substrate = { path = "crates/bitrouter-substrate", version = "1.0.0-alpha.27" }
+bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.27" }
+bitrouter-observe = { path = "crates/bitrouter-observe", version = "1.0.0-alpha.27", default-features = false }
 
 # ACP SDK crates
 agent-client-protocol = "1.2"

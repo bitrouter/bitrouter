@@ -40,6 +40,14 @@
     "model": {
       "type": "string"
     },
+    "parallel_tool_calls": {
+      "description": "Whether the model may issue tool calls in parallel.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
+    },
     "presence_penalty": {
       "description": "Presence penalty. Promoted to the canonical `presence_penalty` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-presence_penalty>",
       "type": [
@@ -81,9 +89,29 @@
       "description": "Stop sequences — a single string or an array of up to four. Promoted to\nthe canonical `stop` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>",
       "default": null
     },
+    "store": {
+      "description": "Whether OpenAI may retain the request and response.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
+    },
     "stream": {
       "type": "boolean",
       "default": false
+    },
+    "stream_options": {
+      "description": "Streaming response controls.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChatStreamOptions"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "temperature": {
       "type": [
@@ -243,6 +271,26 @@
           ]
         }
       ]
+    },
+    "ChatStreamOptions": {
+      "description": "Chat Completions streaming request options.\n\nThese options belong to the Chat Completions wire rather than the\nprotocol-neutral streaming response. Keeping them typed prevents a Chat\nclient's top-level object from leaking into Messages, Responses, or Gemini\nrequests while preserving same-protocol extensions through [`Self::extra`].",
+      "type": "object",
+      "properties": {
+        "include_obfuscation": {
+          "description": "Ask OpenAI not to add obfuscation bytes to streaming deltas.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "include_usage": {
+          "description": "Ask the upstream to emit a final usage-only streaming chunk.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
     },
     "ChatTool": {
       "description": "One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.",

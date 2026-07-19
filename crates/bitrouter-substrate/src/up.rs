@@ -192,6 +192,42 @@ pub struct UpstreamConnection {
 type AgentTransport =
     ByteStreams<Compat<tokio::process::ChildStdin>, Compat<tokio::process::ChildStdout>>;
 
+/// Inherited env vars an agent child must never see. The substrate launches
+/// an **independent** agent session, so a leaked "you are running inside
+/// another agent" marker is categorically false for the child — and actively
+/// harmful: Claude Code's nested-session guard refuses to start when
+/// `CLAUDECODE` leaks through ("Claude Code cannot be launched inside another
+/// Claude Code session"), which broke spawning `claude-acp` from any
+/// bitrouter run inside a Claude session. Removal happens **before** the
+/// transport/launch env overlay is applied, so an explicitly configured
+/// `env:` value still wins.
+const STRIPPED_INHERITED_ENV: &[&str] = &["CLAUDECODE"];
+
+/// Build the agent child's `Command`: stripped inherited markers, then the
+/// caller's env overlay, piped stdio, and (unix) its own process group so
+/// teardown can kill the whole wrapper chain (`npx → node`, `uvx → python`).
+fn agent_command(
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(command);
+    for key in STRIPPED_INHERITED_ENV {
+        cmd.env_remove(key);
+    }
+    cmd.args(args)
+        .envs(env)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        // Belt-and-braces: the reaper is the real teardown; this covers the
+        // child handle being dropped without it ever running.
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd
+}
+
 /// Spawn `command args` with `env` applied, wired for ACP over stdio.
 ///
 /// The child is made **its own process-group leader** (unix) so teardown can
@@ -207,17 +243,7 @@ fn spawn_agent_process(
     args: &[String],
     env: &HashMap<String, String>,
 ) -> anyhow::Result<(AgentTransport, tokio::process::Child)> {
-    let mut cmd = tokio::process::Command::new(command);
-    cmd.args(args)
-        .envs(env)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        // Belt-and-braces: the reaper below is the real teardown; this covers
-        // the child handle being dropped without it ever running.
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    cmd.process_group(0);
+    let mut cmd = agent_command(command, args, env);
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("spawning agent '{command}': {e}"))?;
@@ -905,6 +931,32 @@ async fn health_check_inner(
 mod tests {
     use super::*;
     use futures::StreamExt;
+
+    #[test]
+    fn agent_child_never_inherits_nested_session_markers() {
+        let cmd = agent_command("echo", &[], &HashMap::new());
+        let removed: Vec<_> = cmd
+            .as_std()
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            removed.contains(&"CLAUDECODE".to_string()),
+            "CLAUDECODE must be stripped (claude's nested-session guard): {removed:?}"
+        );
+
+        // An explicitly configured env value still wins over the strip.
+        let mut env = HashMap::new();
+        env.insert("CLAUDECODE".to_string(), "1".to_string());
+        let cmd = agent_command("echo", &[], &env);
+        let explicit = cmd
+            .as_std()
+            .get_envs()
+            .find(|(k, _)| k.to_string_lossy() == "CLAUDECODE")
+            .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()));
+        assert_eq!(explicit.as_deref(), Some("1"), "explicit config env wins");
+    }
 
     #[cfg(unix)]
     #[tokio::test]

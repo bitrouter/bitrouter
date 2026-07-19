@@ -162,11 +162,17 @@ pub fn registry_rows(registry: &Registry) -> Vec<RemoteRow> {
 pub fn install(id: &str) -> Result<String, String> {
     let agent: &Harness = harness::by_id(id)
         .ok_or_else(|| format!("'{id}' is not in the bundled catalog. Run `bitrouter agents list` (or `--remote` for the ACP registry) to see the available ids."))?;
+    let command = agent.acp_command.ok_or_else(|| {
+        format!(
+            "'{id}' is interactive-only (no ACP adapter to install) — drive it with `bitrouter tui --agent {}`",
+            agent.interactive_binary.unwrap_or(id)
+        )
+    })?;
     Ok(render_stub(&StubSpec {
         id: agent.id,
         comment: agent.description,
         source: agent.project_url,
-        command: agent.acp_command,
+        command,
         args: agent.acp_args.iter().map(|a| a.to_string()).collect(),
         env: Vec::new(),
     }))
@@ -483,7 +489,7 @@ mod tests {
     #[test]
     fn catalog_includes_pi_acp() {
         let a = harness::by_id("pi-acp").expect("pi-acp is in the bundled catalog");
-        assert_eq!(a.acp_command, "npx");
+        assert_eq!(a.acp_command, Some("npx"));
         assert_eq!(a.acp_args, &["-y", "pi-acp@latest"]);
         let out = install("pi-acp").unwrap();
         assert!(out.contains("pi-acp:"));

@@ -15,17 +15,55 @@ use std::path::Path;
 use crate::metering::MeteringStore;
 use crate::paths::ConfigSource;
 
+/// The read side of the metering database, distinguishing "no database yet"
+/// (a fresh install that has never served a request — legitimately `$0`) from
+/// "a database is configured but couldn't be opened" (a config-load, path, or
+/// connection error). Callers that must **fail closed** on an unknown spend —
+/// the fleet budget ceiling — need this distinction; best-effort callers use
+/// [`open_readonly`], which folds both non-store cases into `None`.
+pub enum ReadSide {
+    /// An open store to query.
+    Store(MeteringStore),
+    /// No local database to read (missing SQLite file, `:memory:`, or a config
+    /// whose database URL doesn't resolve to an existing readable path).
+    Absent,
+    /// A database is configured but the read side couldn't open it (config
+    /// load, path anchoring, or connection failure).
+    Unavailable,
+}
+
+/// Open the metering store for read-only queries, distinguishing an *absent*
+/// database (fresh install → [`ReadSide::Absent`]) from a *configured but
+/// unreadable* one ([`ReadSide::Unavailable`]). Never creates the file.
+pub async fn read_side(source: &ConfigSource) -> ReadSide {
+    let config = match crate::paths::load_config(source).await {
+        Ok(c) => c,
+        // A config that won't load can't be trusted to mean "$0 spent".
+        Err(_) => return ReadSide::Unavailable,
+    };
+    let url = match resolve_sqlite_url(&config.database.url, source.home()) {
+        Some(u) => u,
+        // No SQLite file yet / `:memory:` / empty path → nothing to read.
+        None => return ReadSide::Absent,
+    };
+    match crate::db::connect(&url).await {
+        Ok(db) => ReadSide::Store(MeteringStore::new(db)),
+        Err(_) => ReadSide::Unavailable,
+    }
+}
+
 /// Open the metering store for read-only CLI queries.
 ///
 /// Returns `None` when the config can't be loaded, when a SQLite file
 /// URL points at a file that doesn't exist yet (a fresh install that
 /// has never served a request), or when the connection fails. Never
-/// creates the database file.
+/// creates the database file. Callers that must tell "absent" from
+/// "unreadable" apart (the fleet budget ceiling) use [`read_side`].
 pub async fn open_readonly(source: &ConfigSource) -> Option<MeteringStore> {
-    let config = crate::paths::load_config(source).await.ok()?;
-    let url = resolve_sqlite_url(&config.database.url, source.home())?;
-    let db = crate::db::connect(&url).await.ok()?;
-    Some(MeteringStore::new(db))
+    match read_side(source).await {
+        ReadSide::Store(store) => Some(store),
+        ReadSide::Absent | ReadSide::Unavailable => None,
+    }
 }
 
 /// Re-anchor a relative SQLite file URL against the config home and pin

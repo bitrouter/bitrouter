@@ -9,8 +9,9 @@
 //!
 //! [`BitrouterError::to_envelope`] projects an error into the canonical,
 //! serializable [`ErrorEnvelope`] (`{"error": {"kind": …, "message": …}}`) —
-//! the stable shape the CLI prints on stdout and the daemon/cloud HTTP
-//! surfaces converge on.
+//! the stable typed shape the CLI prints on stdout. HTTP surfaces use their
+//! protocol-specific projections; provider bad requests preserve the selected
+//! upstream `error` object or string.
 
 use std::fmt;
 
@@ -68,6 +69,14 @@ pub enum BitrouterError {
         retry_after: Option<u64>,
     },
 
+    /// 400 — an upstream provider rejected the request parameters.
+    #[error("upstream bad request")]
+    UpstreamBadRequest {
+        /// Upstream-selected error payload. Executor-produced values are
+        /// always a JSON object or JSON string.
+        error: serde_json::Value,
+    },
+
     /// 502 — upstream provider returned an error.
     #[error("upstream error ({status}): {message}")]
     Upstream {
@@ -114,6 +123,13 @@ pub enum BitrouterError {
     Internal(String),
 }
 
+fn upstream_payload_text(error: &serde_json::Value) -> String {
+    match error {
+        serde_json::Value::String(message) => message.clone(),
+        other => other.to_string(),
+    }
+}
+
 impl BitrouterError {
     /// The HTTP status code this error renders as.
     pub fn status(&self) -> u16 {
@@ -126,6 +142,7 @@ impl BitrouterError {
             Self::NotFound(_) => 404,
             Self::RateLimited { .. } => 429,
             Self::UpstreamRateLimited { .. } => 429,
+            Self::UpstreamBadRequest { .. } => 400,
             Self::Upstream { .. } => 502,
             Self::UpstreamInvalidResponse { .. } => 502,
             Self::UpstreamAuth { status, .. } => *status,
@@ -146,6 +163,7 @@ impl BitrouterError {
             Self::NotFound(_) => "not_found_error",
             Self::RateLimited { .. } => "rate_limit_error",
             Self::UpstreamRateLimited { .. } => "rate_limit_error",
+            Self::UpstreamBadRequest { .. } => "invalid_request_error",
             Self::Upstream { .. }
             | Self::UpstreamInvalidResponse { .. }
             | Self::UpstreamTimeout => "upstream_error",
@@ -167,6 +185,7 @@ impl BitrouterError {
             Self::NotFound(_) => "not_found",
             Self::RateLimited { .. } => "rate_limit_exceeded",
             Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
+            Self::UpstreamBadRequest { .. } => "invalid_request",
             Self::Upstream { .. } => "upstream_bad_gateway",
             Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
             Self::UpstreamAuth { .. } => "upstream_auth_required",
@@ -199,6 +218,7 @@ impl BitrouterError {
             Self::NotFound(_) => ErrorKind::NotFound,
             Self::RateLimited { .. } => ErrorKind::RateLimited,
             Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
+            Self::UpstreamBadRequest { .. } => ErrorKind::BadRequest,
             Self::Upstream { .. } => ErrorKind::Upstream,
             Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
@@ -223,6 +243,7 @@ impl BitrouterError {
             Self::RateLimited { .. } => "rate limited".to_string(),
             Self::UpstreamPaymentRequired => "upstream payment required".to_string(),
             Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
+            Self::UpstreamBadRequest { error } => upstream_payload_text(error),
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
             }
@@ -247,11 +268,13 @@ impl BitrouterError {
 
     /// A message safe to return to an untrusted HTTP/SSE client.
     ///
-    /// Upstream diagnostics may contain echoed prompts, credentials, provider
-    /// stack traces, or account details. Keep those on the internal error while
-    /// exposing only a stable summary at the public boundary.
+    /// Provider bad-request payloads are intentionally preserved so callers can
+    /// correct rejected parameters. Other upstream diagnostics may contain
+    /// echoed prompts, credentials, provider stack traces, or account details,
+    /// so they expose only a stable summary at the public boundary.
     pub fn public_message(&self) -> String {
         match self {
+            Self::UpstreamBadRequest { error } => upstream_payload_text(error),
             Self::Upstream { .. } => "upstream request failed".to_string(),
             Self::UpstreamInvalidResponse { .. } => {
                 "upstream returned an invalid response".to_string()
@@ -261,9 +284,10 @@ impl BitrouterError {
     }
 }
 
-/// A machine-readable error category — the stable taxonomy shared across the
-/// CLI, the daemon HTTP API, and (in future) the cloud API. Mirrors the
-/// [`BitrouterError`] variants; serialized in `snake_case`.
+/// A machine-readable error category — the stable taxonomy shared across typed
+/// error consumers. This is a many-to-one projection of [`BitrouterError`];
+/// for example, provider and local bad requests both map to [`Self::BadRequest`].
+/// Serialized in `snake_case`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
@@ -315,9 +339,9 @@ pub struct ErrorBody {
     pub hint: Option<String>,
 }
 
-/// The top-level error envelope emitted on stdout by the CLI (and the shape the
-/// daemon/cloud HTTP surfaces converge on). Wraps a single [`ErrorBody`] under
-/// an `error` key: `{"error": {"kind": …, "message": …}}`.
+/// The top-level typed error envelope emitted on stdout by the CLI. Wraps a
+/// single [`ErrorBody`] under an `error` key:
+/// `{"error": {"kind": …, "message": …}}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorEnvelope {
     /// The error detail.
@@ -327,6 +351,30 @@ pub struct ErrorEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_bad_request_error_contract() {
+        let error = BitrouterError::UpstreamBadRequest {
+            error: serde_json::json!("provider secret"),
+        };
+
+        assert_eq!(error.status(), 400);
+        assert_eq!(error.error_type(), "invalid_request_error");
+        assert_eq!(error.error_code(), "invalid_request");
+        assert_eq!(error.kind(), ErrorKind::BadRequest);
+        assert_eq!(
+            serde_json::to_value(error.kind()).unwrap(),
+            serde_json::json!("bad_request")
+        );
+        assert_eq!(error.public_message(), "provider secret");
+        assert!(
+            error
+                .to_envelope()
+                .error
+                .message
+                .contains("provider secret")
+        );
+    }
 
     #[test]
     fn upstream_auth_status_and_type() {

@@ -12,12 +12,12 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `alibaba` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 8 |
 | `alibaba_cn` | Alibaba Cloud | CN | anthropic, openai, responses | Per-token | 13 |
 | `alibaba_coding_plan` | Alibaba Cloud | CN | openai | Subscription | 8 |
-| `ambient` | Ambient | US | openai | Per-token | 3 |
+| `ambient` | Ambient | US | openai | Per-token | 4 |
 | `anthropic` | Anthropic | US | anthropic | Per-token | 8 |
 | `atlascloud` | Atlas Cloud | US | openai | Per-token | 13 |
-| `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 14 |
+| `aws-bedrock` | Amazon Web Services | US | openai, responses | Per-token | 17 |
 | `azure` | Microsoft Azure | US | openai, responses | Per-token | 18 |
-| `bitrouter` | BitRouter | US | openai | Per-token | 48 |
+| `bitrouter` | BitRouter | US | openai | Per-token | 49 |
 | `byteplus` | BytePlus | CN | openai | Per-token | 1 |
 | `cerebras` | Cerebras | US | openai | Per-token | 3 |
 | `chutes` | Chutes | US | openai | Per-token | 7 |
@@ -26,17 +26,17 @@ Every model in the [catalog](/docs/get-started/supported-models) is served by on
 | `github-copilot` | GitHub | US | openai | Subscription | 17 |
 | `gmicloud` | GMI Cloud | US | openai | Per-token | 13 |
 | `google` | Google | US | google, openai | Per-token | 4 |
-| `google-ai` | Google | US | google, openai | Subscription | 3 |
+| `google-ai` | Google | US | antigravity | Subscription | 3 |
 | `minimax` | MiniMax | CN | anthropic, openai | Per-token | 3 |
 | `minimax_cn` | MiniMax | CN | anthropic, openai | Per-token | 3 |
-| `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 3 |
+| `moonshotai` | Moonshot AI | CN | anthropic, openai | Per-token | 4 |
 | `moonshotai_coding_plan` | Moonshot AI | CN | openai | Subscription | 1 |
 | `novita` | Novita AI | US | openai | Per-token | 15 |
 | `openai` | OpenAI | US | openai, responses | Per-token | 6 |
 | `openai-codex` | OpenAI | US | responses | Subscription | 6 |
-| `opencode-go` | OpenCode | US | openai | Subscription | 18 |
+| `opencode-go` | OpenCode | US | openai | Subscription | 20 |
 | `opencode-zen` | OpenCode | US | openai | Per-token | 30 |
-| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 50 |
+| `openrouter` | OpenRouter | US | anthropic, openai, responses | Per-token | 51 |
 | `phala` | Phala | US | openai | Per-token | 5 |
 | `qianfan` | Baidu AI Cloud | CN | openai | Per-token | 8 |
 | `qianfan_cn` | Baidu AI Cloud | CN | openai | Per-token | 6 |

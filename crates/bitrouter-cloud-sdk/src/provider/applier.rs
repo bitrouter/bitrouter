@@ -155,11 +155,11 @@ impl BitrouterCloudAuthApplier {
         Ok(metadata)
     }
 
-    /// Resolve a current OAuth bearer if a credentials file is present,
+    /// Resolve the current stored bearer if a credentials file is present,
     /// refreshing transparently if it's within the refresh window. Returns
     /// `Ok(None)` when no credentials file exists — callers fall through
     /// to the inline API-key path.
-    async fn resolve_oauth_bearer(&self) -> Result<Option<String>> {
+    async fn resolve_stored_bearer(&self) -> Result<Option<String>> {
         // Cheap pre-check: no file means we can skip the lock + AS fetch.
         if !self.credentials_path.exists() {
             return Ok(None);
@@ -176,12 +176,15 @@ impl BitrouterCloudAuthApplier {
                 self.credentials_path.display()
             ))
         })?;
-        let Some(creds) = store.current().cloned() else {
+        let Some(credential) = store.current() else {
             return Ok(None);
         };
-        let metadata = self.resolve_metadata(&creds.authorization_server).await?;
+        let metadata = match credential.oauth() {
+            Some(creds) => Some(self.resolve_metadata(&creds.authorization_server).await?),
+            None => None,
+        };
         let token = store
-            .current_token(&self.refresh_client, &metadata)
+            .current_token(&self.refresh_client, metadata.as_ref())
             .await
             .map_err(|e| BitrouterError::Upstream {
                 status: 401,
@@ -198,7 +201,7 @@ impl AuthApplier for BitrouterCloudAuthApplier {
         mut request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
-        let bearer = match self.resolve_oauth_bearer().await? {
+        let bearer = match self.resolve_stored_bearer().await? {
             Some(token) => token,
             None => {
                 // Fall back to the inline api_key (filled from
@@ -240,7 +243,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::auth::credentials::{Credentials, CredentialsStore};
+    use crate::auth::credentials::{Credentials, CredentialsStore, StoredCredential};
 
     fn tmp_creds_path(label: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -262,6 +265,8 @@ mod tests {
             api_key: key.to_string(),
             api_protocol: ApiProtocol::ChatCompletions,
             chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -294,6 +299,24 @@ mod tests {
         let request = empty_request();
         let out = applier.apply(request, &target).await.unwrap();
         assert_eq!(bearer(&out).as_deref(), Some("Bearer brk_test.abc"));
+    }
+
+    #[tokio::test]
+    async fn applies_stored_api_key_without_metadata_discovery() {
+        let path = tmp_creds_path("stored-api-key");
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store
+            .save(StoredCredential::api_key(
+                "brk_stored.secret".to_owned(),
+                "https://unreachable.invalid".to_owned(),
+            ))
+            .unwrap();
+
+        let applier = BitrouterCloudAuthApplier::new(&path).unwrap();
+        let target = target_with_api_key("brk_inline.must-not-win");
+        let out = applier.apply(empty_request(), &target).await.unwrap();
+
+        assert_eq!(bearer(&out).as_deref(), Some("Bearer brk_stored.secret"));
     }
 
     #[tokio::test]
@@ -425,7 +448,13 @@ mod tests {
         // The rotated refresh token was persisted.
         let reloaded = CredentialsStore::load(&path).unwrap();
         assert_eq!(
-            reloaded.current().unwrap().refresh_token.as_deref(),
+            reloaded
+                .current()
+                .unwrap()
+                .oauth()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
             Some("rotated-rt")
         );
     }

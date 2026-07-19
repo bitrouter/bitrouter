@@ -80,7 +80,7 @@ Verify: `bitrouter --version`. If `command not found`, see `references/diagnose.
 
 ## 3. Run (Local only)
 
-BitRouter has no interactive setup wizard — onboarding is two commands.
+**Guided onboarding.** Bare `bitrouter` (no subcommand) is the front door: a network-free credential probe launches a scripted wizard (credentials → harness → launch/serve/exit) when nothing is configured, or prints a one-line status + `bitrouter launch` hint when it already is (never re-onboards, never auto-spawns). `bitrouter init` re-runs it; every prompt has a flag, so `bitrouter init --yes [flags]` runs headlessly, emits the JSON envelope, never blocks, and scaffolds the starter `bitrouter.yaml` (`--force` overwrites, `--reset` clears credentials first). `--yes` reports-and-skips anything needing interactive OAuth (bare `--cloud-login`, provider PKCE/device) in `providers_skipped_interactive`. The two commands below remain the fast path.
 
 **Zero-config (BYOK).** Export any of the supported env vars and start the daemon. It auto-enables every provider whose key is present.
 
@@ -122,7 +122,10 @@ bitrouter providers login claude-code       # Claude Pro/Max via Claude Code ses
 bitrouter providers login openai-codex      # ChatGPT/Codex subscription
 bitrouter providers login github-copilot    # browser device flow, token stored on disk
 bitrouter providers login supergrok         # SuperGrok via the Grok CLI session (~/.grok)
+bitrouter providers login google-ai         # Google AI (Antigravity) via the `agy` CLI keyring session
 ```
+
+Seed a BYOK provider (any that accepts a pasted key — `openai`, `anthropic`, `google`, `openrouter`, `opencode-*`) non-interactively with `--api-key sk-…` or `--key-stdin` (`printf %s "$KEY" | bitrouter providers login anthropic --key-stdin`). Both skip the method menu, conflict with the OAuth-only `--import-existing` / `--no-browser`, and error if the provider has no API-key method.
 
 ## 4. Connect your SDK
 
@@ -152,6 +155,9 @@ bitrouter mcp serve
 # streamable HTTP: cloud backend, multi-tenant — clients supply their own Bearer header
 # no --token on the server side; each MCP client sets "Authorization: Bearer brk_..." in its remote config
 bitrouter mcp serve --transport http
+
+# stdio: origin AgentSkills server (skills_search/skills_get over installed skills)
+bitrouter mcp serve --backend skills
 
 # print the Claude/Cursor mcpServers config block
 bitrouter mcp install --client claude
@@ -187,12 +193,13 @@ Read these on demand — don't load them all upfront.
 | `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
 | `references/updating.md` | `bitrouter update`, channels, package-manager delegation, the status nudge |
+| `references/orchestration.md` | Fleet orchestration — the `mcp serve --backend fleet` stdio bridge, spawn/prompt/status/diff/apply/merge/close tools, human-gated writes, task-phrasing rules |
 | `references/sessions.md` | Per-session ACP substrate — `acp serve\|prompt\|sessions`, NDJSON format, worktree retention, session records, one-agent-per-session, turn queue, identity, v1 limits |
 
 ## 7. Gotchas
 
 - **Always ask Local-or-Cloud first.** The default of "just install locally" is wrong for users who want managed billing — they should never install the daemon at all.
-- **Cloud sign-in is `bitrouter cloud login`.** Per-provider OAuth is `bitrouter providers login <provider>` (today: `claude-code`, `github-copilot`, `openai-codex`, and `supergrok`), not a top-level `login` command.
+- **Cloud sign-in is `bitrouter cloud login`.** Per-provider OAuth is `bitrouter providers login <provider>` (today: `claude-code`, `github-copilot`, `openai-codex`, `supergrok`, and `google-ai`), not a top-level `login` command.
 - **Cloud management is `bitrouter cloud …`.** After `bitrouter cloud login`, run `bitrouter cloud --help` for the subcommand index: `keys`, `usage`, `requests`, `billing`, `policy`, `budget`, `preset`, `byok`. Every leaf accepts `--json`.
 - **Local port: `127.0.0.1:4356`.** Old docs (and the upstream README) sometimes say 8787 — those are stale.
 - **Cloud endpoints:** `https://api.bitrouter.ai/v1` for the OpenAI shape; `https://api.bitrouter.ai` (no `/v1`) for the Anthropic SDK — same asymmetry as Local.

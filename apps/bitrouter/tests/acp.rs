@@ -81,7 +81,7 @@ async fn prompt_ndjson() {
             ..Default::default()
         },
     };
-    let result = bitrouter::acp_cli::prompt(ctx, "hello", false, &mut buf).await;
+    let result = bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf).await;
 
     let _ = std::env::set_current_dir(&orig_dir);
 
@@ -149,6 +149,131 @@ async fn prompt_ndjson() {
     assert_eq!(
         stop_reason, "end_turn",
         "expected snake_case end_turn stop_reason, got: {stop_reason}"
+    );
+    // Bare `spawn -p` (no --result-schema) stays byte-compatible: the result
+    // line must not grow contract fields.
+    for key in ["result", "schema_ok", "raw"] {
+        assert!(
+            last.get(key).is_none(),
+            "bare result line must not carry `{key}`: {last_line}"
+        );
+    }
+}
+
+// ── Test 1a: --result-schema contract ─────────────────────────────────────────
+
+/// Bash stub whose FIRST prompt reply violates the schema (`"ok": 3`) and
+/// whose second (the repair re-prompt) satisfies it — exercising the
+/// one-repair loop end to end.
+const REPAIR_STUB: &str = r#"
+    n=0
+    while read line; do
+      id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+      case "$line" in
+        *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+        *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+        *session/prompt*)
+          n=$((n+1))
+          if [ "$n" = 1 ]; then
+            printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"```json\\n{\\"ok\\": 3}\\n```"}}}}\n'
+          else
+            printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"```json\\n{\\"ok\\": true}\\n```"}}}}\n'
+          fi
+          printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+      esac
+    done
+"#;
+
+/// Stub that never produces JSON at all — both attempts fail, so the result
+/// line must report `schema_ok:false` + `result:null` + the raw text.
+const HOPELESS_STUB: &str = r#"
+    while read line; do
+      id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+      case "$line" in
+        *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+        *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+        *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"words, not JSON"}}}}\n';
+                          printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+      esac
+    done
+"#;
+
+fn stub_config_with(script: &str) -> Config {
+    let agent_cfg = AcpAgentConfig {
+        name: "stub".to_string(),
+        transport: AcpTransport::Stdio {
+            command: "bash".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            env: HashMap::new(),
+        },
+    };
+    let mut cfg = Config::default();
+    cfg.agents.insert("stub".to_string(), agent_cfg);
+    cfg
+}
+
+const OK_SCHEMA: &str =
+    r#"{"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"}}}"#;
+
+/// Run a `--result-schema` prompt against `script` and return the parsed
+/// terminal result line.
+async fn result_line_for(script: &str) -> serde_json::Value {
+    let base = tempfile::tempdir().expect("tempdir");
+    let orig_dir = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(base.path()).expect("set_current_dir");
+
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(script),
+        agent_id: "stub",
+        options: bitrouter::acp_cli::launch_options(None, false, false, None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let contract =
+        bitrouter::result_contract::ResultContract::from_flag(OK_SCHEMA).expect("valid schema");
+    let result =
+        bitrouter::acp_cli::prompt(ctx, "do the task", false, Some(contract), &mut buf).await;
+    let _ = std::env::set_current_dir(&orig_dir);
+    result.expect("prompt should succeed");
+
+    let output = String::from_utf8(buf).expect("valid utf8");
+    let last = output.lines().last().expect("at least one line");
+    serde_json::from_str(last).expect("terminal line is JSON")
+}
+
+#[tokio::test]
+async fn result_schema_repair_reprompt_recovers() {
+    let last = result_line_for(REPAIR_STUB).await;
+    assert_eq!(last["type"], "result");
+    assert_eq!(
+        last["schema_ok"], true,
+        "the repair re-prompt's valid reply must be accepted: {last}"
+    );
+    assert_eq!(last["result"], serde_json::json!({"ok": true}));
+    assert!(last.get("raw").is_none(), "no raw text on success: {last}");
+}
+
+#[tokio::test]
+async fn result_schema_failure_reports_raw_and_never_blocks() {
+    let last = result_line_for(HOPELESS_STUB).await;
+    assert_eq!(last["type"], "result");
+    assert_eq!(last["schema_ok"], false);
+    assert!(
+        last["result"].is_null(),
+        "result is null on failure: {last}"
+    );
+    assert!(
+        last["raw"]
+            .as_str()
+            .is_some_and(|r| r.contains("words, not JSON")),
+        "raw reply text surfaces so the orchestrator is never blocked: {last}"
     );
 }
 
@@ -767,7 +892,7 @@ async fn prompt_headless_denies_permission_and_completes() {
     // Bound the whole run: before the fix this hung forever.
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        bitrouter::acp_cli::prompt(ctx, "write it", false, &mut buf),
+        bitrouter::acp_cli::prompt(ctx, "write it", false, None, &mut buf),
     )
     .await;
 

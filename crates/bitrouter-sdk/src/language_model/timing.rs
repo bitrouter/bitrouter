@@ -60,8 +60,8 @@ impl FirstTokenKind {
 /// streamed output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FirstTokenTiming {
-    /// Elapsed provider time in milliseconds.
-    pub latency_ms: u64,
+    /// Time from the provider attempt start to first semantic output.
+    pub ttft_ms: u64,
     /// Which semantic delta arrived first.
     pub kind: FirstTokenKind,
 }

@@ -1102,8 +1102,8 @@ async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
                     stop_details: None,
                     provider_metadata: ProviderMetadata::new(),
                 },
-                latency_ms: 1,
-                generation_time_ms: 1,
+                request_duration_ms: 1,
+                upstream_duration_ms: Some(1),
                 server_tool_calls: Vec::new(),
             })
         }
@@ -1128,6 +1128,8 @@ async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
             api_key: "unused".to_string(),
             api_protocol: ApiProtocol::Responses,
             chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,

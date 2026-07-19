@@ -29,6 +29,38 @@ pub async fn refresh(
     client_id: &str,
     current: &OAuthToken,
 ) -> Result<OAuthToken, AuthCodeError> {
+    refresh_inner(client, token_endpoint, client_id, None, current).await
+}
+
+/// Like [`refresh`], but for a **confidential** OAuth client — includes
+/// `client_secret` in the grant. Google installed-app clients (e.g. the
+/// Antigravity `agy` CLI) require the secret even though it ships inside the
+/// binary; [`crate::antigravity`] extracts it from the local `agy` at runtime
+/// rather than embedding Google's secret here.
+pub async fn refresh_with_client_secret(
+    client: &reqwest::Client,
+    token_endpoint: &str,
+    client_id: &str,
+    client_secret: &str,
+    current: &OAuthToken,
+) -> Result<OAuthToken, AuthCodeError> {
+    refresh_inner(
+        client,
+        token_endpoint,
+        client_id,
+        Some(client_secret),
+        current,
+    )
+    .await
+}
+
+async fn refresh_inner(
+    client: &reqwest::Client,
+    token_endpoint: &str,
+    client_id: &str,
+    client_secret: Option<&str>,
+    current: &OAuthToken,
+) -> Result<OAuthToken, AuthCodeError> {
     if !token_endpoint.starts_with("https://") {
         return Err(AuthCodeError::InsecureEndpoint(token_endpoint.to_string()));
     }
@@ -41,11 +73,14 @@ pub async fn refresh(
                           `bitrouter providers login <provider>`"
                     .into(),
             })?;
-    let form = [
+    let mut form = vec![
         ("grant_type", "refresh_token"),
         ("client_id", client_id),
         ("refresh_token", refresh_token),
     ];
+    if let Some(secret) = client_secret {
+        form.push(("client_secret", secret));
+    }
     let response = client
         .post(token_endpoint)
         .header(reqwest::header::ACCEPT, "application/json")

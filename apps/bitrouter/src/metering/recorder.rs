@@ -120,8 +120,8 @@ impl SettlementRecorder for MeteringRecorder {
                 ReconciliationStatus::NotApplicable
             },
             estimated_charge_micro_usd,
-            latency_ms: ctx.latency_ms,
-            generation_time_ms: ctx.generation_time_ms,
+            latency_ms: ctx.request_duration_ms,
+            generation_time_ms: ctx.upstream_duration_ms.unwrap_or(0),
             streamed: ctx.streamed,
             error: ctx.error.as_ref().map(|e| e.to_string()),
         };

@@ -1337,6 +1337,47 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
             model.id, date
         ));
     }
+    if let Some(benchmarks) = &model.benchmarks {
+        validate_terminal_bench_2_1(&model.id, benchmarks.terminal_bench_2_1.as_ref(), issues);
+    }
+}
+
+/// Sanity-check any recorded Terminal-Bench 2.1 metrics. Every metric is
+/// optional (they stay absent until measured), so this only fires on values
+/// that are present and out of range — accuracy is a `0..=100` percent,
+/// cost/time are non-negative, and `as_of` is a calendar date.
+fn validate_terminal_bench_2_1(
+    model_id: &str,
+    tb: Option<&TerminalBench21>,
+    issues: &mut Vec<String>,
+) {
+    let Some(tb) = tb else { return };
+    if let Some(accuracy) = tb.accuracy
+        && !(0.0..=100.0).contains(&accuracy)
+    {
+        issues.push(format!(
+            "registry/models: model '{model_id}' terminal_bench_2_1.accuracy {accuracy} is outside 0..=100"
+        ));
+    }
+    for (field, value) in [
+        ("cost_per_task", tb.cost_per_task),
+        ("time_per_task", tb.time_per_task),
+    ] {
+        if let Some(value) = value
+            && value < 0.0
+        {
+            issues.push(format!(
+                "registry/models: model '{model_id}' terminal_bench_2_1.{field} {value} is negative"
+            ));
+        }
+    }
+    if let Some(date) = &tb.as_of
+        && !valid_yyyy_mm_dd(date)
+    {
+        issues.push(format!(
+            "registry/models: model '{model_id}' terminal_bench_2_1.as_of '{date}' is not YYYY-MM-DD"
+        ));
+    }
 }
 
 fn validate_provider<'a>(
@@ -1980,6 +2021,59 @@ struct CanonicalModel {
     open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    benchmarks: Option<Benchmarks>,
+}
+
+/// Independent-benchmark results for a canonical model, keyed by benchmark.
+/// Only the benchmarks BitRouter curates on (see `registry/README.md`) get a
+/// field here; the shape is extensible to the other curation benchmarks.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Benchmarks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_bench_2_1: Option<TerminalBench21>,
+}
+
+/// Terminal-Bench 2.1 results — 89 command-line agent tasks, all-or-nothing
+/// pytest scoring (Laude Institute / Stanford + the Terminal-Bench community).
+///
+/// The three metrics are **optional** and stay absent until measured: we
+/// populate them from our own runs of the open harness routed through BitRouter
+/// (`measured_by: bitrouter`), not from unverified numbers. The provenance
+/// fields are first-class on purpose — a benchmark score is meaningless without
+/// them, because the same model on the same benchmark version can differ by
+/// double-digit points across harness and reasoning-effort. `harness` + `config`
+/// pin a run so it is reproducible; `measured_by` + `source_url` keep a
+/// third-party citation from ever being mistaken for a BitRouter measurement.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalBench21 {
+    /// Score: percent of the 89 tasks passed (`0..=100`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accuracy: Option<f64>,
+    /// Average cost per task, in USD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cost_per_task: Option<f64>,
+    /// Average time per task, in minutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    time_per_task: Option<f64>,
+    /// Who produced the numbers: `bitrouter` for our own runs, otherwise the
+    /// third-party source (e.g. `artificial-analysis`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    measured_by: Option<String>,
+    /// Agent harness the run used (e.g. `terminus-2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    harness: Option<String>,
+    /// Reasoning-effort / configuration label the run used (e.g. `max`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config: Option<String>,
+    /// Citation URL when `measured_by` is a third party.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_url: Option<String>,
+    /// Snapshot date (`YYYY-MM-DD`) the numbers were recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    as_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2075,7 +2169,12 @@ struct ModelCompatibility {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChatCompletionsCompatibility {
-    token_limit_field: ChatTokenLimitField,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_limit_field: Option<ChatTokenLimitField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supports_store: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supports_stream_options: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -2092,6 +2191,9 @@ enum ApiProtocol {
     Anthropic,
     Google,
     Responses,
+    /// Google Antigravity Code Assist — a custom, externally-registered runtime
+    /// protocol (`bitrouter_providers::antigravity`). No models.dev source.
+    Antigravity,
 }
 
 impl ApiProtocol {
@@ -2101,6 +2203,7 @@ impl ApiProtocol {
             Self::Anthropic => "anthropic",
             Self::Google => "google",
             Self::Responses => "responses",
+            Self::Antigravity => "antigravity",
         }
     }
 
@@ -2110,6 +2213,9 @@ impl ApiProtocol {
             Self::Anthropic => "messages",
             Self::Google => "generate_content",
             Self::Responses => "responses",
+            // The runtime maps any unknown protocol string to `Custom(_)`; this
+            // is the name the antigravity adapter registers under.
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -2520,6 +2626,82 @@ api_base: https://api.acme.test/v1
         let ids: Vec<_> = loaded.models().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, vec!["acme/one", "acme/two"]);
         validate_loaded(&loaded).expect("grouped model file validates");
+    }
+
+    #[test]
+    fn canonical_model_parses_terminal_bench_and_validates() {
+        let yaml = r#"
+id: acme/one
+name: "Acme: One"
+input_modalities: [text]
+output_modalities: [text]
+benchmarks:
+  terminal_bench_2_1:
+    accuracy: 61.3
+    cost_per_task: 0.75
+    time_per_task: 4.35
+    measured_by: bitrouter
+    harness: terminus-2
+    config: max
+    as_of: 2026-07-17
+"#;
+        let model: CanonicalModel =
+            serde_saphyr::from_str(yaml).expect("parses terminal_bench_2_1 block");
+        let mut issues = Vec::new();
+        validate_canonical_model(&model, &mut issues);
+        assert!(issues.is_empty(), "unexpected issues: {issues:?}");
+
+        // Filled metrics survive the round-trip; unset fields are omitted.
+        let dist = serde_json::to_value(&model).unwrap();
+        let tb = &dist["benchmarks"]["terminal_bench_2_1"];
+        assert_eq!(tb["accuracy"], json!(61.3));
+        assert_eq!(tb["measured_by"], json!("bitrouter"));
+        assert!(
+            tb.get("source_url").is_none(),
+            "unset field must be omitted"
+        );
+    }
+
+    #[test]
+    fn canonical_model_terminal_bench_metrics_are_optional() {
+        // The shape ships now with metrics unfilled — this must parse + validate,
+        // and must not invent any metric into the dist output.
+        let yaml = r#"
+id: acme/two
+input_modalities: [text]
+output_modalities: [text]
+benchmarks:
+  terminal_bench_2_1: {}
+"#;
+        let model: CanonicalModel =
+            serde_saphyr::from_str(yaml).expect("empty terminal_bench_2_1 parses");
+        let mut issues = Vec::new();
+        validate_canonical_model(&model, &mut issues);
+        assert!(issues.is_empty(), "unexpected issues: {issues:?}");
+        let dist = serde_json::to_value(&model).unwrap();
+        assert_eq!(dist["benchmarks"]["terminal_bench_2_1"], json!({}));
+    }
+
+    #[test]
+    fn canonical_model_rejects_out_of_range_terminal_bench() {
+        let yaml = r#"
+id: acme/three
+input_modalities: [text]
+output_modalities: [text]
+benchmarks:
+  terminal_bench_2_1:
+    accuracy: 142.0
+    cost_per_task: -1.0
+    as_of: 07-2026
+"#;
+        let model: CanonicalModel = serde_saphyr::from_str(yaml).expect("parses");
+        let mut issues = Vec::new();
+        validate_canonical_model(&model, &mut issues);
+        assert_eq!(
+            issues.len(),
+            3,
+            "expected accuracy + cost + as_of issues: {issues:?}"
+        );
     }
 
     #[test]

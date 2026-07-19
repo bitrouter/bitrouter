@@ -130,7 +130,26 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     if let Some(existing) = config.providers.get_mut(id) {
         // Already in the config (user-written, zero-config, or a prior pass):
         // only fill what is unset; never overwrite a user's field.
-        if existing.class.is_none() {
+        //
+        // A subscription class also gates Strategy-3 auto-cascade entry in the
+        // routing table (a plain canonical request never silently bills a
+        // personal subscription). Implanting it into a provider the operator
+        // *fully hand-declared* (its own models AND its own credential) silently
+        // demotes it from routable to explicit-route-only, so the daemon 404s a
+        // canonical id that the local `bitrouter models` resolver — which does
+        // not run this merge — reports as routable. A full manual declaration is
+        // the operator's opt-in, so leave its class unset: it ranks last and
+        // joins the cascade like any user-declared provider. Stub declarations
+        // (empty models — e.g. the auto-enabled `claude-code` entry) still get
+        // classified, preserving the never-silently-bill guarantee. `models` is
+        // still the operator's here — it is filled from the registry just below.
+        let subscription = matches!(
+            class,
+            ProviderClass::FirstPartySubscription | ProviderClass::GatewaySubscription
+        );
+        let hand_declared = !existing.models.is_empty()
+            && (!existing.api_key.is_empty() || !existing.accounts.is_empty());
+        if existing.class.is_none() && !(subscription && hand_declared) {
             existing.class = Some(class);
         }
         if existing.models.is_empty() {
@@ -442,6 +461,63 @@ mod tests {
         // community wins even if (oddly) flagged subscription.
         reseller.billing = Billing::Subscription;
         assert_eq!(classify(&reseller), ProviderClass::ThirdPartyApi);
+    }
+
+    #[test]
+    fn hand_declared_subscription_keeps_class_unset() {
+        // A subscription provider the operator FULLY hand-declared (own models +
+        // own credential) must keep `class: None`, so it joins the canonical
+        // auto-cascade instead of being demoted to explicit-route-only. Without
+        // this, the daemon (which runs the merge) 404s a canonical id that the
+        // local `bitrouter models` resolver (which does not) reports routable.
+        let mut sub = provider("mysub");
+        sub.billing = Billing::Subscription;
+        let hand_models = build_models(&sub);
+        assert!(!hand_models.is_empty());
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "mysub".to_string(),
+            ProviderConfig {
+                api_key: "sub-oauth-placeholder".to_string(),
+                active: true,
+                models: hand_models,
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut config, &data_with(vec![sub], vec![]));
+
+        let merged = &config.providers["mysub"];
+        assert_eq!(
+            merged.class, None,
+            "a fully hand-declared subscription provider opts into the cascade"
+        );
+        assert!(!merged.models.is_empty(), "its own models are preserved");
+    }
+
+    #[test]
+    fn stub_subscription_still_classified() {
+        // A stub subscription entry (empty models — e.g. the auto-enabled
+        // `claude-code`) is still classified, preserving the guarantee that a
+        // plain canonical request never silently bills a personal subscription.
+        let mut sub = provider("mysub2");
+        sub.billing = Billing::Subscription;
+
+        let mut config = Config::default();
+        config.providers.insert(
+            "mysub2".to_string(),
+            ProviderConfig {
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut config, &data_with(vec![sub], vec![]));
+
+        assert_eq!(
+            config.providers["mysub2"].class,
+            Some(ProviderClass::FirstPartySubscription),
+            "a stub subscription provider is still classified"
+        );
     }
 
     #[test]

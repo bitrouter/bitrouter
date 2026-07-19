@@ -3,6 +3,7 @@
   "icon": "Map",
   "defaultOpen": false,
   "pages": [
+    "cloud-api",
     "---Development---",
     "build-a-plugin",
     "self-host",

@@ -1,7 +1,9 @@
 //! Per-session ACP substrate — one session, one agent.
+pub mod dotdir;
 pub mod down;
 pub mod engine;
 pub mod executor;
+pub mod fleet;
 pub mod record;
 pub mod session;
 pub mod telemetry;

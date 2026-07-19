@@ -15,7 +15,7 @@ It runs anywhere your agent runs, with no dependencies to install, and is operat
 An agentic loop consumes three things. Most routers govern only the first — BitRouter makes all three routable, observable, and governed:
 
 - **Models** — route LLM calls across providers, accounts, and wire protocols (OpenAI, Anthropic, Google). See [Models](/docs/concepts/models).
-- **Tools** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources, not hardcoded endpoints. See [Tools](/docs/concepts/tools).
+- **Capabilities** — an **MCP gateway** and an **AgentSkills gateway**: tools and skills become governed, routable resources, not hardcoded endpoints. See [Tools](/docs/concepts/tools).
 - **Agents** — an **ACP gateway**: sub-agents are first-class routable primitives, so a task can go to the sub-agent that best fits the objective — just as a call routes to the best-fit model. See [Agents](/docs/concepts/agents).
 
 Optimizing a loop isn't just model selection — it's the model, the tool, *and* the sub-agent that best serve the loop's objective. Each loop gets a [policy](/docs/concepts/policy) that BitRouter tunes from live signal through a continuous act → observe → evaluate → learn loop, so it improves the longer it runs. Cost is what it optimizes today; latency and accuracy are next.

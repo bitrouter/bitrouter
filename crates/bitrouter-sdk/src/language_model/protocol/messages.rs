@@ -1027,9 +1027,9 @@ impl InboundAdapter for MessagesAdapter {
         // translates across protocols (the v0 #547 bug: Anthropic's object form
         // reaching an OpenAI upstream verbatim). Unmapped shapes stay in `extra`.
         // Anthropic nests parallel-tool control inside the object as
-        // `disable_parallel_tool_use`; the parser lifts it to the top-level
-        // `parallel_tool_calls` in `extra` so it survives the round-trip.
-        let tool_choice = parse_messages_tool_choice(&mut extra);
+        // `disable_parallel_tool_use`; promote its inverse into the canonical
+        // parallel-tool slot so it can translate across protocols.
+        let (tool_choice, parallel_tool_calls) = parse_messages_tool_choice(&mut extra);
 
         Ok(Prompt {
             model: req.model,
@@ -1050,6 +1050,11 @@ impl InboundAdapter for MessagesAdapter {
                 stop: req.stop_sequences.unwrap_or_default(),
                 presence_penalty: None,
                 frequency_penalty: None,
+                store: None,
+                parallel_tool_calls,
+                chat_stream_options: None,
+                extra_protocol: Some(ApiProtocol::Messages),
+                supplemental_extra: std::collections::HashMap::new(),
                 extra,
             },
             response_format,
@@ -1121,6 +1126,11 @@ impl OutboundAdapter for MessagesAdapter {
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
+        if prompt.params.store == Some(true) {
+            return Err(BitrouterError::bad_request(
+                "store: true cannot be honored by a Messages upstream",
+            ));
+        }
         let mut messages = Vec::new();
         for m in &prompt.messages {
             messages.push(render_message(m));
@@ -1185,8 +1195,7 @@ impl OutboundAdapter for MessagesAdapter {
         // <https://platform.claude.com/docs/en/build-with-claude/effort>
         let mut output_config = prompt
             .params
-            .extra
-            .get("output_config")
+            .extra_value_for_protocol(&ApiProtocol::Messages, "output_config")
             .and_then(|v| v.as_object())
             .cloned()
             .unwrap_or_default();
@@ -1206,11 +1215,7 @@ impl OutboundAdapter for MessagesAdapter {
         // nests parallel-tool control inside the object, so fold the
         // protocol-neutral top-level `parallel_tool_calls` (the shape every other
         // protocol uses) back into `disable_parallel_tool_use` here.
-        let parallel_tool_calls = prompt
-            .params
-            .extra
-            .get("parallel_tool_calls")
-            .and_then(|v| v.as_bool());
+        let parallel_tool_calls = prompt.params.parallel_tool_calls;
         if prompt.tool_choice.is_some() || parallel_tool_calls.is_some() {
             let mut tc = match &prompt.tool_choice {
                 Some(tc) => render_messages_tool_choice(tc),
@@ -1235,14 +1240,9 @@ impl OutboundAdapter for MessagesAdapter {
         if !prompt.params.stop.is_empty() {
             req.insert("stop_sequences".into(), prompt.params.stop.clone().into());
         }
-        // Splat anthropic-specific extras (metadata, thinking, …) back into
-        // the outbound request. `parallel_tool_calls` is skipped — it was folded
-        // into `tool_choice` above, and Anthropic has no top-level field for it.
-        // Typed fields win over same-named extras.
-        for (k, v) in &prompt.params.extra {
-            if k == "parallel_tool_calls" {
-                continue;
-            }
+        // Splat Anthropic-specific extras (metadata, thinking, …) only for a
+        // native round trip. Typed fields win over same-named extras.
+        for (k, v) in prompt.params.extras_for_protocol(&ApiProtocol::Messages) {
             req.entry(k.clone()).or_insert_with(|| v.clone());
         }
         req.insert("stream".into(), prompt.stream.into());
@@ -1449,16 +1449,17 @@ fn render_messages_response_format(rf: &ResponseFormat) -> serde_json::Value {
 /// Promote an Anthropic `tool_choice` into the canonical [`ToolChoice`], removing
 /// it from `extra` when it maps to a known shape. Unmapped shapes are left
 /// untouched so they pass through opaquely. Anthropic nests parallel-tool control
-/// inside the object as `disable_parallel_tool_use`; lift it to the
-/// protocol-neutral top-level `parallel_tool_calls` (the shape every other
-/// protocol uses) so it survives translation rather than being dropped with the
-/// consumed object.
+/// inside the object as `disable_parallel_tool_use`; return its inverse for the
+/// canonical parallel-tool slot so it survives translation rather than being
+/// dropped with the consumed object.
 /// <https://docs.anthropic.com/en/api/messages> → `tool_choice`.
 fn parse_messages_tool_choice(
     extra: &mut std::collections::HashMap<String, serde_json::Value>,
-) -> Option<ToolChoice> {
+) -> (Option<ToolChoice>, Option<bool>) {
     let (parsed, disable_parallel) = {
-        let obj = extra.get("tool_choice").and_then(|v| v.as_object())?;
+        let Some(obj) = extra.get("tool_choice").and_then(|v| v.as_object()) else {
+            return (None, None);
+        };
         let parsed = match obj.get("type").and_then(|t| t.as_str()) {
             Some("auto") => Some(ToolChoice::Auto),
             Some("any") => Some(ToolChoice::Required),
@@ -1477,12 +1478,12 @@ fn parse_messages_tool_choice(
         (parsed, disable_parallel)
     };
     if parsed.is_some() {
-        if let Some(disable) = disable_parallel {
-            extra.insert("parallel_tool_calls".to_string(), (!disable).into());
-        }
         extra.remove("tool_choice");
     }
-    parsed
+    let parallel_tool_calls = parsed
+        .as_ref()
+        .and(disable_parallel.map(|disable| !disable));
+    (parsed, parallel_tool_calls)
 }
 
 /// Render the canonical [`ToolChoice`] into Anthropic's native `tool_choice`

@@ -1966,17 +1966,6 @@
         },
         {
           "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "tools"
-          ],
-          "provider": "google-ai",
-          "provider_model_id": "gemini-3.1-flash-lite-preview"
-        },
-        {
-          "api_protocol": [
             "openai",
             "responses",
             "anthropic"
@@ -2072,18 +2061,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "google-ai",
-          "provider_model_id": "gemini-3.1-pro-preview"
         },
         {
           "api_protocol": [
@@ -2183,18 +2160,6 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
-        },
-        {
-          "api_protocol": [
-            "google",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "google-ai",
-          "provider_model_id": "gemini-3.5-flash"
         },
         {
           "api_protocol": "openai",
@@ -3540,18 +3505,6 @@
         },
         {
           "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "moonshotai_coding_plan",
-          "provider_model_id": "kimi-for-coding",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.16,
@@ -3894,6 +3847,98 @@
         }
       ],
       "release_date": "2026-06-12"
+    },
+    {
+      "family": "kimi-k3",
+      "id": "moonshotai/kimi-k3",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 131072,
+      "name": "Kimi: K3",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "moonshotai",
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "provider": "moonshotai_coding_plan",
+          "provider_model_id": "kimi-for-coding",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "kimi-k3"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "moonshotai/kimi-k3"
+        }
+      ],
+      "release_date": "2026-07-16"
     },
     {
       "family": "gpt",
@@ -4365,6 +4410,27 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-5.6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
               "no_cache": 1.0
             },
             "output_tokens": {
@@ -4511,6 +4577,27 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-5.6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
               "no_cache": 5.0
             },
             "output_tokens": {
@@ -4649,6 +4736,27 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-5.6-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": [
             "openai",
@@ -5762,6 +5870,24 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.04,
+              "cache_write": 0.0,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.15
+            }
+          },
+          "provider": "ambient",
+          "provider_model_id": "stepfun/step-3.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.03,
               "no_cache": 0.15
             },
@@ -6292,6 +6418,11 @@
           },
           "provider": "bitrouter",
           "provider_model_id": "x-ai/grok-4.5"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "grok-4.5"
         },
         {
           "api_protocol": "openai",

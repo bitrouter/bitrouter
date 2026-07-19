@@ -14,7 +14,7 @@ use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::timing::FirstTokenKind;
-use crate::language_model::types::{RoutingTarget, UsageOrigin};
+use crate::language_model::types::{FinishReason, RoutingTarget, UsageOrigin};
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries
 /// pipeline-observed data only — no charging / funding fields. Deployments
@@ -65,15 +65,19 @@ pub struct SettlementContext {
     pub server_tool_calls: Vec<crate::language_model::types::ServerToolCall>,
     /// Whether the request was streamed.
     pub streamed: bool,
-    /// End-to-end latency in milliseconds.
-    pub latency_ms: u64,
-    /// Upstream generation time in milliseconds.
-    pub generation_time_ms: u64,
+    /// End-to-end request duration in milliseconds.
+    pub request_duration_ms: u64,
+    /// Time spent in the final provider-facing operation.
+    pub upstream_duration_ms: Option<u64>,
     /// Time from the successful provider attempt start to the first semantic
     /// stream delta.
-    pub first_token_latency_ms: Option<u64>,
+    pub ttft_ms: Option<u64>,
+    /// Time from the first to the last semantic stream delta.
+    pub generation_duration_ms: Option<u64>,
     /// Kind of the first semantic stream delta.
     pub first_token_kind: Option<FirstTokenKind>,
+    /// Canonical reason a successful generation ended.
+    pub finish_reason: Option<FinishReason>,
     /// The error, if the request failed (Settlement still runs).
     pub error: Option<BitrouterError>,
     /// Events carried over from the request lifecycle (so recorders can
@@ -151,10 +155,12 @@ mod tests {
             media_output_count: 0,
             server_tool_calls: Vec::new(),
             streamed: false,
-            latency_ms: 0,
-            generation_time_ms: 0,
-            first_token_latency_ms: None,
+            request_duration_ms: 0,
+            upstream_duration_ms: None,
+            ttft_ms: None,
+            generation_duration_ms: None,
             first_token_kind: None,
+            finish_reason: None,
             error: None,
             events: EventBus::default(),
         }

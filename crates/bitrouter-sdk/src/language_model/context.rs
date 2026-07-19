@@ -12,10 +12,12 @@ use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
-use crate::language_model::timing::{FirstTokenKind, FirstTokenTiming, elapsed_millis};
+use crate::language_model::timing::{
+    FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
+};
 use crate::language_model::types::{
-    ApiProtocol, Content, ExecutionResult, PipelineRequest, PipelineResponse, Prompt,
-    RoutingTarget, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, FinishReason, PipelineRequest,
+    PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -84,7 +86,8 @@ pub struct PipelineContext {
     pub execution_result: Option<ExecutionResult>,
     stream_provider_started_at: Option<Instant>,
     first_token_timing: Option<FirstTokenTiming>,
-    finalized_request_latency_ms: Option<u64>,
+    generation_duration_ms: Option<u64>,
+    finalized_request_duration_ms: Option<u64>,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -125,7 +128,8 @@ impl PipelineContext {
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
-            finalized_request_latency_ms: None,
+            generation_duration_ms: None,
+            finalized_request_duration_ms: None,
             metadata: HashMap::new(),
             extensions: Extensions::default(),
             events: EventBus::new(),
@@ -151,7 +155,8 @@ impl PipelineContext {
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
-            finalized_request_latency_ms: None,
+            generation_duration_ms: None,
+            finalized_request_duration_ms: None,
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
             events: self.events.clone(),
@@ -192,39 +197,44 @@ impl PipelineContext {
         self.stream_provider_started_at = Some(started_at);
     }
 
-    pub(crate) fn finalize_request_latency(&mut self) {
-        let latency_ms = elapsed_millis(self.request_started_at);
-        self.finalized_request_latency_ms = Some(latency_ms);
+    pub(crate) fn finalize_request_duration(&mut self) {
+        let request_duration_ms = elapsed_millis(self.request_started_at);
+        self.finalized_request_duration_ms = Some(request_duration_ms);
         if let Some(result) = self.execution_result.as_mut() {
-            result.latency_ms = latency_ms;
+            result.request_duration_ms = request_duration_ms;
         }
     }
 
-    /// End-to-end request time in milliseconds. Once settlement begins this is
+    /// End-to-end request duration in milliseconds. Once settlement begins this is
     /// the finalized value; before then it is the current elapsed duration.
-    pub fn request_latency_ms(&self) -> u64 {
-        self.finalized_request_latency_ms
+    pub fn request_duration_ms(&self) -> u64 {
+        self.finalized_request_duration_ms
             .or_else(|| {
                 self.execution_result
                     .as_ref()
-                    .map(|result| result.latency_ms)
-                    .filter(|latency| *latency > 0)
+                    .map(|result| result.request_duration_ms)
+                    .filter(|duration| *duration > 0)
             })
             .unwrap_or_else(|| elapsed_millis(self.request_started_at))
     }
 
-    pub(crate) fn finalize_stream_generation_time(&mut self) {
+    pub(crate) fn finalize_stream_upstream_duration(&mut self) {
         let Some(provider_started_at) = self.stream_provider_started_at else {
             return;
         };
         if let Some(result) = self.execution_result.as_mut() {
-            result.generation_time_ms = elapsed_millis(provider_started_at);
+            result.upstream_duration_ms = Some(elapsed_millis(provider_started_at));
         }
     }
 
     /// The first semantic output timing captured for a streamed request.
     pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
         self.first_token_timing
+    }
+
+    /// Time from the first to the last semantic stream delta.
+    pub fn generation_duration_ms(&self) -> Option<u64> {
+        self.generation_duration_ms
     }
 
     /// Store outbound HTTP headers for the next upstream request. The
@@ -297,10 +307,11 @@ impl PipelineContext {
 
     /// Apply preset prompt-body overrides. `system_prompt`, when
     /// present, replaces the prompt's system; `params` is shallow-merged into
-    /// the prompt's `params.extra` so provider-specific knobs survive. Already-
-    /// set request fields take precedence — a preset is a *default*, not an
-    /// override of an explicit request value (except for `system` which has
-    /// no merging surface).
+    /// the prompt's supplemental params so provider-specific knobs survive
+    /// without inheriting the inbound wire's ownership. Already-set request
+    /// fields take precedence — a preset is a *default*, not an override of an
+    /// explicit request value (except for `system` which has no merging
+    /// surface).
     pub fn apply_preset_overrides(
         &mut self,
         overrides: &crate::language_model::routing::PromptOverrides,
@@ -316,9 +327,47 @@ impl PipelineContext {
         }
         for (k, v) in &overrides.params {
             // Don't clobber an explicit request value; presets are defaults.
+            if self.prompt.params.extra.contains_key(k) {
+                continue;
+            }
+
+            // Promote the protocol fields normalized by inbound adapters into
+            // the same typed slots when they come from a preset. Otherwise a
+            // preset `store: true`, for example, could bypass the cross-wire
+            // safety checks by remaining an untyped supplemental field.
+            match k.as_str() {
+                "store" => {
+                    if self.prompt.params.store.is_none() {
+                        self.prompt.params.store = v.as_bool();
+                    }
+                    if self.prompt.params.store.is_some() {
+                        continue;
+                    }
+                }
+                "parallel_tool_calls" => {
+                    if self.prompt.params.parallel_tool_calls.is_none() {
+                        self.prompt.params.parallel_tool_calls = v.as_bool();
+                    }
+                    if self.prompt.params.parallel_tool_calls.is_some() {
+                        continue;
+                    }
+                }
+                "stream_options" => {
+                    if self.prompt.params.chat_stream_options.is_none()
+                        && let Ok(options) = serde_json::from_value::<ChatStreamOptions>(v.clone())
+                    {
+                        self.prompt.params.chat_stream_options = Some(options);
+                    }
+                    if self.prompt.params.chat_stream_options.is_some() {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+
             self.prompt
                 .params
-                .extra
+                .supplemental_extra
                 .entry(k.clone())
                 .or_insert_with(|| v.clone());
         }
@@ -415,6 +464,9 @@ impl PipelineContext {
             final_usage: None,
             provider_started_at: self.stream_provider_started_at,
             first_token_timing: self.first_token_timing,
+            first_semantic_at: None,
+            generation_duration_ms: None,
+            finish_reason: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
@@ -426,10 +478,14 @@ impl PipelineContext {
     /// Fold a finished `StreamContext` back in: usage lands in the execution
     /// result, stream-stage events are merged.
     pub fn absorb_stream(&mut self, stream: StreamContext) {
-        if let (Some(exec), Some(usage)) = (self.execution_result.as_mut(), stream.final_usage) {
-            exec.result.usage = Some(usage);
+        if let Some(exec) = self.execution_result.as_mut() {
+            if let Some(usage) = stream.final_usage {
+                exec.result.usage = Some(usage);
+            }
+            exec.result.finish_reason = stream.finish_reason.clone();
         }
         self.first_token_timing = stream.first_token_timing;
+        self.generation_duration_ms = stream.generation_duration_ms;
         self.events.merge_from(stream.events);
     }
 
@@ -486,10 +542,12 @@ impl PipelineContext {
                 .map(|e| e.server_tool_calls.clone())
                 .unwrap_or_default(),
             streamed: false,
-            latency_ms: self.request_latency_ms(),
-            generation_time_ms: exec.map(|e| e.generation_time_ms).unwrap_or(0),
-            first_token_latency_ms: self.first_token_timing.map(|timing| timing.latency_ms),
+            request_duration_ms: self.request_duration_ms(),
+            upstream_duration_ms: exec.and_then(|e| e.upstream_duration_ms),
+            ttft_ms: self.first_token_timing.map(|timing| timing.ttft_ms),
+            generation_duration_ms: self.generation_duration_ms,
             first_token_kind: self.first_token_timing.map(|timing| timing.kind),
+            finish_reason: exec.and_then(|e| e.result.finish_reason.clone()),
             error: None,
             events: std::mem::take(&mut self.events),
         }
@@ -558,31 +616,64 @@ pub struct StreamContext {
     pub final_usage: Option<Usage>,
     provider_started_at: Option<Instant>,
     first_token_timing: Option<FirstTokenTiming>,
+    first_semantic_at: Option<Instant>,
+    generation_duration_ms: Option<u64>,
+    finish_reason: Option<FinishReason>,
     events: EventBus,
     metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
 }
 
 impl StreamContext {
-    pub(crate) fn observe_first_token(&mut self, part: &StreamPart) {
-        if self.first_token_timing.is_some() {
-            return;
+    pub(crate) fn observe_upstream_part(&mut self, part: &StreamPart) {
+        match part {
+            StreamPart::Finish { reason } => {
+                self.finish_reason = Some(reason.clone());
+            }
+            StreamPart::ResponseCompleted { status, .. } => {
+                self.finish_reason = Some(match status.as_str() {
+                    "completed" => FinishReason::Stop,
+                    "incomplete" => FinishReason::Length,
+                    other => FinishReason::Other(other.to_string()),
+                });
+            }
+            _ => {}
         }
+
         let Some(provider_started_at) = self.provider_started_at else {
             return;
         };
         let Some(kind) = FirstTokenKind::from_part(part) else {
             return;
         };
-        self.first_token_timing = Some(FirstTokenTiming {
-            latency_ms: elapsed_millis(provider_started_at),
-            kind,
-        });
+        let observed_at = Instant::now();
+        if let Some(first_semantic_at) = self.first_semantic_at {
+            self.generation_duration_ms = Some(duration_millis(
+                observed_at.duration_since(first_semantic_at),
+            ));
+        } else {
+            self.first_semantic_at = Some(observed_at);
+            self.first_token_timing = Some(FirstTokenTiming {
+                ttft_ms: duration_millis(observed_at.duration_since(provider_started_at)),
+                kind,
+            });
+            self.generation_duration_ms = Some(0);
+        }
     }
 
     /// The first semantic output timing captured so far.
     pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
         self.first_token_timing
+    }
+
+    /// Time from the first to the most recent semantic stream delta.
+    pub fn generation_duration_ms(&self) -> Option<u64> {
+        self.generation_duration_ms
+    }
+
+    /// Canonical terminal reason observed from the upstream stream.
+    pub fn finish_reason(&self) -> Option<&FinishReason> {
+        self.finish_reason.as_ref()
     }
 
     /// Emit a typed event from within the StreamHook stage.
@@ -678,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_preset_overrides_merges_into_params_extra_without_clobbering() {
+    fn apply_preset_overrides_merges_into_supplemental_params_without_clobbering() {
         let mut prompt = empty_prompt();
         prompt
             .params
@@ -697,7 +788,39 @@ mod tests {
 
         // Existing key kept; new key filled in.
         assert_eq!(ctx.prompt().params.extra["temperature"], 0.7);
-        assert_eq!(ctx.prompt().params.extra["top_k"], 40);
+        assert_eq!(ctx.prompt().params.supplemental_extra["top_k"], 40);
+    }
+
+    #[test]
+    fn apply_preset_overrides_promotes_normalized_protocol_fields() {
+        let mut prompt = empty_prompt();
+        prompt.params.store = Some(false);
+        let mut ctx = ctx_from_prompt(prompt);
+
+        let overrides = PromptOverrides {
+            system_prompt: None,
+            params: serde_json::Map::from_iter([
+                ("store".to_string(), true.into()),
+                ("parallel_tool_calls".to_string(), false.into()),
+                (
+                    "stream_options".to_string(),
+                    serde_json::json!({"include_obfuscation": false}),
+                ),
+            ]),
+        };
+        ctx.apply_preset_overrides(&overrides);
+
+        assert_eq!(ctx.prompt().params.store, Some(false));
+        assert_eq!(ctx.prompt().params.parallel_tool_calls, Some(false));
+        assert_eq!(
+            ctx.prompt()
+                .params
+                .chat_stream_options
+                .as_ref()
+                .and_then(|options| options.include_obfuscation),
+            Some(false)
+        );
+        assert!(ctx.prompt().params.supplemental_extra.is_empty());
     }
 
     #[test]
@@ -706,6 +829,7 @@ mod tests {
         ctx.apply_preset_overrides(&PromptOverrides::default());
         assert!(ctx.prompt().system.is_none());
         assert!(ctx.prompt().params.extra.is_empty());
+        assert!(ctx.prompt().params.supplemental_extra.is_empty());
     }
 
     #[test]
@@ -937,8 +1061,8 @@ mod tests {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
-            latency_ms: 1,
-            generation_time_ms: 1,
+            request_duration_ms: 1,
+            upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
         });
 

@@ -329,6 +329,40 @@ it ships as a fast-follow. Until then pi spawns with a
 `routing unavailable — synthesize PI_CODING_AGENT_DIR manually` warning
 (§8), i.e. today's behavior, not a regression.
 
+> **Shipped for the interactive facet** (`Routing::PiConfigDir`,
+> `Harness::orchestrator_overlay`): the `bitrouter tui` orchestrator and
+> attach synthesize `models.json` (model list from the daemon's
+> `/v1/models`) and select `--provider bitrouter --model <id>`; the model
+> default rides the CLI flag rather than a `settings.json`. The same
+> mechanism also routes **opencode** (`Routing::OpencodeConfig`, one
+> synthesized `OPENCODE_CONFIG` JSON carrying provider + default model +
+> MCP). Headless `spawn` still launches both direct with a note — wiring
+> the synthesis into the ACP facet remains the v1.1 follow-up.
+>
+> The catalog also carries two **interactive-only, own-auth** harnesses
+> (`Routing::OwnAuth`, `acp_command: None`): `grok` (xAI Grok CLI) and
+> `antigravity` (Google's `agy`). They are subscription clients whose
+> sessions the daemon borrows as providers (`supergrok` / `google-ai`), so
+> redirecting them would loop back to the same backend — they launch with
+> their own auth and `--model` forwards natively.
+>
+> **Shipped 2026-07-14, two more config-synthesis harnesses**: `hermes-acp`
+> (Nous Hermes Agent — native `hermes acp`, ACP v1 with loadSession;
+> `Routing::HermesHome` synthesizes a `HERMES_HOME/config.yaml` with a
+> loopback `custom` provider — hermes trusts loopback custom endpoints —
+> plus `mcp_servers:` fleet injection, credential via `CUSTOM_API_KEY`) and
+> `openclaw` (OpenClaw's gateway ACP bridge `openclaw acp`;
+> `Routing::OpenclawProfile` synthesizes an isolated profile —
+> `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`, `openclaw.json` with a
+> `bitrouter` provider — and the interactive facet runs the embedded
+> runtime `tui --local`; the ACP facet auto-starts the profile's gateway,
+> which **outlives the spawn** — a daemon, by openclaw's design). Headless
+> spawn: direct-with-note like opencode/pi; exporting the synthesized env
+> manually routes both (verified live: `pong` through the daemon in all
+> four facets). OpenClaw caveat: gateway sessions are workspace-scoped via
+> `agents add --workspace`, not process-cwd-scoped — per-worktree agent
+> provisioning is the follow-up for review-queue isolation.
+
 ### 6.5 ACP-native gateway auth (noted for phase 2)
 
 claude-code-acp and gemini-cli both expose a first-class ACP `gateway` auth
@@ -439,13 +473,17 @@ env/args overlay through `LaunchOptions` (the apps layer computes it; the
 substrate stays routing-agnostic); (c) route all credential choice through
 the single §5.4 resolver. (a) and (b) are required for §5 anyway.
 
-## 11. MCP follow-up (out of scope, direction locked)
+## 11. MCP follow-up (shipped — names as landed)
 
-`bitrouter mcp serve` later gains `spawn_subagent` / `prompt_session` /
-`session_status` tools over the same launch path, adding what CLI/NDJSON
-cannot: relaying sub-agent permission requests to the orchestrator as tool
-results instead of headless deny-all. Nothing in v1 may assume the caller is
-a shell (hence the structured `session` NDJSON line, not stderr prose).
+**Shipped** as `bitrouter mcp serve --backend fleet` (TUI_SPEC §4): the tools
+landed as `spawn_subagent` / `prompt_subagent` / `subagent_status` /
+`subagent_diff` / `apply_subagent` / `merge_subagent` / `close_subagent` over
+the same launch path. Permission relaying landed with a different escalation
+home than sketched here: instead of tool-result relays to the orchestrator,
+a TUI-linked bridge routes gated requests to the **human's decision queue**
+over the fleet socket (TUI_SPEC §5); a headless bridge auto-denies high risk,
+logged. Nothing in v1 may assume the caller is a shell (hence the structured
+`session` NDJSON line, not stderr prose).
 
 ## 12. Migration & lockstep checklist
 

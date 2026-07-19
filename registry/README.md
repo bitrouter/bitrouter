@@ -83,6 +83,36 @@ Source lives in two places; `dist/registry/` is generated — never hand-edit it
   beyond the curated catalog** (BYOK / BYO-subscription extras) — those are
   allowed and surface as non-failing *advisories*, not errors.
 
+### Model benchmarks
+
+A model may carry a `benchmarks:` block recording independent-benchmark
+results, keyed by benchmark. Today that is **Terminal-Bench 2.1**; the shape is
+extensible so the other curation benchmarks can follow.
+
+```yaml
+- id: openai/gpt-5.6-sol
+  # …other model fields…
+  benchmarks:
+    terminal_bench_2_1:
+      accuracy: 88.0        # % of the 89 tasks passed (0–100)
+      cost_per_task: 0.75   # USD, average per task
+      time_per_task: 4.35   # minutes, average per task
+      measured_by: bitrouter        # `bitrouter`, or a third-party source name
+      harness: terminus-2           # agent harness the run used
+      config: max                   # reasoning-effort / config label
+      as_of: 2026-07-17             # snapshot date (YYYY-MM-DD)
+      source_url: https://…         # required when `measured_by` is a third party
+```
+
+The three metrics are **optional and provenance-first**. A raw score is
+meaningless on its own — the same model on the same benchmark version swings by
+double digits across harness and reasoning-effort — so `harness` + `config` pin
+a run for reproducibility, and `measured_by` (with `source_url`) keeps a cited
+third-party number from being mistaken for one we ran. Per the "omit what you
+can't verify" rule above, **leave the metrics unset until measured**: we fill
+them from our own Terminal-Bench 2.1 runs (the open harness routed through
+BitRouter, `measured_by: bitrouter`), not from unverified figures.
+
 ### Provider variants — one file per distinct endpoint
 
 A provider file is **one routable endpoint with its own commercial terms**, not a

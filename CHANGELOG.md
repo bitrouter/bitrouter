@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.27](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.26...v1.0.0-alpha.27)
+
+
+### ⛰️ Features
+
+- *(sdk)* Clarify request timing metrics ([#738](https://github.com/bitrouter/bitrouter/pull/738)) - ([a5b0730](https://github.com/bitrouter/bitrouter/commit/a5b073078c38c4d449b872cd1fb43fed9cc0bd78))
+- *(tui)* Scrollable PTY panes (host scrollback + mouse forwarding) ([#734](https://github.com/bitrouter/bitrouter/pull/734)) - ([9eb1186](https://github.com/bitrouter/bitrouter/commit/9eb1186a011dd2f5036d3c9964572ee6604fabe2))
+- *(tui)* Wire MCP and skills gateways into harnesses ([#732](https://github.com/bitrouter/bitrouter/pull/732)) - ([b199653](https://github.com/bitrouter/bitrouter/commit/b1996539706991407a1e5f1dc67ab59bf951f80a))
+- *(tui)* Composite manager  ([#715](https://github.com/bitrouter/bitrouter/pull/715)) - ([7a72dff](https://github.com/bitrouter/bitrouter/commit/7a72dfffc997d9b7becc1cf2f77fc57573674f23))
+
+### 🐛 Bug Fixes
+
+- *(fleet)* Non-blocking spawn/prompt so long turns don't time out ([#737](https://github.com/bitrouter/bitrouter/pull/737)) - ([84c1e99](https://github.com/bitrouter/bitrouter/commit/84c1e992fdebf7b9379caaeecfc6cfb19c581023))
+- *(sdk)* Isolate protocol request extras ([#733](https://github.com/bitrouter/bitrouter/pull/733)) - ([dffc9a9](https://github.com/bitrouter/bitrouter/commit/dffc9a9efdd872e2e69605ccfae6f27b11d8bcd4))
+
+### 🚜 Refactor
+
+- *(tui)* Split state.rs into a state/ module ([#730](https://github.com/bitrouter/bitrouter/pull/730)) - ([d730e8e](https://github.com/bitrouter/bitrouter/commit/d730e8e9b1e6ad17dc452c27d6816c8dc053ee3f))
+
+
+## [1.0.0-alpha.26](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.25...v1.0.0-alpha.26)
+
+
+### ⛰️ Features
+
+- *(acp)* Route spawn sub-agents through daemon by default ([#705](https://github.com/bitrouter/bitrouter/pull/705)) - ([e069c8c](https://github.com/bitrouter/bitrouter/commit/e069c8cded12add2aa3d9a26f64394919e5cb562))
+- *(cli)* Add cloud API command ([#718](https://github.com/bitrouter/bitrouter/pull/718)) - ([26cea96](https://github.com/bitrouter/bitrouter/commit/26cea96221250ceec0892ab2a7e71e890c675141))
+- *(routing)* Adaptive, self-optimizing policy-table routing ([#710](https://github.com/bitrouter/bitrouter/pull/710)) - ([0828e7e](https://github.com/bitrouter/bitrouter/commit/0828e7ed40104272da4b6e429b05cb3e5f03079d))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Preserve upstream bad requests ([#716](https://github.com/bitrouter/bitrouter/pull/716)) - ([d6872ba](https://github.com/bitrouter/bitrouter/commit/d6872ba1ed73fd6d600b99c6c1a5adab063b699d))
+
+### 🚜 Refactor
+
+- Remove attestation, fold plugins/ into crates/ ([#701](https://github.com/bitrouter/bitrouter/pull/701)) - ([e9896fa](https://github.com/bitrouter/bitrouter/commit/e9896fa321c29f753db3b76e4bd6d684d0307cf4))
+- Relocate bitrouter-mcp crate under crates/ ([#704](https://github.com/bitrouter/bitrouter/pull/704)) - ([a01a118](https://github.com/bitrouter/bitrouter/commit/a01a1184bf7ebaf352c082897bdd1b6d0be3fd30))
+
+
 ## [1.0.0-alpha.25](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.24...v1.0.0-alpha.25)
 
 

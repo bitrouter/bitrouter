@@ -1,24 +1,10 @@
-//! Reports for `init` and `config validate`.
+//! Reports for `config validate`. (`bitrouter init` now emits the onboarding
+//! result envelope via `crate::onboarding` rather than a dedicated report.)
 
 use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::Human;
-
-/// Result of `bitrouter init`.
-#[derive(Serialize)]
-pub struct InitReport {
-    pub action: &'static str,
-    pub path: String,
-    pub skip_auth: bool,
-}
-
-impl CliReport for InitReport {
-    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
-        h.line(&format!("wrote starter config to {}", self.path))?;
-        h.note("skip_auth is on — credential-less local requests are admitted")
-    }
-}
 
 /// One unset `${VAR}` substituted with a placeholder during validation.
 #[derive(Serialize)]
