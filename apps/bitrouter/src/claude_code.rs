@@ -2,7 +2,7 @@
 //! (`claude-code`).
 //!
 //! Two daemon-side responsibilities, both keyed on the `claude-code` provider
-//! id and the Claude Code agent-profile beta:
+//! id:
 //!
 //! - [`ClaudeCodeRouter`] — an ingress [`PromptTransform`] that detects genuine
 //!   Claude Code traffic by its `anthropic-beta: claude-code-…` header and
@@ -45,10 +45,10 @@ const PROVIDER_ID: &str = "claude-code";
 /// route wherever they already pointed (the pay-as-you-go `anthropic` provider
 /// for bare Claude models, or the explicit provider).
 ///
-/// The transform **only reads** the marker — it never adds it. The subscription
-/// applier separately *requires* the beta to be present and refuses to
-/// fabricate it, so this transform cannot be used to spoof arbitrary traffic as
-/// Claude Code.
+/// The transform only reads the marker; it never adds it. Explicit
+/// `claude-code:<model>` routes do not need this detector: selecting that
+/// provider is already the subscription-use boundary, and its auth applier
+/// supplies the required upstream OAuth and agent-profile headers.
 pub struct ClaudeCodeRouter;
 
 impl PromptTransform for ClaudeCodeRouter {
@@ -66,8 +66,8 @@ impl PromptTransform for ClaudeCodeRouter {
         // text). When it's present and the request targets a bare `claude-*`
         // model, route to the subscription provider by prefixing the model.
         // Non-Claude-Code traffic is left untouched (it falls to the
-        // pay-as-you-go `anthropic` provider). The transform only READS the
-        // marker — it never adds it, so it can't be used to spoof.
+        // pay-as-you-go `anthropic` provider). The transform only reads the
+        // marker; explicit provider-qualified routes bypass this detector.
         let is_cc = headers_indicate_claude_code(headers);
         if is_cc && prompt.model.starts_with("claude") && !prompt.model.starts_with("claude-code:")
         {

@@ -22,6 +22,22 @@ This reuses your local Claude Code session when one is available, and drives Cla
 bitrouter providers logout claude-code      # remove the stored credential
 ```
 
+### Long-lived token for servers and CI
+
+Claude Code's `claude setup-token` flow produces a long-lived credential for
+headless environments. Supply it through the official process environment
+variable before BitRouter starts:
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" bitrouter start
+```
+
+BitRouter captures this token when it constructs the subscription provider. It
+is process-local and non-refreshable, so rotate it at the secret source and
+restart BitRouter. Keep the value in your secret manager or an owner-only
+environment file; never put it in `bitrouter.yaml`, a client configuration,
+command arguments, logs, or benchmark artifacts.
+
 <Callout type="warn">
 **One auth mode per request.** A request routed to `claude-code:<model>` uses your OAuth subscription; a request routed to the `anthropic` provider uses `ANTHROPIC_API_KEY`. Run `bitrouter providers logout claude-code` to remove the subscription route.
 </Callout>
@@ -44,6 +60,26 @@ bitrouter route claude-code:claude-sonnet-4-6
 ```
 
 Then [start BitRouter and send a request](/docs/integrations/models#start-bitrouter-and-send-a-request). Use the explicit id `claude-code:claude-sonnet-4-6` to pin the request to your subscription, or use the Claude Code harness flow below so BitRouter detects genuine Claude Code traffic and rewrites bare Claude model names to the subscription provider.
+
+Standard Anthropic clients and non-Claude-Code agents can use that explicit
+route without pretending to be Claude Code. They send an ordinary Messages API
+request to BitRouter; BitRouter adds the OAuth, Claude Code agent-profile,
+version, and client headers required by the subscription upstream:
+
+```bash
+curl http://127.0.0.1:4356/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-code:claude-sonnet-4-6",
+    "max_tokens": 64,
+    "messages": [{"role": "user", "content": "Reply with exactly READY."}]
+  }'
+```
+
+The provider-qualified model is the opt-in boundary. A bare Claude model from a
+non-Claude-Code client never silently spends your subscription; it follows the
+normal provider cascade, which excludes subscription providers.
 
 ## Run Claude Code through BitRouter (with telemetry)
 

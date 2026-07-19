@@ -1,5 +1,11 @@
 # Terminal-Bench Full-Run Readiness Design
 
+> **Claude route update (2026-07-20):** The compatibility conclusion below was
+> the fail-closed behavior of the pre-bridge binary. It is superseded by
+> `2026-07-20-anthropic-ingress-claude-subscription-design.md`, where an
+> explicit `claude-code:<model>` route authorizes BitRouter to construct the
+> upstream OAuth-compatible request for a standard downstream client.
+
 ## Goal
 
 Prepare PR #717 and the production benchmark environment for one internal,

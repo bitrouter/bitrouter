@@ -17,18 +17,16 @@
 //! back to the store, and caches it in memory to avoid hammering the
 //! refresh endpoint under load.
 //!
-//! ## Gate on the agent-profile beta — detect, never inject
+//! ## Explicit route boundary and upstream adaptation
 //!
-//! Only genuine Claude Code traffic may spend the subscription. [`ClaudeCodeAuthApplier::apply`]
-//! **gates** on the Claude Code agent-profile beta the client itself sent
-//! (`anthropic-beta: claude-code-…`) — the same marker the Pro/Max subscription
-//! endpoint keys on — and rejects (`400`) any request that reaches this provider
-//! without it. It **never fabricates** the marker: enabling correct Claude Code
-//! use is the contract; the applier does not spoof arbitrary traffic as Claude
-//! Code. The body is forwarded faithfully ([`ClaudeCodeAuthApplier::prepare_body`]
-//! is a no-op) — current Claude Code (CLI, Agent SDK, `bitrouter spawn`) does
-//! not lead its `system` with a fixed identity string, but always carries the
-//! agent-profile beta, and the subscription accepts its own system blocks as-is.
+//! Resolving an explicit `claude-code:<model>` target is the operator's
+//! authorization to spend the subscription. Downstream clients speak normal
+//! Anthropic Messages; [`ClaudeCodeAuthApplier::apply`] adds the OAuth and
+//! Claude Code agent-profile headers required by the upstream. Bare canonical
+//! Claude models never auto-cascade onto subscription providers, while genuine
+//! Claude Code traffic can still be auto-routed by the app-layer ingress
+//! detector. The body is forwarded faithfully
+//! ([`ClaudeCodeAuthApplier::prepare_body`] is a no-op).
 //!
 //! ## Two distinct ids
 //!
@@ -484,13 +482,11 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         _body: &mut serde_json::Value,
         _target: &RoutingTarget,
     ) -> Result<()> {
-        // Faithful passthrough. The request is gated in `apply` on the Claude
-        // Code agent-profile beta (`anthropic-beta: claude-code-…`), and the
-        // Pro/Max subscription endpoint accepts genuine Claude Code's own
-        // system blocks as-is (verified: a stock `claude -p` round-trips on the
-        // subscription). So this applier neither requires a specific system
-        // prompt nor rewrites the body — it forwards exactly what Claude Code
-        // sent and lets the upstream be the authority.
+        // Faithful passthrough. `apply` supplies the required upstream OAuth
+        // and agent-profile headers, while the Pro/Max subscription endpoint
+        // accepts normal Anthropic Messages system blocks as-is. This applier
+        // therefore neither requires a specific system prompt nor rewrites the
+        // body; it lets the upstream be the authority.
         Ok(())
     }
 }

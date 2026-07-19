@@ -162,6 +162,15 @@ For each credential, record only:
 
 Provider API keys, subscription OAuth material, AWS keys, and SSH keys stay out of Harbor configs and evidence archives. Sandboxes receive only the private daemon URL and, when local daemon authentication is disabled, a non-secret local token required by the client library.
 
+For a Claude Pro/Max subscription, freeze an explicit
+`claude-code:<model>` target and the protected source of
+`CLAUDE_CODE_OAUTH_TOKEN`. The central daemon must receive that variable before
+provider construction. Terminus 2 and other non-Claude-Code harnesses send
+normal client requests and must not receive the OAuth token or synthesize
+Claude Code identity headers; BitRouter owns the outbound OAuth-compatible
+translation. A bare canonical Claude model is not equivalent to this explicit
+opt-in and must remain outside subscription auto-cascade.
+
 ## Harbor and Terminus 2
 
 Freeze:

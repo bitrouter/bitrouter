@@ -1,5 +1,10 @@
 # Terminal-Bench Full-Run Readiness Implementation Plan
 
+> **Claude route update (2026-07-20):** The checked compatibility rejection in
+> this historical plan describes the pre-bridge binary. Claude execution now
+> follows `2026-07-20-anthropic-ingress-claude-subscription.md` and must pass a
+> new immutable EC2 canary before it is accepted.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Merge PR #717 with current main, prove one frozen BitRouter binary can serve every Terminus 2-compatible provider/model route required by a one-trial Terminal-Bench 2.1 full run, and fail closed on incompatible subscription routes before consuming identities or AWS resources.

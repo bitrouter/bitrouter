@@ -22,6 +22,20 @@ bitrouter providers login claude-code
 bitrouter providers logout claude-code      # 移除已保存的凭据
 ```
 
+### 用于服务器和 CI 的长期 token
+
+Claude Code 的 `claude setup-token` 流程会为无头环境生成长期凭据。请在
+BitRouter 启动前，通过官方进程环境变量提供它：
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" bitrouter start
+```
+
+BitRouter 会在构建订阅供应商时捕获这个 token。它只存在于进程内且不可
+刷新，因此应在密钥来源中轮换后重启 BitRouter。请把值保存在密钥管理器
+或仅所有者可读的环境文件中；绝不要放入 `bitrouter.yaml`、客户端配置、
+命令参数、日志或 benchmark 产物。
+
 <Callout type="warn">
 **每次请求只用一种鉴权方式。** 路由到 `claude-code:<model>` 的请求使用你的 OAuth 订阅；路由到 `anthropic` 供应商的请求使用 `ANTHROPIC_API_KEY`。运行 `bitrouter providers logout claude-code` 即可移除订阅路由。
 </Callout>
@@ -44,6 +58,26 @@ bitrouter route claude-code:claude-sonnet-4-6
 ```
 
 然后[启动 BitRouter 并发送请求](/docs/integrations/models#start-bitrouter-and-send-a-request)。使用显式 id `claude-code:claude-sonnet-4-6` 可以把请求固定到你的订阅上；也可以使用下方 Claude Code 运行容器流程，让 BitRouter 识别真正的 Claude Code 流量，并把裸 Claude 模型名改写到订阅供应商。
+
+标准 Anthropic 客户端和非 Claude Code agent 可以使用这个显式路由，
+而无需伪装成 Claude Code。它们向 BitRouter 发送普通 Messages API 请求；
+BitRouter 会补齐订阅上游要求的 OAuth、Claude Code agent 画像、版本和客户
+端请求头：
+
+```bash
+curl http://127.0.0.1:4356/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-code:claude-sonnet-4-6",
+    "max_tokens": 64,
+    "messages": [{"role": "user", "content": "Reply with exactly READY."}]
+  }'
+```
+
+带供应商限定的模型名就是显式选择边界。非 Claude Code 客户端发送裸 Claude
+模型时，绝不会静默消耗你的订阅；它仍遵循普通供应商级联，而订阅供应商
+不参与该级联。
 
 ## 让 Claude Code 经 BitRouter 运行（附带遥测）
 

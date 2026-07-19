@@ -129,6 +129,16 @@ Use a dedicated control database and a separate new policy database. The policy 
 
 Before starting a group, set new output paths and the harness identifier expected by the pinned BitRouter revision. Start the daemon, wait on its health endpoint with a bounded timeout, and record start time, PID, config hash, binary hash, database, port, and output paths in an append-only group manifest.
 
+When a route uses the Claude Code subscription, inject
+`CLAUDE_CODE_OAUTH_TOKEN` into an owner-only central environment source before
+the daemon starts. Deliver the value through a non-echoing protected channel;
+never put it in an argument, config, Harbor environment, controller manifest,
+log, or archive. Presence checks report only `present` or `missing`. The direct
+provider sentinel must use a standard Anthropic request with an explicit
+`claude-code:<model>` target and deliberately omit `anthropic-beta`, proving
+that BitRouter—not the benchmark harness—constructs the upstream Claude Code
+OAuth request.
+
 Never hot-swap the serving binary, config, provider credential class, or policy database within a lineage.
 
 ## 5. Validate Harbor and Terminus 2
@@ -192,6 +202,13 @@ The canary passes only when:
 - the sandbox is gone and no run-tagged volume or network interface remains.
 
 Keep concurrency 1 until explicit sessions are proven. Test higher concurrency only in separate non-evaluation identities.
+
+For an explicitly routed `claude-code:<model>` canary, Terminus 2 is a valid
+downstream harness on builds that implement the Anthropic-to-subscription
+bridge. Keep its normal ingress configuration unchanged: do not inject the
+OAuth token, a Claude Code agent-profile beta, or a Claude Code identity prompt
+into the sandbox. Reject the canary if a bare canonical Claude model reaches
+the subscription or if any secret appears outside the central daemon.
 
 ## 7. Resolve or create the immutable control
 

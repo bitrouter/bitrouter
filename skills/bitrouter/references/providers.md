@@ -20,7 +20,7 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `azure` | `AZURE_OPENAI_API_KEY` | Bearer | Azure OpenAI `/openai/v1` surface; set `AZURE_OPENAI_RESOURCE` to your resource name (unset ⇒ provider inactive). Entra ID tokens also work as the bearer |
 | `vertex` | `VERTEX_EXPRESS_API_KEY` | Header `x-goog-api-key` | Vertex AI, currently **Express Mode only** → **Gemini models only** (no Claude/Llama/Mistral), global endpoint (region ignored). Partner models are commented out in the registry entry pending service-account OAuth support |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `claude-code` | — (local OAuth) | Claude Code session | `bitrouter providers login claude-code`; Claude Pro/Max subscription provider, distinct from `anthropic` API-key billing |
+| `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` or local OAuth | Claude Code subscription | `bitrouter providers login claude-code`, or a long-lived `claude setup-token` value for headless use; distinct from `anthropic` API-key billing |
 | `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
 | `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
 | `supergrok` | — (local OAuth) | SuperGrok subscription | `bitrouter providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
@@ -35,6 +35,15 @@ the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
 and no cache**: the registry is empty, so only fully-specified local providers
 and the in-binary `bitrouter` cloud gateway are available — the known-provider
 shorthand needs one prior successful fetch. Startup still succeeds.
+
+`CLAUDE_CODE_OAUTH_TOKEN` is the local-OAuth exception: a non-empty value
+auto-enables `claude-code` and is captured as a process-local, non-refreshable
+Bearer when the daemon constructs the provider. Set it before `start` (or use a
+reload path that reconstructs provider auth), keep it out of YAML and command
+arguments, and route standard Anthropic clients explicitly to
+`claude-code:<model>`. BitRouter adds the subscription upstream's required
+OAuth/Claude-Code headers. Bare Claude models still do not auto-cascade onto a
+subscription provider.
 
 ## Provider registry (catalog + priority)
 

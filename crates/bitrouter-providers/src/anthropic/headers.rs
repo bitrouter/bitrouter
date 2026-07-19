@@ -24,18 +24,6 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 ///   <https://github.com/openclaw/openclaw>).
 pub const OAUTH_BETA_VALUES: &[&str] = &["claude-code-20250219", "oauth-2025-04-20"];
 
-/// The forced first `system` block for Claude Pro/Max OAuth requests.
-///
-/// The subscription endpoint admits requests under the Claude Code agent
-/// profile; the first `system` block has to be this exact identity string or
-/// the upstream rejects the request. The subscription applier
-/// [`crate::claude_code::ClaudeCodeAuthApplier`] *gates* on this block being
-/// present (it never fabricates it). Mirrors the request shape of Claude Code
-/// itself (see the OpenClaw reference, `src/llm/providers/anthropic.ts`, at
-/// <https://github.com/openclaw/openclaw>).
-pub const CLAUDE_CODE_SYSTEM_PROMPT: &str =
-    "You are Claude Code, Anthropic's official CLI for Claude.";
-
 /// The `user-agent` Claude Code sends. The OAuth path mirrors it so the
 /// subscription endpoint sees a first-party-CLI-shaped request.
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.75";

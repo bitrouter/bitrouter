@@ -288,8 +288,8 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 ## Q35. Can Terminus 2 use a Claude Code subscription as its model provider?
 
-**Symptom:** A fixed route points Terminus 2 at `claude-code:<model>`, but the provider rejects the request for a missing Claude Code agent-profile beta.
+**Symptom:** A fixed route points Terminus 2 at `claude-code:<model>`, but an older BitRouter build rejects the request for a missing Claude Code agent-profile beta.
 
-**Cause / diagnostic:** The Claude Code subscription route deliberately accepts only genuine Claude Code client traffic carrying its own `anthropic-beta: claude-code-*` marker. Terminus 2 speaks OpenAI-compatible requests and does not originate that marker. Adding it in BitRouter or the benchmark config would impersonate another harness and defeat the provider safety boundary.
+**Cause / diagnostic:** Terminus 2 is a normal downstream client and should not originate Claude Code credentials or identity headers. Current BitRouter treats the explicit `claude-code:<model>` target as the operator's subscription-use boundary and constructs the OAuth-compatible Claude Code request on the upstream side. The older rejection means the serving binary predates that bridge or the request did not resolve to the explicit provider-qualified target. A bare canonical Claude model still cannot auto-cascade onto a personal subscription.
 
-**Safe action:** Fail the compatibility gate before credentials, run roots, or EC2 allocation. For a Terminus 2 benchmark use the separate `anthropic` API-key provider; to test the Claude Code subscription use a genuine Claude Code harness and label it as a different harness/control key. Never synthesize the agent-profile header.
+**Safe action:** Pin and verify a bridge-capable BitRouter source/binary, set the long-lived `CLAUDE_CODE_OAUTH_TOKEN` only in the protected central daemon environment before startup, and use an explicit `claude-code:<model>` target. Keep the token and Claude Code agent-profile header out of Harbor, Terminus 2, sandbox, manifest, and artifact configuration. First run a no-beta standard Anthropic sentinel, then a real Terminus 2 EC2 canary; accept only with the intended provider/model trace, four-bucket settlement, strict cost/reward/session joins, TrialResult, and zero AWS residue.

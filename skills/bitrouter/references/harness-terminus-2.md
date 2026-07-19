@@ -119,6 +119,11 @@ cheaper model.
 
 - Prefer Chat Completions for current Terminus-2 session correlation. Harbor's
   Responses path does not carry the same `session_id` fields.
+- A Claude Pro/Max subscription is valid only through an explicit
+  `claude-code:<model>` BitRouter route. Terminus-2 keeps its normal downstream
+  request shape; the central daemon owns `CLAUDE_CODE_OAUTH_TOKEN` and adds the
+  upstream OAuth/Claude-Code headers. Never copy either into Harbor or the
+  sandbox. Bare Claude models do not auto-cascade onto the subscription.
 - Do not use prompt hashes as benchmark identity. They are only a low-confidence
   fallback for ordinary traffic.
 - Do not interpret a cache hit as a routing signal yet. Cache-aware settlement

@@ -196,7 +196,7 @@ Run:
 
 ```bash
 cargo run -p dist-helper -- check
-rg -n "Terminus 2 cannot|requires a genuine Claude Code|must not synthesize" docs skills apps crates
+rg -n "only genuine Claude Code traffic may spend|provider only accepts Claude Code requests" docs/integrations skills apps crates
 git diff --check
 ```
 
