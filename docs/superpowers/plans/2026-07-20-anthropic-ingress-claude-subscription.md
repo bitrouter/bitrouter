@@ -104,7 +104,11 @@ Delete the `request_has_claude_code_beta` early-return block and remove the now-
 // owns the OAuth/Claude-Code upstream transformation below.
 ```
 
-Do not change credential resolution, body passthrough, beta merging, automatic ingress routing, or routing-table subscription exclusion.
+Do not change credential resolution, beta merging, automatic ingress routing,
+or routing-table subscription exclusion. Real-upstream validation later
+amended the original body-passthrough assumption: the upstream requires a
+recognized Claude Agent SDK identity. Add that identity centrally, preserve all
+client system instructions, and keep genuine/legacy Claude Code idempotent.
 
 - [ ] **Step 4: Run focused Claude provider tests**
 

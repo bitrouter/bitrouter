@@ -139,6 +139,13 @@ provider sentinel must use a standard Anthropic request with an explicit
 that BitRouter—not the benchmark harness—constructs the upstream Claude Code
 OAuth request.
 
+The accepted bridge also prepends the current Claude Agent SDK identity block
+on the central outbound hop while retaining every downstream system
+instruction. The sandbox must not originate that identity. A direct sentinel
+that receives a generic upstream 429 should be compared against the official
+Claude Code CLI: if the CLI succeeds with the same token/model, verify the
+serving binary includes this body transform before blaming account quota.
+
 Never hot-swap the serving binary, config, provider credential class, or policy database within a lineage.
 
 ## 5. Validate Harbor and Terminus 2
@@ -172,6 +179,13 @@ agent:
 ```
 
 Render variables before Pydantic validation. `api_base` belongs in `agent.kwargs` for the pinned Harbor implementation. Keep the non-secret local key in `agent.kwargs.llm_kwargs.api_key`; `agent.env.OPENAI_API_KEY` alone is insufficient in affected Harbor versions.
+
+For a Claude subscription route, replace the entry model with
+`anthropic/<claude-model>` and replace `OPENAI_API_KEY` with the same non-secret
+local value under `ANTHROPIC_API_KEY`. This makes Terminus 2's complete
+downstream hop use Anthropic Messages. Keep `api_base`, `llm_kwargs.api_key`,
+and the immutable workflow headers; the fixed daemon tier resolves the request
+to `claude-code:<claude-model>`.
 
 Set `x-bitrouter-workflow-session` to the exact value later emitted as the Harbor outcome `session_key`. Confirm the header on a captured canary request. Do not use prompt hashes, body metadata, response IDs, or overlapping time windows as the primary parallel attribution key.
 
@@ -207,7 +221,8 @@ For an explicitly routed `claude-code:<model>` canary, Terminus 2 is a valid
 downstream harness on builds that implement the Anthropic-to-subscription
 bridge. Keep its normal ingress configuration unchanged: do not inject the
 OAuth token, a Claude Code agent-profile beta, or a Claude Code identity prompt
-into the sandbox. Reject the canary if a bare canonical Claude model reaches
+into the sandbox; the central daemon owns all three upstream adaptations.
+Reject the canary if a bare canonical Claude model reaches
 the subscription or if any secret appears outside the central daemon.
 
 ## 7. Resolve or create the immutable control

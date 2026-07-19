@@ -24,6 +24,20 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 ///   <https://github.com/openclaw/openclaw>).
 pub const OAUTH_BETA_VALUES: &[&str] = &["claude-code-20250219", "oauth-2025-04-20"];
 
+/// The current Claude Agent SDK identity block accepted by the Claude Code
+/// subscription endpoint.
+///
+/// A standard Anthropic Messages client does not send this block. The
+/// `claude-code` subscription applier prepends it while preserving the
+/// client's own system instructions, making an explicit subscription route
+/// wire-compatible with the first-party agent profile.
+pub const CLAUDE_AGENT_SYSTEM_PROMPT: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+/// The legacy Claude Code identity retained for idempotency with older clients.
+pub const LEGACY_CLAUDE_CODE_SYSTEM_PROMPT: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude.";
+
 /// The `user-agent` Claude Code sends. The OAuth path mirrors it so the
 /// subscription endpoint sees a first-party-CLI-shaped request.
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.75";

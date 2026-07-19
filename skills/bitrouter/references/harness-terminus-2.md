@@ -43,6 +43,28 @@ The model name has a LiteLLM provider prefix. `openai/@coding` sends the
 BitRouter preset `@coding`; replace it with the preset or model exposed by your
 BitRouter configuration.
 
+For an explicit Claude subscription route, use LiteLLM's Anthropic provider so
+the complete downstream hop is Anthropic Messages rather than Chat
+Completions:
+
+```yaml
+agent:
+  name: terminus-2
+  model_name: anthropic/claude-sonnet-5
+  env:
+    ANTHROPIC_API_KEY: bitrouter-local
+  kwargs:
+    api_base: http://CENTRAL_PRIVATE_HOST:4356/v1
+    llm_kwargs:
+      api_key: bitrouter-local
+```
+
+Map the daemon's fixed policy tier to
+`claude-code:claude-sonnet-5`. The local key is only the non-secret downstream
+credential; `CLAUDE_CODE_OAUTH_TOKEN` remains on the central daemon, where
+BitRouter constructs the Claude Code-compatible upstream headers and identity
+system block while preserving Terminus 2's own system instructions.
+
 Run a Harbor task with `terminus-2` after applying the equivalent agent config:
 
 ```bash
@@ -117,13 +139,16 @@ cheaper model.
 
 ## Gotchas
 
-- Prefer Chat Completions for current Terminus-2 session correlation. Harbor's
-  Responses path does not carry the same `session_id` fields.
+- Prefer Chat Completions for general current Terminus-2 session correlation.
+  For an explicit `claude-code:<model>` route, use the Anthropic configuration
+  above and pass the same immutable workflow session through
+  `llm_call_kwargs.extra_headers`.
 - A Claude Pro/Max subscription is valid only through an explicit
   `claude-code:<model>` BitRouter route. Terminus-2 keeps its normal downstream
   request shape; the central daemon owns `CLAUDE_CODE_OAUTH_TOKEN` and adds the
-  upstream OAuth/Claude-Code headers. Never copy either into Harbor or the
-  sandbox. Bare Claude models do not auto-cascade onto the subscription.
+  upstream OAuth/Claude-Code headers and agent identity system block. Never copy
+  any of them into Harbor or the sandbox. Bare Claude models do not
+  auto-cascade onto the subscription.
 - Do not use prompt hashes as benchmark identity. They are only a low-confidence
   fallback for ordinary traffic.
 - Do not interpret a cache hit as a routing signal yet. Cache-aware settlement

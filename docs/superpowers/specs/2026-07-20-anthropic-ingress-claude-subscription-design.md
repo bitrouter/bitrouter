@@ -45,7 +45,15 @@ auth applier performs the following outbound transformation:
 5. merge the required `claude-code-*` and OAuth beta values with any downstream
    feature betas, preserving feature flags without duplication;
 6. set the Claude Code-compatible `user-agent` and `x-app` values;
-7. forward the Anthropic Messages body faithfully.
+7. prepend the current Claude Agent SDK identity system block when absent,
+   preserving every downstream system instruction and remaining idempotent for
+   genuine current or legacy Claude Code bodies.
+
+The body rule was confirmed during real-upstream validation: headers alone
+returned a generic 429 while the official CLI succeeded with the same
+token/model. Component probes showed that the recognized identity block is the
+minimal missing condition; metadata, query parameters, and extra SDK headers
+are not required.
 
 The applier must no longer reject a request merely because the downstream
 client did not send a Claude Code agent-profile beta. Credential absence still

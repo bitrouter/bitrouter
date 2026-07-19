@@ -25,8 +25,10 @@
 //! Claude Code agent-profile headers required by the upstream. Bare canonical
 //! Claude models never auto-cascade onto subscription providers, while genuine
 //! Claude Code traffic can still be auto-routed by the app-layer ingress
-//! detector. The body is forwarded faithfully
-//! ([`ClaudeCodeAuthApplier::prepare_body`] is a no-op).
+//! detector. [`ClaudeCodeAuthApplier::prepare_body`] prepends the current
+//! Claude Agent SDK identity when a standard Messages client did not already
+//! supply a recognized Claude Code identity, preserving all client system
+//! instructions and remaining idempotent for genuine Claude Code.
 //!
 //! ## Two distinct ids
 //!
@@ -479,15 +481,68 @@ impl AuthApplier for ClaudeCodeAuthApplier {
 
     async fn prepare_body(
         &self,
-        _body: &mut serde_json::Value,
+        body: &mut serde_json::Value,
         _target: &RoutingTarget,
     ) -> Result<()> {
-        // Faithful passthrough. `apply` supplies the required upstream OAuth
-        // and agent-profile headers, while the Pro/Max subscription endpoint
-        // accepts normal Anthropic Messages system blocks as-is. This applier
-        // therefore neither requires a specific system prompt nor rewrites the
-        // body; it lets the upstream be the authority.
+        // A/B against the first-party CLI shows the subscription endpoint
+        // returns a generic 429 for an OAuth-shaped request that lacks a
+        // recognized agent identity. Headers alone are insufficient. Add the
+        // current SDK identity only on the explicit claude-code route, retain
+        // every client system block, and do nothing for genuine/legacy Claude
+        // Code bodies that already carry an identity.
+        if system_has_agent_identity(body) {
+            return Ok(());
+        }
+        let object = body.as_object_mut().ok_or_else(|| {
+            BitrouterError::internal("claude-code request body must be a JSON object")
+        })?;
+        let identity = serde_json::json!({
+            "type": "text",
+            "text": headers::CLAUDE_AGENT_SYSTEM_PROMPT,
+        });
+        let system = match object.remove("system") {
+            None | Some(serde_json::Value::Null) => serde_json::Value::Array(vec![identity]),
+            Some(serde_json::Value::String(text)) => serde_json::Value::Array(vec![
+                identity,
+                serde_json::json!({ "type": "text", "text": text }),
+            ]),
+            Some(serde_json::Value::Array(mut blocks)) => {
+                blocks.insert(0, identity);
+                serde_json::Value::Array(blocks)
+            }
+            Some(other) => {
+                object.insert("system".to_string(), other);
+                return Err(BitrouterError::Upstream {
+                    status: 400,
+                    message: "claude-code request has an invalid Anthropic system field".into(),
+                });
+            }
+        };
+        object.insert("system".to_string(), system);
         Ok(())
+    }
+}
+
+/// Whether the rendered Messages body already carries a current or legacy
+/// Claude Code identity. Genuine current CLI traffic places a billing marker
+/// first and the identity in the next block, so scan all system text blocks
+/// rather than assuming index zero.
+fn system_has_agent_identity(body: &serde_json::Value) -> bool {
+    fn is_identity(text: &str) -> bool {
+        let text = text.trim_start();
+        text.starts_with(headers::CLAUDE_AGENT_SYSTEM_PROMPT)
+            || text.starts_with(headers::LEGACY_CLAUDE_CODE_SYSTEM_PROMPT)
+    }
+
+    match body.as_object().and_then(|object| object.get("system")) {
+        Some(serde_json::Value::String(text)) => is_identity(text),
+        Some(serde_json::Value::Array(blocks)) => blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_identity)
+        }),
+        _ => false,
     }
 }
 
@@ -804,33 +859,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_body_is_faithful_passthrough() {
-        // The body gate moved to `apply` (keyed on the agent-profile beta);
-        // `prepare_body` now forwards the body untouched regardless of the
-        // system prompt — it neither requires a specific identity nor rewrites
-        // anything, so genuine Claude Code's own system blocks pass through.
+    async fn prepare_body_adds_agent_identity_without_losing_client_system() {
         let path = tmp_store_path();
         let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
-        let unchanged = |body: serde_json::Value| {
-            let applier = &applier;
-            async move {
-                let mut b = body.clone();
-                applier
-                    .prepare_body(&mut b, &cc_target(None))
-                    .await
-                    .unwrap();
-                assert_eq!(b, body, "prepare_body must not touch the body");
-            }
-        };
-        // No system, an arbitrary system, and the real Claude Code shape all
-        // pass through unchanged.
-        unchanged(serde_json::json!({ "model": "claude", "messages": [] })).await;
-        unchanged(serde_json::json!({ "system": "be terse", "messages": [] })).await;
-        unchanged(serde_json::json!({
-            "system": [{ "type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK." }],
+        let identity = headers::CLAUDE_AGENT_SYSTEM_PROMPT;
+
+        let mut absent = serde_json::json!({ "model": "claude", "messages": [] });
+        applier
+            .prepare_body(&mut absent, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(absent["system"][0]["text"], identity);
+
+        let mut string = serde_json::json!({ "system": "be terse", "messages": [] });
+        applier
+            .prepare_body(&mut string, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(string["system"][0]["text"], identity);
+        assert_eq!(string["system"][1]["text"], "be terse");
+
+        let original_block = serde_json::json!({
+            "type": "text",
+            "text": "follow the client rules",
+            "cache_control": { "type": "ephemeral" }
+        });
+        let mut blocks = serde_json::json!({
+            "system": [original_block.clone()],
             "messages": []
-        }))
-        .await;
+        });
+        applier
+            .prepare_body(&mut blocks, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(blocks["system"][0]["text"], identity);
+        assert_eq!(blocks["system"][1], original_block);
+
+        let mut genuine = serde_json::json!({
+            "system": [
+                { "type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.215; cc_entrypoint=sdk-cli;" },
+                { "type": "text", "text": identity },
+                { "type": "text", "text": "keep this" }
+            ],
+            "messages": []
+        });
+        let before = genuine.clone();
+        applier
+            .prepare_body(&mut genuine, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(genuine, before, "genuine Claude Code must stay idempotent");
     }
 
     /// Write a `.credentials.json` in a fresh temp dir and return its path.

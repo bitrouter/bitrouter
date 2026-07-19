@@ -64,7 +64,10 @@ Then [start BitRouter and send a request](/docs/integrations/models#start-bitrou
 Standard Anthropic clients and non-Claude-Code agents can use that explicit
 route without pretending to be Claude Code. They send an ordinary Messages API
 request to BitRouter; BitRouter adds the OAuth, Claude Code agent-profile,
-version, and client headers required by the subscription upstream:
+version, and client headers required by the subscription upstream. It also
+prepends the current Claude Agent SDK identity system block while preserving
+the client's own system instructions; genuine Claude Code bodies are left
+idempotent:
 
 ```bash
 curl http://127.0.0.1:4356/v1/messages \

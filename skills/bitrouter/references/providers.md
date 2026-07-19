@@ -42,8 +42,9 @@ Bearer when the daemon constructs the provider. Set it before `start` (or use a
 reload path that reconstructs provider auth), keep it out of YAML and command
 arguments, and route standard Anthropic clients explicitly to
 `claude-code:<model>`. BitRouter adds the subscription upstream's required
-OAuth/Claude-Code headers. Bare Claude models still do not auto-cascade onto a
-subscription provider.
+OAuth/Claude-Code headers and prepends the current Claude Agent SDK identity
+system block without dropping the downstream client's system instructions.
+Bare Claude models still do not auto-cascade onto a subscription provider.
 
 ## Provider registry (catalog + priority)
 
