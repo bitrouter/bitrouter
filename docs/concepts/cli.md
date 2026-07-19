@@ -33,6 +33,8 @@ The default OAuth scope set covers `inference:invoke`, `usage:read`, `keys:read`
 
 Inspect the local session with `bitrouter cloud whoami` — it reads the credentials file directly and never hits the network. Sign out with `bitrouter cloud logout`: OAuth credentials are revoked on a best-effort basis before local deletion, while API keys are deleted locally only.
 
+Receipt reconciliation can use the same protected credential file without exporting a bearer into the environment. Pass `--credentials-file "$XDG_DATA_HOME/bitrouter/account-credentials.json"` to `bitrouter workflow-state reconcile-metering`; fresh OAuth tokens are used directly and near-expiry tokens are refreshed before the receipt request. Omitting the flag preserves the existing `--api-key-env BITROUTER_API_KEY` behavior.
+
 <Callout type="info">
 After either login form, the `bitrouter` provider is auto-enabled in zero-config mode — every model your account is entitled to is routable as `bitrouter:<model-id>` with no further setup.
 </Callout>

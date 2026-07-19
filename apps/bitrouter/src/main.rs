@@ -565,6 +565,11 @@ enum WorkflowStateAction {
         /// Environment variable containing the inference key.
         #[arg(long, default_value = "BITROUTER_API_KEY")]
         api_key_env: String,
+        /// Protected BitRouter Cloud credential file. When set, resolves either
+        /// a static API key or an OAuth bearer (with refresh) without exporting
+        /// the credential into the process environment.
+        #[arg(long)]
+        credentials_file: Option<PathBuf>,
         /// Exact request id to reconcile. Repeat for every selected row.
         #[arg(long = "request-id", required = true)]
         request_ids: Vec<String>,
@@ -1407,6 +1412,33 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     }
 }
 
+async fn settlement_bearer_from_credentials(path: &Path) -> Result<String> {
+    use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, REFRESH_WINDOW};
+
+    let client = reqwest::Client::new();
+    let mut store = CredentialsStore::load(path)
+        .with_context(|| format!("read BitRouter Cloud credentials from {}", path.display()))?;
+    let authorization_server = store
+        .current()
+        .and_then(|credential| credential.oauth())
+        .filter(|credential| credential.access_token_near_expiry(REFRESH_WINDOW))
+        .map(|credential| credential.authorization_server.clone());
+    let metadata = match authorization_server {
+        Some(server) => Some(
+            bitrouter_cloud_sdk::auth::metadata::fetch(&client, &server)
+                .await
+                .with_context(|| {
+                    format!("refresh metadata for credentials at {}", path.display())
+                })?,
+        ),
+        None => None,
+    };
+    store
+        .current_token(&client, metadata.as_ref())
+        .await
+        .with_context(|| format!("resolve bearer from credentials at {}", path.display()))
+}
+
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     match action {
         WorkflowStateAction::HarborOutcomes {
@@ -1548,6 +1580,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             database_url,
             api_base,
             api_key_env,
+            credentials_file,
             request_ids,
             prices,
             max_attempts,
@@ -1563,9 +1596,12 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .map(|value| UsagePriceOverride::parse(value))
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(anyhow::Error::from)?;
-            let api_key = std::env::var(&api_key_env).with_context(|| {
-                format!("read inference key from environment variable {api_key_env}")
-            })?;
+            let api_key = match credentials_file {
+                Some(path) => settlement_bearer_from_credentials(&path).await?,
+                None => std::env::var(&api_key_env).with_context(|| {
+                    format!("read inference key from environment variable {api_key_env}")
+                })?,
+            };
             let client = SettlementClient::new(&api_base, api_key)
                 .context("build request settlement client")?;
             let db = bitrouter::db::connect(&database_url)
@@ -3435,6 +3471,61 @@ async fn force_kill(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconcile_metering_accepts_explicit_cloud_credentials_file() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "reconcile-metering",
+            "--database-url",
+            "sqlite:///tmp/usage.db",
+            "--credentials-file",
+            "/tmp/account-credentials.json",
+            "--request-id",
+            "req-1",
+        ])
+        .expect("parse credentials file");
+        match cli.command {
+            Some(Command::WorkflowState {
+                action:
+                    WorkflowStateAction::ReconcileMetering {
+                        credentials_file, ..
+                    },
+            }) => assert_eq!(
+                credentials_file.as_deref(),
+                Some(Path::new("/tmp/account-credentials.json"))
+            ),
+            _ => panic!("expected reconcile-metering"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_bearer_reads_fresh_oauth_without_environment_export() {
+        use bitrouter_cloud_sdk::auth::credentials::{Credentials, CredentialsStore};
+        use chrono::{Duration, Utc};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("account-credentials.json");
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store
+            .save(Credentials {
+                access_token: "protected-test-bearer".into(),
+                refresh_token: Some("protected-test-refresh".into()),
+                expires_at: Utc::now() + Duration::minutes(10),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".into(),
+                scope: "inference:invoke".into(),
+                client_id: "test-client".into(),
+                authorization_server: "https://as.example.com".into(),
+                namespace_id: Some("ns-test".into()),
+                subject: None,
+            })
+            .unwrap();
+
+        let bearer = settlement_bearer_from_credentials(&path).await.unwrap();
+        assert_eq!(bearer, "protected-test-bearer");
+    }
 
     #[test]
     fn cli_definition_is_valid() {

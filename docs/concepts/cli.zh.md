@@ -33,6 +33,8 @@ bitrouter cloud whoami
 
 `bitrouter cloud whoami` 直接读取本地凭证文件，不访问网络。使用 `bitrouter cloud logout` 退出登录：OAuth 凭证会在删除本地文件前尽力撤销，API key 则只在本地删除。
 
+权威 receipt 结算也可以直接复用这个受保护的凭证文件，无需把 bearer 导出到环境变量。给 `bitrouter workflow-state reconcile-metering` 传入 `--credentials-file "$XDG_DATA_HOME/bitrouter/account-credentials.json"` 即可；未临近过期的 OAuth token 会直接使用，临近过期时会先刷新。省略该参数仍保持原有的 `--api-key-env BITROUTER_API_KEY` 行为。
+
 <Callout type="info">
 使用任一方式登录后，零配置模式都会自动启用 `bitrouter` provider——账户内的每个可用模型都可作为 `bitrouter:<model-id>` 路由，无需进一步配置。
 </Callout>
