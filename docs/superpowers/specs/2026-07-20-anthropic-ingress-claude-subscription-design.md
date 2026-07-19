@@ -45,7 +45,10 @@ auth applier performs the following outbound transformation:
 5. merge the required `claude-code-*` and OAuth beta values with any downstream
    feature betas, preserving feature flags without duplication;
 6. set the Claude Code-compatible `user-agent` and `x-app` values;
-7. prepend the current Claude Agent SDK identity system block when absent,
+7. normalize LiteLLM `extra_body` extensions into the top-level Messages body,
+   preserving explicit top-level values and dropping its upstream-invalid
+   `session_id` after BitRouter has captured session headers;
+8. prepend the current Claude Agent SDK identity system block when absent,
    preserving every downstream system instruction and remaining idempotent for
    genuine current or legacy Claude Code bodies.
 

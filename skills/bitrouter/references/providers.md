@@ -43,7 +43,9 @@ reload path that reconstructs provider auth), keep it out of YAML and command
 arguments, and route standard Anthropic clients explicitly to
 `claude-code:<model>`. BitRouter adds the subscription upstream's required
 OAuth/Claude-Code headers and prepends the current Claude Agent SDK identity
-system block without dropping the downstream client's system instructions.
+system block without dropping the downstream client's system instructions. It
+also unwraps LiteLLM `extra_body` extensions and drops its harness-only
+`session_id`, which remains available through BitRouter's workflow headers.
 Bare Claude models still do not auto-cascade onto a subscription provider.
 
 ## Provider registry (catalog + priority)

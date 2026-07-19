@@ -63,7 +63,9 @@ bitrouter route claude-code:claude-sonnet-4-6
 而无需伪装成 Claude Code。它们向 BitRouter 发送普通 Messages API 请求；
 BitRouter 会补齐订阅上游要求的 OAuth、Claude Code agent 画像、版本和客户
 端请求头，并在保留客户端自身 system 指令的同时，前置当前 Claude Agent SDK
-身份块；真正的 Claude Code 请求不会被重复注入：
+身份块；真正的 Claude Code 请求不会被重复注入。LiteLLM 的 `extra_body`
+扩展会被合并到出站 body，而仅用于 harness 关联的 `session_id` 保留在
+BitRouter trace 请求头中，不会发送给 Anthropic：
 
 ```bash
 curl http://127.0.0.1:4356/v1/messages \

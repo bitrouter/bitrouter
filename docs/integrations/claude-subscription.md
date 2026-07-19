@@ -67,7 +67,9 @@ request to BitRouter; BitRouter adds the OAuth, Claude Code agent-profile,
 version, and client headers required by the subscription upstream. It also
 prepends the current Claude Agent SDK identity system block while preserving
 the client's own system instructions; genuine Claude Code bodies are left
-idempotent:
+idempotent. LiteLLM `extra_body` extensions are merged into the outbound body,
+while its harness-only `session_id` is kept on BitRouter's trace headers and
+not forwarded to Anthropic:
 
 ```bash
 curl http://127.0.0.1:4356/v1/messages \

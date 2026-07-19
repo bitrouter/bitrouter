@@ -109,6 +109,9 @@ or routing-table subscription exclusion. Real-upstream validation later
 amended the original body-passthrough assumption: the upstream requires a
 recognized Claude Agent SDK identity. Add that identity centrally, preserve all
 client system instructions, and keep genuine/legacy Claude Code idempotent.
+The real Terminus 2 canary additionally exposed LiteLLM's unmerged
+`extra_body.session_id`; normalize that extension centrally without weakening
+header-based workflow/session correlation.
 
 - [ ] **Step 4: Run focused Claude provider tests**
 

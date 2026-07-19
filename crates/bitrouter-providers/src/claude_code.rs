@@ -484,6 +484,7 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         body: &mut serde_json::Value,
         _target: &RoutingTarget,
     ) -> Result<()> {
+        unwrap_litellm_extra_body(body)?;
         // A/B against the first-party CLI shows the subscription endpoint
         // returns a generic 429 for an OAuth-shaped request that lacks a
         // recognized agent identity. Headers alone are insufficient. Add the
@@ -521,6 +522,34 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         object.insert("system".to_string(), system);
         Ok(())
     }
+}
+
+/// Normalize LiteLLM's provider-extension container before calling Anthropic.
+///
+/// Some normal agent harnesses serialize `extra_body` instead of merging it
+/// into the provider request. Anthropic rejects that wrapper. Merge extension
+/// fields into the top level (without overriding explicit top-level values)
+/// and drop `session_id`: BitRouter already receives the session through
+/// headers, while Anthropic does not accept it as a Messages body field.
+fn unwrap_litellm_extra_body(body: &mut serde_json::Value) -> Result<()> {
+    let object = body.as_object_mut().ok_or_else(|| {
+        BitrouterError::internal("claude-code request body must be a JSON object")
+    })?;
+    let Some(extra_body) = object.remove("extra_body") else {
+        return Ok(());
+    };
+    let serde_json::Value::Object(extra_body) = extra_body else {
+        return Err(BitrouterError::Upstream {
+            status: 400,
+            message: "claude-code request has an invalid LiteLLM extra_body field".into(),
+        });
+    };
+    for (key, value) in extra_body {
+        if key != "session_id" {
+            object.entry(key).or_insert(value);
+        }
+    }
+    Ok(())
 }
 
 /// Whether the rendered Messages body already carries a current or legacy
@@ -909,6 +938,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(genuine, before, "genuine Claude Code must stay idempotent");
+    }
+
+    #[tokio::test]
+    async fn prepare_body_unwraps_litellm_extra_body_and_drops_session_id() {
+        let path = tmp_store_path();
+        let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
+        let mut body = serde_json::json!({
+            "model": "claude-fable-5",
+            "messages": [],
+            "top_k": 7,
+            "extra_body": {
+                "session_id": "terminus-private-session",
+                "top_k": 99,
+                "custom_extension": { "enabled": true }
+            }
+        });
+
+        applier
+            .prepare_body(&mut body, &cc_target(None))
+            .await
+            .unwrap();
+
+        assert!(body.get("extra_body").is_none());
+        assert!(body.get("session_id").is_none());
+        assert_eq!(body["top_k"], 7, "top-level client value must win");
+        assert_eq!(body["custom_extension"]["enabled"], true);
+        assert_eq!(
+            body["system"][0]["text"],
+            headers::CLAUDE_AGENT_SYSTEM_PROMPT
+        );
     }
 
     /// Write a `.credentials.json` in a fresh temp dir and return its path.

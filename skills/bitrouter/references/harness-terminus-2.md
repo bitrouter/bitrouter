@@ -54,7 +54,7 @@ agent:
   env:
     ANTHROPIC_API_KEY: bitrouter-local
   kwargs:
-    api_base: http://CENTRAL_PRIVATE_HOST:4356/v1
+    api_base: http://CENTRAL_PRIVATE_HOST:4356
     llm_kwargs:
       api_key: bitrouter-local
 ```
@@ -64,6 +64,15 @@ Map the daemon's fixed policy tier to
 credential; `CLAUDE_CODE_OAUTH_TOKEN` remains on the central daemon, where
 BitRouter constructs the Claude Code-compatible upstream headers and identity
 system block while preserving Terminus 2's own system instructions.
+
+Do not append `/v1` to the Anthropic `api_base`: LiteLLM's Anthropic handler
+adds `/v1/messages` itself. A base ending in `/v1` becomes
+`/v1/v1/messages`, fails with 404 before reaching BitRouter, and produces no
+route trace. The OpenAI provider configuration above still requires `/v1`.
+Current bridge-capable BitRouter builds also unwrap Terminus/LiteLLM's
+`extra_body` and remove its body-level `session_id`; keep the immutable
+workflow/session headers because they remain the authoritative correlation
+channel.
 
 Run a Harbor task with `terminus-2` after applying the equivalent agent config:
 

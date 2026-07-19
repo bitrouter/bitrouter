@@ -183,9 +183,16 @@ Render variables before Pydantic validation. `api_base` belongs in `agent.kwargs
 For a Claude subscription route, replace the entry model with
 `anthropic/<claude-model>` and replace `OPENAI_API_KEY` with the same non-secret
 local value under `ANTHROPIC_API_KEY`. This makes Terminus 2's complete
-downstream hop use Anthropic Messages. Keep `api_base`, `llm_kwargs.api_key`,
-and the immutable workflow headers; the fixed daemon tier resolves the request
-to `claude-code:<claude-model>`.
+downstream hop use Anthropic Messages. Remove the `/v1` suffix from
+`api_base` because LiteLLM's Anthropic handler appends `/v1/messages`; retain
+`llm_kwargs.api_key` and the immutable workflow headers. The fixed daemon tier
+resolves the request to `claude-code:<claude-model>`.
+
+Terminus 2 supplies its session to LiteLLM, which may serialize it as
+`extra_body.session_id` on Anthropic requests. Pin a bridge-capable BitRouter
+that unwraps `extra_body` and drops this upstream-invalid field after the trace
+headers have already captured the exact session. Do not remove the explicit
+workflow headers to work around the body error.
 
 Set `x-bitrouter-workflow-session` to the exact value later emitted as the Harbor outcome `session_key`. Confirm the header on a captured canary request. Do not use prompt hashes, body metadata, response IDs, or overlapping time windows as the primary parallel attribution key.
 

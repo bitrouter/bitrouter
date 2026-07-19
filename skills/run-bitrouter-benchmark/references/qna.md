@@ -293,3 +293,19 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 **Cause / diagnostic:** Terminus 2 is a normal downstream client and should not originate Claude Code credentials, identity headers, or the Claude Agent SDK identity system block. Current BitRouter treats the explicit `claude-code:<model>` target as the operator's subscription-use boundary and constructs the OAuth-compatible Claude Code request on the upstream side, preserving the client's original system instructions. The older rejection—or a generic upstream 429 when the official CLI succeeds with the same token/model—means the serving binary predates the complete bridge, or the request did not resolve to the explicit provider-qualified target. A bare canonical Claude model still cannot auto-cascade onto a personal subscription.
 
 **Safe action:** Pin and verify a bridge-capable BitRouter source/binary, set the long-lived `CLAUDE_CODE_OAUTH_TOKEN` only in the protected central daemon environment before startup, and use an explicit `claude-code:<model>` target. Keep the token, Claude Code agent-profile header, and injected identity block out of Harbor, Terminus 2, sandbox, manifest, and artifact configuration. First run a no-beta standard Anthropic sentinel, then a real Terminus 2 EC2 canary; accept only with the intended provider/model trace, four-bucket settlement, strict cost/reward/session joins, TrialResult, and zero AWS residue.
+
+## Q36. Why does a Terminus 2 Anthropic canary return 404 without adding a BitRouter trace?
+
+**Symptom:** LiteLLM raises `NotFoundError`, its masked URL ends in `/v1/v1/messages`, and the daemon trace count remains at the direct sentinel only.
+
+**Cause / diagnostic:** The Anthropic handler appends `/v1/messages` to `api_base`. Reusing the OpenAI-style `http://host:port/v1` base therefore duplicates the version segment and misses BitRouter's `/v1/messages` route before routing, metering, or settlement can begin.
+
+**Safe action:** For `model_name: anthropic/<model>`, set `api_base` to `http://host:port` with no `/v1` suffix. Keep `/v1` for OpenAI-provider Terminus 2 configurations. Validate the frozen TrialConfig, run a fresh immutable non-evaluation identity, and preserve the failed identity rather than retrying it.
+
+## Q37. Why does Anthropic reject `extra_body` after the Terminus request reaches BitRouter?
+
+**Symptom:** Route traces appear, but every model call fails with `invalid_request_error: extra_body: Extra inputs are not permitted`; the traced inbound body contains `extra_body.session_id`.
+
+**Cause / diagnostic:** Terminus 2 passes its session into Harbor's LiteLLM wrapper. Some Anthropic-handler versions serialize the provider-extension container instead of merging it, but Anthropic Messages does not accept `extra_body` or a body-level `session_id`. The same session is already present in the immutable BitRouter workflow headers.
+
+**Safe action:** Use a bridge-capable BitRouter build that merges non-conflicting `extra_body` extensions into the outbound body, gives explicit top-level fields precedence, and drops `session_id` only after request/session tracing has captured the headers. Do not patch the scored artifact or retry the consumed identity; rebuild, freeze a new binary and run identity, and repeat the non-evaluation canary.
