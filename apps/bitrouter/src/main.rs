@@ -3723,14 +3723,14 @@ mod tests {
         .expect("parse reliability report");
 
         match cli.command {
-            Command::WorkflowState {
+            Some(Command::WorkflowState {
                 action:
                     WorkflowStateAction::ReliabilityReport {
                         database_url,
                         config,
                         output,
                     },
-            } => {
+            }) => {
                 assert_eq!(database_url, "sqlite:///tmp/bitrouter.db");
                 assert_eq!(config, PathBuf::from("/tmp/bitrouter.yaml"));
                 assert_eq!(output, PathBuf::from("/tmp/reliability.json"));
