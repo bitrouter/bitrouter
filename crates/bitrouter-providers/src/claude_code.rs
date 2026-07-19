@@ -416,23 +416,11 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         mut request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
-        // Gate: only genuine Claude Code traffic may spend the subscription.
-        // We detect it by the Claude Code agent-profile beta the client itself
-        // sent (`anthropic-beta: claude-code-…`) — the same marker the Pro/Max
-        // subscription endpoint keys on — and NEVER fabricate it. A request that
-        // reaches this provider without it (e.g. a hand-typed `claude-code:<model>`
-        // that bypassed the ingress router) is refused. This replaces the older,
-        // version-brittle check on the system-prompt identity string: current
-        // Claude Code (CLI, Agent SDK, `bitrouter spawn`) no longer leads its
-        // system with that exact text, but always carries the agent-profile beta.
-        if !request_has_claude_code_beta(&request) {
-            return Err(BitrouterError::Upstream {
-                status: 400,
-                message: "the claude-code subscription provider only accepts Claude Code requests \
-                          (missing the Claude Code agent-profile beta)"
-                    .into(),
-            });
-        }
+        // Reaching this applier means routing already resolved an explicit
+        // `claude-code:<model>` target. That explicit target is the
+        // subscription-use boundary. Downstream clients speak normal Anthropic
+        // Messages; this applier owns the OAuth/Claude-Code upstream
+        // transformation below.
         let label = self.label_for(target);
         let resolved = self.resolve_credential(label).await?;
         // `anthropic-version` is mandatory regardless of credential type.
@@ -528,30 +516,6 @@ fn merged_beta_value<'a>(client_betas: impl Iterator<Item = &'a str>) -> String 
     out.join(",")
 }
 
-/// Whether the request carries the Claude Code agent-profile beta — the
-/// `anthropic-beta: claude-code-…` value genuine Claude Code sends (and the
-/// Pro/Max subscription endpoint keys on). The beta header is a comma-joined
-/// list; any token whose name starts with `claude-code` counts, so the check is
-/// stable across the dated suffix (`claude-code-20250219`, future dates).
-/// Matching the protocol marker — not the version-dependent system-prompt text —
-/// is what makes detection robust across Claude Code's CLI / Agent-SDK shapes.
-fn request_has_claude_code_beta(request: &reqwest::Request) -> bool {
-    request
-        .headers()
-        .get_all("anthropic-beta")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(beta_value_has_claude_code)
-}
-
-/// Whether a single (possibly comma-joined) `anthropic-beta` header value
-/// contains the Claude Code agent-profile beta.
-pub(crate) fn beta_value_has_claude_code(value: &str) -> bool {
-    value
-        .split(',')
-        .any(|b| b.trim().starts_with("claude-code"))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -592,14 +556,16 @@ mod tests {
         }
     }
 
-    /// A request as it reaches the applier: it carries the Claude Code
-    /// agent-profile beta, which the `apply` gate requires — like genuine
-    /// Claude Code traffic. Tests of the post-gate behaviour start from this.
-    fn cc_request() -> reqwest::Request {
-        let mut req = reqwest::Client::new()
+    fn standard_request() -> reqwest::Request {
+        reqwest::Client::new()
             .post("https://api.anthropic.com/v1/messages")
             .build()
-            .unwrap();
+            .unwrap()
+    }
+
+    /// A request from genuine Claude Code, including its agent-profile beta.
+    fn cc_request() -> reqwest::Request {
+        let mut req = standard_request();
         req.headers_mut().insert(
             "anthropic-beta",
             HeaderValue::from_static("claude-code-20250219"),
@@ -608,26 +574,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_rejects_request_without_agent_profile_beta() {
-        // The gate: a request that reaches the subscription provider without the
-        // Claude Code agent-profile beta (e.g. a hand-typed `claude-code:<model>`
-        // that bypassed the ingress router) is refused, before any credential is
-        // spent. Genuine Claude Code always carries the beta.
+    async fn explicit_route_adds_agent_profile_to_standard_anthropic_request() {
         let path = tmp_store_path();
-        seed_marker(&path);
-        let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
-        let req = reqwest::Client::new()
-            .post("https://api.anthropic.com/v1/messages")
-            .build()
-            .unwrap(); // no anthropic-beta
-        let err = applier.apply(req, &cc_target(None)).await.unwrap_err();
-        assert!(
-            matches!(err, BitrouterError::Upstream { status: 400, .. }),
-            "expected a 400 gate rejection, got: {err}"
+        let applier = ClaudeCodeAuthApplier::new(&path)
+            .unwrap()
+            .with_env_oauth_token(Some(OAuthToken {
+                access_token: "sk-ant-oat-env".into(),
+                expires_at: 0,
+                refresh_token: None,
+            }));
+        let mut req = standard_request();
+        req.headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("downstream-key"));
+
+        let authed = applier.apply(req, &cc_target(None)).await.unwrap();
+        let headers = authed.headers();
+        let beta = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        assert!(beta.contains("claude-code-20250219"));
+        assert!(beta.contains("oauth-2025-04-20"));
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer sk-ant-oat-env")
         );
-        assert!(
-            err.to_string().contains("agent-profile beta"),
-            "expected the gate message, got: {err}"
+        assert!(headers.get("x-api-key").is_none());
+        assert_eq!(
+            headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(headers::CLAUDE_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            headers.get("x-app").and_then(|value| value.to_str().ok()),
+            Some(headers::CLAUDE_CODE_X_APP)
         );
     }
 
@@ -635,7 +618,7 @@ mod tests {
     async fn errors_when_no_session() {
         let path = tmp_store_path();
         let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
-        let req = cc_request();
+        let req = standard_request();
         let err = applier.apply(req, &cc_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
