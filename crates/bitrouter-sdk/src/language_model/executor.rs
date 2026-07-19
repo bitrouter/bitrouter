@@ -1725,6 +1725,8 @@ mod openai_codex_stream_bridge_tests {
             api_key: "unused".into(),
             api_protocol: ApiProtocol::Responses,
             chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
             account_label: None,
             api_key_override: None,
             api_base_override: None,
