@@ -110,9 +110,13 @@ For both modes, prove:
 - the central host has no unexpected listener on selected ports;
 - controller, daemon, Harbor, and archive paths are writable by the intended user only.
 
+Long-running commands must be owned by a persistent central supervisor (for example, a named tmux pane or systemd unit), not by the operator's SSH connection. This is especially important when SSH uses Tailscale or `ProxyJump`: a jump timeout is not a benchmark terminal state. SSH should poll retained output, exit status, markers, processes, and exact AWS tags.
+
 ## 4. Build and start BitRouter
 
 Checkout the full frozen commit and confirm the worktree/patch state. Build with the recorded command, compute the serving binary hash, and compare it with `binary SHA-256` in the manifest.
+
+Also prove target compatibility: record central-host OS/architecture, use the pinned target or central toolchain (including an absolute Cargo path when non-interactive SSH omits it from `PATH`), and require the serving artifact to be a matching Linux ELF before execution. A hash of a macOS artifact is not a valid Linux build proof.
 
 Validate control and policy configs through that binary:
 
@@ -169,11 +173,14 @@ Pin a Harbor revision that treats a vanished tmux pane/session as typed `Termina
 
 Run these gates without consuming the scored manifest:
 
-1. one direct strong-route request through BitRouter;
-2. one direct balanced/economy request through BitRouter;
-3. one real Terminus 2 trial in an ephemeral EC2 sandbox;
-4. one session-end fixture if the Harbor revision changed;
-5. one cleanup cycle proving zero sandbox residue.
+1. a harness/provider compatibility check before credentials or resource allocation;
+2. one direct strong-route request through BitRouter;
+3. one direct balanced/economy request through BitRouter;
+4. one real Terminus 2 trial in an ephemeral EC2 sandbox;
+5. one session-end fixture if the Harbor revision changed;
+6. one cleanup cycle proving zero sandbox residue.
+
+Each canary/preflight uses a fresh immutable non-evaluation identity and owner-only evidence directory. Preserve config validation, daemon log, sanitized provider response, trace, and an accepted/rejected marker even when the request fails. Validate the real Harbor `TrialConfig`, controller manifest, and daemon config before creating any scored run root.
 
 The canary passes only when:
 
@@ -255,6 +262,10 @@ Use the exact options supported by the pinned binary. A broad time window may lo
 
 For timeout or client-disconnect paths, use the pinned reconciliation interface to query authoritative receipts with the same stable request ID. Poll only within the frozen grace/attempt budget. Accept `computed` or authoritative `not_charged`; retain `pending` or `unknown` as a rejection, never as zero.
 
+Immediately before freezing a Cloud lineage, fetch the authenticated `/v1/models` entry for every selected model and save only its public model and pricing fields as the price snapshot. Do not assume the OSS registry revision is current. Reconstruct every computed receipt with that exact snapshot; an `authoritative_charge_mismatch` is a fail-closed pricing-drift signal, not permission to estimate. A corrected postprocess may reopen the same receipt rows and rebuild missing artifacts only when it launches zero Harbor cases and preserves the original rejection evidence.
+
+When Cloud inference authenticates from `account-credentials.json`, prefer the same owner-only credential store for receipt reconciliation if the pinned binary supports `--credentials-file`. This keeps OAuth refresh inside the process and avoids exporting the bearer. Otherwise declare the exact API-key environment source in the private manifest. A present credential file is not sufficient: a non-evaluation inference sentinel must prove that its refresh token is still accepted.
+
 Build and validate the bundle before reward mutates policy state. Independently reconstruct it from the database/request IDs and compare totals. A postprocess-only recovery may use a separately pinned binary, but it must launch zero cases, preserve original artifacts, avoid routing-state mutation, and record its own hash and actions.
 
 For accepted policy groups, apply feedback through the pinned `workflow-state apply-reward-feedback` interface and archive the result plus policy-state snapshots.
@@ -311,3 +322,5 @@ Archive accepted and rejected groups. Include manifests, sanitized configs, cont
 Do not archive live credentials, prompt/provider secrets, SSH keys, credential-store databases, or shell history. Keep request IDs, session IDs, timestamps, raw usage, decisions, and rewards needed for reproducibility unless a public privacy policy requires a documented transformation.
 
 Raise concurrency with new non-evaluation canaries, not inside a scored lineage. A cautious sequence is 1 for session validation, then separately frozen 3, 4, 6, and 8 candidates. At each step require complete TrialResults, authoritative settlement, strict joins, acceptable provider latency/error behavior, observed peak equal to the declared value, and zero AWS residue. A successful canary authorizes only a future new lineage at that fixed value.
+
+Once an operator freezes a value for a new lineage (for example 4 after a successful staged decision), write it into every manifest and controller-capacity field before launch and keep it unchanged across control and r1-r3. A one-case preflight may observe a peak of one even when its controller capacity is four; multi-case capacity validation must use enough predeclared non-evaluation cases to exercise the declared peak.

@@ -3759,11 +3759,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1296,
-              "no_cache": 0.612
+              "cache_read": 0.1425,
+              "no_cache": 0.7125
             },
             "output_tokens": {
-              "text": 3.069
+              "text": 3.0
             }
           },
           "provider": "bitrouter",

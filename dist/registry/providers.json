@@ -2289,11 +2289,11 @@
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1296,
-              "no_cache": 0.612
+              "cache_read": 0.1425,
+              "no_cache": 0.7125
             },
             "output_tokens": {
-              "text": 3.069
+              "text": 3.0
             }
           },
           "provider_model_id": "moonshotai/kimi-k2.7-code"

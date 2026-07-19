@@ -12,6 +12,7 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 | Q16-Q20 | Isolation, resume, postprocessing, controls, and trials |
 | Q21-Q26 | Provider errors, settlement, cache-aware cost, and reward semantics |
 | Q27-Q29 | Concurrency, cleanup, and publication |
+| Q30-Q33 | Target-platform builds, persistent operators, preflight evidence, and Cloud OAuth |
 
 ## Q1. Which parts of the benchmark are fixed, and which are configurable?
 
@@ -244,3 +245,51 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 **Cause / diagnostic:** Internal mechanism evidence may use short13/~20 tasks and one trial per case; public reproduction uses all 89 tasks and five predeclared trials, declared held-out semantics, provenance, and uncertainty. Actual charge and notional list-price cost are different series, and raw archives may contain secrets.
 
 **Safe action:** Match the claim to the run class, report tuning versus held-out behavior, separate actual/notional economics, publish every round/failure and registry provenance, sanitize credentials/keys/private paths without deleting request/session/usage evidence, checksum the release, and secret-scan both upload and download.
+
+## Q30. Why does a binary with the expected SHA fail with `Exec format error` on EC2?
+
+**Symptom:** The serving binary hash matches the operator's manifest, but the central Linux host refuses to execute it.
+
+**Cause / diagnostic:** SHA-256 proves byte identity, not target compatibility. The artifact was built on macOS or for another architecture and then copied to an `x86_64` Linux central host. Non-interactive SSH may also omit `~/.cargo/bin` from `PATH`, hiding the actual central Rust toolchain.
+
+**Safe action:** Record `uname -m`, build the exact commit on the target host or with a pinned matching cross-toolchain, invoke the recorded absolute Cargo path, and require both the new SHA-256 and an ELF/architecture check before any provider preflight or run identity is created. Never reuse the incompatible artifact's path or hash.
+
+## Q31. Why must a benchmark process not live inside the operator's SSH session?
+
+**Symptom:** A direct SSH command works for short probes but the Tailscale/ProxyJump connection closes during a model call or Harbor trial, leaving the operator unsure whether the remote process survived.
+
+**Cause / diagnostic:** The control connection became the job supervisor. Jump-host banner latency and transport resets are independent of Harbor, the daemon, and EC2 lifecycle; a child started in a new process session may even outlive a killed parent.
+
+**Safe action:** Run provider canaries and benchmark groups under a named persistent central supervisor such as tmux or systemd. Freeze the command before launch, retain output and exit status, and let SSH perform read-only polling. After any disconnect, first audit the exact PID, port, run root, event log, and EC2 tags; never launch a second attempt merely because the local SSH client lost contact.
+
+## Q32. Why must failed preflights keep their logs?
+
+**Symptom:** A direct provider sentinel returns non-2xx, but a temporary-directory cleanup deletes the daemon log and response body before diagnosis.
+
+**Cause / diagnostic:** The preflight was treated as disposable even though it is the evidence that protects scored identities from installation, protocol, credential, and entitlement failures.
+
+**Safe action:** Give every preflight a fresh immutable non-evaluation identity and owner-only directory. Preserve config validation, daemon log, sanitized response, trace, and exactly one `PREFLIGHT_ACCEPTED` or `PREFLIGHT_REJECTED` marker. Refuse in-place reruns; after a fix, advance the preflight identity while leaving scored case identities untouched.
+
+## Q33. Why can BitRouter Cloud routing return `invalid_grant` even though a credential file exists?
+
+**Symptom:** The built-in Cloud provider finds `account-credentials.json`, attempts OAuth refresh, and returns a 401/502 chain ending in `invalid_grant`; receipt reconciliation may separately ask for `BITROUTER_API_KEY`.
+
+**Cause / diagnostic:** Presence and mode `0600` do not prove that an OAuth refresh token is still accepted. A copied or rotated credential can be stale. Older reconciliation CLIs accepted only an exported inference key even though the provider itself could consume the protected OAuth store.
+
+**Safe action:** Preserve the rejected preflight, run a new interactive `bitrouter cloud login` device flow on the central credential store, and never print/copy the resulting bearer. Use a pinned reconciliation interface that accepts the same protected credential file (or a declared API-key environment source), then advance to a new preflight identity and require both real inference and authoritative receipt settlement before a scored launch.
+
+## Q34. Why can a Cloud receipt be computed but reconciliation still fail with `authoritative_charge_mismatch`?
+
+**Symptom:** The receipt contains the same request ID, model, provider, and four token buckets as the local row, yet strict reconciliation stores it as `unknown` and rejects the artifact.
+
+**Cause / diagnostic:** The run froze a stale per-token price snapshot. Cloud model prices can change independently of the OSS registry revision; an exact receipt charge therefore cannot be reconstructed from old rates even when usage identity is perfect.
+
+**Safe action:** Immediately before freezing a lineage, fetch the authenticated Cloud `/v1/models` record, retain only the public model/pricing fields in an owner-only configuration snapshot, and reconcile with those exact rates. Treat the authoritative receipt as the charge source and the frozen rates as an integrity cross-check. Preserve the rejected postprocess attempt; if the case and TrialResult are complete, use a zero-launch postprocess recovery rather than rerunning the trial. Update stale OSS registry data separately and rebuild before a later lineage.
+
+## Q35. Can Terminus 2 use a Claude Code subscription as its model provider?
+
+**Symptom:** A fixed route points Terminus 2 at `claude-code:<model>`, but the provider rejects the request for a missing Claude Code agent-profile beta.
+
+**Cause / diagnostic:** The Claude Code subscription route deliberately accepts only genuine Claude Code client traffic carrying its own `anthropic-beta: claude-code-*` marker. Terminus 2 speaks OpenAI-compatible requests and does not originate that marker. Adding it in BitRouter or the benchmark config would impersonate another harness and defeat the provider safety boundary.
+
+**Safe action:** Fail the compatibility gate before credentials, run roots, or EC2 allocation. For a Terminus 2 benchmark use the separate `anthropic` API-key provider; to test the Claude Code subscription use a genuine Claude Code harness and label it as a different harness/control key. Never synthesize the agent-profile header.

@@ -3499,6 +3499,30 @@ api_base: https://api.acme.test/v1
         );
     }
 
+    #[test]
+    fn built_registry_uses_current_bitrouter_cloud_kimi_pricing() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root).expect("builds repository registry");
+        let providers: Value =
+            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+        let bitrouter = providers["data"]
+            .as_array()
+            .expect("provider data array")
+            .iter()
+            .find(|provider| provider["name"] == "bitrouter");
+
+        assert!(bitrouter.is_some(), "BitRouter Cloud provider");
+        assert_provider_mapping(
+            bitrouter,
+            "BitRouter Cloud",
+            "moonshotai/kimi-k2.7-code",
+            "moonshotai/kimi-k2.7-code",
+            0.7125,
+            (Some(0.1425), None),
+            3.0,
+        );
+    }
+
     fn assert_provider_mapping(
         provider: Option<&Value>,
         provider_name: &str,

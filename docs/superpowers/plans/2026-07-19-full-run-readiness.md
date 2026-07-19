@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Merge PR #717 with current main and prove one frozen BitRouter binary can serve the four provider/model routes required by a one-trial Terminal-Bench 2.1 full run through real Harbor, Terminus 2, central EC2, and ephemeral EC2 sandboxes without hot updates.
+**Goal:** Merge PR #717 with current main, prove one frozen BitRouter binary can serve every Terminus 2-compatible provider/model route required by a one-trial Terminal-Bench 2.1 full run, and fail closed on incompatible subscription routes before consuming identities or AWS resources.
 
-**Architecture:** Integrate in a clean worktree, compositionally resolve main/PR conflicts, regenerate derived artifacts, and freeze one release binary. Deploy that exact binary to the existing central EC2 host, then run four isolated concurrency-one non-scoring canaries with unique identities and strict trace, four-bucket settlement, session, TrialResult, and AWS cleanup gates. Any reusable operational finding is added to the documentation-only `run-bitrouter-benchmark` skill.
+**Architecture:** Integrate in a clean worktree, compositionally resolve main/PR conflicts, regenerate derived artifacts, and freeze one release binary. Deploy that exact binary to the existing central EC2 host, then run isolated non-scoring provider checks with controller capacity 4 and strict trace, four-bucket settlement, session, TrialResult, and AWS cleanup gates. Terminus 2 compatibility is checked before credentials or resource allocation, so unsupported subscription routes consume no trial identity. Any reusable operational finding is added to the documentation-only `run-bitrouter-benchmark` skill.
 
 **Tech Stack:** Rust/Cargo, BitRouter OpenAI-compatible ingress and provider adapters, Harbor, Terminus 2, Python controller, AWS EC2/Service Quotas/STS CLI, SQLite workflow-state evidence, Markdown Agent Skill.
 
@@ -13,9 +13,9 @@
 - Benchmark method is Terminal-Bench 2.1 + Harbor + Terminus 2 + one central EC2 daemon + one ephemeral EC2 sandbox per trial.
 - Run class is an internal one-trial mechanism run, not a public five-trial reproduction.
 - AWS selector is the explicit named access-key profile `benchmark-202607` in `us-east-2`; ambient/default AWS identity is forbidden.
-- Claude uses only the daemon-process `CLAUDE_CODE_OAUTH_TOKEN`; Codex uses the protected `openai-codex` OAuth store; Cloud uses the protected BitRouter credential source.
+- Terminus 2 must not use the `claude-code` subscription provider because it does not originate the genuine Claude Code agent-profile marker. Claude requires the separate `anthropic` API-key provider or is excluded. Codex uses the protected `openai-codex` OAuth store; Cloud uses the protected BitRouter credential source.
 - Provider secrets never enter Harbor configs, command arguments, traces, logs, manifests, Git, or chat.
-- Canary concurrency is one; scored full-run concurrency is frozen only after canary acceptance.
+- Every validation launched after 2026-07-20 has controller capacity 4. A one-case canary still has an observed sandbox peak of one; a multi-case capacity validation must exercise four.
 - No scored full-run case starts during this plan.
 - A serving binary/config is never replaced inside a canary or scored lineage.
 - The original dirty PR #717 worktree is preserved unchanged.
@@ -275,15 +275,15 @@ agent:
         x-bitrouter-workflow-session: EXACT_TRIAL_SESSION
 ```
 
-Replace the all-caps values before writing the operator-private configs. Validate each rendered object with Harbor's pinned `TrialConfig.model_validate`; expected count is four.
+Replace the all-caps values before writing the operator-private configs. Validate each executable object with Harbor's pinned `TrialConfig.model_validate`. The two `claude-code` subscription candidates stop at the compatibility gate; only Codex/Cloud configs are executable unless Claude is replaced by an `anthropic` API-key route.
 
-- [ ] **Step 2: Launch the Claude Fable 5 canary**
+- [x] **Step 2: Run the Claude Fable 5 compatibility gate**
 
-Run one predeclared non-scoring TrialConfig under `fullrun-readiness-claude-fable5-20260719-v1`, retry zero, concurrency one. Expected: one `started`, one `terminal_valid`, one TrialResult, verifier reward present, exact session match, and sandbox deletion.
+The gate rejected `claude-code:claude-fable-5` before creating a preflight/run root or AWS resource because Terminus 2 cannot supply a genuine Claude Code marker. The route is excluded unless replaced by an `anthropic` API-key route.
 
-- [ ] **Step 3: Launch the Claude Sonnet 5 canary**
+- [x] **Step 3: Run the Claude Sonnet 5 compatibility gate**
 
-Repeat only with the Sonnet identity/port/config. Expected: the same strict runtime result and a trace whose executed target is `claude-code:claude-sonnet-5`.
+The same pre-resource compatibility gate rejected `claude-code:claude-sonnet-5`; no trial identity or AWS resource was consumed.
 
 - [ ] **Step 4: Launch the Codex Sol canary**
 

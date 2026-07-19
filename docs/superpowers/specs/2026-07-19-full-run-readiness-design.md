@@ -80,8 +80,17 @@ trace file, and output directory. For every route:
 8. independently query AWS instances, volumes, and interfaces until exact-tag
    residue is zero.
 
-Canaries stay at concurrency one. They diagnose the full production path and
-do not consume a scored full-run trial identity.
+The controller capacity for all validations after 2026-07-20 is frozen at 4.
+A one-case route canary still launches and must observe exactly one sandbox;
+multi-case validation must use enough predeclared non-evaluation cases to
+exercise a peak of 4. Canaries do not consume a scored full-run trial identity.
+
+The harness/provider compatibility gate runs before credentials or resource
+allocation. Terminus 2 cannot use the `claude-code` subscription provider:
+that route requires a genuine Claude Code client marker, and BitRouter must not
+synthesize it. A Terminus 2 full run may include Claude only through the
+separate `anthropic` API-key provider; otherwise both Claude subscription routes
+remain excluded from the scored manifest.
 
 ## Evidence and acceptance
 
