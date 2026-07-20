@@ -33,7 +33,7 @@ description: 关于运行 BitRouter 的常见问题——自托管 vs Cloud、Cl
 | 可观测性（OTLP 追踪 + 指标导出） | ✅ | ✅ |
 | MCP 与 ACP 网关 | ✅ | ✅ |
 | 结构化输出 | ✅ | ✅ |
-| 命名空间隔离原语 | ✅ | ✅ |
+| 命名空间隔离原语 | 通过兼容的管理部署 | ✅ |
 | 托管供应商网络（无需上游密钥） | — | ✅ |
 | 开放模型价格折扣 | — | ✅ |
 | 团队席位与工作区级访问控制 | — | ✅ |
@@ -44,6 +44,8 @@ description: 关于运行 BitRouter 的常见问题——自托管 vs Cloud、Cl
 | Agent 自主支付市场 | — | ✅ |
 
 简而言之，Cloud 额外提供：托管供应商网络（[托管模型](/docs/get-started/supported-models)——无需上游密钥，开放模型享折扣）、带严格作用域密钥的团队[工作区](/docs/features/namespaces)、托管可观测性控制台、托管的按请求计费，以及可用性 SLA。其余能力两种模式皆有。
+
+具体到变体与预设：自托管 OSS 支持在 `bitrouter.yaml` 中定义 `variants` 与 `presets`；Cloud 额外提供内置的托管路由 profile，以及按命名空间管理的路由预设。
 
 ## 对比
 

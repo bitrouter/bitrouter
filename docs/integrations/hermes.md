@@ -39,7 +39,7 @@ For **Cloud**, set `base_url` to `https://api.bitrouter.ai/v1` and use your BitR
 
 ## Pick a model
 
-The `model` field takes any registry id in `provider/model` form, optionally with a `:cost` / `:latency` variant. See [Models](/docs/concepts/models).
+The `model` field takes any registry id in `provider/model` form. On BitRouter Cloud, you can add a managed routing profile such as `:cost` / `:latency`; on a local OSS daemon, define matching `variants` in `bitrouter.yaml` first. See [Models](/docs/concepts/models).
 
 ## Learn more
 

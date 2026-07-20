@@ -1,13 +1,13 @@
 ---
 title: Provider Selection
-description: Choose how BitRouter ranks providers when a model is served by more than one — by cost, latency, or throughput.
+description: On BitRouter Cloud, choose how providers are ranked when a model is served by more than one — by cost, latency, or throughput.
 sourceHash: 08b021ccc3b9394f871bb91d23e8b05efba77e223208d9a19f2ba08e51b49f72
 ---
 
-Most models on BitRouter are served by more than one provider. When you request `openai/gpt-4o`, BitRouter has to pick which registered endpoint to send the request to. By default it uses a balanced score; with the `provider.sort` field, you choose the policy explicitly.
+Most Cloud models on BitRouter are served by more than one provider. When you request `openai/gpt-4o`, BitRouter has to pick which registered endpoint to send the request to. By default it uses a balanced score; add a `model:<profile>` suffix when you want to choose a policy explicitly.
 
 <Callout type="warn">
-**Today, choose a policy with the [`model:<profile>` suffix](/docs/features/model-variants)** — e.g. `openai/gpt-4o:latency`. The `provider.sort` request-body field described on this page is planned and **not yet active**; the suffix is the supported surface.
+**Today, choose a managed routing policy with the [`model:<profile>` suffix](/docs/features/model-variants)** — e.g. `openai/gpt-4o:latency`. A request-body field such as `provider.sort` is planned and **not yet active**; use the suffix in live Cloud requests.
 </Callout>
 
 There are three policies. Pick whichever matters most for the request.
@@ -25,42 +25,42 @@ Telemetry is refreshed every minute. The same data is visible on each model's pa
 ## Quick example
 
 ```bash
-curl http://127.0.0.1:4356/v1/chat/completions \
+curl https://api.bitrouter.ai/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BITROUTER_API_KEY" \
   -d '{
-    "model": "openai/gpt-4o",
-    "provider": { "sort": "latency" },
+    "model": "openai/gpt-4o:latency",
     "messages": [{"role": "user", "content": "Translate to French: Hello."}]
   }'
 ```
 
-The same `provider.sort` field works on `/v1/messages` (Anthropic) and `/v1beta/models/{model}:generateContent` (Google).
+The same model suffix is honored on `/v1/chat/completions`, `/v1/messages` (Anthropic), and `/v1beta/models/{model}:generateContent` (Google).
 
 ## BYOK providers come first
 
-If you've [added an external key](/docs/features/byok) for a provider, BitRouter prefers that provider for any model it can serve — ahead of every non-BYOK provider, regardless of `provider.sort`. Your BYOK key bills against your own account at upstream list price with no rev share, and you opted into that provider explicitly; honoring that opt-in by default is the only choice that doesn't surprise you later.
+If you've [added an external key](/docs/features/byok) for a provider, BitRouter prefers that provider for any model it can serve — ahead of every non-BYOK provider, regardless of the selected profile. Your BYOK key bills against your own account at upstream list price with no rev share, and you opted into that provider explicitly; honoring that opt-in by default is the only choice that doesn't surprise you later.
 
-Within the BYOK-eligible set, the `provider.sort` policy still applies. So `provider.sort: "latency"` plus BYOK keys for OpenAI and Anthropic ranks those two by TTFT first, and falls back to non-BYOK providers (also ranked by latency) only if both BYOK paths fail.
+Within the BYOK-eligible set, the selected profile still applies. So `openai/gpt-4o:latency` plus BYOK keys for OpenAI and Anthropic ranks those two by TTFT first, and falls back to non-BYOK providers (also ranked by latency) only if both BYOK paths fail.
 
-In **local mode** this section is a no-op — every provider is BYOK by definition.
+In **local OSS mode**, built-in Cloud profile suffixes are not predeclared. Define `variants` or presets in `bitrouter.yaml` when you want local per-request routing selectors; otherwise a suffix remains part of the literal model id.
 
 ## Default behavior
 
-When `provider` is not set, BitRouter ranks by a **balanced score** — a weighted combination of cost, latency, throughput, and uptime, with low-uptime providers filtered out. This is the right default for most agents; specify a policy only when one axis dominates.
+When no profile suffix is present, BitRouter ranks by a **balanced score** — a weighted combination of cost, latency, throughput, and uptime, with low-uptime providers filtered out. This is the right default for most agents; specify a policy only when one axis dominates.
 
 <Callout type="info">
-**The default is not stable across versions.** The weights in the balanced score are tuned over time as we learn from real traffic. If you need a fixed, reproducible policy — for cost reporting, SLO tracking, or A/B tests — set `provider.sort` explicitly.
+**The default is not stable across versions.** The weights in the balanced score are tuned over time as we learn from real traffic. If you need a fixed, reproducible policy — for cost reporting, SLO tracking, or A/B tests — add a profile suffix explicitly.
 </Callout>
 
 ## How selection composes with fallback
 
 [Model fallback](/docs/features/model-fallback) and provider selection are independent layers:
 
-1. For each model in your `models` list (or the single `model` if no fallback), BitRouter applies your `provider.sort` policy to pick the best provider.
+1. For each model in your `models` list (or the single `model` if no fallback), BitRouter applies the policy encoded on that model id, or `balanced` when no suffix is present.
 2. If the chosen provider fails in a way that doesn't surface to the caller (rate limit, 5xx), BitRouter retries on the **next-ranked provider of the same model** before falling through to the next model in the list.
-3. The same `provider.sort` policy applies to every model in the fallback list — you cannot specify a different policy per model.
+3. Each fallback model string is resolved independently, so you can use the same suffix everywhere or pick different profiles per fallback entry.
 
-Concretely: `models: ["openai/gpt-4o", "anthropic/claude-sonnet-4-6"]` with `provider.sort: "cost"` evaluates the cheapest provider of GPT-4o first, then the cheapest provider of Sonnet, then surfaces the error.
+Concretely: `models: ["openai/gpt-4o:cost", "anthropic/claude-sonnet-4-6:cost"]` evaluates the cheapest provider of GPT-4o first, then the cheapest provider of Sonnet, then surfaces the error.
 
 ## When metrics are tied
 

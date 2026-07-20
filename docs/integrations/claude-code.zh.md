@@ -46,7 +46,7 @@ claude
 
 ## 选择模型
 
-`ANTHROPIC_MODEL` 接受 `provider/model` 形式的任意注册表 id——例如 `anthropic/claude-sonnet-4-6`、`openai/gpt-4o`、`google/gemini-2.5-pro`。加上 `:cost` 或 `:latency` 后缀可以为本次会话调整供应商选择倾向。可在会话中用 `/model <id>` 切换，或在启动时用 `claude --model <id>` 指定。完整的 id 命名方案见 [模型](/docs/concepts/models)。
+`ANTHROPIC_MODEL` 接受 `provider/model` 形式的任意注册表 id——例如 `anthropic/claude-sonnet-4-6`、`openai/gpt-4o`、`google/gemini-2.5-pro`。在 BitRouter Cloud 上，可添加 `:cost` 或 `:latency` 这类托管路由 profile，为本次会话调整供应商选择倾向；在本地 OSS 守护进程上，请先在 `bitrouter.yaml` 中定义对应的 `variants`。可在会话中用 `/model <id>` 切换，或在启动时用 `claude --model <id>` 指定。完整的 id 命名方案见 [模型](/docs/concepts/models)。
 
 ## 验证
 

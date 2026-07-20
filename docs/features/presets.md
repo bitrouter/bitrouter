@@ -1,12 +1,16 @@
 ---
 title: Presets
-description: Save a named @preset per namespace — a reusable bundle of base model, system prompt, params, and routing rules you invoke inline with @name.
+description: On BitRouter Cloud, save a named @preset per namespace — a reusable bundle of base model, system prompt, params, and routing rules you invoke inline with @name.
 sourceHash: 90a1b5a2af25e5fe3408474b108b5de98300d306800452813d8c56ab31f27d29
 ---
 
-A **preset** is a named, reusable routing configuration you save once on a namespace and invoke inline by putting `@<name>` in the `model` field. Where a [model variant](/docs/features/model-variants) (`:cost`) only re-ranks providers for one request, a preset can also **substitute the base model**, **prepend a system prompt**, **set default generation params**, and **restrict which providers are eligible** — all behind a single short token.
+On BitRouter Cloud and compatible managed routing deployments, a **preset** is a named, reusable routing configuration you save once on a namespace and invoke inline by putting `@<name>` in the `model` field. Where a [model variant](/docs/features/model-variants) (`:cost`) only re-ranks providers for one request, a preset can also **substitute the base model**, **prepend a system prompt**, **set default generation params**, and **restrict which providers are eligible** — all behind a single short token.
 
 Like a variant, the token lives in the `model` string itself, so it needs no body fields and no SDK — it works the same on the OpenAI, Anthropic, and Google surfaces. A request that uses `@fast` looks exactly like any other request; the preset is resolved server-side before routing.
+
+<Callout type="info">
+For a local OSS daemon, presets and variants are defined in `bitrouter.yaml` rather than saved through the namespace management API. Local suffixes are only stripped when their `variants` entries exist in that config.
+</Callout>
 
 ## Invoking a preset
 
@@ -62,8 +66,9 @@ curl -X POST https://api.bitrouter.ai/v1/namespaces/{nsid}/routing-presets \
 Then invoke it from any inference surface:
 
 ```bash
-curl http://127.0.0.1:4356/v1/chat/completions \
+curl https://api.bitrouter.ai/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BITROUTER_API_KEY" \
   -d '{
     "model": "@fast",
     "messages": [{"role": "user", "content": "Summarize this in one line."}]

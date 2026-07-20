@@ -50,7 +50,7 @@ opencode
 
 ## 选择模型
 
-`models` 下的每个键都是 `provider/model` 形式的注册表 id，可选地带上 `:cost` / `:latency` 变体。在 TUI 中选择一个，或运行 `opencode run --model bitrouter/openai/gpt-4o`。参见[模型](/docs/concepts/models)。
+`models` 下的每个键都是 `provider/model` 形式的注册表 id。在 BitRouter Cloud 上，可附带 `:cost` / `:latency` 这类托管路由 profile；在本地 OSS 守护进程上，请先在 `bitrouter.yaml` 中定义对应的 `variants`。在 TUI 中选择一个，或运行 `opencode run --model bitrouter/openai/gpt-4o`。参见[模型](/docs/concepts/models)。
 
 ## 了解更多
 

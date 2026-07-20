@@ -1,12 +1,16 @@
 ---
 title: 预设（Presets）
-description: 在命名空间上保存一个命名的 @preset——一个可复用的「基础模型 + 系统提示 + 参数 + 路由规则」组合，用 @name 内联调用。
+description: 在 BitRouter Cloud 中，在命名空间上保存一个命名的 @preset——一个可复用的「基础模型 + 系统提示 + 参数 + 路由规则」组合，用 @name 内联调用。
 sourceHash: 90a1b5a2af25e5fe3408474b108b5de98300d306800452813d8c56ab31f27d29
 ---
 
-**预设（preset）** 是你在命名空间上保存一次、之后通过在 `model` 字段里写 `@<name>` 来内联调用的一份命名路由配置。[模型变体](/docs/features/model-variants)（`:cost`）只为单个请求对供应商重新排序；而预设还能 **替换基础模型**、**注入系统提示**、**设置默认生成参数**，并 **限制可用的供应商**——全部收敛在一个简短的 token 后面。
+在 BitRouter Cloud 与兼容的托管路由部署中，**预设（preset）** 是你在命名空间上保存一次、之后通过在 `model` 字段里写 `@<name>` 来内联调用的一份命名路由配置。[模型变体](/docs/features/model-variants)（`:cost`）只为单个请求对供应商重新排序；而预设还能 **替换基础模型**、**注入系统提示**、**设置默认生成参数**，并 **限制可用的供应商**——全部收敛在一个简短的 token 后面。
 
 和变体一样，这个 token 本身就是 `model` 字符串的一部分，因此既不需要请求体字段、也不需要 SDK——在 OpenAI、Anthropic、Google 三套接口上行为一致。使用 `@fast` 的请求与任何普通请求别无二致；预设会在路由之前在服务端解析完成。
+
+<Callout type="info">
+对于本地 OSS 守护进程，presets 与 variants 在 `bitrouter.yaml` 中定义，而不是通过命名空间管理 API 保存。本地后缀只有在该配置中存在对应的 `variants` 条目时才会被剥离。
+</Callout>
 
 ## 调用一个预设
 
@@ -62,8 +66,9 @@ curl -X POST https://api.bitrouter.ai/v1/namespaces/{nsid}/routing-presets \
 然后在任意推理接口上调用它：
 
 ```bash
-curl http://127.0.0.1:4356/v1/chat/completions \
+curl https://api.bitrouter.ai/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BITROUTER_API_KEY" \
   -d '{
     "model": "@fast",
     "messages": [{"role": "user", "content": "Summarize this in one line."}]

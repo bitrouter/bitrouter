@@ -39,7 +39,7 @@ hermes config set model.base_url http://127.0.0.1:4356/v1
 
 ## 选择模型
 
-`model` 字段接受任意 `provider/model` 形式的 registry id，也可以附带 `:cost` / `:latency` 变体后缀。详见[模型](/docs/concepts/models)。
+`model` 字段接受任意 `provider/model` 形式的 registry id。在 BitRouter Cloud 上，也可以附带 `:cost` / `:latency` 这类托管路由 profile；在本地 OSS 守护进程上，请先在 `bitrouter.yaml` 中定义对应的 `variants`。详见[模型](/docs/concepts/models)。
 
 ## 了解更多
 

@@ -1,10 +1,10 @@
 ---
 title: 命名空间
-description: 将 API 密钥、策略和用量限定在单个部署内的隔离边界——适用于任何自托管或本地 BitRouter 节点。
+description: 将 API 密钥、策略和用量限定在单个部署内的隔离边界——适用于 BitRouter Cloud 与兼容的自托管管理部署。
 sourceHash: ef661d25cfb34736fe3297d140ebb9fff2a7a22dc5d7009358630c6f1fe474d1
 ---
 
-**命名空间**是 BitRouter 的隔离基元。API 密钥、策略和使用数据全部作用于单个命名空间。在自托管或本地节点上，你可以运行多个命名空间，将不同的项目、环境或 Agent 部署彼此隔离。
+**命名空间**是 BitRouter 的隔离基元。API 密钥、策略和使用数据全部作用于单个命名空间。在 BitRouter Cloud 或兼容的自托管管理部署上，你可以运行多个命名空间，将不同的项目、环境或 Agent 部署彼此隔离。
 
 ## 凭证模型：命名空间级密钥
 
@@ -29,7 +29,7 @@ bitrouter cloud namespace current   # 离线读取本地凭证
 bitrouter cloud whoami              # 同时打印已绑定的命名空间
 ```
 
-列出节点上的所有命名空间：
+列出管理端点上的所有命名空间：
 
 ```bash
 bitrouter cloud namespace list      # 所有命名空间，当前激活的标有 (active)
@@ -79,4 +79,4 @@ bitrouter cloud usage --from 2026-05-01T00:00:00Z --to 2026-06-01T00:00:00Z
 bitrouter cloud requests --limit 25                           # 分页请求日志
 ```
 
-使用命名空间级凭证的 Agent 或 CI 任务只能读取自身命名空间的用量——跨命名空间聚合需要由节点运维人员签发更宽泛的凭证。
+使用命名空间级凭证的 Agent 或 CI 任务只能读取自身命名空间的用量——跨命名空间聚合需要由管理端运维人员签发更宽泛的凭证。

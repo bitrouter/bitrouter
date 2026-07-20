@@ -43,7 +43,7 @@ Then pick the model with `/model` in the TUI.
 
 ## Pick a model
 
-Each `models[].id` is a registry id in `provider/model` form, optionally with a `:cost` / `:latency` variant. See [Models](/docs/concepts/models).
+Each `models[].id` is a registry id in `provider/model` form. On BitRouter Cloud, it may include a managed routing profile such as `:cost` / `:latency`; on a local OSS daemon, define matching `variants` in `bitrouter.yaml` first. See [Models](/docs/concepts/models).
 
 ## Learn more
 
