@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::routing::post;
@@ -702,6 +702,46 @@ async fn real_trace_capture_writes_sanitized_trace_jsonl_to_archive_path() {
         Some(&"session-a".to_string())
     );
     assert_eq!(archived[0].path, "/v1/chat/completions");
+}
+
+#[tokio::test]
+async fn real_trace_capture_archives_cancelled_inflight_request() {
+    let path = temp_path("cancelled-daemon-traces.jsonl");
+    let capture = RealTraceCapture::new(TraceCaptureOptions {
+        harness: HarnessId::Terminus2,
+        session_header: Some("x-bitrouter-workflow-session".to_string()),
+        archive_path: Some(path.clone()),
+    });
+    let router = axum::Router::new().route(
+        "/v1/chat/completions",
+        post(|| async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Json(json!({ "ok": true }))
+        }),
+    );
+    let server = TestServer::new(capture.router_wrapper()(router));
+
+    let request = server
+        .post("/v1/chat/completions")
+        .add_header("x-bitrouter-request-id", "cancelled-request-001")
+        .add_header("x-bitrouter-trial-id", "trial-cancelled")
+        .json(&json!({
+            "model": "openai-codex:gpt-5.6-sol",
+            "messages": [{ "role": "user", "content": "reply ok" }]
+        }));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), request)
+            .await
+            .is_err()
+    );
+
+    let archived = TraceArchive::read_jsonl(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].id, "cancelled-request-001");
+    assert_eq!(archived[0].outcome.http_status, 499);
+    assert_eq!(archived[0].outcome.status, "client_cancelled");
 }
 
 #[test]

@@ -65,6 +65,48 @@ struct CaptureInner {
     identity_tracker: WorkflowIdentityTracker,
 }
 
+struct PendingIngressTrace {
+    capture: RealTraceCapture,
+    record: Option<CapturedIngressTrace>,
+}
+
+impl PendingIngressTrace {
+    fn new(capture: RealTraceCapture, record: CapturedIngressTrace) -> Self {
+        Self {
+            capture,
+            record: Some(record),
+        }
+    }
+
+    fn finish(mut self, http_status: u16, success: bool) {
+        if let Some(mut record) = self.record.take() {
+            record.captured_at = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+            record.outcome = RealTraceOutcome {
+                http_status,
+                status: if success {
+                    "completed".to_string()
+                } else {
+                    "failed".to_string()
+                },
+            };
+            self.capture.push_record(record);
+        }
+    }
+}
+
+impl Drop for PendingIngressTrace {
+    fn drop(&mut self) {
+        if let Some(mut record) = self.record.take() {
+            record.captured_at = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+            record.outcome = RealTraceOutcome {
+                http_status: 499,
+                status: "client_cancelled".to_string(),
+            };
+            self.capture.push_record(record);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapturedIngressTrace {
     pub id: String,
@@ -213,27 +255,29 @@ impl RealTraceCapture {
         }
         let headers = headers_to_map(&parts.headers);
         let req = Request::from_parts(parts, Body::from(body_bytes));
-        let response = next.run(req).await;
-
-        if let (Some(protocol), Some(raw_body)) = (protocol, raw_body) {
-            self.push_record(CapturedIngressTrace {
-                id: request_id,
-                captured_at: Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
-                harness: self.inner.options.harness.clone(),
-                protocol,
-                method,
-                path,
-                headers,
-                raw_body,
-                outcome: RealTraceOutcome {
-                    http_status: response.status().as_u16(),
-                    status: if response.status().is_success() {
-                        "completed".to_string()
-                    } else {
-                        "failed".to_string()
+        let pending_trace = match (protocol, raw_body) {
+            (Some(protocol), Some(raw_body)) => Some(PendingIngressTrace::new(
+                self.clone(),
+                CapturedIngressTrace {
+                    id: request_id,
+                    captured_at: None,
+                    harness: self.inner.options.harness.clone(),
+                    protocol,
+                    method,
+                    path,
+                    headers,
+                    raw_body,
+                    outcome: RealTraceOutcome {
+                        http_status: 499,
+                        status: "client_cancelled".to_string(),
                     },
                 },
-            });
+            )),
+            _ => None,
+        };
+        let response = next.run(req).await;
+        if let Some(pending_trace) = pending_trace {
+            pending_trace.finish(response.status().as_u16(), response.status().is_success());
         }
 
         response
