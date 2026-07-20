@@ -691,6 +691,10 @@ async fn real_trace_capture_writes_sanitized_trace_jsonl_to_archive_path() {
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(archived.len(), 1);
+    assert!(
+        capture.records().is_empty(),
+        "archive-backed daemon capture must not retain full request bodies in an unbounded in-memory buffer"
+    );
     assert_eq!(archived[0].harness, HarnessId::Hermes);
     assert!(!archived[0].headers.contains_key("authorization"));
     assert_eq!(

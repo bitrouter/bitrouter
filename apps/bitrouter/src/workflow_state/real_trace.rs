@@ -301,6 +301,12 @@ impl RealTraceCapture {
             if let Err(e) = append_sanitized_trace(path, &record, &TraceSanitizer::default()) {
                 tracing::warn!(path = %path.display(), error = %e, "workflow trace archive append failed");
             }
+            // Archive-backed daemon capture is a streaming mode. Keeping the
+            // same full request body in `records` as well makes resident memory
+            // grow with the lifetime trace volume and eventually OOMs long
+            // benchmark runs. In-memory capture remains available when no
+            // archive path is configured (the default used by replay tests).
+            return;
         }
         self.inner
             .records
