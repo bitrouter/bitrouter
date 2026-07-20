@@ -275,12 +275,17 @@ impl RealTraceCapture {
             )),
             _ => None,
         };
-        let response = next.run(req).await;
         if let Some(pending_trace) = pending_trace {
-            pending_trace.finish(response.status().as_u16(), response.status().is_success());
+            return tokio::spawn(async move {
+                let response = next.run(req).await;
+                pending_trace.finish(response.status().as_u16(), response.status().is_success());
+                response
+            })
+            .await
+            .expect("workflow trace downstream task panicked");
         }
 
-        response
+        next.run(req).await
     }
 
     fn next_id(&self) -> String {

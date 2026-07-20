@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -705,18 +707,24 @@ async fn real_trace_capture_writes_sanitized_trace_jsonl_to_archive_path() {
 }
 
 #[tokio::test]
-async fn real_trace_capture_archives_cancelled_inflight_request() {
+async fn real_trace_capture_finishes_downstream_after_client_cancellation() {
     let path = temp_path("cancelled-daemon-traces.jsonl");
     let capture = RealTraceCapture::new(TraceCaptureOptions {
         harness: HarnessId::Terminus2,
         session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: Some(path.clone()),
     });
+    let downstream_completed = Arc::new(AtomicBool::new(false));
+    let completed = Arc::clone(&downstream_completed);
     let router = axum::Router::new().route(
         "/v1/chat/completions",
-        post(|| async {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-            Json(json!({ "ok": true }))
+        post(move || {
+            let completed = Arc::clone(&completed);
+            async move {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                completed.store(true, Ordering::SeqCst);
+                Json(json!({ "ok": true }))
+            }
         }),
     );
     let server = TestServer::new(capture.router_wrapper()(router));
@@ -735,13 +743,21 @@ async fn real_trace_capture_archives_cancelled_inflight_request() {
             .is_err()
     );
 
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !downstream_completed.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("downstream request should outlive the cancelled client future");
+
     let archived = TraceArchive::read_jsonl(&path).unwrap();
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(archived.len(), 1);
     assert_eq!(archived[0].id, "cancelled-request-001");
-    assert_eq!(archived[0].outcome.http_status, 499);
-    assert_eq!(archived[0].outcome.status, "client_cancelled");
+    assert_eq!(archived[0].outcome.http_status, 200);
+    assert_eq!(archived[0].outcome.status, "completed");
 }
 
 #[test]
