@@ -70,6 +70,27 @@ impl MeteringRecorder {
             _ => unavailable_charge_evidence(&usage, "pricing_not_found"),
         }
     }
+
+    fn normalize_policy_rejection(ctx: &mut SettlementContext) {
+        let is_policy_rejection = matches!(
+            ctx.error,
+            Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation { .. })
+        );
+        let has_no_usage = ctx.prompt_tokens == 0
+            && ctx.completion_tokens == 0
+            && ctx.reasoning_tokens == 0
+            && ctx.cache_read_tokens == 0
+            && ctx.cache_write_tokens == 0
+            && ctx.usage_origin == UsageOrigin::Unknown
+            && ctx.raw_usage.is_none();
+        if is_policy_rejection && has_no_usage {
+            ctx.usage_origin = UsageOrigin::ProviderReported;
+            ctx.raw_usage = Some(serde_json::json!({
+                "error": { "code": "upstream_policy_violation" },
+                "usage": null
+            }));
+        }
+    }
 }
 
 #[async_trait]
@@ -81,6 +102,7 @@ impl SettlementRecorder for MeteringRecorder {
             model = %ctx.model_id,
             "metering settlement started"
         );
+        Self::normalize_policy_rejection(ctx);
         let charge_evidence = self.charge_evidence(ctx);
         if charge_evidence.charge_micro_usd.is_none() {
             // Demoted from `warn` to `debug` — the per-request "finished"
@@ -123,7 +145,10 @@ impl SettlementRecorder for MeteringRecorder {
             latency_ms: ctx.request_duration_ms,
             generation_time_ms: ctx.upstream_duration_ms.unwrap_or(0),
             streamed: ctx.streamed,
-            error: ctx.error.as_ref().map(|e| e.to_string()),
+            error: ctx
+                .error
+                .as_ref()
+                .map(|error| error.error_code().to_string()),
         };
         self.store.record_request(metric).await?;
         tracing::debug!(

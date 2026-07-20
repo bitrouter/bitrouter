@@ -104,6 +104,8 @@ pub struct MeteringUsageRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authoritative_receipt: Option<serde_json::Value>,
     pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +134,7 @@ impl MeteringUsageRecord {
         for record in records {
             if record.charge_status == ChargeStatus::Computed
                 || record.reconciliation_status != ReconciliationStatus::NotApplicable
+                || record.usage_origin == UsageOrigin::Unknown
             {
                 continue;
             }
@@ -890,16 +893,41 @@ impl From<requests::Model> for MeteringUsageRecord {
         } else {
             None
         };
-        let usage_origin = match row.usage_origin.as_str() {
+        let mut usage_origin = match row.usage_origin.as_str() {
             "provider_reported" => UsageOrigin::ProviderReported,
             "authoritative_receipt" => UsageOrigin::AuthoritativeReceipt,
             "estimated" => UsageOrigin::Estimated,
             _ => UsageOrigin::Unknown,
         };
-        let raw_usage = row
+        let mut raw_usage = row
             .raw_usage_json
             .as_deref()
             .and_then(|json| serde_json::from_str(json).ok());
+        let error_code = row.error.as_deref().map(|error| {
+            if error == "upstream_policy_violation"
+                || error.contains("upstream policy violation")
+                || error.contains("upstream content policy violation")
+            {
+                "upstream_policy_violation".to_string()
+            } else {
+                "request_failed".to_string()
+            }
+        });
+        let legacy_policy_rejection = error_code.as_deref() == Some("upstream_policy_violation")
+            && usage_origin == UsageOrigin::Unknown
+            && raw_usage.is_none()
+            && row.prompt_tokens == 0
+            && row.completion_tokens == 0
+            && row.reasoning_tokens == 0
+            && row.cache_read_tokens == 0
+            && row.cache_write_tokens == 0;
+        if legacy_policy_rejection {
+            usage_origin = UsageOrigin::ProviderReported;
+            raw_usage = Some(serde_json::json!({
+                "error": { "code": "upstream_policy_violation" },
+                "usage": null
+            }));
+        }
         let authoritative_receipt = row
             .authoritative_receipt_json
             .as_deref()
@@ -925,6 +953,7 @@ impl From<requests::Model> for MeteringUsageRecord {
             reconciliation_attempts: row.reconciliation_attempts.max(0) as u32,
             authoritative_receipt,
             status: Some(status.to_string()),
+            error_code,
         }
     }
 }

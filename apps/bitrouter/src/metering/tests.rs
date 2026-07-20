@@ -487,6 +487,82 @@ async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> 
 }
 
 #[tokio::test]
+async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let mut settlement = ctx("policy", 0, 0);
+    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.raw_usage = None;
+    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation {
+        message: "provider detail must not persist".to_string(),
+    });
+
+    recorder.record(&mut settlement).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let record = records.first().expect("one usage record");
+
+    assert_eq!(
+        record.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+    );
+    assert_eq!(
+        record.raw_usage.as_ref(),
+        Some(&serde_json::json!({
+            "error": { "code": "upstream_policy_violation" },
+            "usage": null
+        }))
+    );
+    assert_eq!(record.final_charge_micro_usd, Some(0));
+    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(
+        record.error_code.as_deref(),
+        Some("upstream_policy_violation")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let mut settlement = ctx("legacy-policy", 0, 0);
+    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation {
+        message: "legacy provider detail".to_string(),
+    });
+    recorder.record(&mut settlement).await?;
+    pool.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "UPDATE requests SET usage_origin='unknown', raw_usage_json=NULL, \
+         charge_status='unknown', charge_evidence_json=NULL, \
+         error='upstream content policy violation' \
+         WHERE request_id='r-legacy-policy-0-0'",
+    ))
+    .await
+    .unwrap();
+
+    let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    let record = records.first().expect("one usage record");
+
+    assert_eq!(
+        record.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+    );
+    assert_eq!(
+        record.error_code.as_deref(),
+        Some("upstream_policy_violation")
+    );
+    assert!(record.raw_usage.is_some());
+    assert_eq!(record.final_charge_micro_usd, Some(0));
+    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn spend_aggregates_across_requests() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
@@ -660,6 +736,11 @@ fn usage_price_override_imputes_missing_charges() {
         model_id: "gpt-5.5".to_string(),
         prompt_tokens: 21,
         completion_tokens: 17,
+        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        raw_usage: Some(serde_json::json!({
+            "input_tokens": 21,
+            "output_tokens": 17
+        })),
         final_charge_micro_usd: Some(0),
         status: Some("completed".to_string()),
         ..Default::default()
@@ -677,6 +758,26 @@ fn usage_price_override_imputes_missing_charges() {
             .map(|evidence| evidence.pricing_source),
         Some(super::PricingSource::Override)
     );
+}
+
+#[test]
+fn usage_price_override_refuses_unknown_usage() {
+    let mut records = vec![super::MeteringUsageRecord {
+        id: Some("failed".to_string()),
+        request_id: Some("failed".to_string()),
+        provider_id: "openai-codex".to_string(),
+        model_id: "gpt-5.5".to_string(),
+        status: Some("failed".to_string()),
+        usage_origin: bitrouter_sdk::language_model::UsageOrigin::Unknown,
+        raw_usage: None,
+        ..Default::default()
+    }];
+    let original = records.clone();
+    let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
+
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+
+    assert_eq!(records, original);
 }
 
 #[test]
@@ -720,6 +821,13 @@ fn four_rate_override_prices_cache_buckets() {
         reasoning_tokens: 10,
         cache_read_tokens: 40,
         cache_write_tokens: 20,
+        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        raw_usage: Some(serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 30,
+            "cache_read_tokens": 40,
+            "cache_write_tokens": 20
+        })),
         ..Default::default()
     }];
     let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,0.2,2.5,10")
@@ -741,6 +849,12 @@ fn legacy_two_rate_override_refuses_cached_usage() {
         prompt_tokens: 100,
         completion_tokens: 30,
         cache_read_tokens: 40,
+        usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
+        raw_usage: Some(serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 30,
+            "cache_read_tokens": 40
+        })),
         ..Default::default()
     }];
     let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,10")
