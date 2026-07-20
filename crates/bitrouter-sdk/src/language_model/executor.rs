@@ -294,6 +294,18 @@ fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> 
     }
 }
 
+/// Preserve stable, actionable errors deliberately emitted by a protocol
+/// decoder. Other decoder failures describe malformed provider wire data and
+/// remain a sanitized 502 at the BitRouter boundary.
+fn classify_stream_decoder_error(error: BitrouterError) -> BitrouterError {
+    match error {
+        error @ BitrouterError::UpstreamPolicyViolation { .. } => error,
+        error => BitrouterError::UpstreamInvalidResponse {
+            message: error.to_string(),
+        },
+    }
+}
+
 fn upstream_body_error(context: &'static str, error: reqwest::Error) -> BitrouterError {
     if error.is_timeout() {
         BitrouterError::UpstreamTimeout
@@ -993,9 +1005,7 @@ impl Executor for HttpExecutor {
                                 }
                             }
                             Err(e) => {
-                                yield Err(BitrouterError::UpstreamInvalidResponse {
-                                    message: e.to_string(),
-                                });
+                                yield Err(classify_stream_decoder_error(e));
                                 return;
                             }
                         }
@@ -1019,9 +1029,7 @@ impl Executor for HttpExecutor {
                         yield Ok(p);
                     }
                 }
-                Err(e) => yield Err(BitrouterError::UpstreamInvalidResponse {
-                    message: e.to_string(),
-                }),
+                Err(e) => yield Err(classify_stream_decoder_error(e)),
             }
         };
 
@@ -1272,6 +1280,33 @@ mod error_classification_tests {
             );
             assert_eq!(error.status(), 502);
         }
+    }
+
+    #[test]
+    fn stream_decoder_preserves_typed_upstream_policy_violation() {
+        let error = classify_stream_decoder_error(BitrouterError::UpstreamPolicyViolation {
+            message: "provider detail must stay internal".to_string(),
+        });
+
+        assert!(matches!(
+            error,
+            BitrouterError::UpstreamPolicyViolation { .. }
+        ));
+        assert_eq!(error.status(), 403);
+        assert_eq!(error.error_code(), "upstream_policy_violation");
+        assert_eq!(error.public_message(), "upstream content policy violation");
+    }
+
+    #[test]
+    fn stream_decoder_still_wraps_generic_parse_errors_as_upstream_502() {
+        let error =
+            classify_stream_decoder_error(BitrouterError::bad_request("malformed provider event"));
+
+        assert!(matches!(
+            error,
+            BitrouterError::UpstreamInvalidResponse { .. }
+        ));
+        assert_eq!(error.status(), 502);
     }
 
     #[test]

@@ -264,7 +264,8 @@ pub(crate) fn classify_failure(error: &BitrouterError) -> InadequacyCause {
             401 | 403 => InadequacyCause::Auth,
             _ => InadequacyCause::ProviderPermanent,
         },
-        BitrouterError::UpstreamBadRequest { .. } => InadequacyCause::ProviderPermanent,
+        BitrouterError::UpstreamBadRequest { .. }
+        | BitrouterError::UpstreamPolicyViolation { .. } => InadequacyCause::ProviderPermanent,
         BitrouterError::UpstreamTimeout
         | BitrouterError::UpstreamRateLimited { .. }
         | BitrouterError::UpstreamUnavailable
@@ -838,6 +839,12 @@ mod tests {
         assert_eq!(
             classify_failure(&BitrouterError::UpstreamBadRequest {
                 error: serde_json::json!("unsupported parameter"),
+            }),
+            InadequacyCause::ProviderPermanent
+        );
+        assert_eq!(
+            classify_failure(&BitrouterError::UpstreamPolicyViolation {
+                message: "provider diagnostic".to_string(),
             }),
             InadequacyCause::ProviderPermanent
         );

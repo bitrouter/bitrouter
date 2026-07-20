@@ -799,6 +799,22 @@ fn openai_error_status(err_type: &str) -> u16 {
     }
 }
 
+fn openai_policy_violation(error: Option<&serde_json::Value>, message: &str) -> bool {
+    let policy_code = error
+        .and_then(|value| value.get("code").or_else(|| value.get("type")))
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| {
+            matches!(
+                value,
+                "content_policy_violation" | "content_filter" | "safety_violation"
+            )
+        });
+    let normalized = message.to_ascii_lowercase();
+    policy_code
+        || normalized.contains("flagged for possible cybersecurity risk")
+        || normalized.contains("content policy violation")
+}
+
 // Responses has no native finish-reason *string* to preserve: its terminal
 // signal is the response `status` (`completed` / `incomplete` / `failed`), a
 // small closed set that the unified [`FinishReason`] enum reproduces exactly on
@@ -2338,7 +2354,10 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 // errors don't always 502 here (which would trigger fallback
                 // retries). Spec:
                 // <https://platform.openai.com/docs/guides/error-codes>.
-                let error_obj = json.get("response").and_then(|r| r.get("error"));
+                let error_obj = json
+                    .get("response")
+                    .and_then(|r| r.get("error"))
+                    .or_else(|| json.get("error"));
                 let err_type = error_obj
                     .and_then(|e| e.get("type"))
                     .and_then(|t| t.as_str())
@@ -2348,6 +2367,11 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     .or_else(|| json.get("message"))
                     .and_then(|m| m.as_str())
                     .unwrap_or("responses stream error");
+                if openai_policy_violation(error_obj, msg) {
+                    return Err(BitrouterError::UpstreamPolicyViolation {
+                        message: msg.to_string(),
+                    });
+                }
                 return Err(BitrouterError::Upstream {
                     status: openai_error_status(err_type),
                     message: msg.to_string(),

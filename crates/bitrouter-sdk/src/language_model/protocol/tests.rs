@@ -2743,6 +2743,65 @@ fn responses_stream_error_maps_to_proper_http_status() {
 }
 
 #[test]
+fn responses_stream_top_level_error_retains_status_and_message() {
+    // The Responses API emits a bare `error` event with the error object at
+    // the top level, while `response.failed` nests it below `response`.
+    // Both shapes must preserve provider diagnostics for recovery decisions.
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let err = decoder
+        .decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: serde_json::json!({
+                "type": "error",
+                "error": { "type": "rate_limit_error", "message": "retry later" }
+            })
+            .to_string(),
+        })
+        .unwrap_err();
+    match err {
+        crate::error::BitrouterError::Upstream { status, message } => {
+            assert_eq!(status, 429, "rate_limit_error → 429");
+            assert_eq!(message, "retry later");
+        }
+        other => panic!("expected Upstream, got {other:?}"),
+    }
+}
+
+#[test]
+fn responses_stream_content_policy_error_is_typed_and_publicly_sanitized() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let err = decoder
+        .decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "server_error",
+                    "message": "This content was flagged for possible cybersecurity risk. internal-detail"
+                }
+            })
+            .to_string(),
+        })
+        .unwrap_err();
+
+    match err {
+        crate::error::BitrouterError::UpstreamPolicyViolation { message } => {
+            assert!(message.contains("internal-detail"));
+            let policy_error = crate::error::BitrouterError::UpstreamPolicyViolation { message };
+            assert_eq!(policy_error.status(), 403);
+            assert_eq!(policy_error.error_code(), "upstream_policy_violation");
+            assert_eq!(
+                policy_error.public_message(),
+                "upstream content policy violation"
+            );
+        }
+        other => panic!("expected UpstreamPolicyViolation, got {other:?}"),
+    }
+}
+
+#[test]
 fn streaming_decoders_emit_response_started_once() {
     // The 3 streaming protocols whose canonical IR previously dropped the
     // upstream response id now surface it as a one-shot `ResponseStarted`,
