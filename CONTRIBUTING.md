@@ -7,7 +7,7 @@ This guide covers how to report bugs, request features, submit pull requests, an
 ## Before You Start
 
 - Read the project introduction in [`README.md`](README.md)
-- Read the workspace architecture guide in [`DEVELOPMENT.md`](DEVELOPMENT.md)
+- Read the workspace architecture guide in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - Check existing issues and pull requests before opening a new one
 
 ## Reporting Bugs
@@ -82,7 +82,7 @@ If the provider uses an already-supported wire protocol (Chat Completions, Respo
 4. For stateful auth (OAuth, token-exchange), add an `AuthApplier` in `crates/bitrouter-providers/` keyed by the `auth.handler` name and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`).
 5. Add or update tests, and update user-facing docs + the `/bitrouter` skill when the provider list or env vars change.
 
-If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no current registry provider needs it — see the `ApiProtocol::Custom` escape hatch in [`crates/bitrouter-sdk/src/language_model/protocol/mod.rs`](crates/bitrouter-sdk/src/language_model/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`DEVELOPMENT.md`](DEVELOPMENT.md) for where each layer lives.
+If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no current registry provider needs it — see the `ApiProtocol::Custom` escape hatch in [`crates/bitrouter-sdk/src/language_model/protocol/mod.rs`](crates/bitrouter-sdk/src/language_model/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for where each layer lives.
 
 ## Questions and Discussion
 
