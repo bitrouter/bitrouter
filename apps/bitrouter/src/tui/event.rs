@@ -228,8 +228,10 @@ pub enum Effect {
     BridgeBootstrapApproved,
 }
 
-/// The channel message the loop receives. Carries the real `PendingPermission`
-/// handle (not `Clone`), which the loop stashes before deriving `AppEvent`.
+/// The channel message the loop receives. Carries a `PendingPermission` handle,
+/// which the loop stashes before deriving `AppEvent`. The handle is cloneable and
+/// its resolver is shared — answering (or the session tearing down) resolves the
+/// upstream exactly once; merely dropping it no longer denies.
 pub enum Incoming {
     Update {
         record_id: String,

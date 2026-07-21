@@ -85,8 +85,20 @@ const UPDATE_CHANNEL_CAPACITY: usize = 1024;
 ///
 /// Unresolved permissions are otherwise reaped only when the connection tears
 /// down — ACP v1 has no per-turn-cancel cleanup for in-flight permission
-/// requests — so a consumer must always resolve or drop each `PendingPermission`.
-#[derive(Debug)]
+/// requests.
+///
+/// # Shared once-only resolver
+///
+/// `PendingPermission` is **cloneable**: the resolver is shared behind an
+/// [`Arc`], so the session-scoped
+/// [`PermissionRegistry`](crate::permissions::PermissionRegistry) and any manager
+/// forwarder can each hold a clone. The upstream is answered exactly **once**
+/// (first [`resolve`](Self::resolve) wins; later calls are no-ops), and a mere
+/// consumer drop no longer defaults to Deny while another clone (the registry) is
+/// alive — that is what lets a permission survive a manager detach and be
+/// re-issued on reattach. The upstream defaults to the reject option only when
+/// the **last** clone drops (session teardown).
+#[derive(Debug, Clone)]
 pub struct PendingPermission {
     /// Id we minted for this request; stable for the life of the request.
     pub request_id: String,
@@ -97,19 +109,66 @@ pub struct PendingPermission {
     /// Carried so a consumer that re-issues the request (the down-facing agent)
     /// forwards the same options and resolves with the exact selection.
     pub options: Vec<PermissionOption>,
-    resolver: oneshot::Sender<RequestPermissionOutcome>,
+    /// Shared, once-only resolver back to the parked upstream handler.
+    resolver: Arc<PermissionResolver>,
+}
+
+/// The once-only sink that answers one upstream `request_permission`. Shared by
+/// every [`PendingPermission`] clone; the first `take` wins.
+#[derive(Debug)]
+struct PermissionResolver {
+    tx: Mutex<Option<oneshot::Sender<RequestPermissionOutcome>>>,
 }
 
 impl PendingPermission {
+    /// Build a pending item wrapping the parked handler's one-shot sender.
+    pub(crate) fn new(
+        request_id: String,
+        tool_call: ToolCallUpdate,
+        options: Vec<PermissionOption>,
+        resolver: oneshot::Sender<RequestPermissionOutcome>,
+    ) -> Self {
+        Self {
+            request_id,
+            tool_call,
+            options,
+            resolver: Arc::new(PermissionResolver {
+                tx: Mutex::new(Some(resolver)),
+            }),
+        }
+    }
+
     /// Answer this permission request with the **exact** outcome — the chosen
     /// `optionId` (or `Cancelled`) as selected by the consumer. The parked
     /// upstream handler validates the id against the offered options
-    /// ([`sanitize_selection`]) before
-    /// responding. Consumes the pending item; if the `PendingPermission` is
-    /// instead **dropped** without calling this, the upstream handler defaults
-    /// the response to the reject option.
-    pub fn resolve(self, outcome: RequestPermissionOutcome) {
-        let _ = self.resolver.send(outcome);
+    /// ([`sanitize_selection`]) before responding. **Idempotent**: the first call
+    /// (across any clone) answers the upstream; later calls are no-ops. If every
+    /// clone is instead **dropped** without calling this, the upstream handler
+    /// defaults the response to the reject option.
+    pub fn resolve(&self, outcome: RequestPermissionOutcome) {
+        if let Ok(mut guard) = self.resolver.tx.lock()
+            && let Some(tx) = guard.take()
+        {
+            let _ = tx.send(outcome);
+        }
+    }
+
+    /// Whether the upstream has already been answered (or the resolver lock was
+    /// poisoned — treated as resolved so a broken entry is not re-offered). The
+    /// [`PermissionRegistry`](crate::permissions::PermissionRegistry) filters on
+    /// this so a resolved permission is never replayed on reattach.
+    pub fn is_resolved(&self) -> bool {
+        self.resolver.tx.lock().map(|g| g.is_none()).unwrap_or(true)
+    }
+
+    /// Answer this request with the reject option — the safe default when no
+    /// manager will ever broker it (the headless `bitrouter acp prompt` path).
+    /// Convenience over [`resolve`](Self::resolve); idempotent. This is now
+    /// **explicit** because, unlike before the session-scoped registry,
+    /// *dropping* a `PendingPermission` no longer defaults to Deny (a registry
+    /// clone keeps it alive for a possible reattach).
+    pub fn deny(&self) {
+        self.resolve(select_option(PermissionOutcome::Deny, &self.options));
     }
 }
 
@@ -662,12 +721,12 @@ async fn drive(
                     // reject default). Clone once for the parked task; move the
                     // rest into the item.
                     let options = request.options.clone();
-                    let pending_item = PendingPermission {
+                    let pending_item = PendingPermission::new(
                         request_id,
-                        tool_call: request.tool_call,
-                        options: request.options,
-                        resolver: item_tx,
-                    };
+                        request.tool_call,
+                        request.options,
+                        item_tx,
+                    );
                     // If no one is listening on the permissions stream the item
                     // is dropped immediately and `item_rx` resolves to `Deny`.
                     let _ = perm_tx.unbounded_send(pending_item);
