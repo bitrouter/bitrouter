@@ -211,6 +211,42 @@ async fn computed_receipt_replaces_local_usage_only_when_charge_matches() -> Res
 }
 
 #[tokio::test]
+async fn authoritative_half_micro_charge_matches_provider_rounding() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder =
+        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
+    let mut settlement = ctx("half-micro", 1, 1);
+    settlement.provider_id = "bitrouter".to_string();
+    recorder.record(&mut settlement).await?;
+    let receipt = SettlementReceipt {
+        request_id: settlement.request_id.clone(),
+        state: SettlementState::Computed,
+        model_id: Some("model-a".to_string()),
+        provider_id: Some("ambient".to_string()),
+        usage: SettlementUsage {
+            uncached_input_tokens: 1_137,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            output_tokens: 213,
+            reasoning_tokens: 45,
+        },
+        final_charge_micro_usd: Some(1_985),
+    };
+    let prices = [super::UsagePriceOverride::parse(
+        "ambient:model-a=0.84,0.84,0.84,3.99",
+    )?];
+
+    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+
+    assert_eq!(status, super::ReconciliationStatus::Computed);
+    assert_eq!(records[0].final_charge_micro_usd, Some(1_985));
+    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn authoritative_charge_mismatch_fails_closed() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());

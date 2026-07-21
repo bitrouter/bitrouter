@@ -419,18 +419,6 @@ pub fn calculate_charge_evidence(
             "missing_cache_write_rate",
             "invalid_cache_write_rate",
         ),
-        (
-            normalized_usage.output_tokens,
-            effective_rates.output_micro_usd_per_token,
-            "missing_output_rate",
-            "invalid_output_rate",
-        ),
-        (
-            normalized_usage.reasoning_tokens,
-            effective_rates.output_micro_usd_per_token,
-            "missing_output_rate",
-            "invalid_output_rate",
-        ),
     ];
     let mut charge = 0.0;
     for (tokens, rate, missing_reason, invalid_reason) in buckets {
@@ -454,6 +442,34 @@ pub fn calculate_charge_evidence(
         };
         charge += bucket;
     }
+
+    // Output and reasoning tokens are charged at the same rate. Combine their
+    // individually clamped counts before multiplication so a half-micro-USD
+    // boundary is rounded exactly once, matching provider receipt semantics.
+    let output_tokens = normalized_usage
+        .output_tokens
+        .min(MAX_TRUSTED_TOKENS)
+        .saturating_add(normalized_usage.reasoning_tokens.min(MAX_TRUSTED_TOKENS));
+    let output_rate = effective_rates.output_micro_usd_per_token;
+    if output_tokens > 0 && output_rate.is_some_and(|value| !value.is_finite() || value < 0.0) {
+        return unknown_evidence(
+            normalized_usage,
+            effective_rates,
+            pricing_source,
+            pricing_version,
+            "invalid_output_rate",
+        );
+    }
+    let Some(output_charge) = charge_for_tokens(output_tokens, output_rate) else {
+        return unknown_evidence(
+            normalized_usage,
+            effective_rates,
+            pricing_source,
+            pricing_version,
+            "missing_output_rate",
+        );
+    };
+    charge += output_charge;
 
     ChargeEvidence {
         status: ChargeStatus::Computed,
@@ -528,7 +544,11 @@ fn hash_rate(hasher: &mut Sha256, rate: Option<f64>) {
 /// is zero (no work to bill, rate may legitimately be missing); `None` when
 /// the bucket has nonzero usage but no rate.
 fn bucket_charge(tokens: u64, rate: Option<f64>) -> Option<f64> {
-    let tokens = tokens.min(MAX_TRUSTED_TOKENS);
+    charge_for_tokens(tokens.min(MAX_TRUSTED_TOKENS), rate)
+}
+
+/// Calculate one contribution from an already bounded token count.
+fn charge_for_tokens(tokens: u64, rate: Option<f64>) -> Option<f64> {
     match (tokens, rate) {
         (0, _) => Some(0.0),
         (n, Some(r)) => Some(n as f64 * r),
@@ -584,6 +604,24 @@ mod tests {
         assert_eq!(evidence.normalized_usage.reasoning_tokens, 10);
         assert_eq!(evidence.pricing_source, PricingSource::Configured);
         assert!(evidence.pricing_version.starts_with("sha256:"));
+    }
+
+    /// Regression for full89 Sol r2: output and reasoning share one provider
+    /// rate, so their tokens must be combined before rounding the final charge.
+    /// Multiplying the two buckets separately can move an exact half-micro-USD
+    /// boundary below 1984.5 due to binary floating-point accumulation.
+    #[test]
+    fn shared_output_rate_rounds_after_combining_completion_tokens() {
+        let pricing = ModelPricing::cache_aware(Some(0.84), Some(0.84), Some(0.84), Some(3.99));
+        let usage = Usage {
+            prompt_tokens: 1_137,
+            completion_tokens: 258,
+            reasoning_tokens: 45,
+            origin: UsageOrigin::ProviderReported,
+            ..Default::default()
+        };
+
+        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(1_985));
     }
 
     #[test]
