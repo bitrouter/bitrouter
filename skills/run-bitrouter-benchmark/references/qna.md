@@ -12,7 +12,7 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 | Q16-Q20 | Isolation, resume, postprocessing, controls, and trials |
 | Q21-Q26 | Provider errors, settlement, cache-aware cost, and reward semantics |
 | Q27-Q29 | Concurrency, cleanup, and publication |
-| Q30-Q33 | Target-platform builds, persistent operators, preflight evidence, and Cloud OAuth |
+| Q30-Q37 | Target-platform builds, persistent operators, Cloud/Claude OAuth, settlement, and protocol shaping |
 
 ## Q1. Which parts of the benchmark are fixed, and which are configurable?
 
@@ -282,9 +282,9 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 **Symptom:** The receipt contains the same request ID, model, provider, and four token buckets as the local row, yet strict reconciliation stores it as `unknown` and rejects the artifact.
 
-**Cause / diagnostic:** The run froze a stale per-token price snapshot. Cloud model prices can change independently of the OSS registry revision; an exact receipt charge therefore cannot be reconstructed from old rates even when usage identity is perfect.
+**Cause / diagnostic:** First recompute the charge from the serialized frozen rates with decimal arithmetic and the provider's documented final-rounding rule. If that result differs from the receipt, the price snapshot is stale: Cloud prices can change independently of the OSS registry revision. If decimal recomputation matches the receipt but the pinned binary differs, the defect is local charge arithmetic. In particular, output and reasoning tokens commonly share one output rate; multiplying them as separate binary floating-point buckets can move an exact half-micro-USD boundary below the value the provider rounds.
 
-**Safe action:** Immediately before freezing a lineage, fetch the authenticated Cloud `/v1/models` record, retain only the public model/pricing fields in an owner-only configuration snapshot, and reconcile with those exact rates. Treat the authoritative receipt as the charge source and the frozen rates as an integrity cross-check. Preserve the rejected postprocess attempt; if the case and TrialResult are complete, use a zero-launch postprocess recovery rather than rerunning the trial. Update stale OSS registry data separately and rebuild before a later lineage.
+**Safe action:** For stale prices, fetch the authenticated Cloud `/v1/models` record immediately before freezing a lineage, retain only public model/pricing fields in an owner-only snapshot, and reconcile with those exact rates. For arithmetic divergence, add an exact failing receipt case, combine token classes that share one rate before multiplication while preserving each class's trust cap and audit fields, then deploy a new immutable postprocessing binary. In both cases, treat the receipt as the charge source and frozen rates as an integrity cross-check; archive the rejected staging and use a zero-launch postprocess recovery when the case and TrialResult are complete. Never loosen equality, add an epsilon, rewrite SQLite, or rerun a valid trial to hide the mismatch.
 
 ## Q35. Can Terminus 2 use a Claude Code subscription as its model provider?
 
