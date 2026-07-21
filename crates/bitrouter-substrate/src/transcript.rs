@@ -22,6 +22,12 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::task::JoinHandle;
 
 /// One transcript entry, before the writer stamps `seq` and `ts`.
+///
+/// The turn-lifecycle entries (`TurnStart`/`TurnEnd`) mirror the v2-shaped
+/// [`TurnState`](crate::turn_state::TurnState) so `down::replay_transcript` can
+/// re-emit them as `_bitrouter/turn_state` notifications on reattach — this is
+/// what lets a reattaching manager see turn boundaries and completion that ACP
+/// v1 otherwise reports only in the (connection-bound) `session/prompt` response.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TranscriptEvent {
@@ -30,10 +36,23 @@ pub enum TranscriptEvent {
     /// A raw upstream `session/update`, verbatim. Boxed to keep the enum's
     /// variants comparably sized (`SessionUpdate` is large).
     Update { update: Box<SessionUpdate> },
-    /// A prompt turn resolved.
-    Result { stop_reason: StopReason },
+    /// A prompt turn started (v2 `running`). Carries the per-session monotonic
+    /// turn index so replay can reconstruct the turn lifecycle.
+    TurnStart { turn_seq: u64 },
+    /// A prompt turn ended (v2 `idle`). Supersedes the pre-turn-state `result`
+    /// entry (which the reader still tolerates); `stop_reason` is optional —
+    /// absent for a turn that failed with no clean stop reason.
+    TurnEnd {
+        turn_seq: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stop_reason: Option<StopReason>,
+    },
     /// A prompt turn failed (transport/pipeline error, timeout, …).
-    Error { message: String },
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_seq: Option<u64>,
+    },
 }
 
 /// The stamped line as it appears on disk.
@@ -138,8 +157,9 @@ mod tests {
             blocks: vec![ContentBlock::Text(TextContent::new("hi".to_string()))],
         })
         .expect("send");
-        tx.send(TranscriptEvent::Result {
-            stop_reason: StopReason::EndTurn,
+        tx.send(TranscriptEvent::TurnEnd {
+            turn_seq: 0,
+            stop_reason: Some(StopReason::EndTurn),
         })
         .expect("send");
         drop(tx);
@@ -154,7 +174,8 @@ mod tests {
         assert_eq!(lines[0]["seq"], 0);
         assert_eq!(lines[0]["kind"], "prompt");
         assert_eq!(lines[1]["seq"], 1);
-        assert_eq!(lines[1]["kind"], "result");
+        assert_eq!(lines[1]["kind"], "turn_end");
+        assert_eq!(lines[1]["turn_seq"], 0);
         assert_eq!(lines[1]["stop_reason"], "end_turn");
         assert!(lines[0]["ts"].as_u64().unwrap() > 0);
     }
@@ -169,8 +190,9 @@ mod tests {
         for _ in 0..2 {
             let (tx, rx) = unbounded_channel();
             let writer = spawn_writer(path.clone(), rx);
-            tx.send(TranscriptEvent::Result {
-                stop_reason: StopReason::EndTurn,
+            tx.send(TranscriptEvent::TurnEnd {
+                turn_seq: 0,
+                stop_reason: Some(StopReason::EndTurn),
             })
             .expect("send");
             drop(tx);
