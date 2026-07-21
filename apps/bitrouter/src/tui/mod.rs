@@ -1814,7 +1814,9 @@ async fn cleanup(rt: &mut Runtime<'_>) {
         pane.kill();
     }
     abort_prompt_tasks(&mut rt.prompt_tasks).await;
-    // Dropping a PendingPermission defaults it to Deny in the substrate.
+    // Drop the TUI's pending-permission clones; the upstream is denied when the
+    // session tears down below (the registry's clone is the last one). Since the
+    // session-scoped registry, dropping a clone alone no longer defaults to Deny.
     rt.pending.clear();
     // Dropping the leases frees the ports for the next fleet.
     rt.fleet.leases.clear();

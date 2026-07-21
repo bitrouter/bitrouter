@@ -81,7 +81,7 @@ use anyhow::Context as _;
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
-    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate,
+    RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate, StopReason,
 };
 use agent_client_protocol::{
     Agent, Channel, Client, ConnectTo, ConnectionTo, Dispatch, Handled, Responder, Stdio,
@@ -90,6 +90,7 @@ use futures::StreamExt;
 use futures::channel::oneshot;
 
 use crate::engine::Session;
+use crate::turn_state::TurnState;
 
 /// Method names this endpoint answers explicitly. Everything else under the
 /// `fs/` and `terminal/` namespaces (and any unknown method) gets a JSON-RPC
@@ -392,12 +393,17 @@ pub fn serve_on(
             },
             agent_client_protocol::on_receive_dispatch!(),
         )
-        // ── forwarding plane: spawn the two upstream→manager pumps ──────────
+        // ── forwarding plane: spawn the upstream→manager pumps ──────────────
         .connect_with(
             transport,
             move |connection: ConnectionTo<Client>| async move {
                 spawn_update_forwarder(&connection, &session_forward, record_for_forward.clone())?;
                 spawn_permission_forwarder(&connection, &session_forward)?;
+                spawn_turn_state_forwarder(
+                    &connection,
+                    &session_forward,
+                    record_for_forward.clone(),
+                )?;
                 // Keep the connection (and its handlers/forwarders) alive until
                 // the manager disconnects (incoming EOF), then return so
                 // `run_until` tears `background` down — cancelling the forwarding
@@ -438,8 +444,48 @@ fn spawn_update_forwarder(
     })
 }
 
+/// Spawn the task that forwards each [`TurnState`] transition to the manager as a
+/// `_bitrouter/turn_state` extension notification — the durable, replayable turn
+/// lifecycle (`running`/`idle`/`requires_action`). Bitrouter's own managers key
+/// completion off this stream (the `session/prompt` response is a bare ack for
+/// them); a third-party v1 client ignores the unknown notification and uses the
+/// response instead.
+fn spawn_turn_state_forwarder(
+    connection: &ConnectionTo<Client>,
+    session: &Arc<Session>,
+    record_id: String,
+) -> agent_client_protocol::Result<()> {
+    let mut turn_states = session.turn_state();
+    let conn = connection.clone();
+    connection.spawn(async move {
+        while let Some(state) = turn_states.next().await {
+            let notification = match state.to_notification(&record_id) {
+                Ok(notification) => notification,
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping unencodable turn state");
+                    continue;
+                }
+            };
+            // A send error means the connection is going away; stop forwarding.
+            if conn.send_notification(notification).is_err() {
+                break;
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Spawn the task that re-issues each upstream [`PendingPermission`] to the
 /// manager and resolves it with the manager's decision.
+///
+/// [`Session::permissions`] is **re-subscribable**: this fresh subscription first
+/// replays every still-unresolved permission, then streams new ones. So on a
+/// manager reattach a new forwarder re-issues any permission that was outstanding
+/// when the previous connection dropped — the detach/reattach fix. Because the
+/// pending item is a shared clone, a manager going away mid-flight no longer
+/// defaults the upstream to Deny (the session's registry keeps the resolver
+/// alive); the permission simply stays pending until some manager answers it or
+/// the session tears down.
 fn spawn_permission_forwarder(
     connection: &ConnectionTo<Client>,
     session: &Arc<Session>,
@@ -456,21 +502,20 @@ fn spawn_permission_forwarder(
             );
             // Drive each round-trip in its own task so a slow manager decision
             // never stalls the forwarder (and the dispatch loop) for the next
-            // permission. The pending item moves in so its resolver lives until
-            // the manager answers; if the connection drops mid-flight the item
-            // is dropped, defaulting the upstream to Deny.
+            // permission.
             conn.spawn({
                 let conn = conn.clone();
                 async move {
-                    match conn.send_request(request).block_task().await {
+                    if let Ok(resp) = conn.send_request(request).block_task().await {
                         // Resolve with the manager's outcome verbatim: the exact
-                        // chosen optionId is preserved end-to-end (up.rs
-                        // validates it against the offered set).
-                        Ok(resp) => pending.resolve(resp.outcome),
-                        // Manager errored or went away: drop the pending item,
-                        // which defaults the upstream to Deny so it never hangs.
-                        Err(_) => drop(pending),
+                        // chosen optionId is preserved end-to-end (up.rs validates
+                        // it against the offered set). Idempotent — a racing
+                        // reattach that also answered is a no-op.
+                        pending.resolve(resp.outcome);
                     }
+                    // Manager errored or went away: leave `pending` unresolved. Its
+                    // clone in the session registry keeps the upstream resolver
+                    // alive, so a reattached manager can still answer it.
                     Ok(())
                 }
             })?;
@@ -481,8 +526,10 @@ fn spawn_permission_forwarder(
 
 /// Replay the durable transcript at `path` to the manager as `session/update`
 /// notifications: `prompt` lines become `user_message_chunk` updates (one per
-/// content block), `update` lines are re-sent verbatim, `result`/`error`
-/// lines are skipped (turn boundaries are implicit in the update stream).
+/// content block), `update` lines are re-sent verbatim, and `turn_start`/
+/// `turn_end` (and legacy `result`/`error`) lines are re-emitted as
+/// `_bitrouter/turn_state` notifications so a reattached manager sees the turn
+/// lifecycle and completion.
 /// A missing file replays nothing (the session simply has no events yet);
 /// malformed lines are skipped with a warning rather than failing the load.
 async fn replay_transcript(
@@ -535,11 +582,78 @@ async fn replay_transcript(
                     }
                 }
             }
-            // result / error lines mark turn boundaries; nothing to replay.
+            // Turn boundaries → `_bitrouter/turn_state` (running/idle). This is
+            // the reattach signal ACP v1 otherwise reports only in the
+            // connection-bound `session/prompt` response, so replaying it is what
+            // lets a reattached manager see turn completion. A legacy `result`
+            // line (pre-turn-state transcript) maps to idle; `error` maps to idle
+            // with no stop reason so a reattached manager isn't left waiting.
+            Some("turn_start") => {
+                if let Some(turn_seq) = value.get("turn_seq").and_then(|v| v.as_u64()) {
+                    send_turn_state(conn, record_id, &TurnState::Running { turn_seq })?;
+                }
+            }
+            Some("turn_end") => {
+                let turn_seq = value.get("turn_seq").and_then(|v| v.as_u64()).unwrap_or(0);
+                let stop_reason = replay_stop_reason(&value);
+                send_turn_state(
+                    conn,
+                    record_id,
+                    &TurnState::Idle {
+                        turn_seq,
+                        stop_reason,
+                    },
+                )?;
+            }
+            Some("result") => {
+                let stop_reason = replay_stop_reason(&value);
+                send_turn_state(
+                    conn,
+                    record_id,
+                    &TurnState::Idle {
+                        turn_seq: 0,
+                        stop_reason,
+                    },
+                )?;
+            }
+            Some("error") => {
+                let turn_seq = value.get("turn_seq").and_then(|v| v.as_u64()).unwrap_or(0);
+                send_turn_state(
+                    conn,
+                    record_id,
+                    &TurnState::Idle {
+                        turn_seq,
+                        stop_reason: None,
+                    },
+                )?;
+            }
             _ => {}
         }
     }
     Ok(())
+}
+
+/// Encode and send a `_bitrouter/turn_state` notification; an encode error is
+/// logged and swallowed so a single bad entry never fails the whole replay.
+fn send_turn_state(
+    conn: &ConnectionTo<Client>,
+    record_id: &str,
+    state: &TurnState,
+) -> agent_client_protocol::Result<()> {
+    match state.to_notification(record_id) {
+        Ok(notification) => conn.send_notification(notification),
+        Err(e) => {
+            tracing::warn!(error = %e, "skipping unencodable turn state in replay");
+            Ok(())
+        }
+    }
+}
+
+/// Parse a transcript line's optional `stop_reason` field into a [`StopReason`].
+fn replay_stop_reason(value: &serde_json::Value) -> Option<StopReason> {
+    value
+        .get("stop_reason")
+        .and_then(|v| serde_json::from_value::<StopReason>(v.clone()).ok())
 }
 
 #[cfg(all(test, unix))]
@@ -824,6 +938,113 @@ mod tests {
                         assert!(
                             chose.contains("chose:allow"),
                             "expected allow option chosen, got: {chose}"
+                        );
+                        Ok(())
+                    })
+                    .await;
+
+                assert!(client_result.is_ok(), "client failed: {client_result:?}");
+                agent.abort();
+                let _ = agent.await;
+                drop(session);
+            })
+            .await;
+    }
+
+    /// A live prompt puts the turn lifecycle on the wire as `_bitrouter/turn_state`
+    /// notifications (the completion signal bitrouter managers key off). Proves
+    /// the down-facing forwarder encodes `TurnState` onto the connection; the
+    /// encoding shape itself is covered by `turn_state`'s unit tests.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn serve_forwards_turn_state_notifications() {
+        use agent_client_protocol::schema::ProtocolVersion;
+        use agent_client_protocol::schema::v1::{
+            InitializeRequest, NewSessionRequest, PromptRequest, StopReason,
+        };
+        use agent_client_protocol::{Channel, Client, ConnectionTo};
+        use tokio::task::LocalSet;
+
+        const BASH_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let (session, _base) = launch_stub_session(BASH_STUB).await;
+                let (agent_channel, client_channel) = Channel::duplex();
+                let agent = tokio::task::spawn_local(serve_on(Arc::clone(&session), agent_channel));
+
+                // Custom `_bitrouter/turn_state` notifications reach the dispatch
+                // catch-all (they are not a typed notification); capture their
+                // serialized params.
+                let (ts_tx, mut ts_rx) = futures::channel::mpsc::unbounded::<serde_json::Value>();
+
+                let client_result = Client
+                    .builder()
+                    .name("test-manager")
+                    .on_receive_dispatch(
+                        move |message: Dispatch, _cx: ConnectionTo<Agent>| {
+                            let ts_tx = ts_tx.clone();
+                            async move {
+                                if let Dispatch::Notification(notif) = &message
+                                    && notif.method == crate::turn_state::TURN_STATE_METHOD
+                                {
+                                    let _ = ts_tx.unbounded_send(notif.params.clone());
+                                }
+                                Ok(Handled::No {
+                                    message,
+                                    retry: false,
+                                })
+                            }
+                        },
+                        agent_client_protocol::on_receive_dispatch!(),
+                    )
+                    .connect_with(client_channel, |cx: ConnectionTo<Agent>| async move {
+                        cx.send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .block_task()
+                            .await?;
+                        let ns = cx
+                            .send_request(NewSessionRequest::new(std::path::PathBuf::from("/")))
+                            .block_task()
+                            .await?;
+                        let resp = cx
+                            .send_request(PromptRequest::new(
+                                ns.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new("do X".to_string()))],
+                            ))
+                            .block_task()
+                            .await?;
+                        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+                        // Collect turn-state notifications until we see the idle
+                        // (completion) transition — proving the lifecycle reached
+                        // the wire, keyed to our record id.
+                        let mut saw_idle = false;
+                        for _ in 0..8 {
+                            match ts_rx.next().await {
+                                Some(v) => {
+                                    if v.get("state").and_then(|s| s.as_str()) == Some("idle") {
+                                        assert_eq!(v["stopReason"], "end_turn");
+                                        assert!(v.get("sessionId").is_some(), "carries sessionId");
+                                        saw_idle = true;
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                        assert!(
+                            saw_idle,
+                            "expected an idle _bitrouter/turn_state on the wire"
                         );
                         Ok(())
                     })

@@ -1253,7 +1253,7 @@ fn spawn_auto_policy(inner: &Arc<FleetInner>, session: &Arc<Session>, handle: St
                                     subagent = %handle, tool = %title,
                                     "denied by the orchestrator conversation (elicitation)"
                                 );
-                                drop(pending);
+                                pending.deny();
                                 continue;
                             }
                             // Round-trip failed — fall through to the existing
@@ -1278,14 +1278,14 @@ fn spawn_auto_policy(inner: &Arc<FleetInner>, session: &Arc<Session>, handle: St
                                     subagent = %handle, tool = %title,
                                     "TUI link lost — denied (high risk)"
                                 );
-                                drop(pending);
+                                pending.deny();
                             }
                         }
                         continue;
                     }
                     // (3) Headless: deny.
                     tracing::warn!(subagent = %handle, tool = %title, "denied (high risk, no human in the loop)");
-                    drop(pending); // dropping resolves as the reject option
+                    pending.deny();
                 }
             }
         }

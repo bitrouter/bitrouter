@@ -32,6 +32,7 @@
 
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -47,15 +48,18 @@ use bitrouter_sdk::acp::{
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::error::{BitrouterError, Result as SdkResult};
 use futures::Stream;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::executor::SessionExecutor;
+use crate::permissions::PermissionRegistry;
 use crate::record::{RecordStatus, RecordStore, SessionRecord, now_unix};
 use crate::session::{SessionState, SessionStatus};
 use crate::telemetry::{RequestCompleted, TelemetryHook};
 use crate::transcript::TranscriptEvent;
 use crate::translate::SessionUpdateKind;
 use crate::turn::TurnController;
+use crate::turn_state::TurnState;
 use crate::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
 use crate::worktree::{WorktreeManager, WorktreeSpec};
 
@@ -72,6 +76,13 @@ const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
 /// How long [`Session::shutdown`] waits for the transcript writer to flush its
 /// tail after every sender has been dropped.
 const TRANSCRIPT_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Capacity of the broadcast that fans [`TurnState`] transitions out to live
+/// consumers (the down-facing turn-state forwarder). Turn-state events are
+/// human-scale (a few per turn), so this only needs to absorb a brief burst; a
+/// consumer that lags past it skips ahead (the durable transcript is the
+/// non-lossy record used on reattach).
+const TURN_STATE_CHANNEL_CAPACITY: usize = 256;
 
 /// Options for [`Session::launch`].
 #[derive(Debug, Clone)]
@@ -200,6 +211,17 @@ pub struct Session {
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
+    /// Session-scoped registry of outstanding permission requests. The sole
+    /// consumer of the upstream (take-once) permission stream; re-exposes it as a
+    /// re-subscribable stream so a reattached manager sees the outstanding set
+    /// instead of an empty stream. See [`crate::permissions`].
+    permissions: Arc<PermissionRegistry>,
+    /// Source of [`TurnState`] transitions (`running`/`idle`/`requires_action`),
+    /// the durable, replayable turn lifecycle. The turn worker and the permission
+    /// pump emit into it; the down-facing endpoint subscribes and encodes each as
+    /// a `_bitrouter/turn_state` notification. Re-subscribable (cloned per
+    /// [`Session::turn_state`]); the durable transcript is the non-lossy record.
+    turn_state_tx: broadcast::Sender<TurnState>,
 }
 
 impl Session {
@@ -459,6 +481,42 @@ impl Session {
             (None, None, None)
         };
 
+        // ── Permission registry (sole consumer of the take-once upstream feed) ─
+        // One pump drains the upstream permission stream into a session-scoped
+        // registry; every manager connection (re)subscribes to the registry, so a
+        // reattached manager sees any permission that was outstanding when it
+        // left instead of an empty stream. See `crate::permissions`.
+        let permissions = Arc::new(PermissionRegistry::new());
+
+        // ── Turn-state lifecycle (v2-shaped running/idle/requires_action) ──────
+        // The turn worker mints a per-session monotonic `turn_seq` and emits
+        // `running`/`idle`; the permission pump emits `requires_action` for the
+        // active turn. Turns are serialized, so `current_turn` (the last-minted
+        // seq) is always the turn a mid-turn permission belongs to.
+        let (turn_state_tx, _) = broadcast::channel::<TurnState>(TURN_STATE_CHANNEL_CAPACITY);
+        let turn_counter = Arc::new(AtomicU64::new(0));
+        let current_turn = Arc::new(AtomicU64::new(0));
+
+        {
+            use futures::StreamExt as _;
+            let registry = Arc::clone(&permissions);
+            let mut upstream_permissions = conn.subscribe_permissions();
+            let pump_turn_state = turn_state_tx.clone();
+            let pump_current_turn = Arc::clone(&current_turn);
+            tokio::spawn(async move {
+                while let Some(pending) = upstream_permissions.next().await {
+                    // A pending permission blocks the active turn — surface it as
+                    // `requires_action` (live-only; not persisted) before parking
+                    // it in the registry for a manager to answer.
+                    let _ = pump_turn_state.send(TurnState::RequiresAction {
+                        turn_seq: pump_current_turn.load(Ordering::Relaxed),
+                        request_id: pending.request_id.clone(),
+                    });
+                    registry.insert(pending);
+                }
+            });
+        }
+
         // ── Pipeline (pinned table + session executor + telemetry hook) ─────
         let target = AcpTarget {
             agent_name: agent_id.to_string(),
@@ -494,6 +552,9 @@ impl Session {
             let turn_wire = Arc::clone(&wire);
             let caller = CallerContext::local();
             let turn_transcript = transcript_tx.clone();
+            let turn_state_sender = turn_state_tx.clone();
+            let turn_counter_for_turns = Arc::clone(&turn_counter);
+            let current_turn_for_turns = Arc::clone(&current_turn);
             TurnController::new(
                 TURN_QUEUE_BOUND,
                 move |blocks: Vec<ContentBlock>| {
@@ -503,6 +564,9 @@ impl Session {
                     let wire = Arc::clone(&turn_wire);
                     let caller = caller.clone();
                     let transcript = turn_transcript.clone();
+                    let turn_state = turn_state_sender.clone();
+                    let turn_counter = Arc::clone(&turn_counter_for_turns);
+                    let current_turn = Arc::clone(&current_turn_for_turns);
                     async move {
                         let Some(ids) = wire.get() else {
                             return Err(anyhow::anyhow!(
@@ -514,6 +578,15 @@ impl Session {
                             let _ = tx.send(TranscriptEvent::Prompt {
                                 blocks: blocks.clone(),
                             });
+                        }
+                        // Turn start: mint the per-session turn seq, mark it the
+                        // active turn (for a mid-turn `requires_action`), and emit
+                        // `running` both live and to the durable transcript.
+                        let turn_seq = turn_counter.fetch_add(1, Ordering::Relaxed);
+                        current_turn.store(turn_seq, Ordering::Relaxed);
+                        let _ = turn_state.send(TurnState::Running { turn_seq });
+                        if let Some(tx) = &transcript {
+                            let _ = tx.send(TranscriptEvent::TurnStart { turn_seq });
                         }
                         let req = AcpRequest::new(
                             agent,
@@ -555,16 +628,34 @@ impl Session {
                                 }
                             }
                         };
+                        // Turn end: persist the outcome and emit `idle` live. Our
+                        // managers key completion off this `idle` (the v1
+                        // `PromptResponse` is a bare ack for them), so it must fire
+                        // on both the live and durable paths; a reattaching manager
+                        // gets it from the replayed transcript. A failed turn ends
+                        // `idle` with no stop reason (v2 `IdleStateUpdate` allows it).
                         if let Some(tx) = &transcript {
                             let _ = tx.send(match &result {
-                                Ok(resp) => TranscriptEvent::Result {
-                                    stop_reason: resp.stop_reason,
+                                Ok(resp) => TranscriptEvent::TurnEnd {
+                                    turn_seq,
+                                    stop_reason: Some(resp.stop_reason),
                                 },
                                 Err(e) => TranscriptEvent::Error {
                                     message: e.to_string(),
+                                    turn_seq: Some(turn_seq),
                                 },
                             });
                         }
+                        let _ = turn_state.send(match &result {
+                            Ok(resp) => TurnState::Idle {
+                                turn_seq,
+                                stop_reason: Some(resp.stop_reason),
+                            },
+                            Err(_) => TurnState::Idle {
+                                turn_seq,
+                                stop_reason: None,
+                            },
+                        });
                         result
                     }
                 },
@@ -612,6 +703,8 @@ impl Session {
             transcript_writer,
             transcript_path,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
+            permissions,
+            turn_state_tx,
         })
     }
 
@@ -705,10 +798,28 @@ impl Session {
         self.conn.subscribe_raw_updates()
     }
 
-    /// Stream of pending permission requests. Single-consumer: the first call
-    /// returns the live stream, later calls return an empty stream.
+    /// Stream of pending permission requests. **Re-subscribable**: each call
+    /// yields its own stream that first replays every still-unresolved permission,
+    /// then streams new ones. A reattached manager therefore sees any permission
+    /// that was outstanding when the previous connection dropped, and dropping a
+    /// stream (a manager detach) no longer defaults the upstream to Deny while the
+    /// session lives. Backed by the session's [`PermissionRegistry`].
     pub fn permissions(&self) -> Pin<Box<dyn Stream<Item = PendingPermission> + Send>> {
-        self.conn.subscribe_permissions()
+        self.permissions.subscribe()
+    }
+
+    /// Stream of [`TurnState`] transitions (`running`/`idle`/`requires_action`).
+    /// Each call yields an independent stream from the current point onward. The
+    /// down-facing endpoint subscribes and encodes each as a `_bitrouter/turn_state`
+    /// notification; the durable transcript carries `TurnStart`/`TurnEnd` for
+    /// replay on reattach. **Lossy under lag** (bounded broadcast) — a lagging
+    /// subscriber skips ahead; the transcript is the non-lossy record.
+    pub fn turn_state(&self) -> Pin<Box<dyn Stream<Item = TurnState> + Send>> {
+        use futures::StreamExt as _;
+        Box::pin(
+            tokio_stream::wrappers::BroadcastStream::new(self.turn_state_tx.subscribe())
+                .filter_map(|r| async move { r.ok() }),
+        )
     }
 
     /// Receiver of [`RequestCompleted`] telemetry records emitted by the
@@ -1384,7 +1495,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transcript_records_prompt_updates_and_result() {
+    async fn transcript_records_prompt_turn_start_updates_and_turn_end() {
         let base = tempfile::tempdir().expect("tempdir");
         let catalog = stub_catalog();
 
@@ -1411,14 +1522,165 @@ mod tests {
             .iter()
             .map(|l| l["kind"].as_str().expect("kind"))
             .collect();
-        // Prompt, the two streamed updates (message chunk + usage), result.
+        // Prompt, turn_start (running), the streamed updates, turn_end (idle).
         assert!(kinds.contains(&"prompt"), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"turn_start"), "kinds: {kinds:?}");
         assert!(kinds.contains(&"update"), "kinds: {kinds:?}");
-        assert_eq!(*kinds.last().expect("lines"), "result");
+        assert_eq!(*kinds.last().expect("lines"), "turn_end");
+        // turn_start precedes turn_end, both carry turn_seq 0.
+        let start = lines.iter().find(|l| l["kind"] == "turn_start").unwrap();
+        let end = lines.iter().find(|l| l["kind"] == "turn_end").unwrap();
+        assert_eq!(start["turn_seq"], 0);
+        assert_eq!(end["turn_seq"], 0);
+        assert_eq!(end["stop_reason"], "end_turn");
         // seq is strictly monotonic from 0.
         for (i, line) in lines.iter().enumerate() {
             assert_eq!(line["seq"].as_u64(), Some(i as u64));
         }
+    }
+
+    /// A prompt turn emits `running` at the start and `idle` (carrying the
+    /// upstream `stopReason`) at the end, both on the live `turn_state` stream
+    /// and keyed to the same per-session `turn_seq`. This is the completion
+    /// signal our managers key off (the `PromptResponse` is a bare ack for them).
+    #[tokio::test]
+    async fn turn_state_emits_running_then_idle() {
+        use crate::turn_state::TurnState;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let catalog = stub_catalog();
+        let session = Session::launch(
+            &catalog,
+            "stub",
+            base.path().to_path_buf(),
+            LaunchOptions::default(),
+        )
+        .await
+        .expect("launch");
+
+        // Subscribe before prompting so we catch `running`; the broadcast buffers
+        // both transitions, which are emitted before `prompt` resolves.
+        let mut states = session.turn_state();
+        session.prompt("hi").await.expect("prompt");
+
+        assert_eq!(
+            states.next().await.expect("running"),
+            TurnState::Running { turn_seq: 0 }
+        );
+        assert_eq!(
+            states.next().await.expect("idle"),
+            TurnState::Idle {
+                turn_seq: 0,
+                stop_reason: Some(StopReason::EndTurn),
+            }
+        );
+
+        session.shutdown().await.expect("shutdown");
+    }
+
+    /// A permission outstanding when a manager "detaches" (drops its
+    /// `permissions()` stream without answering) is **not** denied, and a
+    /// reattached manager (a fresh `permissions()` subscription) is re-issued the
+    /// same permission and can answer it — end-to-end through the real upstream
+    /// stub, the engine pump, and the session registry. Proves the Phase-1
+    /// detach/reattach fix above the `permissions` unit tests.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn outstanding_permission_survives_detach_and_reissues_on_reattach() {
+        use std::sync::Arc;
+
+        use agent_client_protocol_schema::v1::{
+            PermissionOptionKind, RequestPermissionOutcome, SelectedPermissionOutcome,
+        };
+
+        // Stub issues a permission mid-prompt (allow + reject options), reads the
+        // client's response, echoes the chosen optionId, then ends the turn.
+        const PERM_STUB: &str = r#"
+            while read line; do
+              id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+              case "$line" in
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+                *session/prompt*)
+                    printf '{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{"sessionId":"u1","toolCall":{"toolCallId":"tc1","title":"do thing"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"rej","name":"Reject","kind":"reject_once"}]}}\n'
+                    read resp
+                    chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                    printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"chose:%s"}}}}\n' "$chosen"
+                    printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+              esac
+            done
+        "#;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let cfg = AcpAgentConfig {
+            name: "stub".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "bash".to_string(),
+                args: vec!["-c".to_string(), PERM_STUB.to_string()],
+                env: HashMap::new(),
+            },
+        };
+        let catalog =
+            ConfigAcpRoutingTable::from_configs([("stub".to_string(), cfg)]).expect("catalog");
+        let session = Arc::new(
+            Session::launch(
+                &catalog,
+                "stub",
+                base.path().to_path_buf(),
+                LaunchOptions::default(),
+            )
+            .await
+            .expect("launch"),
+        );
+
+        // Drive the prompt concurrently; it completes only after the permission
+        // is answered.
+        let prompt_session = Arc::clone(&session);
+        let prompt = tokio::spawn(async move { prompt_session.prompt("do X").await });
+
+        // "Manager 1" receives the permission but detaches without answering.
+        let mut first = session.permissions();
+        let pending = first.next().await.expect("permission forwarded");
+        assert_eq!(pending.tool_call.fields.title.as_deref(), Some("do thing"));
+        let request_id = pending.request_id.clone();
+        drop(pending);
+        drop(first);
+
+        // "Manager 2" reattaches: a fresh subscription re-issues the SAME
+        // outstanding permission (same request id), proving it was neither lost
+        // nor denied on detach.
+        let mut second = session.permissions();
+        let reissued = second
+            .next()
+            .await
+            .expect("permission re-issued on reattach");
+        assert_eq!(
+            reissued.request_id, request_id,
+            "must be the same permission"
+        );
+        assert_eq!(reissued.tool_call.fields.title.as_deref(), Some("do thing"));
+
+        // Answer with the allow option; the exact selection reaches the upstream.
+        let allow_id = reissued
+            .options
+            .iter()
+            .find(|o| matches!(o.kind, PermissionOptionKind::AllowOnce))
+            .map(|o| o.option_id.clone())
+            .expect("allow option present");
+        reissued.resolve(RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new(allow_id),
+        ));
+
+        // With the permission answered, the turn completes end-to-end.
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), prompt)
+            .await
+            .expect("prompt did not hang")
+            .expect("join")
+            .expect("prompt");
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+
+        // No worktree → dropping the last Arc reaps the upstream child.
+        drop(session);
     }
 
     #[tokio::test]

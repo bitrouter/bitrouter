@@ -782,10 +782,11 @@ where
     )
     .await?;
 
-    // Headless: there is no manager to broker permissions. Consume the
-    // permission stream and DENY each request (dropping the pending item
-    // resolves it as the reject option upstream) — an unconsumed request
-    // would otherwise park its resolver forever and hang the turn.
+    // Headless: there is no manager to broker permissions and none will ever
+    // attach, so explicitly DENY each request (the reject option). Since the
+    // session-scoped permission registry, merely *dropping* a pending item no
+    // longer defaults to Deny — a registry clone keeps it alive for a possible
+    // reattach — so an unconsumed request would otherwise hang the turn forever.
     let mut permissions = session.permissions();
     tokio::spawn(async move {
         while let Some(pending) = permissions.next().await {
@@ -798,7 +799,7 @@ where
                     .unwrap_or("(unnamed)"),
                 "headless prompt: denying permission request (no manager attached)"
             );
-            drop(pending);
+            pending.deny();
         }
     });
 
