@@ -1,6 +1,6 @@
 ---
 title: Models
-description: On BitRouter a model is an aggregate served by many providers — reached through four protocols, ranked per request, with discounted open supply.
+description: On BitRouter a model is an aggregate served by many providers — reached through four protocols, ranked per request, with optional managed profiles.
 sourceHash: 5db2bbc903ccb998b052947933b808037a2c8e06a473f3657c0e65672db6eecf
 ---
 
@@ -21,21 +21,23 @@ Pick the one your SDK is already wired for — you don't adopt a new client. And
 
 ## One id, many providers
 
-Because a model is an aggregate, requesting it kicks off a **provider selection** step. By default BitRouter ranks the eligible providers by a balanced score — a blend of cost, latency, throughput, and uptime — and sends your request to the best one. When the chosen provider fails transiently, it can fall through to the next-ranked provider, or to the next model you listed.
+Because a model is an aggregate, requesting it kicks off a **provider selection** step. On BitRouter Cloud and compatible managed routing deployments, the default ranks eligible providers by a balanced score — a blend of cost, latency, throughput, and uptime — and sends your request to the best one. A local OSS daemon uses the provider order from its routing configuration, defaulting to deterministic provider-name order unless you configure virtual-model strategies, variants, or presets. When the chosen provider fails transiently, BitRouter can fall through to the next-ranked provider, or to the next model you listed.
 
 ## Variants re-rank for one request
 
-When one model has several providers, you sometimes want to bias that ranking for a single call. A **model variant** is an inline suffix on the id — `:cost`, `:latency`, `:throughput` — that re-ranks the *eligible* providers along the axis you named, for that request only. It never changes which providers are eligible, never changes authorization, and a bare id is just the balanced default.
+When one model has several providers, you sometimes want to bias that ranking for a single call. On BitRouter Cloud and compatible managed routing deployments, built-in **model variant** suffixes — `:cost`, `:latency`, `:throughput` — re-rank the *eligible* providers along the axis you named, for that request only. They never change which providers are eligible or change authorization, and a bare id is the balanced default.
+
+For a local OSS daemon, suffixes are config-defined: add entries under `variants` in `bitrouter.yaml` before using `:<variant>` selectors. Unknown suffixes remain part of the literal model id and usually 404.
 
 ## Open models, discounted
 
-Open (non-closed-source) models carry a second property: BitRouter serves them through its own self-hosted provider at **25% below official pricing by default**, with no suffix or configuration. The `:discount` suffix pins a request to that supply explicitly, and it's where any custom account discount applies.
+On BitRouter Cloud, open (non-closed-source) models carry a second property: BitRouter serves them through its own self-hosted provider at **25% below official pricing by default**, with no suffix or configuration. The `:discount` suffix pins a request to that supply explicitly, and it's where any custom account discount applies.
 
 ## Learn how to
 
 - [Provider selection](/docs/features/provider-selection) — how providers behind one model are ranked.
 - [Model fallback](/docs/features/model-fallback) — pass an ordered list and walk it on failure.
-- [Model variants](/docs/features/model-variants) — the `:cost` / `:latency` / `:throughput` suffixes.
+- [Model variants](/docs/features/model-variants) — managed `:cost` / `:latency` / `:throughput` suffixes and local config-defined variants.
 - [Presets](/docs/features/presets) — named, reusable routing configurations.
 - [Structured outputs](/docs/features/structured-outputs) — enforce a JSON schema across providers.
 - [Add external keys (BYOK)](/docs/features/byok) — route through your own provider account.

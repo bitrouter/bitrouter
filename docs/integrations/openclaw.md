@@ -47,7 +47,7 @@ For **Cloud**, set `baseUrl` to `https://api.bitrouter.ai/v1` and use your BitRo
 
 ## Pick a model
 
-Each provider model `id` is a registry id in `provider/model` form (`openai/gpt-4o`, `anthropic/claude-sonnet-4-6`, …), optionally with a `:cost` / `:latency` variant. In OpenClaw's `model.primary` it's prefixed with the provider id you chose — e.g. `bitrouter/openai/gpt-4o`. See [Models](/docs/concepts/models).
+Each provider model `id` is a registry id in `provider/model` form (`openai/gpt-4o`, `anthropic/claude-sonnet-4-6`, …). On BitRouter Cloud, it may include a managed routing profile such as `:cost` / `:latency`; on a local OSS daemon, define matching `variants` in `bitrouter.yaml` first. In OpenClaw's `model.primary` it's prefixed with the provider id you chose — e.g. `bitrouter/openai/gpt-4o`. See [Models](/docs/concepts/models).
 
 ## Learn more
 

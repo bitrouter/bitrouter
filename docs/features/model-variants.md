@@ -1,12 +1,16 @@
 ---
 title: Model Variants
-description: Append :cost, :latency, or :throughput to a model id to choose how BitRouter ranks providers — inline, per request, no body fields.
+description: On BitRouter Cloud, append :cost, :latency, or :throughput to a model id to choose how providers are ranked — inline, per request, no body fields.
 sourceHash: 9704500065fd7a0150d6564893f63556411fefc50300238ffb7d68e85410b8eb
 ---
 
-When a model is served by more than one provider, BitRouter has to choose which endpoint to send each request to. A **model variant** lets you make that choice inline: append a `:<profile>` suffix to the model id and BitRouter ranks providers by the axis you named.
+When a model is served by more than one provider, BitRouter has to choose which endpoint to send each request to. On BitRouter Cloud and compatible managed routing deployments, a **model variant** lets you make that choice inline: append a `:<profile>` suffix to the model id and BitRouter ranks providers by the axis you named.
 
-The suffix is part of the `model` string itself, so it needs no body fields and no SDK — it works the same on the OpenAI, Anthropic, and Google surfaces.
+The suffix is part of the `model` string itself, so it needs no body fields and no SDK — on the managed routing surface it works the same on the OpenAI, Anthropic, and Google surfaces.
+
+<Callout type="info">
+For a local OSS daemon, profile suffixes are not built in. A local request only strips a `:<variant>` suffix when that variant is defined in `bitrouter.yaml`; otherwise the suffix remains part of the literal model id and will usually 404.
+</Callout>
 
 ## The profiles
 
@@ -22,8 +26,9 @@ These are the same three axes described in [Provider Selection](/docs/features/p
 ## Quick example
 
 ```bash
-curl http://127.0.0.1:4356/v1/chat/completions \
+curl https://api.bitrouter.ai/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BITROUTER_API_KEY" \
   -d '{
     "model": "anthropic/claude-sonnet-4.6:cost",
     "messages": [{"role": "user", "content": "Translate to French: Hello."}]
@@ -45,7 +50,7 @@ The suffix behaves identically on `/v1/messages` (Anthropic) and `/v1beta/models
 
 ## The `:discount` suffix
 
-Separate from the ranking profiles above, BitRouter accepts a `:discount` suffix that routes a request to BitRouter's **self-hosted provider**, where open models are served below official pricing:
+Separate from the ranking profiles above, BitRouter Cloud accepts a `:discount` suffix that routes a request to BitRouter's **self-hosted provider**, where open models are served below official pricing:
 
 ```text
 moonshotai/kimi-k2.6:discount     # route to the self-hosted discounted provider
@@ -63,8 +68,8 @@ The profile affects provider *ranking* only. Everything else keys off the base m
 
 ## Seeing which profile a request used
 
-The selected profile is recorded on every request and returned in your usage history. `GET /v1/namespaces/{nsid}/requests` includes a `routing_profile` field (`balanced` / `cost` / `latency` / `throughput`) on each row, so you can audit how much traffic each strategy is taking.
+The selected profile is recorded on every managed request and returned in your usage history. `GET /v1/namespaces/{nsid}/requests` includes a `routing_profile` field (`balanced` / `cost` / `latency` / `throughput`) on each row, so you can audit how much traffic each strategy is taking.
 
 ## Relationship to `provider.sort`
 
-The model-id suffix is the supported way to choose a routing profile today. A request-body equivalent — `provider.sort` — is described in [Provider Selection](/docs/features/provider-selection) but is **not yet active**; until it ships, use the suffix.
+On the managed routing surface, the model-id suffix is the supported way to choose a routing profile today. A request-body equivalent — `provider.sort` — is described in [Provider Selection](/docs/features/provider-selection) but is **not yet active**; until it ships, use the suffix.

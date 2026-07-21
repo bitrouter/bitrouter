@@ -1,10 +1,10 @@
 ---
 title: Namespaces
-description: The isolation boundary that scopes API keys, policies, and usage to a single deployment — available on any self-hosted or local BitRouter node.
+description: The isolation boundary that scopes API keys, policies, and usage to a single deployment — available on BitRouter Cloud and compatible self-hosted management deployments.
 sourceHash: ef661d25cfb34736fe3297d140ebb9fff2a7a22dc5d7009358630c6f1fe474d1
 ---
 
-A **namespace** is BitRouter's isolation primitive. API keys, policies, and usage data are all scoped to a single namespace. On a self-hosted or local node you can run multiple namespaces to separate projects, environments, or agent deployments from one another.
+A **namespace** is BitRouter's isolation primitive. API keys, policies, and usage data are all scoped to a single namespace. On BitRouter Cloud or a compatible self-hosted management deployment, you can run multiple namespaces to separate projects, environments, or agent deployments from one another.
 
 ## Credential model: namespace-scoped keys
 
@@ -29,7 +29,7 @@ bitrouter cloud namespace current   # offline — reads local credential
 bitrouter cloud whoami              # also prints the bound namespace
 ```
 
-To list all namespaces on the node:
+To list all namespaces on the management endpoint:
 
 ```bash
 bitrouter cloud namespace list      # all namespaces; active one marked
@@ -79,4 +79,4 @@ bitrouter cloud usage --from 2026-05-01T00:00:00Z --to 2026-06-01T00:00:00Z
 bitrouter cloud requests --limit 25                           # paginated request log
 ```
 
-An agent or CI job using a namespace-scoped credential can only read usage for its own namespace — cross-namespace aggregation requires a wider credential issued by the node operator.
+An agent or CI job using a namespace-scoped credential can only read usage for its own namespace — cross-namespace aggregation requires a wider credential issued by the management operator.

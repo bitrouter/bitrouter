@@ -33,7 +33,7 @@ Every core capability works the same either way — Cloud only adds what needs a
 | Observability (OTLP trace + metric export) | ✅ | ✅ |
 | MCP & ACP gateways | ✅ | ✅ |
 | Structured outputs | ✅ | ✅ |
-| Namespace isolation primitive | ✅ | ✅ |
+| Namespace isolation primitive | Via compatible management deployment | ✅ |
 | Managed provider network (no upstream keys needed) | — | ✅ |
 | Open-model pricing discounts | — | ✅ |
 | Team seats & per-workspace access control | — | ✅ |
@@ -44,6 +44,8 @@ Every core capability works the same either way — Cloud only adds what needs a
 | Agentic payment marketplace | — | ✅ |
 
 In short, Cloud adds a managed provider network ([Managed Models](/docs/get-started/supported-models) — no upstream keys, open models discounted), team [workspaces](/docs/features/namespaces) with strictly scoped keys, a hosted observability console, managed per-request billing, and an uptime SLA. Everything else is in both.
+
+For variants and presets specifically: self-hosted OSS supports config-defined `variants` and `presets` in `bitrouter.yaml`; Cloud adds built-in managed routing profiles and namespace-managed routing presets.
 
 ## Comparison
 

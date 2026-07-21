@@ -50,7 +50,7 @@ opencode
 
 ## Pick a model
 
-Each key under `models` is a registry id in `provider/model` form, optionally with a `:cost` / `:latency` variant. Select one in the TUI, or run `opencode run --model bitrouter/openai/gpt-4o`. See [Models](/docs/concepts/models).
+Each key under `models` is a registry id in `provider/model` form. On BitRouter Cloud, it may include a managed routing profile such as `:cost` / `:latency`; on a local OSS daemon, define matching `variants` in `bitrouter.yaml` first. Select one in the TUI, or run `opencode run --model bitrouter/openai/gpt-4o`. See [Models](/docs/concepts/models).
 
 ## Learn more
 

@@ -27,7 +27,19 @@ bitrouter launch --agent codex
 bitrouter launch --agent codex -- --model openai/gpt-5-codex
 ```
 
-`spawn` 不会编辑 `~/.codex/config.toml`。它会保留你已有的 Codex 模型选择，然后把 Codex 指向一个临时的 `bitrouter` provider：`base_url = "<BitRouter>/v1"`，`wire_api = "responses"`。如果导出了 `BITROUTER_API_KEY`，Codex 会通过 `env_key` 使用它；否则 BitRouter 会注入一个本地占位凭据，适用于 `bitrouter init` 默认写入的 `skip_auth: true`。
+开始长时间运行前，可以让 BitRouter 检查它将使用的路由：
+
+```bash
+bitrouter launch --agent codex --check -- --model openai/gpt-5-codex
+```
+
+该检查会确认已安装 `codex`、BitRouter base URL 可访问，并且转发的模型至少有一个兼容 Responses 的端点。它**不要求**供应商必须是 `openai-codex`；任何通过 Responses 协议路由的模型来源都可以供 Codex harness 使用。
+
+`launch` 不会编辑 `~/.codex/config.toml`。它会保留你已有的 Codex 模型选择，然后把 Codex 指向一个临时的 `bitrouter` provider：`base_url = "<BitRouter>/v1"`，`wire_api = "responses"`。如果导出了 `BITROUTER_API_KEY`，Codex 会通过 `env_key` 使用它；否则 BitRouter 会注入一个本地占位凭据，适用于 `bitrouter init` 默认写入的 `skip_auth: true`。
+
+<Callout type="warn">
+避免通过 `bitrouter launch --agent codex` 转发 Codex 的 `-c` / `--config` 参数。当前 Codex 版本可能会让这些转发的配置参数覆盖临时 provider 注入，导致本次运行静默停止使用 BitRouter。`launch` 会拒绝这种形态，并要求你把选项移到 Codex 配置里，或用 `--check` 检查路由。
+</Callout>
 
 ## 永久配置
 
@@ -57,7 +69,7 @@ codex
 
 ## 选择模型
 
-Codex 的 `model` 设置，或按次运行的 `codex --model <id>`，都可以使用 `provider/model` 形式的任意注册表 id——例如 `openai/gpt-5-codex`、`anthropic/claude-sonnet-4-6`、`google/gemini-2.5-pro`——也可以选用 `:cost` 或 `:latency` 变体。详见 [模型](/docs/concepts/models)。
+Codex 的 `model` 设置，或按次运行的 `codex --model <id>`，都可以使用 `provider/model` 形式的任意注册表 id——例如 `openai/gpt-5-codex`、`anthropic/claude-sonnet-4-6`、`google/gemini-2.5-pro`。在 BitRouter Cloud 上，你还可以添加 `:cost` 或 `:latency` 这类托管路由 profile。对于本地 OSS 守护进程，请先在 `bitrouter.yaml` 中定义对应的 `variants`，再使用后缀。详见 [模型](/docs/concepts/models)。
 
 ## 验证
 

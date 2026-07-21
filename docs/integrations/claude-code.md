@@ -46,7 +46,7 @@ Prefer a file? Put the same values in `.claude/settings.json` so they apply per-
 
 ## Pick a model
 
-`ANTHROPIC_MODEL` takes any registry id in `provider/model` form — `anthropic/claude-sonnet-4-6`, `openai/gpt-4o`, `google/gemini-2.5-pro`. Add a `:cost` or `:latency` suffix to bias provider selection for the session. Switch mid-session with `/model <id>`, or at launch with `claude --model <id>`. See [Models](/docs/concepts/models) for the full id scheme.
+`ANTHROPIC_MODEL` takes any registry id in `provider/model` form — `anthropic/claude-sonnet-4-6`, `openai/gpt-4o`, `google/gemini-2.5-pro`. On BitRouter Cloud, add a managed routing profile such as `:cost` or `:latency` to bias provider selection for the session; on a local OSS daemon, define matching `variants` in `bitrouter.yaml` first. Switch mid-session with `/model <id>`, or at launch with `claude --model <id>`. See [Models](/docs/concepts/models) for the full id scheme.
 
 ## Verify
 
