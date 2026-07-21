@@ -44,12 +44,6 @@ enum RegistryCommand {
         #[arg(long)]
         check: bool,
     },
-    /// Regenerate the model/provider tables in `docs/get-started/supported-*`.
-    Docs {
-        /// Fail if committed docs tables are stale instead of writing them.
-        #[arg(long)]
-        check: bool,
-    },
     /// Keyless models.dev sync for `auto_sync: { feed: models_dev }` providers.
     Sync {
         /// Write provider YAML updates. Without this, print a dry-run report.
@@ -81,7 +75,6 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Registry { command } => match command {
             RegistryCommand::Validate => registry::validate(&root),
             RegistryCommand::Build { check } => registry::build(&root, check),
-            RegistryCommand::Docs { check } => registry::docs(&root, check),
             RegistryCommand::Sync { write } => registry::sync(&root, write).await,
             RegistryCommand::AgenticPrompt => {
                 print!("{}", registry::agentic_prompt(&root)?);
@@ -91,8 +84,7 @@ async fn run(cli: Cli) -> Result<()> {
         },
         Command::Check => {
             schema::generate(&root, true)?;
-            registry::build(&root, true)?;
-            registry::docs(&root, true)
+            registry::build(&root, true)
         }
     }
 }
