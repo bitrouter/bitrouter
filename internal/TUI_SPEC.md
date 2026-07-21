@@ -181,9 +181,13 @@ extra panes."
 > right zone drops), fleet state right (⚠◆●◉ counts, session count, summed
 > cost, live `serve ●/✗` dot re-probed every ~5s).
 > Panel slots are reserved for two deferred sections:
-> **loops** (below sessions) and **states** (below subagents). `fleet-state.json`
-> records `sessions: [{binary, model}]` instead of a single `orchestrator`. The
-> diagrams below predate this and show the single-rail layout.
+> **loops** (below sessions) and **states** (below subagents). The
+> diagrams below predate the sessions/subagents split and show the single-rail
+> layout.
+>
+> **Superseded (#745):** the durable `fleet-state.json` manager memory (substrate
+> `FleetStore`) described in this spec was removed — the TUI no longer persists
+> fleet state across restarts. This doc is retained as historical design context.
 
 ```
 ┌ roster · 4 ─────────┐┌ orchestrator · claude-code ──────────────────────────────────┐

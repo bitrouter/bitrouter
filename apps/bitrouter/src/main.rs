@@ -347,9 +347,6 @@ enum Command {
         /// created). Off by default — removal discards uncommitted work.
         #[arg(long, requires = "worktree")]
         rm_worktree: bool,
-        /// Disable the durable session transcript (on by default).
-        #[arg(long)]
-        no_transcript: bool,
         /// Per-turn deadline in seconds.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
@@ -367,13 +364,6 @@ enum Command {
             conflicts_with = "no_wait"
         )]
         result_schema: Option<String>,
-        /// (with `--serve`) Keep the session alive for reattach after the
-        /// manager disconnects. Unix-only.
-        #[arg(long, requires = "serve")]
-        warm: bool,
-        /// (with `--serve --warm`) Shut down after this many idle seconds.
-        #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
-        idle_timeout: u64,
         /// Path to `bitrouter.yaml`. Resolves via the standard chain when
         /// omitted.
         #[arg(short, long)]
@@ -897,25 +887,10 @@ enum AcpCmd {
         /// uncommitted. Only a worktree created by this session is removed.
         #[arg(long, requires = "worktree")]
         rm_worktree: bool,
-        /// Disable the durable session transcript
-        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
-        #[arg(long)]
-        no_transcript: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
-        /// Keep the session alive after the manager disconnects and accept
-        /// reattach connections on `.bitrouter/sessions/<record_id>.sock`
-        /// (same stdio JSON-RPC framing over a unix socket; reconnect with
-        /// `bitrouter acp attach <record>` and rejoin history via
-        /// `session/load`). Unix-only.
-        #[arg(long)]
-        warm: bool,
-        /// Shut a warm session down after this many seconds with no manager
-        /// attached.
-        #[arg(long, value_name = "SECS", default_value_t = 1800, requires = "warm")]
-        idle_timeout: u64,
         /// Do NOT route the sub-agent's LLM traffic through the daemon — let
         /// the harness use its own provider auth. Routing is on by default.
         #[arg(long)]
@@ -953,10 +928,6 @@ enum AcpCmd {
         /// uncommitted. Only a worktree created by this session is removed.
         #[arg(long, requires = "worktree")]
         rm_worktree: bool,
-        /// Disable the durable session transcript
-        /// (`.bitrouter/sessions/<id>.transcript.ndjson`, on by default).
-        #[arg(long)]
-        no_transcript: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -990,13 +961,6 @@ enum AcpCmd {
     /// `.bitrouter/sessions/`, newest first. A `running` record whose process
     /// no longer exists is shown as `dead`.
     Sessions,
-    /// Reattach to a warm session: bridge this terminal's stdio to the
-    /// session's unix socket. Speak ACP as usual; `session/load` replays the
-    /// conversation so far. Unix-only.
-    Attach {
-        /// Session record id (or unique prefix) from `bitrouter acp sessions`.
-        record: String,
-    },
 }
 
 #[tokio::main]
@@ -1203,12 +1167,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             no_start,
             worktree,
             rm_worktree,
-            no_transcript,
             turn_timeout,
             no_wait,
             result_schema,
-            warm,
-            idle_timeout,
             config,
             legacy_agent,
             no_install,
@@ -1273,12 +1234,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 let options = bitrouter::acp_cli::launch_options(
                     worktree.as_deref(),
                     rm_worktree,
-                    no_transcript,
                     turn_timeout,
                 );
-                let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
-                    idle_timeout: std::time::Duration::from_secs(idle_timeout),
-                });
                 let ctx = bitrouter::acp_cli::SpawnContext {
                     source: &source,
                     config: cfg,
@@ -1286,12 +1243,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     options,
                     routing,
                 };
-                bitrouter::acp_cli::serve(ctx, warm).await
+                bitrouter::acp_cli::serve(ctx).await
             } else if let Some(text) = prompt {
                 let options = bitrouter::acp_cli::launch_options(
                     worktree.as_deref(),
                     rm_worktree,
-                    no_transcript,
                     turn_timeout,
                 );
                 // A malformed schema fails fast, before any session side effect.
@@ -3139,10 +3095,7 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             agent,
             worktree,
             rm_worktree,
-            no_transcript,
             turn_timeout,
-            warm,
-            idle_timeout,
             direct,
             base_url,
             model,
@@ -3151,15 +3104,8 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options = bitrouter::acp_cli::launch_options(
-                worktree.as_deref(),
-                rm_worktree,
-                no_transcript,
-                turn_timeout,
-            );
-            let warm = warm.then(|| bitrouter::acp_cli::WarmOptions {
-                idle_timeout: std::time::Duration::from_secs(idle_timeout),
-            });
+            let options =
+                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -3173,13 +3119,12 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
                 options,
                 routing,
             };
-            bitrouter::acp_cli::serve(ctx, warm).await
+            bitrouter::acp_cli::serve(ctx).await
         }
         AcpCmd::Prompt {
             agent,
             worktree,
             rm_worktree,
-            no_transcript,
             turn_timeout,
             no_wait,
             direct,
@@ -3191,12 +3136,8 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
-            let options = bitrouter::acp_cli::launch_options(
-                worktree.as_deref(),
-                rm_worktree,
-                no_transcript,
-                turn_timeout,
-            );
+            let options =
+                bitrouter::acp_cli::launch_options(worktree.as_deref(), rm_worktree, turn_timeout);
             let routing = bitrouter::acp_cli::RoutingOptions {
                 direct,
                 base_url,
@@ -3217,7 +3158,6 @@ async fn acp_cmd(cmd: AcpCmd) -> Result<()> {
             let mut stdout = tokio::io::stdout();
             bitrouter::acp_cli::sessions(&mut stdout).await
         }
-        AcpCmd::Attach { record } => bitrouter::acp_cli::attach(&record).await,
     }
 }
 

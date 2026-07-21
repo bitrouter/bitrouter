@@ -102,11 +102,11 @@ a one-line deprecation notice on stderr pointing at `launch`.
 
 ```
 bitrouter spawn <agent> -p "<text>" [--no-wait]        # one-shot prompt → NDJSON on stdout
-bitrouter spawn <agent> --serve [--warm [--idle-timeout SECS]]   # ACP over stdio (GUI / manager)
+bitrouter spawn <agent> --serve                        # ACP over stdio (GUI / manager)
 bitrouter spawn <agent> --check                        # preflight only, no launch
 
 # shared session flags (carried over from `acp serve|prompt` unchanged):
-  [--worktree NAME [--rm-worktree]] [--no-transcript] [--turn-timeout SECS] [-c CONFIG]
+  [--worktree NAME [--rm-worktree]] [--turn-timeout SECS] [-c CONFIG]
 
 # routing flags (new):
   [--direct]              # do NOT inject routing env — agent talks to its provider directly
@@ -122,7 +122,7 @@ bitrouter spawn <agent> --check                        # preflight only, no laun
   `bitrouter tui` fills later; we do not TTY-sniff a mode).
 - `bitrouter acp serve|prompt` remain as **hidden aliases** delegating to the
   new code path (the GUI's AcpFeed and existing docs keep working); `acp
-  sessions` and `acp attach` are unchanged and stay under `acp` (they operate
+  sessions` is unchanged and stays under `acp` (it operates
   on records, not launches).
 
 ### 3.3 NDJSON contract

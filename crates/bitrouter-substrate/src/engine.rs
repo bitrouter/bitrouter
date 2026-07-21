@@ -32,7 +32,6 @@
 
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -48,7 +47,6 @@ use bitrouter_sdk::acp::{
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::error::{BitrouterError, Result as SdkResult};
 use futures::Stream;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::executor::SessionExecutor;
@@ -56,10 +54,8 @@ use crate::permissions::PermissionRegistry;
 use crate::record::{RecordStatus, RecordStore, SessionRecord, now_unix};
 use crate::session::{SessionState, SessionStatus};
 use crate::telemetry::{RequestCompleted, TelemetryHook};
-use crate::transcript::TranscriptEvent;
 use crate::translate::SessionUpdateKind;
 use crate::turn::TurnController;
-use crate::turn_state::TurnState;
 use crate::up::{PendingPermission, UpstreamConnection, UpstreamSessionIds};
 use crate::worktree::{WorktreeManager, WorktreeSpec};
 
@@ -73,19 +69,8 @@ const TURN_QUEUE_BOUND: usize = 64;
 /// `session/cancel` it was sent before the turn is failed outright.
 const TURN_CANCEL_GRACE: Duration = Duration::from_secs(3);
 
-/// How long [`Session::shutdown`] waits for the transcript writer to flush its
-/// tail after every sender has been dropped.
-const TRANSCRIPT_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Capacity of the broadcast that fans [`TurnState`] transitions out to live
-/// consumers (the down-facing turn-state forwarder). Turn-state events are
-/// human-scale (a few per turn), so this only needs to absorb a brief burst; a
-/// consumer that lags past it skips ahead (the durable transcript is the
-/// non-lossy record used on reattach).
-const TURN_STATE_CHANNEL_CAPACITY: usize = 256;
-
 /// Options for [`Session::launch`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
     /// Provision (or reuse) a git worktree for the session. `{record16}` in
     /// its `name`/`branch` is replaced with the first 16 hex chars of the
@@ -102,9 +87,6 @@ pub struct LaunchOptions {
     /// Extra environment for the agent child (and the bootstrap hook),
     /// overlaid on the transport's `env` — e.g. a fleet-allocated `PORT`.
     pub env: Vec<(String, String)>,
-    /// Write the durable NDJSON transcript (prompts, raw updates, results) to
-    /// `.bitrouter/sessions/<record_id>.transcript.ndjson`. On by default.
-    pub transcript: bool,
     /// Per-turn deadline. On elapse the upstream is asked to cancel
     /// cooperatively (`session/cancel`); if it does not comply within
     /// `TURN_CANCEL_GRACE` (3s) the turn errors.
@@ -115,19 +97,6 @@ pub struct LaunchOptions {
     /// (`launch_deferred`) relays the **manager's** descriptors via
     /// [`Session::open`] instead.
     pub mcp_servers: Vec<McpServer>,
-}
-
-impl Default for LaunchOptions {
-    fn default() -> Self {
-        Self {
-            worktree: None,
-            worktree_bootstrap: None,
-            env: Vec::new(),
-            transcript: true,
-            turn_timeout: None,
-            mcp_servers: Vec::new(),
-        }
-    }
 }
 
 /// Everything [`Session::build`] needs beyond the agent id; bundled so the
@@ -146,7 +115,6 @@ struct BuildArgs {
     remove_worktree_on_shutdown: bool,
     /// Extra environment overlaid on the transport's `env` for the child.
     env: Vec<(String, String)>,
-    transcript: bool,
     turn_timeout: Option<Duration>,
     /// `mcpServers` for the immediate `session/new` (unused when deferring —
     /// [`Session::open`] then carries the manager's descriptors).
@@ -202,12 +170,6 @@ pub struct Session {
     record: std::sync::Mutex<SessionRecord>,
     /// Persists [`Self::record`] under `<base_repo>/.bitrouter/sessions/`.
     records: RecordStore,
-    /// The transcript writer task, when the transcript is enabled. Awaited at
-    /// shutdown so the tail is flushed to disk.
-    transcript_writer: Option<tokio::task::JoinHandle<()>>,
-    /// Where the transcript lives, when enabled. The down-facing endpoint
-    /// replays it for `session/load`.
-    transcript_path: Option<PathBuf>,
     /// Receiver for telemetry records emitted by the pipeline's [`TelemetryHook`].
     /// Handed out once by [`Session::telemetry`].
     telemetry_rx: std::sync::Mutex<Option<UnboundedReceiver<RequestCompleted>>>,
@@ -216,12 +178,6 @@ pub struct Session {
     /// re-subscribable stream so a reattached manager sees the outstanding set
     /// instead of an empty stream. See [`crate::permissions`].
     permissions: Arc<PermissionRegistry>,
-    /// Source of [`TurnState`] transitions (`running`/`idle`/`requires_action`),
-    /// the durable, replayable turn lifecycle. The turn worker and the permission
-    /// pump emit into it; the down-facing endpoint subscribes and encodes each as
-    /// a `_bitrouter/turn_state` notification. Re-subscribable (cloned per
-    /// [`Session::turn_state`]); the durable transcript is the non-lossy record.
-    turn_state_tx: broadcast::Sender<TurnState>,
 }
 
 impl Session {
@@ -229,7 +185,7 @@ impl Session {
     /// `catalog`, optionally provision a worktree, spawn the upstream
     /// connection, run `initialize` + `session/new` (cwd = worktree or
     /// `base_repo`, `mcpServers` from [`LaunchOptions::mcp_servers`]), build
-    /// the pipeline, turn queue, and transcript, and record the session
+    /// the pipeline and turn queue, and record the session
     /// identity. Used by the headless `prompt` path and library callers that
     /// have no manager to relay from.
     pub async fn launch(
@@ -267,7 +223,6 @@ impl Session {
             worktree,
             worktree_bootstrap,
             env,
-            transcript,
             turn_timeout,
             mcp_servers,
         } = options;
@@ -331,7 +286,6 @@ impl Session {
                     worktree_base_ref,
                     remove_worktree_on_shutdown: remove_on_shutdown,
                     env,
-                    transcript,
                     turn_timeout,
                     mcp_servers,
                     open_now,
@@ -410,7 +364,6 @@ impl Session {
             worktree_base_ref,
             remove_worktree_on_shutdown,
             env: extra_env,
-            transcript,
             turn_timeout,
             mcp_servers,
             open_now,
@@ -453,34 +406,6 @@ impl Session {
             let _ = wire.set(ids);
         }
 
-        // ── Transcript (durable, non-lossy NDJSON) ─────────────────────────
-        // A single writer task owns the file; the connection's non-lossy raw
-        // update feed is pumped into it, and the turn closure below adds
-        // prompt/result/error events on the same channel.
-        let (transcript_tx, transcript_writer, transcript_path) = if transcript {
-            let (tx, rx) = unbounded_channel::<TranscriptEvent>();
-            let path = crate::transcript::transcript_path(&base_repo, &state.record_id);
-            let writer = crate::transcript::spawn_writer(path.clone(), rx);
-            if let Some(mut feed) = conn.take_transcript_feed() {
-                let update_tx = tx.clone();
-                tokio::spawn(async move {
-                    while let Some(update) = feed.recv().await {
-                        if update_tx
-                            .send(TranscriptEvent::Update {
-                                update: Box::new(update),
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                });
-            }
-            (Some(tx), Some(writer), Some(path))
-        } else {
-            (None, None, None)
-        };
-
         // ── Permission registry (sole consumer of the take-once upstream feed) ─
         // One pump drains the upstream permission stream into a session-scoped
         // registry; every manager connection (re)subscribes to the registry, so a
@@ -488,30 +413,14 @@ impl Session {
         // left instead of an empty stream. See `crate::permissions`.
         let permissions = Arc::new(PermissionRegistry::new());
 
-        // ── Turn-state lifecycle (v2-shaped running/idle/requires_action) ──────
-        // The turn worker mints a per-session monotonic `turn_seq` and emits
-        // `running`/`idle`; the permission pump emits `requires_action` for the
-        // active turn. Turns are serialized, so `current_turn` (the last-minted
-        // seq) is always the turn a mid-turn permission belongs to.
-        let (turn_state_tx, _) = broadcast::channel::<TurnState>(TURN_STATE_CHANNEL_CAPACITY);
-        let turn_counter = Arc::new(AtomicU64::new(0));
-        let current_turn = Arc::new(AtomicU64::new(0));
-
         {
             use futures::StreamExt as _;
             let registry = Arc::clone(&permissions);
             let mut upstream_permissions = conn.subscribe_permissions();
-            let pump_turn_state = turn_state_tx.clone();
-            let pump_current_turn = Arc::clone(&current_turn);
             tokio::spawn(async move {
                 while let Some(pending) = upstream_permissions.next().await {
-                    // A pending permission blocks the active turn — surface it as
-                    // `requires_action` (live-only; not persisted) before parking
-                    // it in the registry for a manager to answer.
-                    let _ = pump_turn_state.send(TurnState::RequiresAction {
-                        turn_seq: pump_current_turn.load(Ordering::Relaxed),
-                        request_id: pending.request_id.clone(),
-                    });
+                    // Park the pending permission in the registry for a manager to
+                    // answer; every manager connection (re)subscribes to see the set.
                     registry.insert(pending);
                 }
             });
@@ -551,10 +460,6 @@ impl Session {
             let agent = agent_id.to_string();
             let turn_wire = Arc::clone(&wire);
             let caller = CallerContext::local();
-            let turn_transcript = transcript_tx.clone();
-            let turn_state_sender = turn_state_tx.clone();
-            let turn_counter_for_turns = Arc::clone(&turn_counter);
-            let current_turn_for_turns = Arc::clone(&current_turn);
             TurnController::new(
                 TURN_QUEUE_BOUND,
                 move |blocks: Vec<ContentBlock>| {
@@ -563,10 +468,6 @@ impl Session {
                     let agent = agent.clone();
                     let wire = Arc::clone(&turn_wire);
                     let caller = caller.clone();
-                    let transcript = turn_transcript.clone();
-                    let turn_state = turn_state_sender.clone();
-                    let turn_counter = Arc::clone(&turn_counter_for_turns);
-                    let current_turn = Arc::clone(&current_turn_for_turns);
                     async move {
                         let Some(ids) = wire.get() else {
                             return Err(anyhow::anyhow!(
@@ -574,20 +475,6 @@ impl Session {
                             ));
                         };
                         let acp_session_id = ids.acp_session_id.clone();
-                        if let Some(tx) = &transcript {
-                            let _ = tx.send(TranscriptEvent::Prompt {
-                                blocks: blocks.clone(),
-                            });
-                        }
-                        // Turn start: mint the per-session turn seq, mark it the
-                        // active turn (for a mid-turn `requires_action`), and emit
-                        // `running` both live and to the durable transcript.
-                        let turn_seq = turn_counter.fetch_add(1, Ordering::Relaxed);
-                        current_turn.store(turn_seq, Ordering::Relaxed);
-                        let _ = turn_state.send(TurnState::Running { turn_seq });
-                        if let Some(tx) = &transcript {
-                            let _ = tx.send(TranscriptEvent::TurnStart { turn_seq });
-                        }
                         let req = AcpRequest::new(
                             agent,
                             AcpRequestPayload::Prompt(PromptRequest::new(
@@ -628,34 +515,6 @@ impl Session {
                                 }
                             }
                         };
-                        // Turn end: persist the outcome and emit `idle` live. Our
-                        // managers key completion off this `idle` (the v1
-                        // `PromptResponse` is a bare ack for them), so it must fire
-                        // on both the live and durable paths; a reattaching manager
-                        // gets it from the replayed transcript. A failed turn ends
-                        // `idle` with no stop reason (v2 `IdleStateUpdate` allows it).
-                        if let Some(tx) = &transcript {
-                            let _ = tx.send(match &result {
-                                Ok(resp) => TranscriptEvent::TurnEnd {
-                                    turn_seq,
-                                    stop_reason: Some(resp.stop_reason),
-                                },
-                                Err(e) => TranscriptEvent::Error {
-                                    message: e.to_string(),
-                                    turn_seq: Some(turn_seq),
-                                },
-                            });
-                        }
-                        let _ = turn_state.send(match &result {
-                            Ok(resp) => TurnState::Idle {
-                                turn_seq,
-                                stop_reason: Some(resp.stop_reason),
-                            },
-                            Err(_) => TurnState::Idle {
-                                turn_seq,
-                                stop_reason: None,
-                            },
-                        });
                         result
                     }
                 },
@@ -665,8 +524,7 @@ impl Session {
 
         // ── Durable session record ─────────────────────────────────────────
         // Best-effort: a record-write failure must not fail the launch, but it
-        // is surfaced because `bitrouter acp sessions` (and v2 session/load)
-        // depend on records existing.
+        // is surfaced because `bitrouter acp sessions` depends on records existing.
         let record = SessionRecord {
             record_id: state.record_id.clone(),
             agent_id: state.agent_id.clone(),
@@ -676,7 +534,6 @@ impl Session {
             branch: worktree_branch,
             base_ref: worktree_base_ref,
             pid: std::process::id(),
-            socket: None,
             started_at: now_unix(),
             status: RecordStatus::Running,
             ended_at: None,
@@ -700,11 +557,8 @@ impl Session {
             wire,
             record: std::sync::Mutex::new(record),
             records,
-            transcript_writer,
-            transcript_path,
             telemetry_rx: std::sync::Mutex::new(Some(telemetry_rx)),
             permissions,
-            turn_state_tx,
         })
     }
 
@@ -808,20 +662,6 @@ impl Session {
         self.permissions.subscribe()
     }
 
-    /// Stream of [`TurnState`] transitions (`running`/`idle`/`requires_action`).
-    /// Each call yields an independent stream from the current point onward. The
-    /// down-facing endpoint subscribes and encodes each as a `_bitrouter/turn_state`
-    /// notification; the durable transcript carries `TurnStart`/`TurnEnd` for
-    /// replay on reattach. **Lossy under lag** (bounded broadcast) — a lagging
-    /// subscriber skips ahead; the transcript is the non-lossy record.
-    pub fn turn_state(&self) -> Pin<Box<dyn Stream<Item = TurnState> + Send>> {
-        use futures::StreamExt as _;
-        Box::pin(
-            tokio_stream::wrappers::BroadcastStream::new(self.turn_state_tx.subscribe())
-                .filter_map(|r| async move { r.ok() }),
-        )
-    }
-
     /// Receiver of [`RequestCompleted`] telemetry records emitted by the
     /// pipeline's hook. Single-consumer: the first call returns the receiver,
     /// later calls return `None`.
@@ -840,34 +680,10 @@ impl Session {
         self.conn.upstream_init()
     }
 
-    /// Where the durable transcript lives, when enabled. The down-facing
-    /// endpoint replays it for `session/load`, and advertises `loadSession`
-    /// only when this is `Some`.
-    pub fn transcript_path(&self) -> Option<&std::path::Path> {
-        self.transcript_path.as_deref()
-    }
-
     /// The worktree this session runs in, when one was provisioned. Fleet
     /// managers use it for diff/review over the subagent's work.
     pub fn worktree_path(&self) -> Option<&std::path::Path> {
         self.worktree.as_deref()
-    }
-
-    /// Record the unix socket this (warm) session accepts manager reattach on,
-    /// so `bitrouter acp attach` / `acp sessions` can discover it. Cleared
-    /// automatically at shutdown.
-    pub async fn advertise_socket(&self, path: PathBuf) {
-        let updated = {
-            let mut guard = match self.record.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            guard.socket = Some(path);
-            guard.clone()
-        };
-        if let Err(e) = self.records.write(&updated).await {
-            tracing::warn!(error = %e, "failed to record warm-session socket");
-        }
     }
 
     /// Tears the upstream connection down deterministically (killing the agent
@@ -884,7 +700,6 @@ impl Session {
             worktrees,
             record,
             records,
-            transcript_writer,
             ..
         } = self;
 
@@ -900,17 +715,6 @@ impl Session {
             tracing::warn!(error = %e, "upstream teardown unconfirmed; child may not have terminated");
         }
         drop(conn);
-
-        // Every transcript sender is now gone (the turn worker exited with the
-        // controller; the connection's feed closed with the teardown), so the
-        // writer flushes its tail and finishes. Bounded wait.
-        if let Some(writer) = transcript_writer
-            && tokio::time::timeout(TRANSCRIPT_FLUSH_TIMEOUT, writer)
-                .await
-                .is_err()
-        {
-            tracing::warn!("transcript writer did not flush within {TRANSCRIPT_FLUSH_TIMEOUT:?}");
-        }
 
         if let Some(path) = worktree {
             if remove_worktree_on_shutdown {
@@ -928,8 +732,6 @@ impl Session {
         };
         record.status = RecordStatus::Exited;
         record.ended_at = Some(now_unix());
-        // The socket dies with the process; a stale path must not be advertised.
-        record.socket = None;
         if let Err(e) = records.write(&record).await {
             tracing::warn!(error = %e, "failed to update session record");
         }
@@ -1494,90 +1296,6 @@ mod tests {
         session.shutdown().await.expect("shutdown");
     }
 
-    #[tokio::test]
-    async fn transcript_records_prompt_turn_start_updates_and_turn_end() {
-        let base = tempfile::tempdir().expect("tempdir");
-        let catalog = stub_catalog();
-
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            base.path().to_path_buf(),
-            LaunchOptions::default(),
-        )
-        .await
-        .expect("launch");
-        let record_id = session.state().record_id.clone();
-
-        session.prompt("hi").await.expect("prompt");
-        session.shutdown().await.expect("shutdown");
-
-        let path = crate::transcript::transcript_path(base.path(), &record_id);
-        let raw = std::fs::read_to_string(&path).expect("transcript file written");
-        let lines: Vec<serde_json::Value> = raw
-            .lines()
-            .map(|l| serde_json::from_str(l).expect("valid ndjson"))
-            .collect();
-        let kinds: Vec<&str> = lines
-            .iter()
-            .map(|l| l["kind"].as_str().expect("kind"))
-            .collect();
-        // Prompt, turn_start (running), the streamed updates, turn_end (idle).
-        assert!(kinds.contains(&"prompt"), "kinds: {kinds:?}");
-        assert!(kinds.contains(&"turn_start"), "kinds: {kinds:?}");
-        assert!(kinds.contains(&"update"), "kinds: {kinds:?}");
-        assert_eq!(*kinds.last().expect("lines"), "turn_end");
-        // turn_start precedes turn_end, both carry turn_seq 0.
-        let start = lines.iter().find(|l| l["kind"] == "turn_start").unwrap();
-        let end = lines.iter().find(|l| l["kind"] == "turn_end").unwrap();
-        assert_eq!(start["turn_seq"], 0);
-        assert_eq!(end["turn_seq"], 0);
-        assert_eq!(end["stop_reason"], "end_turn");
-        // seq is strictly monotonic from 0.
-        for (i, line) in lines.iter().enumerate() {
-            assert_eq!(line["seq"].as_u64(), Some(i as u64));
-        }
-    }
-
-    /// A prompt turn emits `running` at the start and `idle` (carrying the
-    /// upstream `stopReason`) at the end, both on the live `turn_state` stream
-    /// and keyed to the same per-session `turn_seq`. This is the completion
-    /// signal our managers key off (the `PromptResponse` is a bare ack for them).
-    #[tokio::test]
-    async fn turn_state_emits_running_then_idle() {
-        use crate::turn_state::TurnState;
-
-        let base = tempfile::tempdir().expect("tempdir");
-        let catalog = stub_catalog();
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            base.path().to_path_buf(),
-            LaunchOptions::default(),
-        )
-        .await
-        .expect("launch");
-
-        // Subscribe before prompting so we catch `running`; the broadcast buffers
-        // both transitions, which are emitted before `prompt` resolves.
-        let mut states = session.turn_state();
-        session.prompt("hi").await.expect("prompt");
-
-        assert_eq!(
-            states.next().await.expect("running"),
-            TurnState::Running { turn_seq: 0 }
-        );
-        assert_eq!(
-            states.next().await.expect("idle"),
-            TurnState::Idle {
-                turn_seq: 0,
-                stop_reason: Some(StopReason::EndTurn),
-            }
-        );
-
-        session.shutdown().await.expect("shutdown");
-    }
-
     /// A permission outstanding when a manager "detaches" (drops its
     /// `permissions()` stream without answering) is **not** denied, and a
     /// reattached manager (a fresh `permissions()` subscription) is re-issued the
@@ -1681,30 +1399,6 @@ mod tests {
 
         // No worktree → dropping the last Arc reaps the upstream child.
         drop(session);
-    }
-
-    #[tokio::test]
-    async fn transcript_disabled_writes_nothing() {
-        let base = tempfile::tempdir().expect("tempdir");
-        let catalog = stub_catalog();
-
-        let session = Session::launch(
-            &catalog,
-            "stub",
-            base.path().to_path_buf(),
-            LaunchOptions {
-                transcript: false,
-                ..LaunchOptions::default()
-            },
-        )
-        .await
-        .expect("launch");
-        let record_id = session.state().record_id.clone();
-        session.prompt("hi").await.expect("prompt");
-        session.shutdown().await.expect("shutdown");
-
-        let path = crate::transcript::transcript_path(base.path(), &record_id);
-        assert!(!path.exists(), "transcript must be absent when disabled");
     }
 
     /// Turn timeout: the stub never answers `session/prompt` directly, but

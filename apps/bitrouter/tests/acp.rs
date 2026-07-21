@@ -75,7 +75,7 @@ async fn prompt_ndjson() {
         source: &source,
         config: stub_config(),
         agent_id: "stub",
-        options: bitrouter::acp_cli::launch_options(None, false, false, None),
+        options: bitrouter::acp_cli::launch_options(None, false, None),
         routing: bitrouter::acp_cli::RoutingOptions {
             direct: true,
             ..Default::default()
@@ -230,7 +230,7 @@ async fn result_line_for(script: &str) -> serde_json::Value {
         source: &source,
         config: stub_config_with(script),
         agent_id: "stub",
-        options: bitrouter::acp_cli::launch_options(None, false, false, None),
+        options: bitrouter::acp_cli::launch_options(None, false, None),
         routing: bitrouter::acp_cli::RoutingOptions {
             direct: true,
             ..Default::default()
@@ -282,7 +282,7 @@ async fn result_schema_failure_reports_raw_and_never_blocks() {
 /// `apply_routing` for a catalog harness with an unreachable daemon must fail
 /// fast with `DaemonUnreachable` — before any session is launched. It may
 /// synthesize the catalog invocation into the config (so a later launch is
-/// *possible*), but it creates no worktree / record / transcript itself.
+/// *possible*), but it creates no worktree / record itself.
 #[tokio::test]
 async fn routing_fails_fast_on_dead_daemon() {
     let base = tempfile::tempdir().expect("tempdir");
@@ -493,7 +493,7 @@ async fn serve_subprocess_e2e() {
             "--config",
             config_path.to_str().expect("config path utf8"),
         ])
-        // The substrate roots its session records/transcripts at the cwd;
+        // The substrate roots its session records at the cwd;
         // pin it to the tempdir so test artifacts never land in the repo.
         .current_dir(dir.path())
         .stdin(std::process::Stdio::piped())
@@ -613,231 +613,6 @@ async fn serve_subprocess_e2e() {
     }
 }
 
-// ── Test 3: warm reattach over the per-session unix socket ──────────────────
-
-/// Full warm-session lifecycle against the real binary:
-/// 1. `acp serve --warm` is driven over stdio (initialize → session/new →
-///    prompt "first").
-/// 2. The record advertises the reattach socket; the stdio manager
-///    disconnects (stdin closed) — the session must survive.
-/// 3. A second manager connects over the unix socket (same NDJSON JSON-RPC
-///    framing), runs `session/load`, and must receive the transcript replay
-///    (the "first" prompt as user_message_chunk + the streamed "hi") before
-///    the load response; a follow-up prompt round-trips live.
-/// 4. After the socket manager disconnects, the idle timeout reaps the
-///    session: the child exits on its own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn warm_reattach_socket_e2e() {
-    use std::time::Duration;
-
-    use tokio::io::BufReader;
-
-    const RPC_TIMEOUT: Duration = Duration::from_secs(10);
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let config_path = dir.path().join("bitrouter.yaml");
-    std::fs::write(&config_path, SERVE_CONFIG_YAML).expect("write config");
-
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
-    if !binary.exists() {
-        eprintln!(
-            "warm_reattach_socket_e2e: binary not found at {}; skipping",
-            binary.display()
-        );
-        return;
-    }
-
-    let stderr_path = dir.path().join("serve.stderr");
-    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
-    let mut child = tokio::process::Command::new(&binary)
-        .args([
-            "acp",
-            "serve",
-            "--agent",
-            "stub",
-            "--warm",
-            "--idle-timeout",
-            "5",
-            "--config",
-            config_path.to_str().expect("config path utf8"),
-        ])
-        .current_dir(dir.path())
-        // Scope the reattach socket to the test (sockets bind under
-        // $BITROUTER_HOME/sock, not the repo).
-        .env("BITROUTER_HOME", dir.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(stderr_file)
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn bitrouter acp serve --warm");
-
-    let mut child_stdin = child.stdin.take().expect("child stdin");
-    let child_stdout = child.stdout.take().expect("child stdout");
-    let mut reader = BufReader::new(child_stdout);
-
-    // ── stdio manager: initialize → session/new → prompt "first" ──────────
-    let (init_resp, _) = bounded_round_trip(
-        &mut child_stdin,
-        &mut reader,
-        serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize","params":{"protocolVersion":1}}),
-        "1",
-        RPC_TIMEOUT,
-    )
-    .await;
-    assert!(
-        init_resp["result"]["agentCapabilities"]["loadSession"]
-            .as_bool()
-            .unwrap_or(false),
-        "warm serve must advertise loadSession; got: {init_resp}"
-    );
-    let (new_resp, _) = bounded_round_trip(
-        &mut child_stdin,
-        &mut reader,
-        serde_json::json!({"jsonrpc":"2.0","id":"2","method":"session/new","params":{"cwd":"/","mcpServers":[]}}),
-        "2",
-        RPC_TIMEOUT,
-    )
-    .await;
-    let record_id = new_resp["result"]["sessionId"]
-        .as_str()
-        .expect("sessionId")
-        .to_string();
-    let (prompt_resp, _) = bounded_round_trip(
-        &mut child_stdin,
-        &mut reader,
-        serde_json::json!({"jsonrpc":"2.0","id":"3","method":"session/prompt","params":{"sessionId":record_id,"prompt":[{"type":"text","text":"first"}]}}),
-        "3",
-        RPC_TIMEOUT,
-    )
-    .await;
-    assert_eq!(
-        prompt_resp["result"]["stopReason"].as_str(),
-        Some("end_turn")
-    );
-
-    // The record advertises the reattach socket (written at warm startup).
-    let record_path = dir
-        .path()
-        .join(".bitrouter")
-        .join("sessions")
-        .join(format!("{record_id}.json"));
-    let mut socket_path = None;
-    for _ in 0..100 {
-        if let Ok(raw) = tokio::fs::read_to_string(&record_path).await
-            && let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw)
-            && let Some(sock) = v["socket"].as_str()
-        {
-            socket_path = Some(std::path::PathBuf::from(sock));
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let socket_path = socket_path.expect("record must advertise the reattach socket");
-
-    // Wait for the transcript to be flushed through the "first" turn so the
-    // replay is complete (the writer is async).
-    let transcript_path = dir
-        .path()
-        .join(".bitrouter")
-        .join("sessions")
-        .join(format!("{record_id}.transcript.ndjson"));
-    for _ in 0..100 {
-        if tokio::fs::read_to_string(&transcript_path)
-            .await
-            .is_ok_and(|raw| raw.contains("\"result\""))
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-
-    // ── stdio manager disconnects; the warm session must survive ──────────
-    drop(child_stdin);
-    drop(reader);
-
-    // ── second manager over the unix socket ───────────────────────────────
-    let stream = tokio::net::UnixStream::connect(&socket_path)
-        .await
-        .expect("connect to reattach socket");
-    let (sock_read, sock_write) = stream.into_split();
-    let mut sock_reader = BufReader::new(sock_read);
-    let mut sock_writer = sock_write;
-
-    bounded_round_trip(
-        &mut sock_writer,
-        &mut sock_reader,
-        serde_json::json!({"jsonrpc":"2.0","id":"10","method":"initialize","params":{"protocolVersion":1}}),
-        "10",
-        RPC_TIMEOUT,
-    )
-    .await;
-
-    // session/load replays the transcript BEFORE the response resolves.
-    let (_load_resp, replayed) = bounded_round_trip(
-        &mut sock_writer,
-        &mut sock_reader,
-        serde_json::json!({"jsonrpc":"2.0","id":"11","method":"session/load","params":{"sessionId":record_id,"cwd":"/","mcpServers":[]}}),
-        "11",
-        RPC_TIMEOUT,
-    )
-    .await;
-    let replay_text = serde_json::to_string(&replayed).expect("serialize");
-    assert!(
-        replay_text.contains("user_message_chunk") && replay_text.contains("first"),
-        "replay must contain the earlier prompt; got: {replay_text}"
-    );
-    assert!(
-        replay_text.contains("\"hi\""),
-        "replay must contain the streamed update; got: {replay_text}"
-    );
-
-    // The reattached manager continues live.
-    let (prompt2, _) = bounded_round_trip(
-        &mut sock_writer,
-        &mut sock_reader,
-        serde_json::json!({"jsonrpc":"2.0","id":"12","method":"session/prompt","params":{"sessionId":record_id,"prompt":[{"type":"text","text":"second"}]}}),
-        "12",
-        RPC_TIMEOUT,
-    )
-    .await;
-    assert_eq!(prompt2["result"]["stopReason"].as_str(), Some("end_turn"));
-
-    // ── disconnect; the idle timeout (5s) must reap the session ───────────
-    drop(sock_writer);
-    drop(sock_reader);
-
-    let exit = tokio::time::timeout(Duration::from_secs(20), child.wait()).await;
-    match exit {
-        Ok(Ok(status)) => eprintln!("warm serve exited after idle timeout: {status:?}"),
-        Ok(Err(e)) => panic!("error waiting for warm serve child: {e}"),
-        Err(_) => {
-            let _ = child.kill().await;
-            let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
-            panic!("warm serve did NOT exit within 20s after the idle timeout\nstderr:\n{stderr}");
-        }
-    }
-
-    // The record no longer advertises the (now removed) socket.
-    let raw = tokio::fs::read_to_string(&record_path)
-        .await
-        .expect("record after shutdown");
-    let v: serde_json::Value = serde_json::from_str(&raw).expect("record json");
-    assert_eq!(v["status"].as_str(), Some("exited"));
-    assert!(v["socket"].is_null(), "socket must be cleared at shutdown");
-    assert!(!socket_path.exists(), "socket file must be removed");
-}
-
 /// Regression: a permission request during a **headless** `acp prompt` must
 /// be auto-denied so the turn completes — with no manager attached, an
 /// unconsumed `session/request_permission` would otherwise park its resolver
@@ -883,7 +658,7 @@ async fn prompt_headless_denies_permission_and_completes() {
         source: &source,
         config: cfg,
         agent_id: "perm-stub",
-        options: bitrouter::acp_cli::launch_options(None, false, false, None),
+        options: bitrouter::acp_cli::launch_options(None, false, None),
         routing: bitrouter::acp_cli::RoutingOptions {
             direct: true,
             ..Default::default()

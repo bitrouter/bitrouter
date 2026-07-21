@@ -81,7 +81,7 @@ pub struct SpawnContext<'a> {
     pub config: Config,
     /// The agent id to launch (catalog id or configured entry).
     pub agent_id: &'a str,
-    /// Session options (worktree, transcript, turn timeout).
+    /// Session options (worktree, turn timeout).
     pub options: LaunchOptions,
     /// The routing decision (via-daemon by default, or `--direct`).
     pub routing: RoutingOptions,
@@ -161,7 +161,7 @@ impl RoutingError {
 /// Returns the "via" base URL when routing is active, or `None` when the
 /// session runs direct (`--direct`, an unknown/custom agent, or an
 /// unroutable harness — each warned to stderr). Fails fast — before the
-/// caller creates any worktree, record, or transcript — on an unreachable
+/// caller creates any worktree or record — on an unreachable
 /// daemon or a missing required credential.
 pub async fn apply_routing(
     source: &ConfigSource,
@@ -516,30 +516,13 @@ pub async fn spawn_check(
 
 // ── serve ─────────────────────────────────────────────────────────────────────
 
-/// Warm-session behavior for [`serve`]: after the stdio manager disconnects,
-/// keep the session alive and accept manager reattach connections on a
-/// per-session unix socket until no manager has been connected for
-/// `idle_timeout`.
-#[derive(Debug, Clone)]
-pub struct WarmOptions {
-    pub idle_timeout: std::time::Duration,
-}
-
 /// Launch a session for `agent_id` and serve it as a vanilla ACP Agent over
 /// **stdio** until the manager disconnects.
 ///
 /// Config is taken by value (already loaded by the caller); `options` carries
-/// the worktree spec, transcript switch, and per-turn timeout resolved from
-/// the CLI flags (see [`launch_options`]).
-///
-/// With `warm`, the session survives manager disconnects: reattach
-/// connections are accepted on `.bitrouter/sessions/<record_id>.sock` — the
-/// **same NDJSON JSON-RPC framing as stdio** over a unix socket (no bespoke
-/// protocol; ACP's standardized remote transport replaces this when it
-/// ships). A reconnecting manager runs `initialize` → `session/load` (full
-/// transcript replay) → continues. The session shuts down after
-/// `idle_timeout` with no manager attached.
-pub async fn serve(ctx: SpawnContext<'_>, warm: Option<WarmOptions>) -> Result<()> {
+/// the worktree spec and per-turn timeout resolved from the CLI flags (see
+/// [`launch_options`]).
+pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
     let SpawnContext {
         source,
         mut config,
@@ -547,10 +530,6 @@ pub async fn serve(ctx: SpawnContext<'_>, warm: Option<WarmOptions>) -> Result<(
         options,
         routing,
     } = ctx;
-    #[cfg(not(unix))]
-    if warm.is_some() {
-        anyhow::bail!("--warm requires unix domain sockets (unix-only in v1)");
-    }
     // Route the sub-agent's LLM traffic through the daemon (default) unless
     // opted out. Fail fast to stderr — before speaking any ACP — so a manager
     // handles "child failed to start" rather than a mid-session provider error.
@@ -573,75 +552,7 @@ pub async fn serve(ctx: SpawnContext<'_>, warm: Option<WarmOptions>) -> Result<(
     let exporter = attach_observability(&config, agent_id, &session).await;
     let session = Arc::new(session);
 
-    // Warm: bind the reattach socket up front so the record advertises it for
-    // the session's whole life (a manager can attach even before the stdio
-    // manager disconnects — connections are served one at a time).
-    #[cfg(unix)]
-    let reattach = match &warm {
-        Some(_) => {
-            // Sockets live under the (short, stable) bitrouter home, NOT the
-            // repo: `sun_path` caps unix socket paths at ~104 bytes on macOS,
-            // which a deeply nested repo blows through. The record stores the
-            // absolute path, so discovery is location-independent.
-            let dir = socket_dir();
-            tokio::fs::create_dir_all(&dir)
-                .await
-                .with_context(|| format!("creating {}", dir.display()))?;
-            let record_id = &session.state().record_id;
-            let short: String = record_id.chars().take(16).collect();
-            let path = dir.join(format!("{short}.sock"));
-            // A stale socket file from a dead process blocks bind; the name is
-            // session-unique, so removing it is safe.
-            let _ = tokio::fs::remove_file(&path).await;
-            let listener = tokio::net::UnixListener::bind(&path)
-                .with_context(|| format!("binding reattach socket {}", path.display()))?;
-            session.advertise_socket(path.clone()).await;
-            Some((listener, path))
-        }
-        None => None,
-    };
-
     let served = bitrouter_substrate::down::serve(Arc::clone(&session)).await;
-
-    // Warm loop: the stdio manager is gone; accept reattach connections until
-    // the idle timeout elapses with no manager. (Shadows `served` so the
-    // binding stays immutable on non-unix targets, where this block compiles
-    // away — `--warm` was already rejected up top there.)
-    #[cfg(unix)]
-    let served = match (&warm, &reattach) {
-        (Some(warm), Some((listener, socket_path))) => {
-            use agent_client_protocol::ByteStreams;
-            use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-            let mut served = served;
-            loop {
-                match tokio::time::timeout(warm.idle_timeout, listener.accept()).await {
-                    Err(_) => {
-                        tracing::info!(
-                            idle = ?warm.idle_timeout,
-                            "no manager reattached within the idle timeout; shutting down"
-                        );
-                        break;
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!(error = %e, "reattach accept failed; shutting down");
-                        break;
-                    }
-                    Ok(Ok((stream, _addr))) => {
-                        tracing::info!("manager reattached over {}", socket_path.display());
-                        let (read_half, write_half) = stream.into_split();
-                        let transport =
-                            ByteStreams::new(write_half.compat_write(), read_half.compat());
-                        served =
-                            bitrouter_substrate::down::serve_on(Arc::clone(&session), transport)
-                                .await;
-                    }
-                }
-            }
-            let _ = tokio::fs::remove_file(socket_path).await;
-            served
-        }
-        _ => served,
-    };
 
     // No manager left: shut the session down deliberately so the worktree
     // policy is honored (same semantics as `prompt`). Once serving ends, the
@@ -658,63 +569,6 @@ pub async fn serve(ctx: SpawnContext<'_>, warm: Option<WarmOptions>) -> Result<(
         exporter.shutdown();
     }
     served.map_err(|e| anyhow::anyhow!("acp serve: {e}"))
-}
-
-// ── attach ────────────────────────────────────────────────────────────────────
-
-/// Bridge this process's stdio to a warm session's reattach socket: a plain
-/// bidirectional byte pump (both sides speak the stdio NDJSON JSON-RPC
-/// framing, so no parsing is involved). Resolves `record_prefix` against the
-/// current repo's session records; the record must advertise a socket (the
-/// session is running `serve --warm`). Ends when either side closes.
-#[cfg(unix)]
-pub async fn attach(record_prefix: &str) -> Result<()> {
-    use bitrouter_substrate::record::RecordStore;
-
-    let base = std::env::current_dir().context("resolving current directory")?;
-    let records = RecordStore::new(&base).list().await?;
-    let matches: Vec<_> = records
-        .iter()
-        .filter(|r| r.record_id.starts_with(record_prefix))
-        .collect();
-    let record = match matches.as_slice() {
-        [] => anyhow::bail!(
-            "no session record matches '{record_prefix}' (see `bitrouter acp sessions`)"
-        ),
-        [record] => *record,
-        _ => anyhow::bail!(
-            "'{record_prefix}' matches {} sessions; use more of the record id",
-            matches.len()
-        ),
-    };
-    let Some(socket) = &record.socket else {
-        anyhow::bail!(
-            "session {} has no reattach socket — it is not running `acp serve --warm`",
-            &record.record_id[..8.min(record.record_id.len())]
-        );
-    };
-    let stream = tokio::net::UnixStream::connect(socket)
-        .await
-        .with_context(|| {
-            format!(
-                "connecting to {} (is the session still alive?)",
-                socket.display()
-            )
-        })?;
-    let (mut sock_read, mut sock_write) = stream.into_split();
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    tokio::select! {
-        r = tokio::io::copy(&mut sock_read, &mut stdout) => { r.context("socket → stdout")?; }
-        r = tokio::io::copy(&mut stdin, &mut sock_write) => { r.context("stdin → socket")?; }
-    }
-    Ok(())
-}
-
-/// Unix-only: reattach rides unix domain sockets in v1.
-#[cfg(not(unix))]
-pub async fn attach(_record_prefix: &str) -> Result<()> {
-    anyhow::bail!("`bitrouter acp attach` requires unix domain sockets (unix-only in v1)")
 }
 
 // ── prompt ────────────────────────────────────────────────────────────────────
@@ -751,7 +605,7 @@ where
         routing,
     } = ctx;
     // Route by default; fail fast with a single structured NDJSON `error`
-    // line BEFORE any session side effect (no worktree/record/transcript).
+    // line BEFORE any session side effect (no worktree/record).
     let via = match apply_routing(source, &mut config, agent_id, &routing).await {
         Ok(via) => via,
         Err(e) => {
@@ -785,8 +639,9 @@ where
     // Headless: there is no manager to broker permissions and none will ever
     // attach, so explicitly DENY each request (the reject option). Since the
     // session-scoped permission registry, merely *dropping* a pending item no
-    // longer defaults to Deny — a registry clone keeps it alive for a possible
-    // reattach — so an unconsumed request would otherwise hang the turn forever.
+    // longer defaults to Deny — a registry clone keeps it alive for a
+    // re-subscribing manager — so an unconsumed request would otherwise hang the
+    // turn forever.
     let mut permissions = session.permissions();
     tokio::spawn(async move {
         while let Some(pending) = permissions.next().await {
@@ -1141,12 +996,11 @@ fn drain_telemetry_record(r: RequestCompleted) {
 
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:
 /// `--worktree`/`--rm-worktree` (retention is the default — removal destroys
-/// the agent's uncommitted work, so it is strictly opt-in), `--no-transcript`
-/// (the durable transcript is on by default), and `--turn-timeout <secs>`.
+/// the agent's uncommitted work, so it is strictly opt-in) and
+/// `--turn-timeout <secs>`.
 pub fn launch_options(
     worktree: Option<&str>,
     rm_worktree: bool,
-    no_transcript: bool,
     turn_timeout_secs: Option<u64>,
 ) -> LaunchOptions {
     LaunchOptions {
@@ -1155,28 +1009,9 @@ pub fn launch_options(
             branch: None,
             remove_on_shutdown: rm_worktree,
         }),
-        transcript: !no_transcript,
         turn_timeout: turn_timeout_secs.map(std::time::Duration::from_secs),
         ..Default::default()
     }
-}
-
-/// Directory warm-session reattach sockets are bound in: `$BITROUTER_HOME`
-/// (when set) or `~/.bitrouter`, plus `sock/`. Deliberately NOT under the
-/// repo — unix `sun_path` is ~104 bytes on macOS and repo paths run long.
-#[cfg(unix)]
-fn socket_dir() -> std::path::PathBuf {
-    use std::path::PathBuf;
-    std::env::var_os("BITROUTER_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|v| !v.is_empty())
-                .map(|home| PathBuf::from(home).join(".bitrouter"))
-        })
-        .unwrap_or_else(std::env::temp_dir)
-        .join("sock")
 }
 
 /// Build a [`ConfigAcpRoutingTable`] from the `agents` section of `config`.

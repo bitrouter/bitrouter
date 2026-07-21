@@ -4,8 +4,7 @@
 //! Written at launch and updated at shutdown, records give managers and the
 //! `bitrouter acp sessions` CLI a durable view of which sessions ran (or are
 //! running) in a repo: identity (all three tiers), worktree, pid, and
-//! lifecycle timestamps. They are also the persistence substrate a future
-//! `session/load` (v2 warm sessions) will resume from.
+//! lifecycle timestamps.
 //!
 //! A record whose `status` is `running` may be stale if the substrate process
 //! died without shutting down; consumers should verify `pid` liveness before
@@ -47,10 +46,6 @@ pub struct SessionRecord {
     pub base_ref: Option<String>,
     /// Pid of the substrate process that owns (owned) the session.
     pub pid: u32,
-    /// Unix socket a warm session accepts manager reattach on
-    /// (`bitrouter acp attach`). Set while serving warm; cleared at shutdown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub socket: Option<PathBuf>,
     /// Unix seconds when the session launched.
     pub started_at: u64,
     pub status: RecordStatus,
@@ -169,7 +164,6 @@ mod tests {
             branch: None,
             base_ref: None,
             pid: 4242,
-            socket: None,
             started_at: 1_750_000_000,
             status: RecordStatus::Running,
             ended_at: None,

@@ -14,7 +14,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 pub mod diff;
 pub mod pane;
-use self::pane::{Ownership, PaneKind, PaneState};
+use self::pane::{PaneKind, PaneState};
 pub mod overlay;
 use self::overlay::{DEFAULT_LEADER, Mode, PaletteState, PickerState};
 pub mod layout;
@@ -240,29 +240,6 @@ impl AppState {
             .collect()
     }
 
-    /// The manager-layer state of every ACP agent, in the durable
-    /// [`FleetAgent`](bitrouter_substrate::fleet::FleetAgent) shape — the
-    /// fleet-state snapshot's agent list. PTY panes (the orchestrator,
-    /// interactive attaches) and orchestrator-owned monitors are not fleet
-    /// agents and are skipped. Monitors are read-only (TUI_SPEC_V3 I2):
-    /// there is no composer, so no draft to persist.
-    pub fn fleet_agents(&self) -> Vec<bitrouter_substrate::fleet::FleetAgent> {
-        self.agents
-            .iter()
-            .filter(|p| p.kind == PaneKind::Monitor && p.owner == Ownership::Human)
-            .map(|p| bitrouter_substrate::fleet::FleetAgent {
-                record_id: p.record_id.clone(),
-                autonomy: p.autonomy.label().to_string(),
-                review: p.review,
-                port: p.port,
-                pending: p.pending.as_ref().map(|pending| pending.title.clone()),
-                draft: None,
-                turn_active: p.turn_active,
-                exited: p.exited,
-            })
-            .collect()
-    }
-
     /// Sessions-panel order: indices of the PTY panes (orchestrator sessions
     /// and interactive attaches) in spawn order — stable, herdr-spaces style.
     pub fn sessions_list(&self) -> Vec<usize> {
@@ -284,19 +261,6 @@ impl AppState {
             }
         }
         total
-    }
-
-    /// The durable identity of every orchestrator session, for the fleet
-    /// snapshot (interactive attaches are transient and skipped).
-    pub fn fleet_sessions(&self) -> Vec<bitrouter_substrate::fleet::OrchestratorState> {
-        self.agents
-            .iter()
-            .filter(|p| p.is_session())
-            .map(|p| bitrouter_substrate::fleet::OrchestratorState {
-                binary: p.agent_id.clone(),
-                model: p.model.clone(),
-            })
-            .collect()
     }
 
     /// The detail-focused pane (receives NORMAL-mode input).
