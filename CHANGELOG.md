@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.28](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.27...v1.0.0-alpha.28)
+
+
+### ⛰️ Features
+
+- *(substrate)* Detach/reattach session robustness ([#743](https://github.com/bitrouter/bitrouter/pull/743)) - ([9fb7f92](https://github.com/bitrouter/bitrouter/commit/9fb7f92a588608c424e73ee5dea28d1475244fc9))
+- Add cache-aware routing, Terminus 2 identity, and Claude bridge ([#717](https://github.com/bitrouter/bitrouter/pull/717)) - ([0a4f3ee](https://github.com/bitrouter/bitrouter/commit/0a4f3ee9b93958a3f6fc9725c1dbad334545a8f7))
+
+### 🚜 Refactor
+
+- *(docs)* Consolidate internal specs under docs/ ([#750](https://github.com/bitrouter/bitrouter/pull/750)) - ([b83775d](https://github.com/bitrouter/bitrouter/commit/b83775da9b67d0029bc6c17be76901e8effca823))
+
+### 📚 Documentation
+
+- Correct routing surface docs ([#741](https://github.com/bitrouter/bitrouter/pull/741)) - ([735b316](https://github.com/bitrouter/bitrouter/commit/735b3162dd29264ced65d2e655fa4b47d68f188f))
+
+
 ## [1.0.0-alpha.27](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.26...v1.0.0-alpha.27)
 
 
