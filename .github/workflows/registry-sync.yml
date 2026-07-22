@@ -91,7 +91,6 @@ jobs:
       - name: Build and check registry dist
         run: |
           cargo run -p dist-helper -- registry build
-          cargo run -p dist-helper -- registry docs
           cargo run -p dist-helper -- check
 
       - name: Open registry sync PR
@@ -99,7 +98,7 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           BRANCH: automation/registry-sync
         run: |
-          if git diff --quiet -- registry dist/registry docs/get-started; then
+          if git diff --quiet -- registry dist/registry; then
             echo "registry source and dist are already up to date"
             exit 0
           fi
@@ -115,13 +114,12 @@ jobs:
           - `cargo run -p dist-helper -- registry agentic-prompt`
           - `codex --search exec ... < target/registry-agentic-sync.md`
           - `cargo run -p dist-helper -- registry build`
-          - `cargo run -p dist-helper -- registry docs`
           - `cargo run -p dist-helper -- check`
           EOF
 
           git config user.name "bitrouter-automation[bot]"
           git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
-          git add registry dist/registry docs/get-started
+          git add registry dist/registry
           git commit -m "chore: sync registry catalog"
           remote_ref="$(git ls-remote --heads origin "${BRANCH}")"
           remote_sha="$(printf '%s\n' "${remote_ref}" | awk '{print $1}')"

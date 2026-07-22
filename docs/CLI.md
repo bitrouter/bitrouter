@@ -355,6 +355,34 @@ Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` 
 
 ---
 
+## Workflow-state benchmark evidence
+
+These commands export and validate the request-scoped evidence used by policy
+benchmarks:
+
+```text
+bitrouter workflow-state harbor-outcomes --harbor-run-dir <DIR> --output <JSONL>
+bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
+bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
+bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
+bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> [--policy-decisions <JSONL>] --output-dir <DIR>
+bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
+```
+
+`reconcile-metering` accepts either the API-key environment named by
+`--api-key-env` (default `BITROUTER_API_KEY`) or an owner-only BitRouter Cloud
+credential file. The latter resolves static keys and refreshable OAuth without
+putting a bearer in the environment. Price specs use
+`provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
+
+`bundle` is fail-closed: every non-empty trace set needs an exact usage join and
+computed auditable charge, policy decisions must cover the exact request-id set
+when supplied, and outcomes must join through an explicit session/trial key.
+Timestamp-only reward attribution is available to analytical in-memory reports,
+not accepted benchmark bundles.
+
+---
+
 ## Policy
 
 ### `bitrouter policy create <id>`

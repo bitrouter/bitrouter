@@ -448,13 +448,13 @@ enum Command {
     /// who needs you, radar strip, decision + review queues) beside the
     /// primary pane. `--agent claude|codex|opencode|pi|hermes|openclaw|grok|agy`
     /// hosts that harness's REAL native TUI in a PTY pane (the orchestrator —
-    /// keys pass through; `Ctrl-A` is the one manager leader; `Ctrl-C`
+    /// keys pass through; `Ctrl-Space` is the one manager leader; `Ctrl-C`
     /// interrupts the agent, not the TUI) with the fleet MCP bridge injected
     /// where the harness supports MCP (pi/openclaw/grok/agy have no
     /// mechanism). grok and agy
     /// launch with their own subscription auth (the daemon borrows those
     /// same sessions as providers). A configured `agents:` id instead
-    /// renders that ACP agent from typed events. `Ctrl-A n` spawns
+    /// renders that ACP agent from typed events. `Ctrl-Space n` spawns
     /// worktree-isolated ACP subagents either way.
     #[cfg(feature = "tui")]
     Tui {

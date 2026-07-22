@@ -2,7 +2,7 @@
 
 ## Documents
 
-See `README.md` and `DEVELOPMENT.md` for full project introduction and architecture.
+See `README.md` and `docs/DEVELOPMENT.md` for full project introduction and architecture.
 
 ## Guidelines
 
@@ -36,41 +36,27 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
 
 ## Documentation
 
-Product docs live in `docs/` and are synced to the docs site (`bitrouter-docs`)
-at build time. `docs/CONTRIBUTING.md` is the authoring contract (plain Markdown,
-no `import`/`export`, only the whitelisted global components, extensionless
-internal links).
+Product docs live in the **`bitrouter-docs`** repo (`content/docs/`), where they
+are authored, reviewed, translated, and published. The authoring contract,
+English/Chinese lockstep, and `sourceHash` tracking live there now — not here.
+`docs/` in this repo now holds internal **development** docs — the CLI reference
+(`docs/CLI.md`), the workspace architecture guide (`docs/DEVELOPMENT.md`), and
+design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
 
-1. **ALWAYS** keep English and Chinese in lockstep. Every `docs/<section>/<name>.md`
-   has a Simplified-Chinese sibling `docs/<section>/<name>.zh.md`. When you add,
-   edit, or remove a doc page, make the **identical** change to its `.zh.md` in the
-   same change — never ship an English-only or out-of-date translation.
-2. A translation mirrors the English page exactly except for prose: preserve every
-   code block, component tag (`<Callout>`, `<Tabs>`, …), heading, and link target
-   verbatim; translate only human-readable text. Keep `title:` as the English;
-   translate `description:`.
-3. **NEVER** hand-edit the `sourceHash` frontmatter field — the docs sync manages it
-   (it tracks whether a translation is current).
-4. **NEVER** author API-reference operation pages or the `ai-resources`/root nav
-   here — those are owned by `bitrouter-docs` (see `docs/CONTRIBUTING.md`).
-5. **ALWAYS** keep `docs/get-started/supported-models.md` and
-   `supported-providers.md` (and their `.zh.md` siblings) consistent with the
-   `registry/` catalog whenever you add, remove, or re-scope a vendor or provider
-   in `registry/models/` or `registry/providers/`. Two things must stay in sync:
-   - **The catalog/directory tables.** These are generated, not hand-edited. They
-     live under the `Model catalog` / `Provider directory` anchor heading in all
-     four pages and mirror the built registry catalog. Rebuild the registry
-     (`cargo run -p dist-helper -- registry build`) and then regenerate the tables
-     (`cargo run -p dist-helper -- registry docs`), which rewrites only the
-     anchored block in each page. The English and Chinese tables share identical
-     data rows — only the header row differs — so run the command rather than
-     editing rows by hand. `cargo run -p dist-helper -- check` fails if the
-     committed tables are stale.
-   - **The surrounding prose.** It hardcodes registry-derived facts the script does
-     not touch: the discounted-vs-closed-source vendor families (`gpt-*`,
-     `claude-*`, `gemini-*`, `grok-*`), example model ids, and the default discount
-     percentage. Update these in the same change so the docs never describe a
-     catalog that no longer matches.
+1. **The docs site generates the model/provider tables** from this repo's
+   committed `dist/registry/{models,providers}.json`. When you add, remove, or
+   re-scope a model or provider under `registry/`, rebuild and commit the catalog
+   (`cargo run -p dist-helper -- registry build`, then commit `dist/registry`);
+   `cargo run -p dist-helper -- check` fails if it is stale. The docs site's
+   `supported-models` / `supported-providers` tables regenerate from it
+   automatically — do **not** try to hand-maintain those tables (they no longer
+   live in this repo).
+2. Prose that hardcodes registry-derived facts — the discounted-vs-closed-source
+   families (`gpt-*`, `claude-*`, `gemini-*`, `grok-*`), example model ids, the
+   default discount — now lives in `bitrouter-docs`; update it there when the
+   catalog changes.
+3. On each release, an agent in `bitrouter-docs` drafts a docs update from the
+   changelog for human review — no docs action is needed in this repo.
 
 ## Contributing
 

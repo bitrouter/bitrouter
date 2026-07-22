@@ -138,7 +138,7 @@ bitrouter cloud keys / usage / billing  # manage your cloud account
 bitrouter cloud api /v1/models          # call Cloud APIs directly
 ```
 
-See [`CLI.md`](CLI.md) for the full command reference, flags, and config resolution.
+See [`docs/CLI.md`](docs/CLI.md) for the full command reference, flags, and config resolution.
 
 ### Agent Skill
 
@@ -220,7 +220,7 @@ Want a first-party provider integration, or building an open-source agent/harnes
 
 ## Development
 
-- [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — workspace architecture and SDK internals
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
 - [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)

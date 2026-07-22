@@ -71,6 +71,25 @@ stable for the same ordered event log and config, includes route and endpoint
 classifications plus an event-log SHA-256, and contains no credential material,
 prompt/response content, or tool commands.
 
+## Reconcile request-scoped receipts
+
+Hosted BitRouter Cloud rows can be reconciled without exporting an OAuth bearer
+into the environment. Point the command at the owner-only credential file used
+by `bitrouter cloud login`; a usable bearer is read directly and a near-expiry
+OAuth token is refreshed before receipt polling:
+
+```bash
+bitrouter workflow-state reconcile-metering \
+  --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
+  --credentials-file "$XDG_DATA_HOME/bitrouter/account-credentials.json" \
+  --request-id req-123 \
+  --price 'bitrouter:model=1.0,0.1,1.25,6.0'
+```
+
+For API-key environments, omit `--credentials-file` and provide the variable
+named by `--api-key-env` (default `BITROUTER_API_KEY`). Never place either
+credential in command arguments, logs, or benchmark artifacts.
+
 ## Export an auditable usage snapshot
 
 ```bash
@@ -106,12 +125,15 @@ bitrouter workflow-state bundle \
   --output-dir artifacts/bundle
 ```
 
-Once usage is supplied, bundle creation requires an exact one-to-one
+For any non-empty trace set, bundle creation requires an exact one-to-one
 trace/usage request-id join, provider-reported raw usage, consistent normalized
 buckets, a computed charge, complete effective rates, and a full pricing hash.
 When policy decisions are supplied, trace/decision request ids must also match
-exactly. Terminus-2 bundles additionally require complete structured workflow
-identity; see `references/harness-terminus-2.md`.
+exactly. Outcome attribution requires an explicit session/trial key; timestamp
+overlap is analytical evidence only and is rejected by the strict bundle gate.
+Terminus-2 bundles additionally require complete structured workflow identity;
+see `references/harness-terminus-2.md`.
 
-An analytical replay may omit usage and decisions. That mode is useful for
-extractor development, but it is not benchmark-grade cost evidence.
+The in-memory analytical `build*` APIs may omit usage and decisions for
+extractor development. The `workflow-state bundle` command is benchmark-grade
+and fails closed when traces exist without usage evidence.
