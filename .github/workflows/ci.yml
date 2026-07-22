@@ -13,6 +13,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  repository-hygiene:
+    name: repository-hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: reject tracked files that match gitignore
+        shell: bash
+        run: |
+          ignored_tracked="$(git ls-files -ci --exclude-standard)"
+          if [[ -n "$ignored_tracked" ]]; then
+            echo "::error::Tracked files must not also match .gitignore:"
+            printf '%s\n' "$ignored_tracked"
+            exit 1
+          fi
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
