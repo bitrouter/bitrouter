@@ -12,7 +12,8 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 | Q16-Q20 | Isolation, resume, postprocessing, controls, and trials |
 | Q21-Q26 | Provider errors, settlement, cache-aware cost, and reward semantics |
 | Q27-Q29 | Concurrency, cleanup, and publication |
-| Q30-Q37 | Target-platform builds, persistent operators, Cloud/Claude OAuth, settlement, and protocol shaping |
+| Q30-Q38 | Target-platform builds, persistent operators, Cloud/Claude OAuth, settlement, protocol shaping, and SSH monitoring |
+| Q39-Q42 | Target groups, model-specific Claude quota, security skips, and dual scoring |
 
 ## Q1. Which parts of the benchmark are fixed, and which are configurable?
 
@@ -140,7 +141,7 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 **Cause / diagnostic:** A partial/failed run was resumed in place or control and policy state overlapped.
 
-**Safe action:** Allocate new run/group paths and ports, use a dedicated control database and one fresh shared r1-r3 policy database, archive the old attempt unchanged, and start a new lineage after implementation/config fixes.
+**Safe action:** Allocate new run/group paths and ports, use a dedicated control database and one fresh policy database shared across every targeted policy round, archive the old attempt unchanged, and start a new lineage after implementation/config fixes.
 
 ## Q17. Which cases may a crash-resume entrypoint launch?
 
@@ -317,3 +318,35 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 **Cause / diagnostic:** The management path and benchmark data plane are independent. A persistent central supervisor can keep Harbor, BitRouter, and EC2 sandboxes running after the operator connection disappears. Common control-plane causes are a changed `/32` source not present in the bastion security group, a cold or unstable Tailscale DERP path, and local network policy that blocks direct port 22 even when an HTTP public-IP probe succeeds. First use the declared IAM profile to verify central instance/system health, exact run-tagged sandbox state, and the current security-group rules; use CloudWatch CPU/network activity only as supporting evidence, never as an acceptance result.
 
 **Safe action:** Do not restart the tmux/systemd job or relaunch a case because SSH failed. Prime and verify the Tailscale path with `tailscale ping`, test port 22 separately, then reconnect through the frozen jump chain and read the existing exit marker and case-event log. If the operator is authorized to repair ingress, add only a tagged current `/32` rule to the bastion, keep the central host restricted to the bastion security group, and remove the temporary rule after monitoring is complete. Never widen SSH to `0.0.0.0/0`, copy credentials to a jump host, or treat a transport timeout as benchmark failure.
+
+## Q39. Must every model combination run r3?
+
+**Symptom:** One matrix combination is already running r3, while later combinations can save time by ending after r2.
+
+**Cause / diagnostic:** Target groups were treated as a global runner constant instead of a frozen per-combination experimental input. Omitting r3 after seeing r2 would be cherry-picking, but declaring `control+r1+r2` before that combination starts is a valid, narrower experiment.
+
+**Safe action:** Freeze ordered target groups per combination. Let an already-declared `control+r1+r2+r3` lineage finish; run later declared `control+r1+r2` lineages through accepted r2 feedback and the post-feedback snapshot, then mark them complete. Reject a non-target r3 before daemon startup and case consumption, and report every targeted round.
+
+## Q40. Does a Claude Code subscription `429` block all Claude models?
+
+**Symptom:** `claude-fable-5` returns `429`, so the operator considers pausing Fable, Opus, and Sonnet together.
+
+**Cause / diagnostic:** Claude Code subscription limits may be model-specific. A family-wide gate discards usable capacity and confounds the intended model lineages.
+
+**Safe action:** Key provider-gate evidence by the exact target. A `429` for `claude-fable-5` blocks only that target; independently sentinel `claude-opus-4-8` and `claude-sonnet-5`, and run whichever exact model is ready under its own frozen lineage. Preserve the failed Fable evidence, apply no family-wide cooldown, and never substitute another model's results into Fable.
+
+## Q41. When may a task be skipped for a network/security refusal?
+
+**Symptom:** One case receives a typed security refusal and repeated attempts risk wasting time without producing a TrialResult.
+
+**Cause / diagnostic:** A single refusal can be transient or misclassified, while unlimited retries violate immutable identities. The narrow exception therefore requires two matching typed failures and no valid result.
+
+**Safe action:** Run only the original identity and one immutable `replacement-01`. Mark `skipped_security_policy` only if both were started once, both are terminal-invalid, neither produced a valid TrialResult, and two sanitized HTTP `403` evidence files have the same allowed class (`provider_policy_refusal` or `network_security_policy_denied`). Hash both files into the skip record. Never skip a `429`, `5xx`, timeout, missing-usage case, generic runtime error, non-matching refusal, or any attempt with a valid TrialResult; never fabricate missing evidence.
+
+## Q42. How is a full89 group scored when a task has a validated security skip?
+
+**Symptom:** Removing the skipped case from the denominator makes quality appear better, while assigning a fake zero-reward TrialResult corrupts the evidence bundle.
+
+**Cause / diagnostic:** Runtime coverage and official benchmark scoring are separate. The group can account for all 89 tasks using accepted results plus validated skips without synthesizing an execution.
+
+**Safe action:** Keep the official denominator 89 and give the skipped task zero contribution: `sum(real accepted rewards) / 89`. Also report `runnable-only = sum(real accepted rewards) / accepted_count` as a secondary labeled diagnostic. Publish accepted/skip counts and identities, evidence hashes, and real incurred cost; create no synthetic TrialResult, request, usage, outcome, or reward row.

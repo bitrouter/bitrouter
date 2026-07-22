@@ -29,7 +29,7 @@ freeze manifest
   -> one real non-evaluation Terminus 2 canary
   -> resolve immutable control
   -> launch only missing control identities, once
-  -> r1 -> feedback -> r2 -> feedback -> r3
+  -> execute frozen target groups: control+r1+r2[+r3]
   -> settle and strictly accept each group
   -> exact-tag cleanup after every group
   -> sanitize, checksum, archive, and report
@@ -125,7 +125,7 @@ Validate control and policy configs through that binary:
 "$BITROUTER_BIN" config validate --config "$POLICY_CONFIG"
 ```
 
-Use a dedicated control database and a separate new policy database. The policy database persists across r1-r3; per-group traces, decisions, logs, and process lifetimes do not.
+Use a dedicated control database and a separate new policy database. The policy database persists across every targeted policy round; per-group traces, decisions, logs, and process lifetimes do not.
 
 Before starting a group, set new output paths and the harness identifier expected by the pinned BitRouter revision. Start the daemon, wait on its health endpoint with a bounded timeout, and record start time, PID, config hash, binary hash, database, port, and output paths in an append-only group manifest.
 
@@ -145,6 +145,13 @@ instruction. The sandbox must not originate that identity. A direct sentinel
 that receives a generic upstream 429 should be compared against the official
 Claude Code CLI: if the CLI succeeds with the same token/model, verify the
 serving binary includes this body transform before blaming account quota.
+
+Gate Claude subscription targets independently by exact provider-qualified
+model. Record the sentinel result under that exact model key and never create a
+family-wide cooldown. For example, a `429` from `claude-fable-5` does not block
+fresh sentinels for `claude-opus-4-8` or `claude-sonnet-5`. Move to another
+model combination only under its own frozen manifest and case identities;
+never substitute its responses into the rate-limited lineage.
 
 Never hot-swap the serving binary, config, provider credential class, or policy database within a lineage.
 
@@ -250,10 +257,10 @@ Control uses a clean dedicated database, routes every request to the frozen stro
 
 ## 8. Run policy rounds
 
-Create a new policy database and use this exact sequence:
+Create a new policy database and execute the exact sequence frozen for this model combination:
 
 ```text
-r1 -> feedback -> r2 -> feedback -> r3
+r1 -> feedback -> r2 -> feedback [-> r3]
 ```
 
 For each round:
@@ -269,9 +276,24 @@ For each round:
 9. audit exact-tag AWS cleanup;
 10. accept or reject the group independently.
 
-Apply reward feedback once after accepted r1 and once after accepted r2. Snapshot policy state before and after feedback. Do not apply feedback after r3 for this evaluation lineage, after a rejected group, to a control, or to held-out evidence.
+Apply reward feedback once after accepted r1 and once after accepted r2. Snapshot policy state before and after feedback. When r2 is the final target, require its feedback marker and post-feedback snapshot before writing lineage acceptance. Do not apply feedback after r3 for this evaluation lineage, after a rejected group, to a control, or to held-out evidence.
 
-If an intermediate accepted round loses quality or costs more, continue through the predeclared r3 unless a severe stop limit was crossed. If a round fails evidence integrity, stop the lineage before feedback or the next round.
+If an intermediate accepted round loses quality or costs more, continue through every remaining predeclared target unless a severe stop limit was crossed. If a round fails evidence integrity, stop the lineage before feedback or the next round. Reject any attempt to launch a group absent from this combination's frozen target list before starting the daemon or consuming a case identity.
+
+### Narrow security-policy skip
+
+Do not convert ordinary runtime/provider failures into skips. A scored task may
+be marked `skipped_security_policy` only after the original identity and exactly
+one immutable `replacement-01` identity each have one `started` event, one
+`terminal_invalid` event, no valid TrialResult, and separate sanitized typed
+HTTP `403` evidence with the same normalized class. The only allowed classes
+are `provider_policy_refusal` and `network_security_policy_denied`.
+
+Hash both evidence files into an owner-only immutable skip record. Never copy a
+raw provider body, invent a TrialResult/request/usage/outcome/reward, or use the
+skip path for `429`, `5xx`, timeout, missing usage, generic runtime failure, or
+an attempt that produced a valid TrialResult. A non-matching second refusal is
+diagnostic failure, not permission for a third attempt.
 
 ## 9. Reconcile and assemble evidence
 
@@ -362,4 +384,4 @@ Do not archive live credentials, prompt/provider secrets, SSH keys, credential-s
 
 Raise concurrency with new non-evaluation canaries, not inside a scored lineage. A cautious sequence is 1 for session validation, then separately frozen 3, 4, 6, and 8 candidates. At each step require complete TrialResults, authoritative settlement, strict joins, acceptable provider latency/error behavior, observed peak equal to the declared value, and zero AWS residue. A successful canary authorizes only a future new lineage at that fixed value.
 
-Once an operator freezes a value for a new lineage (for example 4 after a successful staged decision), write it into every manifest and controller-capacity field before launch and keep it unchanged across control and r1-r3. A one-case preflight may observe a peak of one even when its controller capacity is four; multi-case capacity validation must use enough predeclared non-evaluation cases to exercise the declared peak.
+Once an operator freezes a value for a new lineage (for example 4 after a successful staged decision), write it into every manifest and controller-capacity field before launch and keep it unchanged across control and every targeted policy round. A one-case preflight may observe a peak of one even when its controller capacity is four; multi-case capacity validation must use enough predeclared non-evaluation cases to exercise the declared peak.

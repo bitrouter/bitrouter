@@ -30,7 +30,7 @@ Answer it only when the same case/trial identities have:
 - authoritative cache-aware settlement;
 - comparable harness, sandbox, protocol, and pricing inputs.
 
-The result is a set of points: control, r1, r2, and r3. Report all of them. A cheaper round is not a success if quality falls outside the predeclared tolerance, and a high-quality round is not a routing-economics result if its cost evidence is incomplete.
+The result is the complete predeclared set of points for each model combination: `control+r1+r2`, optionally followed by r3. Freeze and report every targeted point. A cheaper round is not a success if quality falls outside the predeclared tolerance, and a high-quality round is not a routing-economics result if its cost evidence is incomplete.
 
 ## Fixed experimental topology
 
@@ -72,6 +72,7 @@ sandbox AMI, instance type, region, and network shape
 policy-state lineage
 price snapshot and source date
 fixed concurrency, retry rule, and timeouts
+ordered target groups for each model combination
 ```
 
 Changing any item starts a new policy lineage. Give every lineage and round a new label, directory, port set, trace set, log set, and controller state. Never reuse a partial run directory or policy database.
@@ -105,15 +106,17 @@ When prices change, reprice the archived raw usage under a new declared snapshot
 
 ## Policy evolution
 
-Use a clean policy database for r1 and share exactly that database with r2 and r3:
+Use a clean policy database for r1 and share exactly that database with every later targeted policy round:
 
 | Group | Database | Feedback | Interpretation |
 | --- | --- | --- | --- |
 | r1 | New clean policy DB | Apply only after strict acceptance | Cold exploration |
 | r2 | Same policy DB | Apply only after strict acceptance | First adapted policy |
-| r3 | Same policy DB | None needed for this evaluation lineage | Learned replacement and stability |
+| r3, when targeted | Same policy DB | None needed for this evaluation lineage | Learned replacement and stability |
 
-Run `r1 -> feedback -> r2 -> feedback -> r3`. Do not skip a round because an intermediate point is expensive or lower quality; non-monotonic behavior is part of the finding. Do not continue after a rejected round, and do not add an unplanned r4 to search for a favorable outcome.
+Freeze one ordered sequence before launch. Common sequences are `r1 -> feedback -> r2 -> feedback` and `r1 -> feedback -> r2 -> feedback -> r3`. Ending at r2 is a declared experimental boundary, not a post-hoc skip; persist the post-r2 policy snapshot and feedback marker before accepting that lineage. Do not omit a targeted round because an intermediate point is expensive or lower quality, do not continue after a rejected round, and do not add an unplanned r3/r4 to search for a favorable outcome.
+
+In a multi-model matrix, target groups are per combination rather than global. For example, one already-running combination may finish r3 while all remaining combinations are frozen as `control+r1+r2`. This changes the questions those lineages answer but does not weaken any per-group acceptance gate.
 
 Apply benchmark reward only when the group has complete quality, settlement, join, and cleanup evidence. Never apply reward to the control database, a held-out evaluation, a diagnostic-only artifact, or a rejected group.
 
@@ -134,7 +137,7 @@ If a public protocol permits a replacement after a proven transient infrastructu
 
 ## Tuning and held-out evaluation
 
-Rounds r1-r3 on the same tasks use verifier reward as an optimization signal. They measure adaptation, not unbiased generalization.
+Executed policy rounds on the same tasks use verifier reward as an optimization signal. They measure adaptation, not unbiased generalization.
 
 For a held-out claim:
 
@@ -153,7 +156,7 @@ Benchmark verifier reward is an oracle unavailable in normal product traffic unl
 
 Treat concurrency as a frozen lineage input. Establish explicit workflow-session attribution at concurrency 1, then test higher values with separate non-evaluation canaries. A cautious ladder may evaluate 3, 4, 6, and 8 in new identities; no historical result makes those values safe in another AWS account or provider environment.
 
-Never raise or lower concurrency inside r1-r3. If a canary fails, diagnose it and start a new canary or lineage with a newly frozen value.
+Never raise or lower concurrency inside a targeted policy lineage. If a canary fails, diagnose it and start a new canary or lineage with a newly frozen value.
 
 Because an immutable control is not rerun contemporaneously, record the time gap between it and policy groups. Send non-scoring strong-route sentinels around policy rounds to observe availability, latency, and rate-limit drift. Sentinel data explains temporal confounding but never mutates or replaces the control.
 
