@@ -244,6 +244,39 @@ fn benchmark_integrity_recomputes_charge_from_effective_rates() {
     );
 }
 
+#[test]
+fn benchmark_integrity_rounds_shared_output_rate_after_combining_tokens() {
+    let traces = vec![benchmark_trace("req-shared-output-rate")];
+    let mut usage = computed_usage(
+        "req-shared-output-rate",
+        "ambient",
+        "moonshotai/kimi-k2.7-code",
+        1_137,
+        258,
+        1_985,
+    );
+    usage.output_tokens = 213;
+    usage.reasoning_tokens = 45;
+    usage.raw_usage = Some(json!({
+        "prompt_tokens": 1_137,
+        "completion_tokens": 258,
+        "output_tokens": 213,
+        "reasoning_tokens": 45,
+    }));
+    let evidence = usage.charge_evidence.as_mut().expect("charge evidence");
+    evidence.normalized_usage.output_tokens = 213;
+    evidence.normalized_usage.reasoning_tokens = 45;
+    evidence.effective_rates = EffectivePricingRates {
+        uncached_input_micro_usd_per_token: Some(0.84),
+        cache_read_micro_usd_per_token: Some(0.84),
+        cache_write_micro_usd_per_token: Some(0.84),
+        output_micro_usd_per_token: Some(3.99),
+    };
+
+    WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect("shared-rate completion tokens must round after one multiplication");
+}
+
 fn benchmark_trace(request_id: &str) -> CapturedIngressTrace {
     CapturedIngressTrace {
         id: format!("trace-{request_id}"),

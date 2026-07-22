@@ -817,6 +817,10 @@ fn validate_authoritative_receipt(
 fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
     let normalized = &evidence.normalized_usage;
     let rates = &evidence.effective_rates;
+    let completion_tokens = normalized
+        .output_tokens
+        .min(MAX_TRUSTED_TOKENS)
+        .saturating_add(normalized.reasoning_tokens.min(MAX_TRUSTED_TOKENS));
     let buckets = [
         (
             normalized.uncached_input_tokens,
@@ -830,11 +834,7 @@ fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
             normalized.cache_write_tokens,
             rates.cache_write_micro_usd_per_token,
         ),
-        (normalized.output_tokens, rates.output_micro_usd_per_token),
-        (
-            normalized.reasoning_tokens,
-            rates.output_micro_usd_per_token,
-        ),
+        (completion_tokens, rates.output_micro_usd_per_token),
     ];
     let mut charge = 0.0;
     for (tokens, rate) in buckets {
