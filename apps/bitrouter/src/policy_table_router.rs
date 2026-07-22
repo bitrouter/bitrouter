@@ -286,7 +286,12 @@ impl PolicyTable {
         headers: &HeaderMap,
     ) -> bool {
         let online = OnlineWorkflowState::from_headers(headers, prompt);
+        let request_key = match self.key_strategy {
+            PolicyKeyStrategy::LegacyFingerprint => online.legacy_fingerprint(),
+            PolicyKeyStrategy::WorkflowState => online.routing_key(),
+        };
         self.exploration_allowed_for_online(&online)
+            && exploration_target_matches(headers, request_key)
     }
 
     fn exploration_allowed_for_online(&self, online: &OnlineWorkflowState) -> bool {
@@ -454,7 +459,8 @@ impl PolicyTableRouter {
             PolicyKeyStrategy::LegacyFingerprint => legacy_fingerprint.clone(),
             PolicyKeyStrategy::WorkflowState => online.routing_key().to_string(),
         };
-        let exploration_allowed = self.table.exploration_allowed_for_online(&online);
+        let exploration_allowed = self.table.exploration_allowed_for_online(&online)
+            && exploration_target_matches(headers, &request_key);
         let mut decision = PolicyDecision {
             key_strategy: self.table.key_strategy(),
             request_key,
@@ -729,6 +735,17 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
         .is_some_and(|(namespace, _)| namespace == "bitrouter")
 }
 
+fn exploration_target_matches(headers: &HeaderMap, request_key: &str) -> bool {
+    let Some(value) = headers.get("x-bitrouter-exploration-target") else {
+        return true;
+    };
+    value
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .is_some_and(|target| !target.is_empty() && target == request_key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,6 +799,18 @@ mod tests {
             HeaderValue::from_static("terminus_2"),
         );
         headers.insert("x-bitrouter-agent-role", HeaderValue::from_static("main"));
+        headers
+    }
+
+    fn smithers_headers(node_id: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-harness", HeaderValue::from_static("smithers"));
+        headers.insert("x-bitrouter-protocol", HeaderValue::from_static("chat"));
+        headers.insert(
+            "x-smithers-workflow-id",
+            HeaderValue::from_static("release-review"),
+        );
+        headers.insert("x-smithers-node-id", HeaderValue::from_static(node_id));
         headers
     }
 
@@ -1573,6 +1602,13 @@ mod tests {
         PolicyTableRouter::new(table, Some(ledger))
     }
 
+    fn workflow_exploration_table() -> Arc<PolicyTable> {
+        let mut cfg = config_with_opening_exploration();
+        cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
+        cfg.fingerprints.clear();
+        PolicyTable::from_config(&cfg).expect("configured")
+    }
+
     fn trial_ok() -> Outcome {
         Outcome::Exploration {
             trialed: true,
@@ -1603,6 +1639,66 @@ mod tests {
             "vendor/cheap",
             "a candidate due for a trial routes to the explore tier"
         );
+    }
+
+    #[tokio::test]
+    async fn exploration_target_allows_only_the_matching_request_key() {
+        let table = workflow_exploration_table();
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("start")];
+        let mut matching_headers = smithers_headers("plan");
+        let target_key = table.request_key(&prompt, &matching_headers);
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            cause: InadequacyCause::None,
+        };
+        ledger.observe(&target_key, non_trial()).await;
+        ledger.observe(&target_key, non_trial()).await;
+        matching_headers.insert(
+            "x-bitrouter-exploration-target",
+            target_key.parse().expect("valid request-key header"),
+        );
+        let router = PolicyTableRouter::new(table.clone(), Some(ledger));
+
+        let matching = router.decision_for(&prompt, &matching_headers);
+        assert!(matching.exploration_allowed);
+        assert_eq!(matching.reason, PolicyDecisionReason::ExplorationTrial);
+        assert_eq!(matching.selected_tier.as_deref(), Some("cheap"));
+
+        let mut other_headers = smithers_headers("review");
+        other_headers.insert(
+            "x-bitrouter-exploration-target",
+            target_key.parse().expect("valid request-key header"),
+        );
+        let other = router.decision_for(&prompt, &other_headers);
+        assert!(!other.exploration_allowed);
+        assert_eq!(other.reason, PolicyDecisionReason::StaticTable);
+        assert_eq!(other.selected_tier.as_deref(), Some("flagship"));
+    }
+
+    #[tokio::test]
+    async fn mismatching_exploration_target_suppresses_a_learned_lock() {
+        let table = workflow_exploration_table();
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("start")];
+        let mut headers = smithers_headers("plan");
+        let target_key = table.request_key(&prompt, &headers);
+        let other_key = table.request_key(&prompt, &smithers_headers("review"));
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        ledger.observe(&target_key, trial_ok()).await;
+        headers.insert(
+            "x-bitrouter-exploration-target",
+            other_key.parse().expect("valid request-key header"),
+        );
+        let router = PolicyTableRouter::new(table, Some(ledger));
+
+        let decision = router.decision_for(&prompt, &headers);
+
+        assert!(decision.locked);
+        assert!(!decision.exploration_allowed);
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
     #[tokio::test]

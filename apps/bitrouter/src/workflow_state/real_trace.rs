@@ -148,6 +148,7 @@ impl Default for TraceSanitizer {
             "x-bitrouter-cloud-request-id",
             "x-bitrouter-context-epoch",
             "x-bitrouter-context-transition",
+            "x-bitrouter-exploration-target",
             "x-bitrouter-harness",
             "x-bitrouter-inbound-protocol",
             "x-bitrouter-parent-session-id",
@@ -156,6 +157,8 @@ impl Default for TraceSanitizer {
             "x-bitrouter-session-fingerprint",
             "x-bitrouter-trial-id",
             "x-bitrouter-workflow-session",
+            "x-smithers-node-id",
+            "x-smithers-workflow-id",
             "x-request-id",
             "x-session-id",
         ]
@@ -382,6 +385,7 @@ pub fn capture_from_env() -> Result<Option<RealTraceCapture>> {
         "hermes" => HarnessId::Hermes,
         "claude" | "claude_code" | "claude-code" => HarnessId::ClaudeCode,
         "codex" => HarnessId::Codex,
+        "smithers" => HarnessId::Smithers,
         "terminus_2" | "terminus-2" | "terminus2" => HarnessId::Terminus2,
         "openclaw" | "open_claw" | "open-claw" => HarnessId::OpenClaw,
         "unknown" => HarnessId::Unknown,
@@ -498,6 +502,7 @@ fn harness_header_value(harness: &HarnessId) -> &'static str {
         HarnessId::Hermes => "hermes",
         HarnessId::ClaudeCode => "claude_code",
         HarnessId::Codex => "codex",
+        HarnessId::Smithers => "smithers",
         HarnessId::Terminus2 => "terminus_2",
         HarnessId::OpenClaw => "openclaw",
         HarnessId::Unknown => "unknown",
@@ -529,7 +534,7 @@ fn session_from_raw_body(harness: &HarnessId, raw_body: &serde_json::Value) -> O
         HarnessId::ClaudeCode => claude_session_from_metadata(raw_body),
         HarnessId::Hermes => json_str(raw_body, &["metadata", "job_id"]),
         HarnessId::Terminus2 => json_str(raw_body, &["session_id"]),
-        HarnessId::Generic | HarnessId::OpenClaw | HarnessId::Unknown => None,
+        HarnessId::Generic | HarnessId::Smithers | HarnessId::OpenClaw | HarnessId::Unknown => None,
     }
 }
 
