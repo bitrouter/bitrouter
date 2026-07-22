@@ -368,10 +368,8 @@ pub fn export_candidate_file(
 }
 
 fn resolved_file_location(path: &Path) -> Result<PathBuf> {
-    if path.exists() {
-        return std::fs::canonicalize(path)
-            .with_context(|| format!("resolving policy path {}", path.display()));
-    }
+    path.file_name()
+        .ok_or_else(|| anyhow::anyhow!("policy output must name a file: {}", path.display()))?;
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -379,17 +377,27 @@ fn resolved_file_location(path: &Path) -> Result<PathBuf> {
             .context("resolving current directory")?
             .join(path)
     };
-    let file_name = absolute
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("policy output must name a file: {}", path.display()))?;
-    let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
-    let resolved_parent = if parent.exists() {
-        std::fs::canonicalize(parent)
-            .with_context(|| format!("resolving policy output parent {}", parent.display()))?
-    } else {
-        parent.to_path_buf()
-    };
-    Ok(resolved_parent.join(file_name))
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                resolved.push(component.as_os_str());
+            }
+            std::path::Component::Normal(_) => {
+                resolved.push(component.as_os_str());
+                if resolved.exists() {
+                    resolved = std::fs::canonicalize(&resolved).with_context(|| {
+                        format!("resolving policy path component {}", resolved.display())
+                    })?;
+                }
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 fn is_opening_key(request_key: &str) -> bool {
@@ -1130,6 +1138,24 @@ mod tests {
         let before = std::fs::read(&active).unwrap();
 
         let error = export_candidate_file(&active, &active, &lock).unwrap_err();
+
+        assert!(error.to_string().contains("active policy lock"));
+        assert_eq!(std::fs::read(&active).unwrap(), before);
+    }
+
+    #[test]
+    fn candidate_export_refuses_nonexistent_parent_alias_of_active_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("policy-lock.yaml");
+        let candidate = dir.path().join("new").join("..").join("policy-lock.yaml");
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+        };
+        write_atomic(&active, None, &lock).unwrap();
+        let before = std::fs::read(&active).unwrap();
+
+        let error = export_candidate_file(&active, &candidate, &lock).unwrap_err();
 
         assert!(error.to_string().contains("active policy lock"));
         assert_eq!(std::fs::read(&active).unwrap(), before);
