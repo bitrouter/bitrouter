@@ -277,6 +277,46 @@ fn benchmark_integrity_rounds_shared_output_rate_after_combining_tokens() {
         .expect("shared-rate completion tokens must round after one multiplication");
 }
 
+#[test]
+fn benchmark_integrity_rounds_all_equal_rate_buckets_after_combining_tokens() {
+    let traces = vec![benchmark_trace("req-all-equal-rates")];
+    let mut usage = computed_usage(
+        "req-all-equal-rates",
+        "ambient",
+        "moonshotai/kimi-k2.7-code",
+        265_355,
+        1_445,
+        232_450,
+    );
+    usage.uncached_input_tokens = 96_565;
+    usage.cache_read_tokens = 84_573;
+    usage.cache_write_tokens = 84_217;
+    usage.output_tokens = 1_445;
+    usage.raw_usage = Some(json!({
+        "prompt_tokens": 265_355,
+        "completion_tokens": 1_445,
+        "cache_read_tokens": 84_573,
+        "cache_write_tokens": 84_217,
+    }));
+    let evidence = usage.charge_evidence.as_mut().expect("charge evidence");
+    evidence.normalized_usage = NormalizedUsage {
+        uncached_input_tokens: 96_565,
+        cache_read_tokens: 84_573,
+        cache_write_tokens: 84_217,
+        output_tokens: 1_445,
+        reasoning_tokens: 0,
+    };
+    evidence.effective_rates = EffectivePricingRates {
+        uncached_input_micro_usd_per_token: Some(0.87125),
+        cache_read_micro_usd_per_token: Some(0.87125),
+        cache_write_micro_usd_per_token: Some(0.87125),
+        output_micro_usd_per_token: Some(0.87125),
+    };
+
+    WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[usage])
+        .expect("all buckets sharing one frozen rate must round after one multiplication");
+}
+
 fn benchmark_trace(request_id: &str) -> CapturedIngressTrace {
     CapturedIngressTrace {
         id: format!("trace-{request_id}"),
@@ -422,6 +462,16 @@ fn benchmark_integrity_rejects_duplicate_or_unmatched_request_ids() {
     let error = WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[unmatched])
         .expect_err("unmatched usage ids must fail");
     assert!(error.to_string().contains("request ids differ"));
+}
+
+#[test]
+fn benchmark_integrity_rejects_nonempty_traces_without_usage() {
+    let traces = vec![benchmark_trace("req-without-usage")];
+
+    let error = WorkflowRunArtifact::validate_benchmark_integrity(&traces, &[])
+        .expect_err("a benchmark trace without settlement evidence must fail closed");
+
+    assert!(error.to_string().contains("usage snapshot is empty"));
 }
 
 #[test]
@@ -1071,6 +1121,34 @@ fn run_artifact_joins_trace_to_benchmark_outcome_by_agent_time_window() {
 }
 
 #[test]
+fn complete_benchmark_integrity_rejects_time_only_reward_join() {
+    let mut trace = benchmark_trace("req-time-only");
+    trace.harness = HarnessId::Codex;
+    trace.captured_at = Some("2026-07-09T08:01:30Z".to_string());
+    let usage = computed_usage("req-time-only", "openai", "gpt-test", 10, 2, 30);
+    let outcome = BenchmarkOutcomeRecord {
+        session_key: "regex-log__abc123".to_string(),
+        task_id: "terminal-bench/regex-log".to_string(),
+        reward: 1.0,
+        failed_reason: None,
+        finished_at: Some("2026-07-09T08:05:00Z".to_string()),
+        trial_name: Some("regex-log__abc123".to_string()),
+        agent_started_at: Some("2026-07-09T08:00:00Z".to_string()),
+        agent_finished_at: Some("2026-07-09T08:04:00Z".to_string()),
+    };
+
+    let error = WorkflowRunArtifact::validate_complete_benchmark_integrity(
+        &[trace],
+        &[usage],
+        &[outcome],
+        &[],
+    )
+    .expect_err("strict benchmark validation must not attribute reward by time alone");
+
+    assert!(error.to_string().contains("outcome join incomplete"));
+}
+
+#[test]
 fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
     let traces = vec![CapturedIngressTrace {
         id: "trace-001".to_string(),
@@ -1561,12 +1639,20 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         locked: true,
         trialed: false,
     }];
+    let usage = vec![computed_usage(
+        "req-001",
+        "bitrouter",
+        "moonshotai/kimi-k2.7-code",
+        10,
+        2,
+        30,
+    )];
 
     let artifact = WorkflowRunArtifact::write_bundle_with_decisions(
         "run-a",
         &output_dir,
         &traces,
-        &[],
+        &usage,
         &outcomes,
         &decisions,
         &TraceSanitizer::default(),
@@ -1709,10 +1795,16 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
         protocol: ProtocolKind::ChatCompletions,
         method: "POST".to_string(),
         path: "/v1/chat/completions".to_string(),
-        headers: [(
-            "x-bitrouter-workflow-session".to_string(),
-            "session-a".to_string(),
-        )]
+        headers: [
+            (
+                "x-bitrouter-request-id".to_string(),
+                "req-outcome-a".to_string(),
+            ),
+            (
+                "x-bitrouter-workflow-session".to_string(),
+                "session-a".to_string(),
+            ),
+        ]
         .into_iter()
         .collect(),
         raw_body: json!({
@@ -1740,7 +1832,14 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
         "run-a",
         &output_dir,
         &traces,
-        &[],
+        &[computed_usage(
+            "req-outcome-a",
+            "openai",
+            "gpt-test",
+            10,
+            2,
+            30,
+        )],
         &outcomes,
         &TraceSanitizer::default(),
     )
@@ -1783,7 +1882,7 @@ fn benchmark_bundle_rejects_unmatched_outcomes_before_writing() {
         "run-a",
         &output_dir,
         &[trace],
-        &[],
+        &[computed_usage("req-1", "openai", "gpt-test", 10, 2, 30)],
         &outcomes,
         &TraceSanitizer::default(),
     )

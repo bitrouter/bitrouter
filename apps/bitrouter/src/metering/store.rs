@@ -316,6 +316,40 @@ impl MeteringStore {
         Ok(charges.into_iter().map(|c| c.max(0) as u64).sum())
     }
 
+    /// Spend suitable for enforcing a hard policy ceiling.
+    ///
+    /// Analytical callers may still use [`get_spend`](Self::get_spend), where
+    /// the legacy non-null charge column represents unknown evidence as zero.
+    /// Enforcement must instead fail closed whenever any row in the window has
+    /// unknown or legacy charge evidence.
+    pub async fn get_enforceable_spend(
+        &self,
+        api_key_id: &str,
+        window: TimeWindow,
+    ) -> Result<Option<u64>> {
+        let start = window_start(window).to_rfc3339();
+        let charges: Vec<(i64, String)> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::EstimatedChargeMicroUsd)
+            .column(requests::Column::ChargeStatus)
+            .filter(requests::Column::ApiKeyId.eq(api_key_id))
+            .filter(requests::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|error| BitrouterError::internal(format!("get_enforceable_spend: {error}")))?;
+        let mut total = 0_u64;
+        for (charge, status) in charges {
+            match ChargeStatus::from_persisted(&status) {
+                ChargeStatus::Computed | ChargeStatus::NotCharged => {
+                    total = total.saturating_add(charge.max(0) as u64);
+                }
+                ChargeStatus::Unknown | ChargeStatus::LegacyUnknown => return Ok(None),
+            }
+        }
+        Ok(Some(total))
+    }
+
     /// Total request count for `api_key_id` within `window`.
     pub async fn get_request_count(&self, api_key_id: &str, window: TimeWindow) -> Result<u64> {
         let start = window_start(window).to_rfc3339();

@@ -247,6 +247,43 @@ async fn authoritative_half_micro_charge_matches_provider_rounding() -> Result<(
 }
 
 #[tokio::test]
+async fn authoritative_equal_rate_buckets_share_one_multiplication() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder =
+        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
+    let mut settlement = ctx("equal-rate-buckets", 1, 1);
+    settlement.provider_id = "bitrouter".to_string();
+    recorder.record(&mut settlement).await?;
+    let receipt = SettlementReceipt {
+        request_id: settlement.request_id.clone(),
+        state: SettlementState::Computed,
+        model_id: Some("moonshotai/kimi-k2.7-code".to_string()),
+        provider_id: Some("ambient".to_string()),
+        usage: SettlementUsage {
+            uncached_input_tokens: 1_972,
+            cache_read_tokens: 32_832,
+            cache_write_tokens: 0,
+            output_tokens: 485,
+            reasoning_tokens: 1,
+        },
+        final_charge_micro_usd: Some(31_175),
+    };
+    let prices = [super::UsagePriceOverride::parse(
+        "ambient:moonshotai/kimi-k2.7-code=0.84,0.84,0.84,3.99",
+    )?];
+
+    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+
+    assert_eq!(status, super::ReconciliationStatus::Computed);
+    assert_eq!(records[0].provider_id, "ambient");
+    assert_eq!(records[0].final_charge_micro_usd, Some(31_175));
+    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn authoritative_charge_mismatch_fails_closed() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());

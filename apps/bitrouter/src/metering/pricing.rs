@@ -400,6 +400,40 @@ pub fn calculate_charge_evidence(
         }
     };
 
+    let charge_micro_usd =
+        match calculate_normalized_charge_micro_usd(&normalized_usage, &effective_rates) {
+            Ok(charge) => charge,
+            Err(reason) => {
+                return unknown_evidence(
+                    normalized_usage,
+                    effective_rates,
+                    pricing_source,
+                    pricing_version,
+                    reason,
+                );
+            }
+        };
+
+    ChargeEvidence {
+        status: ChargeStatus::Computed,
+        charge_micro_usd: Some(charge_micro_usd),
+        normalized_usage,
+        effective_rates,
+        pricing_source,
+        pricing_version,
+        unknown_reason: None,
+    }
+}
+
+/// Reconstruct a charge from frozen normalized usage and rates.
+///
+/// Every bucket with the exact same frozen rate is combined before the single
+/// multiplication and final rounding. Settlement and benchmark verification
+/// both call this helper so their provider-receipt semantics cannot drift.
+pub(crate) fn calculate_normalized_charge_micro_usd(
+    normalized_usage: &NormalizedUsage,
+    effective_rates: &EffectivePricingRates,
+) -> std::result::Result<i64, &'static str> {
     let buckets = [
         (
             normalized_usage.uncached_input_tokens,
@@ -419,67 +453,52 @@ pub fn calculate_charge_evidence(
             "missing_cache_write_rate",
             "invalid_cache_write_rate",
         ),
-    ];
-    let mut charge = 0.0;
-    for (tokens, rate, missing_reason, invalid_reason) in buckets {
-        if tokens > 0 && rate.is_some_and(|value| !value.is_finite() || value < 0.0) {
-            return unknown_evidence(
-                normalized_usage,
-                effective_rates,
-                pricing_source,
-                pricing_version,
-                invalid_reason,
-            );
-        }
-        let Some(bucket) = bucket_charge(tokens, rate) else {
-            return unknown_evidence(
-                normalized_usage,
-                effective_rates,
-                pricing_source,
-                pricing_version,
-                missing_reason,
-            );
-        };
-        charge += bucket;
-    }
-
-    // Output and reasoning tokens are charged at the same rate. Combine their
-    // individually clamped counts before multiplication so a half-micro-USD
-    // boundary is rounded exactly once, matching provider receipt semantics.
-    let output_tokens = normalized_usage
-        .output_tokens
-        .min(MAX_TRUSTED_TOKENS)
-        .saturating_add(normalized_usage.reasoning_tokens.min(MAX_TRUSTED_TOKENS));
-    let output_rate = effective_rates.output_micro_usd_per_token;
-    if output_tokens > 0 && output_rate.is_some_and(|value| !value.is_finite() || value < 0.0) {
-        return unknown_evidence(
-            normalized_usage,
-            effective_rates,
-            pricing_source,
-            pricing_version,
-            "invalid_output_rate",
-        );
-    }
-    let Some(output_charge) = charge_for_tokens(output_tokens, output_rate) else {
-        return unknown_evidence(
-            normalized_usage,
-            effective_rates,
-            pricing_source,
-            pricing_version,
+        (
+            normalized_usage.output_tokens,
+            effective_rates.output_micro_usd_per_token,
             "missing_output_rate",
-        );
-    };
-    charge += output_charge;
-
-    ChargeEvidence {
-        status: ChargeStatus::Computed,
-        charge_micro_usd: Some(charge.round().max(0.0) as i64),
-        normalized_usage,
-        effective_rates,
-        pricing_source,
-        pricing_version,
-        unknown_reason: None,
+            "invalid_output_rate",
+        ),
+        (
+            normalized_usage.reasoning_tokens,
+            effective_rates.output_micro_usd_per_token,
+            "missing_output_rate",
+            "invalid_output_rate",
+        ),
+    ];
+    // Providers multiply the total token count for each distinct frozen rate
+    // once, then round the final charge. Keep groups in first-seen bucket order
+    // so addition across different rates is deterministic. `to_bits` is the
+    // stable identity for rates that came from the same frozen price field.
+    let mut rate_groups: Vec<(u64, f64)> = Vec::new();
+    for (tokens, rate, missing_reason, invalid_reason) in buckets {
+        if tokens == 0 {
+            continue;
+        }
+        let Some(rate) = rate else {
+            return Err(missing_reason);
+        };
+        if !rate.is_finite() || rate < 0.0 {
+            return Err(invalid_reason);
+        }
+        let tokens = tokens.min(MAX_TRUSTED_TOKENS);
+        if let Some((group_tokens, _)) = rate_groups
+            .iter_mut()
+            .find(|(_, group_rate)| group_rate.to_bits() == rate.to_bits())
+        {
+            *group_tokens = group_tokens.saturating_add(tokens);
+        } else {
+            rate_groups.push((tokens, rate));
+        }
     }
+    let charge = rate_groups
+        .into_iter()
+        .map(|(tokens, rate)| tokens as f64 * rate)
+        .sum::<f64>();
+    if !charge.is_finite() {
+        return Err("invalid_charge_total");
+    }
+    Ok(charge.round().max(0.0) as i64)
 }
 
 /// Evidence for a request with no usable pricing entry.
@@ -537,22 +556,6 @@ fn hash_rate(hasher: &mut Sha256, rate: Option<f64>) {
             hasher.update(value.to_bits().to_be_bytes());
         }
         None => hasher.update([0]),
-    }
-}
-
-/// One token bucket's contribution to the charge. `Some(0.0)` when the bucket
-/// is zero (no work to bill, rate may legitimately be missing); `None` when
-/// the bucket has nonzero usage but no rate.
-fn bucket_charge(tokens: u64, rate: Option<f64>) -> Option<f64> {
-    charge_for_tokens(tokens.min(MAX_TRUSTED_TOKENS), rate)
-}
-
-/// Calculate one contribution from an already bounded token count.
-fn charge_for_tokens(tokens: u64, rate: Option<f64>) -> Option<f64> {
-    match (tokens, rate) {
-        (0, _) => Some(0.0),
-        (n, Some(r)) => Some(n as f64 * r),
-        (_, None) => None,
     }
 }
 

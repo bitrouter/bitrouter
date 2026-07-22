@@ -335,6 +335,61 @@ async fn spend_cap_is_enforced_via_metering_store() {
 }
 
 #[tokio::test]
+async fn spend_cap_fails_closed_when_prior_charge_is_unknown() {
+    let store = Arc::new(PolicyStore::from_policies([Policy {
+        id: "p1".into(),
+        max_spend_micro_usd: Some(100),
+        ..Default::default()
+    }]));
+    let metering = fresh_metering().await;
+    metering
+        .record_request(RequestMetric {
+            request_id: "unknown-charge".into(),
+            user_id: "u1".into(),
+            api_key_id: "k1".into(),
+            model_id: "unpriced-model".into(),
+            provider_id: "unknown-provider".into(),
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            uncached_input_tokens: 10,
+            output_tokens: 5,
+            usage_origin: Default::default(),
+            raw_usage: None,
+            charge_status: ChargeStatus::Unknown,
+            charge_evidence: ChargeEvidence {
+                status: ChargeStatus::Unknown,
+                charge_micro_usd: None,
+                normalized_usage: Default::default(),
+                effective_rates: EffectivePricingRates::default(),
+                pricing_source: PricingSource::Unknown,
+                pricing_version: "sha256:unavailable".to_string(),
+                unknown_reason: Some("pricing_not_found".to_string()),
+            },
+            reconciliation_status: Default::default(),
+            estimated_charge_micro_usd: 0,
+            latency_ms: 100,
+            generation_time_ms: 80,
+            streamed: false,
+            error: None,
+        })
+        .await
+        .unwrap();
+    let hook = PolicyHook::new(store, Some(metering));
+    let mut request = ctx("unpriced-model", Some("p1"));
+
+    match hook.check(&mut request).await.unwrap() {
+        HookDecision::Deny(reason) => {
+            let error: bitrouter_sdk::BitrouterError = reason.into();
+            assert_eq!(error.status(), 403);
+        }
+        HookDecision::Allow => panic!("unknown historical spend must fail a hard ceiling closed"),
+    }
+}
+
+#[tokio::test]
 async fn rate_limit_is_enforced_via_metering_store() {
     let store = Arc::new(PolicyStore::from_policies([Policy {
         id: "p1".into(),

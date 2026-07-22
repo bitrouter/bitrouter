@@ -79,9 +79,15 @@ impl PreRequestHook for PolicyHook {
         if effective.max_spend_micro_usd.is_some()
             && let Some(metering) = &self.metering
         {
-            let spent = metering
-                .get_spend(ctx.caller().api_key_id(), TimeWindow::ThisMonth)
-                .await?;
+            let Some(spent) = metering
+                .get_enforceable_spend(ctx.caller().api_key_id(), TimeWindow::ThisMonth)
+                .await?
+            else {
+                return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                    "spend ceiling cannot be evaluated: prior charge evidence is incomplete"
+                        .to_string(),
+                )));
+            };
             if let Err(violation) = effective.check_spend(spent) {
                 return Ok(HookDecision::Deny(DenyReason::Forbidden(
                     violation.to_string(),

@@ -8,7 +8,7 @@ use bitrouter_sdk::language_model::UsageOrigin;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::metering::pricing::MAX_TRUSTED_TOKENS;
+use crate::metering::pricing::calculate_normalized_charge_micro_usd;
 use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
 use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
@@ -234,6 +234,13 @@ impl TraceArchive {
     ) -> RewardJoin {
         RewardJoin::from_traces_and_outcomes(traces, outcomes)
     }
+
+    pub fn join_outcomes_strict(
+        traces: &[CapturedIngressTrace],
+        outcomes: &[BenchmarkOutcomeRecord],
+    ) -> RewardJoin {
+        RewardJoin::from_traces_and_outcomes_strict(traces, outcomes)
+    }
 }
 
 impl CloudUsageRecord {
@@ -370,14 +377,20 @@ impl CostJoinSummary {
 
 impl WorkflowRunArtifact {
     /// Validate the usage side of a benchmark bundle before any artifact files
-    /// are written. Analytical builds with no usage remain supported; once a
-    /// usage snapshot is supplied it must be complete and auditable.
+    /// are written. A non-empty trace set always requires complete, auditable
+    /// settlement evidence; analysis without usage must use the in-memory
+    /// `build*` APIs rather than a benchmark-grade bundle.
     pub fn validate_benchmark_integrity(
         traces: &[CapturedIngressTrace],
         usage: &[CloudUsageRecord],
     ) -> Result<()> {
-        if usage.is_empty() {
+        if traces.is_empty() && usage.is_empty() {
             return Ok(());
+        }
+        if usage.is_empty() {
+            return Err(BitrouterError::bad_request(
+                "benchmark integrity: usage snapshot is empty for non-empty traces",
+            ));
         }
 
         let mut trace_ids = BTreeSet::new();
@@ -520,7 +533,7 @@ impl WorkflowRunArtifact {
         if outcomes.is_empty() {
             return Ok(());
         }
-        let reward_join = TraceArchive::join_outcomes(traces, outcomes);
+        let reward_join = TraceArchive::join_outcomes_strict(traces, outcomes);
         if reward_join.summary.unmatched_trace_count != 0
             || reward_join.summary.unmatched_outcome_count != 0
             || reward_join.summary.matched_trace_count != traces.len()
@@ -815,36 +828,8 @@ fn validate_authoritative_receipt(
 }
 
 fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
-    let normalized = &evidence.normalized_usage;
-    let rates = &evidence.effective_rates;
-    let completion_tokens = normalized
-        .output_tokens
-        .min(MAX_TRUSTED_TOKENS)
-        .saturating_add(normalized.reasoning_tokens.min(MAX_TRUSTED_TOKENS));
-    let buckets = [
-        (
-            normalized.uncached_input_tokens,
-            rates.uncached_input_micro_usd_per_token,
-        ),
-        (
-            normalized.cache_read_tokens,
-            rates.cache_read_micro_usd_per_token,
-        ),
-        (
-            normalized.cache_write_tokens,
-            rates.cache_write_micro_usd_per_token,
-        ),
-        (completion_tokens, rates.output_micro_usd_per_token),
-    ];
-    let mut charge = 0.0;
-    for (tokens, rate) in buckets {
-        if tokens == 0 {
-            continue;
-        }
-        let rate = rate.filter(|value| value.is_finite() && *value >= 0.0)?;
-        charge += tokens.min(MAX_TRUSTED_TOKENS) as f64 * rate;
-    }
-    charge.is_finite().then_some(charge.round().max(0.0) as i64)
+    calculate_normalized_charge_micro_usd(&evidence.normalized_usage, &evidence.effective_rates)
+        .ok()
 }
 
 fn validate_terminus_identity(

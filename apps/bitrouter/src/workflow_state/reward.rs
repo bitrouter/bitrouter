@@ -227,6 +227,24 @@ impl RewardJoin {
         traces: &[CapturedIngressTrace],
         outcomes: &[BenchmarkOutcomeRecord],
     ) -> Self {
+        Self::join(traces, outcomes, true)
+    }
+
+    /// Benchmark-grade join that requires an explicit session or trial key.
+    /// Timestamp attribution remains available only through the analytical
+    /// [`from_traces_and_outcomes`](Self::from_traces_and_outcomes) path.
+    pub fn from_traces_and_outcomes_strict(
+        traces: &[CapturedIngressTrace],
+        outcomes: &[BenchmarkOutcomeRecord],
+    ) -> Self {
+        Self::join(traces, outcomes, false)
+    }
+
+    fn join(
+        traces: &[CapturedIngressTrace],
+        outcomes: &[BenchmarkOutcomeRecord],
+        allow_time_fallback: bool,
+    ) -> Self {
         let outcomes_by_session = outcomes.iter().enumerate().fold(
             BTreeMap::<String, Vec<usize>>::new(),
             |mut acc, (index, outcome)| {
@@ -254,7 +272,7 @@ impl RewardJoin {
                     matched.push(&outcomes[*index]);
                 }
             }
-            if matched.is_empty() {
+            if matched.is_empty() && allow_time_fallback {
                 let time_matches = outcomes
                     .iter()
                     .enumerate()
