@@ -339,6 +339,59 @@ pub fn evolve_document(
     Ok(EvolutionResult { document, changes })
 }
 
+/// Turn an evolved candidate into a deployment artifact. Existing routes and
+/// hard-failure adequacy protection remain active; only future exploration is
+/// disabled so holdout and production routing are deterministic.
+pub fn freeze_document(mut document: PolicyLock) -> PolicyLock {
+    for policy in document.policies.values_mut() {
+        policy.adequacy.explore_enabled = false;
+    }
+    document
+}
+
+/// Atomically publish a candidate without permitting it to replace the lock
+/// currently selected by `bitrouter.yaml`.
+pub fn export_candidate_file(
+    active_lock_path: &Path,
+    candidate_path: &Path,
+    document: &PolicyLock,
+) -> Result<String> {
+    let active = resolved_file_location(active_lock_path)?;
+    let candidate = resolved_file_location(candidate_path)?;
+    if active == candidate {
+        anyhow::bail!(
+            "candidate output '{}' is the active policy lock; choose a separate path",
+            candidate_path.display()
+        );
+    }
+    write_atomic(candidate_path, None, document)
+}
+
+fn resolved_file_location(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return std::fs::canonicalize(path)
+            .with_context(|| format!("resolving policy path {}", path.display()));
+    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("resolving current directory")?
+            .join(path)
+    };
+    let file_name = absolute
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("policy output must name a file: {}", path.display()))?;
+    let parent = absolute.parent().unwrap_or_else(|| Path::new("."));
+    let resolved_parent = if parent.exists() {
+        std::fs::canonicalize(parent)
+            .with_context(|| format!("resolving policy output parent {}", parent.display()))?
+    } else {
+        parent.to_path_buf()
+    };
+    Ok(resolved_parent.join(file_name))
+}
+
 fn is_opening_key(request_key: &str) -> bool {
     request_key == "opening" || request_key.split('|').nth(2) == Some("opening")
 }
@@ -1045,6 +1098,66 @@ mod tests {
     }
 
     #[test]
+    fn freezing_disables_exploration_but_preserves_adequacy() {
+        let mut policy = definition();
+        policy.adequacy.enabled = true;
+        policy.adequacy.explore_enabled = true;
+        policy.adequacy.explore_tier = Some("economy".into());
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), policy)]),
+        };
+
+        let frozen = freeze_document(lock);
+
+        assert!(frozen.policies["coding"].adequacy.enabled);
+        assert!(!frozen.policies["coding"].adequacy.explore_enabled);
+        assert_eq!(
+            frozen.policies["coding"].adequacy.explore_tier.as_deref(),
+            Some("economy")
+        );
+    }
+
+    #[test]
+    fn candidate_export_refuses_to_replace_the_active_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("policy-lock.yaml");
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+        };
+        write_atomic(&active, None, &lock).unwrap();
+        let before = std::fs::read(&active).unwrap();
+
+        let error = export_candidate_file(&active, &active, &lock).unwrap_err();
+
+        assert!(error.to_string().contains("active policy lock"));
+        assert_eq!(std::fs::read(&active).unwrap(), before);
+    }
+
+    #[test]
+    fn independent_candidate_exports_are_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("policy-lock.yaml");
+        let first = dir.path().join("candidate-a.yaml");
+        let second = dir.path().join("candidate-b.yaml");
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+        };
+        write_atomic(&active, None, &lock).unwrap();
+
+        let first_digest = export_candidate_file(&active, &first, &lock).unwrap();
+        let second_digest = export_candidate_file(&active, &second, &lock).unwrap();
+
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap()
+        );
+        assert_eq!(first_digest, second_digest);
+    }
+
+    #[test]
     fn validation_rejects_empty_or_duplicate_tier_models() {
         let mut empty = definition();
         empty.tiers.insert("strong".into(), "   ".into());
@@ -1330,6 +1443,62 @@ presets:
 
         assert!(error.to_string().contains("writeback is locked"));
         assert!(!dir.path().join("bitrouter.db").exists());
+    }
+
+    #[tokio::test]
+    async fn locked_config_can_export_without_mutating_active_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"database:
+  url: sqlite://./bitrouter.db
+presets:
+  coding:
+    model: anthropic/claude-opus-4.8
+"#,
+        )
+        .await
+        .unwrap();
+        let initialized = initialize_files(
+            &config_path,
+            "terminal-bench",
+            "coding",
+            None,
+            "moonshotai/kimi-k2.7-code",
+        )
+        .await
+        .unwrap();
+        let db_path = dir.path().join("bitrouter.db");
+        let db = crate::db::connect(&format!("sqlite://{}", db_path.display()))
+            .await
+            .unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+        db.close().await.unwrap();
+        let before_config = tokio::fs::read(&config_path).await.unwrap();
+        let before_lock = tokio::fs::read(&initialized.path).await.unwrap();
+        let candidate_path = dir.path().join("candidate.yaml");
+
+        let update = evolve_files(&config_path, false).await.unwrap();
+        let frozen = freeze_document(update.document);
+        export_candidate_file(&update.path, &candidate_path, &frozen).unwrap();
+
+        assert_eq!(tokio::fs::read(&config_path).await.unwrap(), before_config);
+        assert_eq!(
+            tokio::fs::read(&initialized.path).await.unwrap(),
+            before_lock
+        );
+        let candidate = load(&candidate_path).await.unwrap();
+        assert!(
+            candidate.document.policies["terminal-bench"]
+                .adequacy
+                .enabled
+        );
+        assert!(
+            !candidate.document.policies["terminal-bench"]
+                .adequacy
+                .explore_enabled
+        );
     }
 
     #[tokio::test]

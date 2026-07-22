@@ -12,6 +12,8 @@ pub struct PolicyReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
     pub writeback: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -30,6 +32,9 @@ impl CliReport for PolicyReport {
         h.line(&format!("policy {}", self.action))?;
         if let Some(path) = &self.path {
             h.line(&format!("  file: {path}"))?;
+        }
+        if let Some(path) = &self.candidate_path {
+            h.line(&format!("  candidate: {path}"))?;
         }
         if let Some(digest) = &self.digest {
             h.line(&format!("  digest: {digest}"))?;

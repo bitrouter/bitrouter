@@ -854,8 +854,14 @@ enum PolicyAction {
     /// Project qualified database evidence into a deterministic policy lock.
     Evolve {
         /// Publish the candidate. Without this flag, print a dry-run report.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "output")]
         apply: bool,
+        /// Export the candidate without changing the active policy lock.
+        #[arg(long, value_name = "FILE", conflicts_with = "apply")]
+        output: Option<PathBuf>,
+        /// Disable future exploration in the exported candidate.
+        #[arg(long, requires = "output")]
+        freeze: bool,
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -2882,15 +2888,40 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             output.emit(&reload(&socket).await?)?;
         }
-        PolicyAction::Evolve { apply, config } => {
+        PolicyAction::Evolve {
+            apply,
+            output: candidate_output,
+            freeze,
+            config,
+        } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             let update = bitrouter::policy_lock::evolve_files(config_path, apply).await?;
-            let action = if apply { "evolve" } else { "evolve-dry-run" };
+            let action = if candidate_output.is_some() {
+                "evolve-export"
+            } else if apply {
+                "evolve"
+            } else {
+                "evolve-dry-run"
+            };
             let published = apply && !update.changes.is_empty();
             let mut report =
                 routing_policy_report(config_path, action, published, update.changes, None).await?;
-            report.digest = Some(update.digest);
+            if let Some(candidate_path) = candidate_output {
+                let document = if freeze {
+                    bitrouter::policy_lock::freeze_document(update.document)
+                } else {
+                    update.document
+                };
+                report.digest = Some(bitrouter::policy_lock::export_candidate_file(
+                    &update.path,
+                    &candidate_path,
+                    &document,
+                )?);
+                report.candidate_path = Some(candidate_path.display().to_string());
+            } else {
+                report.digest = Some(update.digest);
+            }
             output.emit(&report)?;
         }
         PolicyAction::Lock { config } => {
@@ -2976,6 +3007,7 @@ async fn routing_policy_report(
     Ok(PolicyReport {
         action: action.to_string(),
         path: path.map(|path| path.display().to_string()),
+        candidate_path: None,
         digest: loaded.as_ref().map(|lock| lock.digest.clone()),
         writeback: match cfg.policy.writeback {
             config::PolicyWriteback::Locked => "locked",
@@ -3794,6 +3826,40 @@ mod tests {
                 action: PolicyAction::Evolve { apply: true, .. }
             })
         ));
+
+        let export = Cli::try_parse_from([
+            "bitrouter",
+            "policy",
+            "evolve",
+            "--output",
+            "candidate.yaml",
+            "--freeze",
+        ])
+        .expect("parse frozen export");
+        assert!(matches!(
+            export.command,
+            Some(Command::Policy {
+                action: PolicyAction::Evolve {
+                    apply: false,
+                    output: Some(path),
+                    freeze: true,
+                    ..
+                }
+            }) if path == PathBuf::from("candidate.yaml")
+        ));
+
+        assert!(Cli::try_parse_from(["bitrouter", "policy", "evolve", "--freeze"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "evolve",
+                "--apply",
+                "--output",
+                "candidate.yaml",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
