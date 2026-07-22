@@ -10,7 +10,7 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/company/bitrouterai/?viewAsMember=true)
 [![Book a call](https://img.shields.io/badge/Book_a_call-founders-000000?logo=cal.com&logoColor=white)](https://cal.com/kelsenliu)
 
-**The self-improving LLM router that optimize your agentic workflows with every runs, works with any harnesses, any models, any loops.**
+**The self-improving LLM router that optimizes your agentic workflows with every run, works with any harnesses, any models, any loops.**
 
 > **You're tokenmaxxing in production.**
 > Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, and tightens that routing as the loop runs.
@@ -29,14 +29,34 @@ Optimizing a loop isn't just model selection — it's choosing the model, the to
 
 ## The self-improving loop
 
-BitRouter wraps your agentic loop in a second loop. Each loop gets its own **policy spec** — a config file that declares how its calls, tools, and agents should route. Against that spec BitRouter runs a continuous **act → observe → evaluate → learn** cycle, and every step is a component it already ships:
+BitRouter wraps your agentic loop in a second loop. Each loop gets its own **policy spec** — `bitrouter.yaml` — declaring how its calls, tools, and agents route. The routing key is **context-aware and lives as code**: it's the *step in the loop*, not just the model name — so "plan on the flagship, do routine file reads on something cheap" is one declarative table.
 
-- **Act — the router.** Each model, tool, and agent call is rewritten to a chosen route: policy-table routing, cross-protocol translation, multi-account failover.
-- **Observe — telemetry.** Every hop is attributed with cost, tokens, latency, and outcome, and exported to Prometheus or any OTLP backend.
-- **Evaluate — the eval engine.** Each run and routing decision is scored against your chosen objective — did the route it picked still reach the goal?
-- **Learn — the policy engine.** The eval signal folds back into the policy spec: an agent self-tunes it, or you edit it by hand. The next turn of the loop acts on the improved spec.
+```yaml
+# bitrouter.yaml — context-aware routing as code, keyed on the loop's step
+policy_table:
+  tiers:                         # a tier name → the model it routes to
+    cheap:    moonshotai/kimi-k2.6
+    flagship: gpt-5.5
+  fingerprints:                  # the agentic-loop step → which tier handles it
+    opening:         flagship    #   first turn        → plan on the strong model
+    after_read_file: cheap       #   routine file read → downgrade
+    midstream:       cheap
+  default_tier:    flagship      # anything unmapped stays safe
+  tool_use_tier:   flagship      # guardrail: a tool call is never
+  tool_safe_tiers: [flagship]    #   stranded on a tool-blind model
+  adequacy:
+    enabled: true                # a downgrade that starts failing…
+    escalation_tier: flagship    #   …escalates itself back up
+```
 
-You choose what the loop optimizes for — cost, latency, or accuracy — and it improves the longer it runs in production.
+Against that spec BitRouter runs a continuous **act → observe → evaluate → learn** cycle — and every step is a component it already ships:
+
+- **Act — the router** reads the table and rewrites each call to its tier's model: policy-table routing, cross-protocol translation, multi-account failover.
+- **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported to Prometheus or any OTLP backend.
+- **Evaluate — the eval engine** scores each routing decision against your objective: did the cheap route it picked still reach the goal?
+- **Learn — the policy engine** folds that signal back into the spec. In-loop, `adequacy:` self-escalates a downgrade that starts failing; across runs the optimizer publishes an evolved, resolved `policy-lock.yaml` (an npm-style manifest/lock split, git-owned) — or you edit the table by hand.
+
+You choose what the loop optimizes for — cost, latency, or accuracy — and the spec sharpens the longer it runs in production.
 
 ## Benchmarks
 
@@ -61,13 +81,14 @@ Every gateway below routes model calls. BitRouter is the only one that also make
 |  | **BitRouter** | **OpenRouter** | **LiteLLM** | **TensorZero** | **Portkey** | **Bifrost** |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Routable primitives** | Models + tools + **agents** (MCP + ACP) | Models | Models + tools (MCP) | Models | Models + tools (MCP) | Models + tools (MCP) |
+| **Routing key** | **The loop step** (last tool called) | Model name | Model + request tags | Model name | Model + metadata | Model name |
 | **Optimizes** | The **loop**, multi-objective (cost today) | Static routing | Static routing | The model | Static routing | Static routing |
 
 _All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero are Rust._
 
 ## What BitRouter is not
 
-- **Not a static gateway** — it doesn't just forward calls to a fixed route; it runs an act → observe → evaluate → learn loop that keeps tightening the route as it runs.
+- **Not a static gateway** — it doesn't just forward calls to a fixed route; it runs an act → observe → evaluate → learn loop that keeps tightening the route as it runs. Every change it makes lands in a git-owned `policy-lock.yaml` you can read, diff, and revert — auto-tuning you fully own, never a black box.
 - **Not an orchestration framework** — it doesn't define your agent's control flow, steps, or state; it routes the calls, tools, and sub-agents your loop already makes.
 - **Not an agent harness** — it runs *under* Claude Code, Codex, and the rest, not instead of them.
 
