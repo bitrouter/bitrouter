@@ -16,11 +16,23 @@ description: >
   proxy", "bitrouter cloud", "brk_ key", anything naming bitrouter.yaml,
   port 4356, Harbor Terminus-2, or api.bitrouter.ai — even when the user does not name
   BitRouter directly.
-version: 1.0.0
 license: Apache-2.0
 metadata:
   author: BitRouterAI
-  tags: [llm, proxy, routing, openai, anthropic, google, gemini, openrouter, copilot, opencode, ai-gateway, claude-code, codex]
+  tags:
+    - llm
+    - proxy
+    - routing
+    - openai
+    - anthropic
+    - google
+    - gemini
+    - openrouter
+    - copilot
+    - opencode
+    - ai-gateway
+    - claude-code
+    - codex
 ---
 
 # BitRouter
