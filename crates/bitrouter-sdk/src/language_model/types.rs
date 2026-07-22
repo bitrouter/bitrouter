@@ -1420,46 +1420,80 @@ impl Prompt {
     }
 }
 
+/// Mutually exclusive token buckets used by settlement and cost evidence.
+///
+/// `output_tokens` excludes reasoning tokens, while the three input buckets
+/// add up to the provider-reported prompt total.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedUsage {
+    /// Input tokens neither read from nor written to a provider cache.
+    pub uncached_input_tokens: u64,
+    /// Input tokens read from a provider cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to a provider cache.
+    pub cache_write_tokens: u64,
+    /// Non-reasoning output tokens.
+    pub output_tokens: u64,
+    /// Reasoning output tokens.
+    pub reasoning_tokens: u64,
+}
+
+/// A provider usage payload whose subset relationships cannot be normalized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageNormalizationError {
+    /// Cache-read and cache-write subsets exceed the prompt-token total.
+    InputBucketsOverlap,
+    /// The reasoning subset exceeds the completion-token total.
+    OutputBucketsOverlap,
+}
+
+/// Provenance of the canonical usage counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageOrigin {
+    /// The upstream provider supplied this usage payload.
+    ProviderReported,
+    /// A request-scoped authoritative settlement receipt supplied this usage.
+    AuthoritativeReceipt,
+    /// BitRouter estimated usage because the provider payload was unavailable.
+    Estimated,
+    /// Usage provenance is unavailable, including the absence of a usage payload.
+    #[default]
+    Unknown,
+}
+
+impl UsageOrigin {
+    /// Stable database and JSON value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderReported => "provider_reported",
+            Self::AuthoritativeReceipt => "authoritative_receipt",
+            Self::Estimated => "estimated",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// Token usage counts. Counts use `0` (not `null`) for "known to be zero";
 /// missing usage is represented by `Option<Usage>` being `None` upstream.
 ///
-/// Token usage, carrying the same information as the Vercel AI SDK V3
-/// `LanguageModelV3Usage` in a **flat** shape suited to a router.
+/// Token usage carries the same information as the Vercel AI SDK V3
+/// `LanguageModelV3Usage` in a **flat** shape suited to a router. V3 itself
+/// models usage as a nested input/output record plus an optional raw blob.
+/// Every V3 number is either stored directly or derivable from these fields:
 ///
-/// V3 itself models usage as a **nested** record —
-/// `inputTokens: { total, noCache, cacheRead, cacheWrite }`,
-/// `outputTokens: { total, text, reasoning }`, plus an optional `raw` blob.
-/// bitrouter is a faithful-passthrough router: it carries the upstream's wire
-/// counts and never has to hand a client back a `LanguageModelV3Usage` *object*,
-/// so a flat field set is the more convenient internal form. Every V3 number is
-/// either stored directly or derivable from the flat fields:
+/// - input total → [`prompt_tokens`](Self::prompt_tokens), including cache
+///   read and cache write subsets
+/// - uncached input → prompt minus cache-read and cache-write tokens
+/// - output total → [`completion_tokens`](Self::completion_tokens), including
+///   the reasoning subset
+/// - text output → completion minus reasoning tokens
 ///
-/// - V3 `inputTokens.total` → [`prompt_tokens`](Self::prompt_tokens). The cache
-///   buckets are *included* in this total (folded in at parse time — see the
-///   Messages `parse_usage`), matching V3's "total input" semantics.
-/// - V3 `inputTokens.cacheRead` → [`cache_read_tokens`](Self::cache_read_tokens),
-///   a subset of `prompt_tokens`.
-/// - V3 `inputTokens.cacheWrite` → [`cache_write_tokens`](Self::cache_write_tokens),
-///   a subset of `prompt_tokens`. (The earlier flat `Usage` had no cache-write
-///   slot; this field restores the V3 `cacheWrite` bucket so a billing layer can
-///   meter cache creation distinctly from cache reads.)
-/// - V3 `inputTokens.noCache` is **derivable**, not stored:
-///   `prompt_tokens - cache_read_tokens - cache_write_tokens`. Storing it too
-///   would be a redundant field that could disagree with its own components.
-/// - V3 `outputTokens.total` → [`completion_tokens`](Self::completion_tokens).
-/// - V3 `outputTokens.reasoning` → [`reasoning_tokens`](Self::reasoning_tokens),
-///   a subset of `completion_tokens`.
-/// - V3 `outputTokens.text` is **derivable**, not stored:
-///   `completion_tokens - reasoning_tokens`.
-///
-/// V3 carries no top-level `totalTokens`; the grand total is purely
-/// `prompt_tokens + completion_tokens` ([`total`](Self::total)) here, computed on
-/// demand rather than stored so it can never drift from its components. The V3
-/// `raw` provider blob is not retained on this struct — a raw provider field that
-/// lacks a canonical slot rides instead in
-/// [`GenerateResult::provider_metadata`](crate::language_model::GenerateResult).
+/// The raw provider object is retained verbatim so settlement can audit
+/// provider-specific billing extensions without parsing response content a
+/// second time.
 /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/provider/src/language-model/v3/language-model-v3-usage.ts>
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     /// Prompt / input tokens.
     pub prompt_tokens: u64,
@@ -1486,6 +1520,12 @@ pub struct Usage {
     /// upstream reports none. Observability only — not a billing input.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub web_search_count: u64,
+    /// Whether the counters came from the provider or an in-process estimate.
+    #[serde(default)]
+    pub origin: UsageOrigin,
+    /// Original provider usage object, retained exactly for settlement audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<Box<serde_json::Value>>,
 }
 
 fn is_zero_u64(v: &u64) -> bool {
@@ -1496,6 +1536,28 @@ impl Usage {
     /// Total tokens (prompt + completion).
     pub fn total(&self) -> u64 {
         self.prompt_tokens + self.completion_tokens
+    }
+
+    /// Convert inclusive provider totals into non-overlapping settlement
+    /// buckets, rejecting internally inconsistent provider reports.
+    pub fn normalized_buckets(&self) -> Result<NormalizedUsage, UsageNormalizationError> {
+        let cached_input = self
+            .cache_read_tokens
+            .checked_add(self.cache_write_tokens)
+            .filter(|cached| *cached <= self.prompt_tokens)
+            .ok_or(UsageNormalizationError::InputBucketsOverlap)?;
+        let output_tokens = self
+            .completion_tokens
+            .checked_sub(self.reasoning_tokens)
+            .ok_or(UsageNormalizationError::OutputBucketsOverlap)?;
+
+        Ok(NormalizedUsage {
+            uncached_input_tokens: self.prompt_tokens - cached_input,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: self.cache_write_tokens,
+            output_tokens,
+            reasoning_tokens: self.reasoning_tokens,
+        })
     }
 }
 
@@ -2313,5 +2375,57 @@ mod tests {
         assert_eq!(j["status"], "ok");
         let back: ServerToolCall = serde_json::from_value(j).unwrap();
         assert_eq!(back, c);
+    }
+
+    #[test]
+    fn normalized_usage_buckets_are_non_overlapping() {
+        let usage = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 30,
+            reasoning_tokens: 10,
+            cache_read_tokens: 40,
+            cache_write_tokens: 20,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            usage.normalized_buckets(),
+            Ok(NormalizedUsage {
+                uncached_input_tokens: 40,
+                cache_read_tokens: 40,
+                cache_write_tokens: 20,
+                output_tokens: 20,
+                reasoning_tokens: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn normalization_rejects_cache_buckets_larger_than_prompt() {
+        let usage = Usage {
+            prompt_tokens: 10,
+            cache_read_tokens: 8,
+            cache_write_tokens: 4,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            usage.normalized_buckets(),
+            Err(UsageNormalizationError::InputBucketsOverlap)
+        );
+    }
+
+    #[test]
+    fn normalization_rejects_reasoning_larger_than_completion() {
+        let usage = Usage {
+            completion_tokens: 10,
+            reasoning_tokens: 11,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            usage.normalized_buckets(),
+            Err(UsageNormalizationError::OutputBucketsOverlap)
+        );
     }
 }

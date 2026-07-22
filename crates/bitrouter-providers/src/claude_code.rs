@@ -17,18 +17,18 @@
 //! back to the store, and caches it in memory to avoid hammering the
 //! refresh endpoint under load.
 //!
-//! ## Gate on the agent-profile beta — detect, never inject
+//! ## Explicit route boundary and upstream adaptation
 //!
-//! Only genuine Claude Code traffic may spend the subscription. [`ClaudeCodeAuthApplier::apply`]
-//! **gates** on the Claude Code agent-profile beta the client itself sent
-//! (`anthropic-beta: claude-code-…`) — the same marker the Pro/Max subscription
-//! endpoint keys on — and rejects (`400`) any request that reaches this provider
-//! without it. It **never fabricates** the marker: enabling correct Claude Code
-//! use is the contract; the applier does not spoof arbitrary traffic as Claude
-//! Code. The body is forwarded faithfully ([`ClaudeCodeAuthApplier::prepare_body`]
-//! is a no-op) — current Claude Code (CLI, Agent SDK, `bitrouter spawn`) does
-//! not lead its `system` with a fixed identity string, but always carries the
-//! agent-profile beta, and the subscription accepts its own system blocks as-is.
+//! Resolving an explicit `claude-code:<model>` target is the operator's
+//! authorization to spend the subscription. Downstream clients speak normal
+//! Anthropic Messages; [`ClaudeCodeAuthApplier::apply`] adds the OAuth and
+//! Claude Code agent-profile headers required by the upstream. Bare canonical
+//! Claude models never auto-cascade onto subscription providers, while genuine
+//! Claude Code traffic can still be auto-routed by the app-layer ingress
+//! detector. [`ClaudeCodeAuthApplier::prepare_body`] prepends the current
+//! Claude Agent SDK identity when a standard Messages client did not already
+//! supply a recognized Claude Code identity, preserving all client system
+//! instructions and remaining idempotent for genuine Claude Code.
 //!
 //! ## Two distinct ids
 //!
@@ -416,23 +416,11 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         mut request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
-        // Gate: only genuine Claude Code traffic may spend the subscription.
-        // We detect it by the Claude Code agent-profile beta the client itself
-        // sent (`anthropic-beta: claude-code-…`) — the same marker the Pro/Max
-        // subscription endpoint keys on — and NEVER fabricate it. A request that
-        // reaches this provider without it (e.g. a hand-typed `claude-code:<model>`
-        // that bypassed the ingress router) is refused. This replaces the older,
-        // version-brittle check on the system-prompt identity string: current
-        // Claude Code (CLI, Agent SDK, `bitrouter spawn`) no longer leads its
-        // system with that exact text, but always carries the agent-profile beta.
-        if !request_has_claude_code_beta(&request) {
-            return Err(BitrouterError::Upstream {
-                status: 400,
-                message: "the claude-code subscription provider only accepts Claude Code requests \
-                          (missing the Claude Code agent-profile beta)"
-                    .into(),
-            });
-        }
+        // Reaching this applier means routing already resolved an explicit
+        // `claude-code:<model>` target. That explicit target is the
+        // subscription-use boundary. Downstream clients speak normal Anthropic
+        // Messages; this applier owns the OAuth/Claude-Code upstream
+        // transformation below.
         let label = self.label_for(target);
         let resolved = self.resolve_credential(label).await?;
         // `anthropic-version` is mandatory regardless of credential type.
@@ -493,17 +481,97 @@ impl AuthApplier for ClaudeCodeAuthApplier {
 
     async fn prepare_body(
         &self,
-        _body: &mut serde_json::Value,
+        body: &mut serde_json::Value,
         _target: &RoutingTarget,
     ) -> Result<()> {
-        // Faithful passthrough. The request is gated in `apply` on the Claude
-        // Code agent-profile beta (`anthropic-beta: claude-code-…`), and the
-        // Pro/Max subscription endpoint accepts genuine Claude Code's own
-        // system blocks as-is (verified: a stock `claude -p` round-trips on the
-        // subscription). So this applier neither requires a specific system
-        // prompt nor rewrites the body — it forwards exactly what Claude Code
-        // sent and lets the upstream be the authority.
+        unwrap_litellm_extra_body(body)?;
+        // A/B against the first-party CLI shows the subscription endpoint
+        // returns a generic 429 for an OAuth-shaped request that lacks a
+        // recognized agent identity. Headers alone are insufficient. Add the
+        // current SDK identity only on the explicit claude-code route, retain
+        // every client system block, and do nothing for genuine/legacy Claude
+        // Code bodies that already carry an identity.
+        if system_has_agent_identity(body) {
+            return Ok(());
+        }
+        let object = body.as_object_mut().ok_or_else(|| {
+            BitrouterError::internal("claude-code request body must be a JSON object")
+        })?;
+        let identity = serde_json::json!({
+            "type": "text",
+            "text": headers::CLAUDE_AGENT_SYSTEM_PROMPT,
+        });
+        let system = match object.remove("system") {
+            None | Some(serde_json::Value::Null) => serde_json::Value::Array(vec![identity]),
+            Some(serde_json::Value::String(text)) => serde_json::Value::Array(vec![
+                identity,
+                serde_json::json!({ "type": "text", "text": text }),
+            ]),
+            Some(serde_json::Value::Array(mut blocks)) => {
+                blocks.insert(0, identity);
+                serde_json::Value::Array(blocks)
+            }
+            Some(other) => {
+                object.insert("system".to_string(), other);
+                return Err(BitrouterError::Upstream {
+                    status: 400,
+                    message: "claude-code request has an invalid Anthropic system field".into(),
+                });
+            }
+        };
+        object.insert("system".to_string(), system);
         Ok(())
+    }
+}
+
+/// Normalize LiteLLM's provider-extension container before calling Anthropic.
+///
+/// Some normal agent harnesses serialize `extra_body` instead of merging it
+/// into the provider request. Anthropic rejects that wrapper. Merge extension
+/// fields into the top level (without overriding explicit top-level values)
+/// and drop `session_id`: BitRouter already receives the session through
+/// headers, while Anthropic does not accept it as a Messages body field.
+fn unwrap_litellm_extra_body(body: &mut serde_json::Value) -> Result<()> {
+    let object = body.as_object_mut().ok_or_else(|| {
+        BitrouterError::internal("claude-code request body must be a JSON object")
+    })?;
+    let Some(extra_body) = object.remove("extra_body") else {
+        return Ok(());
+    };
+    let serde_json::Value::Object(extra_body) = extra_body else {
+        return Err(BitrouterError::Upstream {
+            status: 400,
+            message: "claude-code request has an invalid LiteLLM extra_body field".into(),
+        });
+    };
+    for (key, value) in extra_body {
+        if key != "session_id" {
+            object.entry(key).or_insert(value);
+        }
+    }
+    Ok(())
+}
+
+/// Whether the rendered Messages body already carries a current or legacy
+/// Claude Code identity. Genuine current CLI traffic places a billing marker
+/// first and the identity in the next block, so scan all system text blocks
+/// rather than assuming index zero.
+fn system_has_agent_identity(body: &serde_json::Value) -> bool {
+    fn is_identity(text: &str) -> bool {
+        let text = text.trim_start();
+        text.starts_with(headers::CLAUDE_AGENT_SYSTEM_PROMPT)
+            || text.starts_with(headers::LEGACY_CLAUDE_CODE_SYSTEM_PROMPT)
+    }
+
+    match body.as_object().and_then(|object| object.get("system")) {
+        Some(serde_json::Value::String(text)) => is_identity(text),
+        Some(serde_json::Value::Array(blocks)) => blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(is_identity)
+        }),
+        _ => false,
     }
 }
 
@@ -526,30 +594,6 @@ fn merged_beta_value<'a>(client_betas: impl Iterator<Item = &'a str>) -> String 
         }
     }
     out.join(",")
-}
-
-/// Whether the request carries the Claude Code agent-profile beta — the
-/// `anthropic-beta: claude-code-…` value genuine Claude Code sends (and the
-/// Pro/Max subscription endpoint keys on). The beta header is a comma-joined
-/// list; any token whose name starts with `claude-code` counts, so the check is
-/// stable across the dated suffix (`claude-code-20250219`, future dates).
-/// Matching the protocol marker — not the version-dependent system-prompt text —
-/// is what makes detection robust across Claude Code's CLI / Agent-SDK shapes.
-fn request_has_claude_code_beta(request: &reqwest::Request) -> bool {
-    request
-        .headers()
-        .get_all("anthropic-beta")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(beta_value_has_claude_code)
-}
-
-/// Whether a single (possibly comma-joined) `anthropic-beta` header value
-/// contains the Claude Code agent-profile beta.
-pub(crate) fn beta_value_has_claude_code(value: &str) -> bool {
-    value
-        .split(',')
-        .any(|b| b.trim().starts_with("claude-code"))
 }
 
 #[cfg(test)]
@@ -592,14 +636,16 @@ mod tests {
         }
     }
 
-    /// A request as it reaches the applier: it carries the Claude Code
-    /// agent-profile beta, which the `apply` gate requires — like genuine
-    /// Claude Code traffic. Tests of the post-gate behaviour start from this.
-    fn cc_request() -> reqwest::Request {
-        let mut req = reqwest::Client::new()
+    fn standard_request() -> reqwest::Request {
+        reqwest::Client::new()
             .post("https://api.anthropic.com/v1/messages")
             .build()
-            .unwrap();
+            .unwrap()
+    }
+
+    /// A request from genuine Claude Code, including its agent-profile beta.
+    fn cc_request() -> reqwest::Request {
+        let mut req = standard_request();
         req.headers_mut().insert(
             "anthropic-beta",
             HeaderValue::from_static("claude-code-20250219"),
@@ -608,26 +654,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_rejects_request_without_agent_profile_beta() {
-        // The gate: a request that reaches the subscription provider without the
-        // Claude Code agent-profile beta (e.g. a hand-typed `claude-code:<model>`
-        // that bypassed the ingress router) is refused, before any credential is
-        // spent. Genuine Claude Code always carries the beta.
+    async fn explicit_route_adds_agent_profile_to_standard_anthropic_request() {
         let path = tmp_store_path();
-        seed_marker(&path);
-        let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
-        let req = reqwest::Client::new()
-            .post("https://api.anthropic.com/v1/messages")
-            .build()
-            .unwrap(); // no anthropic-beta
-        let err = applier.apply(req, &cc_target(None)).await.unwrap_err();
-        assert!(
-            matches!(err, BitrouterError::Upstream { status: 400, .. }),
-            "expected a 400 gate rejection, got: {err}"
+        let applier = ClaudeCodeAuthApplier::new(&path)
+            .unwrap()
+            .with_env_oauth_token(Some(OAuthToken {
+                access_token: "sk-ant-oat-env".into(),
+                expires_at: 0,
+                refresh_token: None,
+            }));
+        let mut req = standard_request();
+        req.headers_mut()
+            .insert("x-api-key", HeaderValue::from_static("downstream-key"));
+
+        let authed = applier.apply(req, &cc_target(None)).await.unwrap();
+        let headers = authed.headers();
+        let beta = headers
+            .get("anthropic-beta")
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        assert!(beta.contains("claude-code-20250219"));
+        assert!(beta.contains("oauth-2025-04-20"));
+        assert_eq!(
+            headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer sk-ant-oat-env")
         );
-        assert!(
-            err.to_string().contains("agent-profile beta"),
-            "expected the gate message, got: {err}"
+        assert!(headers.get("x-api-key").is_none());
+        assert_eq!(
+            headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(headers::CLAUDE_CODE_USER_AGENT)
+        );
+        assert_eq!(
+            headers.get("x-app").and_then(|value| value.to_str().ok()),
+            Some(headers::CLAUDE_CODE_X_APP)
         );
     }
 
@@ -635,7 +698,7 @@ mod tests {
     async fn errors_when_no_session() {
         let path = tmp_store_path();
         let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
-        let req = cc_request();
+        let req = standard_request();
         let err = applier.apply(req, &cc_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -825,33 +888,86 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_body_is_faithful_passthrough() {
-        // The body gate moved to `apply` (keyed on the agent-profile beta);
-        // `prepare_body` now forwards the body untouched regardless of the
-        // system prompt — it neither requires a specific identity nor rewrites
-        // anything, so genuine Claude Code's own system blocks pass through.
+    async fn prepare_body_adds_agent_identity_without_losing_client_system() {
         let path = tmp_store_path();
         let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
-        let unchanged = |body: serde_json::Value| {
-            let applier = &applier;
-            async move {
-                let mut b = body.clone();
-                applier
-                    .prepare_body(&mut b, &cc_target(None))
-                    .await
-                    .unwrap();
-                assert_eq!(b, body, "prepare_body must not touch the body");
-            }
-        };
-        // No system, an arbitrary system, and the real Claude Code shape all
-        // pass through unchanged.
-        unchanged(serde_json::json!({ "model": "claude", "messages": [] })).await;
-        unchanged(serde_json::json!({ "system": "be terse", "messages": [] })).await;
-        unchanged(serde_json::json!({
-            "system": [{ "type": "text", "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK." }],
+        let identity = headers::CLAUDE_AGENT_SYSTEM_PROMPT;
+
+        let mut absent = serde_json::json!({ "model": "claude", "messages": [] });
+        applier
+            .prepare_body(&mut absent, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(absent["system"][0]["text"], identity);
+
+        let mut string = serde_json::json!({ "system": "be terse", "messages": [] });
+        applier
+            .prepare_body(&mut string, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(string["system"][0]["text"], identity);
+        assert_eq!(string["system"][1]["text"], "be terse");
+
+        let original_block = serde_json::json!({
+            "type": "text",
+            "text": "follow the client rules",
+            "cache_control": { "type": "ephemeral" }
+        });
+        let mut blocks = serde_json::json!({
+            "system": [original_block.clone()],
             "messages": []
-        }))
-        .await;
+        });
+        applier
+            .prepare_body(&mut blocks, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(blocks["system"][0]["text"], identity);
+        assert_eq!(blocks["system"][1], original_block);
+
+        let mut genuine = serde_json::json!({
+            "system": [
+                { "type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.215; cc_entrypoint=sdk-cli;" },
+                { "type": "text", "text": identity },
+                { "type": "text", "text": "keep this" }
+            ],
+            "messages": []
+        });
+        let before = genuine.clone();
+        applier
+            .prepare_body(&mut genuine, &cc_target(None))
+            .await
+            .unwrap();
+        assert_eq!(genuine, before, "genuine Claude Code must stay idempotent");
+    }
+
+    #[tokio::test]
+    async fn prepare_body_unwraps_litellm_extra_body_and_drops_session_id() {
+        let path = tmp_store_path();
+        let applier = ClaudeCodeAuthApplier::new(&path).unwrap();
+        let mut body = serde_json::json!({
+            "model": "claude-fable-5",
+            "messages": [],
+            "top_k": 7,
+            "extra_body": {
+                "session_id": "terminus-private-session",
+                "top_k": 99,
+                "custom_extension": { "enabled": true }
+            }
+        });
+
+        applier
+            .prepare_body(&mut body, &cc_target(None))
+            .await
+            .unwrap();
+
+        assert!(body.get("extra_body").is_none());
+        assert!(body.get("session_id").is_none());
+        assert_eq!(body["top_k"], 7, "top-level client value must win");
+        assert_eq!(body["custom_extension"]["enabled"], true);
+        assert_eq!(
+            body["system"][0]["text"],
+            headers::CLAUDE_AGENT_SYSTEM_PROMPT
+        );
     }
 
     /// Write a `.credentials.json` in a fresh temp dir and return its path.

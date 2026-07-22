@@ -770,6 +770,7 @@ impl Pipeline {
     }
 
     async fn observe_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) {
+        ctx.set_last_attempted_target(target.clone());
         observe_hop_start_with(&self.observe_hooks, ctx, target).await;
     }
 

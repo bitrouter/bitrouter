@@ -30,7 +30,7 @@ use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
     Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StreamPart, Tool,
-    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, provider_namespace,
+    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
     set_provider_metadata,
 };
 
@@ -799,6 +799,22 @@ fn openai_error_status(err_type: &str) -> u16 {
     }
 }
 
+fn openai_policy_violation(error: Option<&serde_json::Value>, message: &str) -> bool {
+    let policy_code = error
+        .and_then(|value| value.get("code").or_else(|| value.get("type")))
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| {
+            matches!(
+                value,
+                "content_policy_violation" | "content_filter" | "safety_violation"
+            )
+        });
+    let normalized = message.to_ascii_lowercase();
+    policy_code
+        || normalized.contains("flagged for possible cybersecurity risk")
+        || normalized.contains("content policy violation")
+}
+
 // Responses has no native finish-reason *string* to preserve: its terminal
 // signal is the response `status` (`completed` / `incomplete` / `failed`), a
 // small closed set that the unified [`FinishReason`] enum reproduces exactly on
@@ -960,8 +976,8 @@ impl InboundAdapter for ResponsesAdapter {
         // key entirely when the upstream reported no token counts. A
         // zero-filled object would let downstream callers conclude the
         // request used zero tokens.
-        if let Some(usage) = result.usage {
-            body["usage"] = render_responses_usage(&usage);
+        if let Some(usage) = &result.usage {
+            body["usage"] = render_responses_usage(usage);
         }
         Ok(body)
     }
@@ -2069,7 +2085,26 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         cache_read_tokens: cache_read,
         cache_write_tokens: 0,
         web_search_count: 0,
+        origin: UsageOrigin::ProviderReported,
+        raw: Some(Box::new(value.clone())),
     })
+}
+
+#[cfg(test)]
+#[test]
+fn parse_usage_retains_provider_payload_and_origin() {
+    use crate::language_model::types::UsageOrigin;
+
+    let raw = serde_json::json!({
+        "input_tokens": 12,
+        "output_tokens": 4,
+        "input_tokens_details": { "cached_tokens": 5 },
+        "provider_extension": { "service_tier": "flex" }
+    });
+
+    let usage = parse_usage(&raw).expect("usage present");
+    assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+    assert_eq!(usage.raw.as_deref(), Some(&raw));
 }
 
 // ===== streaming =====
@@ -2319,7 +2354,10 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 // errors don't always 502 here (which would trigger fallback
                 // retries). Spec:
                 // <https://platform.openai.com/docs/guides/error-codes>.
-                let error_obj = json.get("response").and_then(|r| r.get("error"));
+                let error_obj = json
+                    .get("response")
+                    .and_then(|r| r.get("error"))
+                    .or_else(|| json.get("error"));
                 let err_type = error_obj
                     .and_then(|e| e.get("type"))
                     .and_then(|t| t.as_str())
@@ -2329,6 +2367,11 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     .or_else(|| json.get("message"))
                     .and_then(|m| m.as_str())
                     .unwrap_or("responses stream error");
+                if openai_policy_violation(error_obj, msg) {
+                    return Err(BitrouterError::UpstreamPolicyViolation {
+                        message: msg.to_string(),
+                    });
+                }
                 return Err(BitrouterError::Upstream {
                     status: openai_error_status(err_type),
                     message: msg.to_string(),
@@ -3013,7 +3056,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 } else {
                     id.clone()
                 };
-                self.emit_terminal(&mut frames, status, &response_id, *usage);
+                self.emit_terminal(&mut frames, status, &response_id, usage.clone());
             }
         }
         Ok(frames)

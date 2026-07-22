@@ -2,8 +2,8 @@
 //!
 //! v0 bug defences baked in here:
 //! - **#180** — a default (all-zero) `ModelPricing` is treated as *unconfigured*,
-//!   not as *free*: the charge strategies WARN, emit `PricingUnavailable`, and
-//!   skip the charge rather than silently settling zero.
+//!   not as *free*: settlement records an explicit unknown charge rather than
+//!   silently treating the request as zero cost.
 //! - **#440 → #441** — pricing lookup covers every level; a `(provider, model)`
 //!   miss is reported, not papered over.
 //! - **#443 → #445** — the lookup is keyed by `(provider, service_id)` so a
@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::language_model::Usage;
+use bitrouter_sdk::language_model::{NormalizedUsage, Usage, UsageNormalizationError};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Per-model pricing, in **micro-USD per token**.
 ///
@@ -23,8 +25,8 @@ use bitrouter_sdk::language_model::Usage;
 ///
 /// Defences:
 /// - **#180** — a default (all-`None`) `ModelPricing` is treated as
-///   *unconfigured*: charge strategies WARN, emit `PricingUnavailable`, and
-///   skip the charge rather than silently settling zero.
+///   *unconfigured*: settlement records an explicit unknown charge rather
+///   than silently treating the request as zero cost.
 /// - **bitrouter#463-A** — if any token bucket with nonzero usage lacks a
 ///   rate, `calculate_charge_micro_usd` returns `None` and the charge is
 ///   skipped. A model with input rate set but `output_micro_usd_per_token`
@@ -38,6 +40,10 @@ pub struct ModelPricing {
     /// Micro-USD charged per prompt (input) token (base bracket). `None` =
     /// unconfigured.
     pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD charged per cache-read input token. `None` = unconfigured.
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD charged per cache-write input token. `None` = unconfigured.
+    pub cache_write_micro_usd_per_token: Option<f64>,
     /// Micro-USD charged per completion (output) token (base bracket).
     /// `None` = unconfigured.
     pub output_micro_usd_per_token: Option<f64>,
@@ -60,6 +66,12 @@ pub struct ContextTier {
     pub above_input_tokens: u64,
     /// Micro-USD per prompt (input) token for this bracket.
     pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read input token for this bracket. `None` inherits
+    /// the base rate.
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write input token for this bracket. `None` inherits
+    /// the base rate.
+    pub cache_write_micro_usd_per_token: Option<f64>,
     /// Micro-USD per completion (output) token for this bracket.
     pub output_micro_usd_per_token: Option<f64>,
 }
@@ -70,6 +82,8 @@ impl ModelPricing {
     pub fn new(input_micro_usd_per_token: f64, output_micro_usd_per_token: f64) -> Self {
         Self {
             input_micro_usd_per_token: Some(input_micro_usd_per_token),
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
             output_micro_usd_per_token: Some(output_micro_usd_per_token),
             context_tiers: Vec::new(),
         }
@@ -80,6 +94,25 @@ impl ModelPricing {
     pub fn partial(input: Option<f64>, output: Option<f64>) -> Self {
         Self {
             input_micro_usd_per_token: input,
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
+            output_micro_usd_per_token: output,
+            context_tiers: Vec::new(),
+        }
+    }
+
+    /// Build cache-aware pricing. Each rate remains optional so a missing
+    /// provider rate is distinguishable from an explicitly free bucket.
+    pub fn cache_aware(
+        input: Option<f64>,
+        cache_read: Option<f64>,
+        cache_write: Option<f64>,
+        output: Option<f64>,
+    ) -> Self {
+        Self {
+            input_micro_usd_per_token: input,
+            cache_read_micro_usd_per_token: cache_read,
+            cache_write_micro_usd_per_token: cache_write,
             output_micro_usd_per_token: output,
             context_tiers: Vec::new(),
         }
@@ -97,12 +130,24 @@ impl ModelPricing {
             .max_by_key(|t| t.above_input_tokens)
         {
             Some(tier) => ModelPricing {
-                input_micro_usd_per_token: tier.input_micro_usd_per_token,
-                output_micro_usd_per_token: tier.output_micro_usd_per_token,
+                input_micro_usd_per_token: tier
+                    .input_micro_usd_per_token
+                    .or(self.input_micro_usd_per_token),
+                cache_read_micro_usd_per_token: tier
+                    .cache_read_micro_usd_per_token
+                    .or(self.cache_read_micro_usd_per_token),
+                cache_write_micro_usd_per_token: tier
+                    .cache_write_micro_usd_per_token
+                    .or(self.cache_write_micro_usd_per_token),
+                output_micro_usd_per_token: tier
+                    .output_micro_usd_per_token
+                    .or(self.output_micro_usd_per_token),
                 context_tiers: Vec::new(),
             },
             None => ModelPricing {
                 input_micro_usd_per_token: self.input_micro_usd_per_token,
+                cache_read_micro_usd_per_token: self.cache_read_micro_usd_per_token,
+                cache_write_micro_usd_per_token: self.cache_write_micro_usd_per_token,
                 output_micro_usd_per_token: self.output_micro_usd_per_token,
                 context_tiers: Vec::new(),
             },
@@ -113,15 +158,103 @@ impl ModelPricing {
     /// Distinct from `partial` (some rates set, some not) and from
     /// explicitly-zero rates.
     pub fn is_unconfigured(&self) -> bool {
-        self.input_micro_usd_per_token.is_none() && self.output_micro_usd_per_token.is_none()
+        self.input_micro_usd_per_token.is_none()
+            && self.cache_read_micro_usd_per_token.is_none()
+            && self.cache_write_micro_usd_per_token.is_none()
+            && self.output_micro_usd_per_token.is_none()
     }
 
     /// Whether *every* rate this struct exposes is set. Useful for a
     /// recommender / "cheapest" picker that should refuse placeholder
     /// entries (v0 bitrouter#463 / cloud#251 audit B5).
     pub fn is_complete(&self) -> bool {
-        self.input_micro_usd_per_token.is_some() && self.output_micro_usd_per_token.is_some()
+        self.input_micro_usd_per_token.is_some()
+            && self.cache_read_micro_usd_per_token.is_some()
+            && self.cache_write_micro_usd_per_token.is_some()
+            && self.output_micro_usd_per_token.is_some()
     }
+}
+
+/// Whether a charge was computed from complete evidence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChargeStatus {
+    /// All nonzero token buckets had valid rates.
+    Computed,
+    /// An authoritative receipt confirms that the request was not charged.
+    NotCharged,
+    /// Usage, normalization, or pricing evidence was incomplete.
+    Unknown,
+    /// A pre-evidence row retained from an older database schema.
+    #[default]
+    LegacyUnknown,
+}
+
+impl ChargeStatus {
+    /// Stable database and JSON value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Computed => "computed",
+            Self::NotCharged => "not_charged",
+            Self::Unknown => "unknown",
+            Self::LegacyUnknown => "legacy_unknown",
+        }
+    }
+
+    /// Parse a persisted status, treating unrecognized historical values as
+    /// legacy unknown rather than computed.
+    pub fn from_persisted(value: &str) -> Self {
+        match value {
+            "computed" => Self::Computed,
+            "not_charged" => Self::NotCharged,
+            "unknown" => Self::Unknown,
+            _ => Self::LegacyUnknown,
+        }
+    }
+}
+
+/// Origin of the rates used for settlement evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingSource {
+    /// Rates came from the effective provider/model configuration.
+    Configured,
+    /// Rates came from an explicit benchmark/export override.
+    Override,
+    /// No usable pricing entry was found.
+    Unknown,
+}
+
+/// Effective rates after context-tier inheritance.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EffectivePricingRates {
+    /// Uncached input rate.
+    pub uncached_input_micro_usd_per_token: Option<f64>,
+    /// Cache-read input rate.
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Cache-write input rate.
+    pub cache_write_micro_usd_per_token: Option<f64>,
+    /// Output rate, applied to text and reasoning output.
+    pub output_micro_usd_per_token: Option<f64>,
+}
+
+/// Auditable result of normalizing usage and applying effective pricing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChargeEvidence {
+    /// Whether the final charge is usable.
+    pub status: ChargeStatus,
+    /// Computed charge, absent when status is not `computed`.
+    pub charge_micro_usd: Option<i64>,
+    /// Non-overlapping usage buckets used by the calculation.
+    pub normalized_usage: NormalizedUsage,
+    /// Effective per-token rates.
+    pub effective_rates: EffectivePricingRates,
+    /// Where those rates came from.
+    pub pricing_source: PricingSource,
+    /// Deterministic digest of the full pricing entry.
+    pub pricing_version: String,
+    /// Stable reason when a charge could not be computed.
+    pub unknown_reason: Option<String>,
 }
 
 /// A `(provider, service_id)` → `ModelPricing` table. In Phase 4 this is built
@@ -232,27 +365,204 @@ pub const MAX_TRUSTED_TOKENS: u64 = 10_000_000;
 /// bracket (see [`ModelPricing::resolve_for_input_tokens`]) and its rates bill
 /// the whole request. Flat pricing (no tiers) resolves to its base rates.
 pub fn calculate_charge_micro_usd(usage: &Usage, pricing: &ModelPricing) -> Option<i64> {
-    let pricing = pricing.resolve_for_input_tokens(usage.prompt_tokens);
-    let input = bucket_charge(usage.prompt_tokens, pricing.input_micro_usd_per_token)?;
-    let output = bucket_charge(usage.completion_tokens, pricing.output_micro_usd_per_token)?;
-    Some((input + output).round().max(0.0) as i64)
+    calculate_charge_evidence(usage, pricing, PricingSource::Configured).charge_micro_usd
 }
 
-/// One token bucket's contribution to the charge. `Some(0.0)` when the bucket
-/// is zero (no work to bill, rate may legitimately be missing); `None` when
-/// the bucket has nonzero usage but no rate.
-fn bucket_charge(tokens: u64, rate: Option<f64>) -> Option<f64> {
-    let tokens = tokens.min(MAX_TRUSTED_TOKENS);
-    match (tokens, rate) {
-        (0, _) => Some(0.0),
-        (n, Some(r)) => Some(n as f64 * r),
-        (_, None) => None,
+/// Normalize inclusive provider totals and calculate a four-bucket charge with
+/// sufficient evidence to audit the result later.
+pub fn calculate_charge_evidence(
+    usage: &Usage,
+    pricing: &ModelPricing,
+    pricing_source: PricingSource,
+) -> ChargeEvidence {
+    let pricing_version = pricing_version(pricing);
+    let resolved = pricing.resolve_for_input_tokens(usage.prompt_tokens);
+    let effective_rates = EffectivePricingRates {
+        uncached_input_micro_usd_per_token: resolved.input_micro_usd_per_token,
+        cache_read_micro_usd_per_token: resolved.cache_read_micro_usd_per_token,
+        cache_write_micro_usd_per_token: resolved.cache_write_micro_usd_per_token,
+        output_micro_usd_per_token: resolved.output_micro_usd_per_token,
+    };
+    let normalized_usage = match usage.normalized_buckets() {
+        Ok(normalized) => normalized,
+        Err(error) => {
+            let reason = match error {
+                UsageNormalizationError::InputBucketsOverlap => "invalid_input_buckets",
+                UsageNormalizationError::OutputBucketsOverlap => "invalid_output_buckets",
+            };
+            return unknown_evidence(
+                NormalizedUsage::default(),
+                effective_rates,
+                pricing_source,
+                pricing_version,
+                reason,
+            );
+        }
+    };
+
+    let charge_micro_usd =
+        match calculate_normalized_charge_micro_usd(&normalized_usage, &effective_rates) {
+            Ok(charge) => charge,
+            Err(reason) => {
+                return unknown_evidence(
+                    normalized_usage,
+                    effective_rates,
+                    pricing_source,
+                    pricing_version,
+                    reason,
+                );
+            }
+        };
+
+    ChargeEvidence {
+        status: ChargeStatus::Computed,
+        charge_micro_usd: Some(charge_micro_usd),
+        normalized_usage,
+        effective_rates,
+        pricing_source,
+        pricing_version,
+        unknown_reason: None,
+    }
+}
+
+/// Reconstruct a charge from frozen normalized usage and rates.
+///
+/// Every bucket with the exact same frozen rate is combined before the single
+/// multiplication and final rounding. Settlement and benchmark verification
+/// both call this helper so their provider-receipt semantics cannot drift.
+pub(crate) fn calculate_normalized_charge_micro_usd(
+    normalized_usage: &NormalizedUsage,
+    effective_rates: &EffectivePricingRates,
+) -> std::result::Result<i64, &'static str> {
+    let buckets = [
+        (
+            normalized_usage.uncached_input_tokens,
+            effective_rates.uncached_input_micro_usd_per_token,
+            "missing_uncached_input_rate",
+            "invalid_uncached_input_rate",
+        ),
+        (
+            normalized_usage.cache_read_tokens,
+            effective_rates.cache_read_micro_usd_per_token,
+            "missing_cache_read_rate",
+            "invalid_cache_read_rate",
+        ),
+        (
+            normalized_usage.cache_write_tokens,
+            effective_rates.cache_write_micro_usd_per_token,
+            "missing_cache_write_rate",
+            "invalid_cache_write_rate",
+        ),
+        (
+            normalized_usage.output_tokens,
+            effective_rates.output_micro_usd_per_token,
+            "missing_output_rate",
+            "invalid_output_rate",
+        ),
+        (
+            normalized_usage.reasoning_tokens,
+            effective_rates.output_micro_usd_per_token,
+            "missing_output_rate",
+            "invalid_output_rate",
+        ),
+    ];
+    // Providers multiply the total token count for each distinct frozen rate
+    // once, then round the final charge. Keep groups in first-seen bucket order
+    // so addition across different rates is deterministic. `to_bits` is the
+    // stable identity for rates that came from the same frozen price field.
+    let mut rate_groups: Vec<(u64, f64)> = Vec::new();
+    for (tokens, rate, missing_reason, invalid_reason) in buckets {
+        if tokens == 0 {
+            continue;
+        }
+        let Some(rate) = rate else {
+            return Err(missing_reason);
+        };
+        if !rate.is_finite() || rate < 0.0 {
+            return Err(invalid_reason);
+        }
+        let tokens = tokens.min(MAX_TRUSTED_TOKENS);
+        if let Some((group_tokens, _)) = rate_groups
+            .iter_mut()
+            .find(|(_, group_rate)| group_rate.to_bits() == rate.to_bits())
+        {
+            *group_tokens = group_tokens.saturating_add(tokens);
+        } else {
+            rate_groups.push((tokens, rate));
+        }
+    }
+    let charge = rate_groups
+        .into_iter()
+        .map(|(tokens, rate)| tokens as f64 * rate)
+        .sum::<f64>();
+    if !charge.is_finite() {
+        return Err("invalid_charge_total");
+    }
+    Ok(charge.round().max(0.0) as i64)
+}
+
+/// Evidence for a request with no usable pricing entry.
+pub fn unavailable_charge_evidence(usage: &Usage, reason: &str) -> ChargeEvidence {
+    let normalized = usage.normalized_buckets().unwrap_or_default();
+    unknown_evidence(
+        normalized,
+        EffectivePricingRates::default(),
+        PricingSource::Unknown,
+        "sha256:unavailable".to_string(),
+        reason,
+    )
+}
+
+fn unknown_evidence(
+    normalized_usage: NormalizedUsage,
+    effective_rates: EffectivePricingRates,
+    pricing_source: PricingSource,
+    pricing_version: String,
+    reason: &str,
+) -> ChargeEvidence {
+    ChargeEvidence {
+        status: ChargeStatus::Unknown,
+        charge_micro_usd: None,
+        normalized_usage,
+        effective_rates,
+        pricing_source,
+        pricing_version,
+        unknown_reason: Some(reason.to_string()),
+    }
+}
+
+fn pricing_version(pricing: &ModelPricing) -> String {
+    let mut hasher = Sha256::new();
+    hash_rate(&mut hasher, pricing.input_micro_usd_per_token);
+    hash_rate(&mut hasher, pricing.cache_read_micro_usd_per_token);
+    hash_rate(&mut hasher, pricing.cache_write_micro_usd_per_token);
+    hash_rate(&mut hasher, pricing.output_micro_usd_per_token);
+    let mut tiers = pricing.context_tiers.clone();
+    tiers.sort_by_key(|tier| tier.above_input_tokens);
+    for tier in tiers {
+        hasher.update(tier.above_input_tokens.to_be_bytes());
+        hash_rate(&mut hasher, tier.input_micro_usd_per_token);
+        hash_rate(&mut hasher, tier.cache_read_micro_usd_per_token);
+        hash_rate(&mut hasher, tier.cache_write_micro_usd_per_token);
+        hash_rate(&mut hasher, tier.output_micro_usd_per_token);
+    }
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn hash_rate(hasher: &mut Sha256, rate: Option<f64>) {
+    match rate {
+        Some(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_bits().to_be_bytes());
+        }
+        None => hasher.update([0]),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitrouter_sdk::language_model::UsageOrigin;
 
     #[test]
     fn default_pricing_reads_as_unconfigured() {
@@ -271,6 +581,146 @@ mod tests {
         };
         // 100*2 + 50*10 = 700
         assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(700));
+    }
+
+    #[test]
+    fn cache_aware_charge_uses_four_non_overlapping_buckets() {
+        let pricing = ModelPricing::cache_aware(Some(2.0), Some(0.2), Some(2.5), Some(10.0));
+        let usage = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 30,
+            reasoning_tokens: 10,
+            cache_read_tokens: 40,
+            cache_write_tokens: 20,
+            origin: UsageOrigin::ProviderReported,
+            ..Default::default()
+        };
+
+        let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Configured);
+
+        assert_eq!(evidence.status, ChargeStatus::Computed);
+        assert_eq!(evidence.charge_micro_usd, Some(438));
+        assert_eq!(evidence.normalized_usage.uncached_input_tokens, 40);
+        assert_eq!(evidence.normalized_usage.cache_read_tokens, 40);
+        assert_eq!(evidence.normalized_usage.cache_write_tokens, 20);
+        assert_eq!(evidence.normalized_usage.output_tokens, 20);
+        assert_eq!(evidence.normalized_usage.reasoning_tokens, 10);
+        assert_eq!(evidence.pricing_source, PricingSource::Configured);
+        assert!(evidence.pricing_version.starts_with("sha256:"));
+    }
+
+    /// Regression for full89 Sol r2: output and reasoning share one provider
+    /// rate, so their tokens must be combined before rounding the final charge.
+    /// Multiplying the two buckets separately can move an exact half-micro-USD
+    /// boundary below 1984.5 due to binary floating-point accumulation.
+    #[test]
+    fn shared_output_rate_rounds_after_combining_completion_tokens() {
+        let pricing = ModelPricing::cache_aware(Some(0.84), Some(0.84), Some(0.84), Some(3.99));
+        let usage = Usage {
+            prompt_tokens: 1_137,
+            completion_tokens: 258,
+            reasoning_tokens: 45,
+            origin: UsageOrigin::ProviderReported,
+            ..Default::default()
+        };
+
+        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(1_985));
+    }
+
+    #[test]
+    fn missing_cache_rate_keeps_charge_unknown() {
+        let pricing = ModelPricing::cache_aware(Some(2.0), None, Some(2.5), Some(10.0));
+        let usage = Usage {
+            prompt_tokens: 100,
+            cache_read_tokens: 40,
+            completion_tokens: 1,
+            ..Default::default()
+        };
+
+        let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Configured);
+
+        assert_eq!(evidence.status, ChargeStatus::Unknown);
+        assert_eq!(evidence.charge_micro_usd, None);
+        assert_eq!(
+            evidence.unknown_reason.as_deref(),
+            Some("missing_cache_read_rate")
+        );
+    }
+
+    #[test]
+    fn invalid_nonzero_bucket_rate_keeps_charge_unknown() {
+        for (rate, reason) in [
+            (f64::NAN, "invalid_uncached_input_rate"),
+            (f64::INFINITY, "invalid_uncached_input_rate"),
+            (-1.0, "invalid_uncached_input_rate"),
+        ] {
+            let pricing = ModelPricing::cache_aware(Some(rate), Some(0.2), Some(2.5), Some(10.0));
+            let usage = Usage {
+                prompt_tokens: 1,
+                ..Default::default()
+            };
+
+            let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Configured);
+
+            assert_eq!(evidence.status, ChargeStatus::Unknown);
+            assert_eq!(evidence.charge_micro_usd, None);
+            assert_eq!(evidence.unknown_reason.as_deref(), Some(reason));
+        }
+    }
+
+    #[test]
+    fn absent_cache_usage_does_not_require_cache_rates() {
+        let pricing = ModelPricing::new(2.0, 10.0);
+        let usage = Usage {
+            prompt_tokens: 100,
+            completion_tokens: 5,
+            ..Default::default()
+        };
+
+        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(250));
+    }
+
+    #[test]
+    fn invalid_provider_bucket_relationship_keeps_charge_unknown() {
+        let pricing = ModelPricing::cache_aware(Some(2.0), Some(0.2), Some(2.5), Some(10.0));
+        let usage = Usage {
+            prompt_tokens: 10,
+            cache_read_tokens: 8,
+            cache_write_tokens: 4,
+            ..Default::default()
+        };
+
+        let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Configured);
+
+        assert_eq!(evidence.status, ChargeStatus::Unknown);
+        assert_eq!(evidence.charge_micro_usd, None);
+        assert_eq!(
+            evidence.unknown_reason.as_deref(),
+            Some("invalid_input_buckets")
+        );
+    }
+
+    #[test]
+    fn context_tier_inherits_omitted_cache_rates_from_base() {
+        let pricing = ModelPricing {
+            input_micro_usd_per_token: Some(2.0),
+            cache_read_micro_usd_per_token: Some(0.2),
+            cache_write_micro_usd_per_token: Some(2.5),
+            output_micro_usd_per_token: Some(10.0),
+            context_tiers: vec![ContextTier {
+                above_input_tokens: 50,
+                input_micro_usd_per_token: Some(4.0),
+                cache_read_micro_usd_per_token: None,
+                cache_write_micro_usd_per_token: None,
+                output_micro_usd_per_token: Some(20.0),
+            }],
+        };
+
+        let resolved = pricing.resolve_for_input_tokens(100);
+        assert_eq!(resolved.input_micro_usd_per_token, Some(4.0));
+        assert_eq!(resolved.cache_read_micro_usd_per_token, Some(0.2));
+        assert_eq!(resolved.cache_write_micro_usd_per_token, Some(2.5));
+        assert_eq!(resolved.output_micro_usd_per_token, Some(20.0));
     }
 
     /// v0 bitrouter#463-A regression: partial pricing (input rate set,
@@ -323,7 +773,10 @@ mod tests {
         assert!(!ModelPricing::default().is_complete());
         assert!(!ModelPricing::partial(Some(1.0), None).is_complete());
         assert!(!ModelPricing::partial(None, Some(1.0)).is_complete());
-        assert!(ModelPricing::new(1.0, 1.0).is_complete());
+        assert!(!ModelPricing::new(1.0, 1.0).is_complete());
+        assert!(
+            ModelPricing::cache_aware(Some(1.0), Some(0.1), Some(1.25), Some(1.0)).is_complete()
+        );
     }
 
     #[test]
@@ -340,10 +793,14 @@ mod tests {
     fn tiered() -> ModelPricing {
         ModelPricing {
             input_micro_usd_per_token: Some(1.3),
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
             output_micro_usd_per_token: Some(7.8),
             context_tiers: vec![ContextTier {
                 above_input_tokens: 128_000,
                 input_micro_usd_per_token: Some(2.0),
+                cache_read_micro_usd_per_token: None,
+                cache_write_micro_usd_per_token: None,
                 output_micro_usd_per_token: Some(12.0),
             }],
         }
@@ -376,16 +833,22 @@ mod tests {
     fn resolve_highest_applicable_tier_is_order_independent() {
         let p = ModelPricing {
             input_micro_usd_per_token: Some(1.0),
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
             output_micro_usd_per_token: Some(2.0),
             context_tiers: vec![
                 ContextTier {
                     above_input_tokens: 256_000,
                     input_micro_usd_per_token: Some(4.0),
+                    cache_read_micro_usd_per_token: None,
+                    cache_write_micro_usd_per_token: None,
                     output_micro_usd_per_token: Some(8.0),
                 },
                 ContextTier {
                     above_input_tokens: 128_000,
                     input_micro_usd_per_token: Some(2.0),
+                    cache_read_micro_usd_per_token: None,
+                    cache_write_micro_usd_per_token: None,
                     output_micro_usd_per_token: Some(4.0),
                 },
             ],
@@ -443,23 +906,25 @@ mod tests {
     }
 
     #[test]
-    fn tier_inherits_partial_skip_when_bucket_rate_missing() {
-        // A tier with no output rate must skip (None) when output is nonzero,
-        // exactly like a partial flat entry.
+    fn tier_inherits_base_rate_when_bucket_rate_is_omitted() {
         let pricing = ModelPricing {
             input_micro_usd_per_token: Some(1.3),
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
             output_micro_usd_per_token: Some(7.8),
             context_tiers: vec![ContextTier {
                 above_input_tokens: 128_000,
                 input_micro_usd_per_token: Some(2.0),
+                cache_read_micro_usd_per_token: None,
+                cache_write_micro_usd_per_token: None,
                 output_micro_usd_per_token: None,
             }],
         };
         let hi = Usage {
             prompt_tokens: 200_000,
-            completion_tokens: 1_000, // nonzero, but tier output rate missing
+            completion_tokens: 1_000,
             ..Default::default()
         };
-        assert_eq!(calculate_charge_micro_usd(&hi, &pricing), None);
+        assert_eq!(calculate_charge_micro_usd(&hi, &pricing), Some(407_800));
     }
 }

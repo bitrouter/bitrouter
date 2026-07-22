@@ -24,16 +24,18 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 ///   <https://github.com/openclaw/openclaw>).
 pub const OAUTH_BETA_VALUES: &[&str] = &["claude-code-20250219", "oauth-2025-04-20"];
 
-/// The forced first `system` block for Claude Pro/Max OAuth requests.
+/// The current Claude Agent SDK identity block accepted by the Claude Code
+/// subscription endpoint.
 ///
-/// The subscription endpoint admits requests under the Claude Code agent
-/// profile; the first `system` block has to be this exact identity string or
-/// the upstream rejects the request. The subscription applier
-/// [`crate::claude_code::ClaudeCodeAuthApplier`] *gates* on this block being
-/// present (it never fabricates it). Mirrors the request shape of Claude Code
-/// itself (see the OpenClaw reference, `src/llm/providers/anthropic.ts`, at
-/// <https://github.com/openclaw/openclaw>).
-pub const CLAUDE_CODE_SYSTEM_PROMPT: &str =
+/// A standard Anthropic Messages client does not send this block. The
+/// `claude-code` subscription applier prepends it while preserving the
+/// client's own system instructions, making an explicit subscription route
+/// wire-compatible with the first-party agent profile.
+pub const CLAUDE_AGENT_SYSTEM_PROMPT: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+/// The legacy Claude Code identity retained for idempotency with older clients.
+pub const LEGACY_CLAUDE_CODE_SYSTEM_PROMPT: &str =
     "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// The `user-agent` Claude Code sends. The OAuth path mirrors it so the

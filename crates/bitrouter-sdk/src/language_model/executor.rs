@@ -18,7 +18,8 @@ use crate::language_model::auth::AuthAppliers;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
 use crate::language_model::types::{
-    ApiProtocol, ExecutionResult, GenerateResult, Prompt, RoutingTarget, StreamPart,
+    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, Prompt, RoutingTarget,
+    StreamPart,
 };
 
 /// A boxed stream of canonical stream parts.
@@ -293,6 +294,18 @@ fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> 
     }
 }
 
+/// Preserve stable, actionable errors deliberately emitted by a protocol
+/// decoder. Other decoder failures describe malformed provider wire data and
+/// remain a sanitized 502 at the BitRouter boundary.
+fn classify_stream_decoder_error(error: BitrouterError) -> BitrouterError {
+    match error {
+        error @ BitrouterError::UpstreamPolicyViolation { .. } => error,
+        error => BitrouterError::UpstreamInvalidResponse {
+            message: error.to_string(),
+        },
+    }
+}
+
 fn upstream_body_error(context: &'static str, error: reqwest::Error) -> BitrouterError {
     if error.is_timeout() {
         BitrouterError::UpstreamTimeout
@@ -524,6 +537,7 @@ impl HttpExecutor {
             .apply_auth(request, input.target, input.transport)
             .await?;
         merge_outbound_trace_headers(&mut request, input.trace_headers);
+        inject_outbound_request_id(&mut request, input.ctx)?;
         Ok(request)
     }
 
@@ -566,6 +580,177 @@ impl HttpExecutor {
         }
         Ok(())
     }
+
+    /// The ChatGPT/Codex backend accepts only streaming Responses requests,
+    /// while callers such as Harbor Terminus 2 require one non-streaming result.
+    /// Execute the upstream request as SSE and fold its canonical parts back into
+    /// the same [`GenerateResult`] that the ordinary non-streaming path returns.
+    async fn execute_codex_stream_bridge(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        let started = Instant::now();
+        let mut stream = self.execute_stream(target, prompt, ctx).await?;
+        let mut content = Vec::new();
+        let mut tool_indices = HashMap::<String, usize>::new();
+        let mut usage = None;
+        let mut finish_reason = None;
+        let mut response_id = None;
+
+        while let Some(part) = stream.next().await {
+            match part? {
+                StreamPart::TextStart { .. } => content.push(Content::Text {
+                    text: String::new(),
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::TextDelta { text } => {
+                    if let Some(Content::Text { text: current, .. }) = content.last_mut() {
+                        current.push_str(&text);
+                    } else {
+                        content.push(Content::Text {
+                            text,
+                            provider_metadata: Default::default(),
+                        });
+                    }
+                }
+                StreamPart::TextEnd { .. } => {}
+                StreamPart::ReasoningStart { .. } => content.push(Content::Reasoning {
+                    text: String::new(),
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::ReasoningDelta { text } => {
+                    if let Some(Content::Reasoning { text: current, .. }) = content.last_mut() {
+                        current.push_str(&text);
+                    } else {
+                        content.push(Content::Reasoning {
+                            text,
+                            provider_metadata: Default::default(),
+                        });
+                    }
+                }
+                StreamPart::ReasoningEnd { .. } => {}
+                StreamPart::ToolCallDelta {
+                    id,
+                    name,
+                    arguments,
+                } => {
+                    let index = match tool_indices.get(&id).copied() {
+                        Some(index) => index,
+                        None => {
+                            let index = content.len();
+                            content.push(Content::ToolCall {
+                                id: id.clone(),
+                                name: name.clone().unwrap_or_default(),
+                                arguments: String::new(),
+                                provider_executed: false,
+                                dynamic: false,
+                                provider_metadata: Default::default(),
+                            });
+                            tool_indices.insert(id, index);
+                            index
+                        }
+                    };
+                    if let Content::ToolCall {
+                        name: current_name,
+                        arguments: current_arguments,
+                        ..
+                    } = &mut content[index]
+                    {
+                        if let Some(name) = name
+                            && current_name.is_empty()
+                        {
+                            *current_name = name;
+                        }
+                        current_arguments.push_str(&arguments);
+                    }
+                }
+                StreamPart::ServerToolCall {
+                    id,
+                    name,
+                    arguments,
+                    dynamic,
+                    ..
+                } => content.push(Content::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    provider_executed: true,
+                    dynamic,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::ServerToolResult {
+                    call_id,
+                    tool_name,
+                    output,
+                    dynamic,
+                } => content.push(Content::ToolResult {
+                    call_id,
+                    tool_name,
+                    output,
+                    dynamic,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::File { media_type, data } => content.push(Content::File {
+                    media_type,
+                    data,
+                    filename: None,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::Source { source } => content.push(Content::Source {
+                    source,
+                    provider_metadata: Default::default(),
+                }),
+                StreamPart::Usage { usage: reported } => usage = Some(reported),
+                StreamPart::ResponseStarted { id } => response_id = Some(id),
+                StreamPart::Finish { reason } => finish_reason = Some(reason),
+                StreamPart::ResponseCompleted {
+                    id,
+                    status,
+                    usage: reported,
+                } => {
+                    response_id = Some(id);
+                    if reported.is_some() {
+                        usage = reported;
+                    }
+                    if finish_reason.is_none() {
+                        finish_reason = Some(match status.as_str() {
+                            "completed" => FinishReason::Stop,
+                            "incomplete" => FinishReason::Length,
+                            other => FinishReason::Error(format!(
+                                "openai-codex stream ended with status {other}"
+                            )),
+                        });
+                    }
+                }
+            }
+        }
+
+        content.retain(|part| {
+            !matches!(
+                part,
+                Content::Text { text, .. } | Content::Reasoning { text, .. } if text.is_empty()
+            )
+        });
+        let elapsed = started.elapsed().as_millis() as u64;
+        Ok(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content,
+                usage,
+                finish_reason,
+                response_id,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            request_duration_ms: elapsed,
+            upstream_duration_ms: Some(elapsed),
+            server_tool_calls: Vec::new(),
+        })
+    }
 }
 
 /// Merge any outbound headers that an `ObserveHook::on_hop_start` stashed
@@ -584,6 +769,20 @@ fn merge_outbound_trace_headers(request: &mut reqwest::Request, headers: Option<
     for (name, value) in headers.iter() {
         dest.insert(name.clone(), value.clone());
     }
+}
+
+/// Bind every upstream hop to the pipeline's stable request identity.
+///
+/// The value comes from the pipeline context, not from an arbitrary outbound
+/// header, so retries and fallback hops share the same reconciliation key.
+fn inject_outbound_request_id(request: &mut reqwest::Request, ctx: &PipelineContext) -> Result<()> {
+    let value = http::HeaderValue::from_str(ctx.request_id()).map_err(|error| {
+        BitrouterError::internal(format!("invalid pipeline request id header: {error}"))
+    })?;
+    request
+        .headers_mut()
+        .insert("x-bitrouter-request-id", value);
+    Ok(())
 }
 
 /// Forward the inbound `anthropic-beta` header(s) to a Messages-protocol
@@ -625,6 +824,9 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        if target.provider_name == "openai-codex" {
+            return self.execute_codex_stream_bridge(target, prompt, ctx).await;
+        }
         let (adapter, transport) = self
             .dispatch
             .lookup(&target.api_protocol)
@@ -803,9 +1005,7 @@ impl Executor for HttpExecutor {
                                 }
                             }
                             Err(e) => {
-                                yield Err(BitrouterError::UpstreamInvalidResponse {
-                                    message: e.to_string(),
-                                });
+                                yield Err(classify_stream_decoder_error(e));
                                 return;
                             }
                         }
@@ -829,9 +1029,7 @@ impl Executor for HttpExecutor {
                         yield Ok(p);
                     }
                 }
-                Err(e) => yield Err(BitrouterError::UpstreamInvalidResponse {
-                    message: e.to_string(),
-                }),
+                Err(e) => yield Err(classify_stream_decoder_error(e)),
             }
         };
 
@@ -1085,6 +1283,33 @@ mod error_classification_tests {
     }
 
     #[test]
+    fn stream_decoder_preserves_typed_upstream_policy_violation() {
+        let error = classify_stream_decoder_error(BitrouterError::UpstreamPolicyViolation {
+            message: "provider detail must stay internal".to_string(),
+        });
+
+        assert!(matches!(
+            error,
+            BitrouterError::UpstreamPolicyViolation { .. }
+        ));
+        assert_eq!(error.status(), 403);
+        assert_eq!(error.error_code(), "upstream_policy_violation");
+        assert_eq!(error.public_message(), "upstream content policy violation");
+    }
+
+    #[test]
+    fn stream_decoder_still_wraps_generic_parse_errors_as_upstream_502() {
+        let error =
+            classify_stream_decoder_error(BitrouterError::bad_request("malformed provider event"));
+
+        assert!(matches!(
+            error,
+            BitrouterError::UpstreamInvalidResponse { .. }
+        ));
+        assert_eq!(error.status(), 502);
+    }
+
+    #[test]
     fn retry_after_accepts_seconds_http_date_and_rejects_invalid_values() {
         let seconds = reqwest::header::HeaderValue::from_static("42");
         assert_eq!(parse_retry_after(Some(&seconds)), Some(42));
@@ -1237,6 +1462,41 @@ mod beta_forward_tests {
             &ctx_with_beta(None),
         );
         assert!(request.headers().get("anthropic-beta").is_none());
+    }
+
+    #[test]
+    fn forwards_pipeline_request_id_to_every_upstream() {
+        let mut request = fresh_request();
+        let ctx = ctx_with_beta(None);
+
+        inject_outbound_request_id(&mut request, &ctx).unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("t")
+        );
+    }
+
+    #[test]
+    fn pipeline_request_id_replaces_untrusted_outbound_value() {
+        let mut request = fresh_request();
+        request.headers_mut().insert(
+            "x-bitrouter-request-id",
+            http::HeaderValue::from_static("untrusted"),
+        );
+
+        inject_outbound_request_id(&mut request, &ctx_with_beta(None)).unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("t")
+        );
     }
 }
 
@@ -1412,5 +1672,139 @@ mod client_selection_tests {
             BitrouterError::UpstreamTimeout => {}
             other => panic!("expected UpstreamTimeout, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod openai_codex_stream_bridge_tests {
+    use super::*;
+    use crate::caller::CallerContext;
+    use crate::language_model::types::{Content, FinishReason, UsageOrigin};
+    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn read_request_body(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+        let mut received = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.expect("read request");
+            assert!(count > 0, "request ended before headers were complete");
+            received.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = received.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&received[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+                .expect("content-length header");
+            let body_start = header_end + 4;
+            if received.len() < body_start + content_length {
+                continue;
+            }
+            return serde_json::from_slice(&received[body_start..body_start + content_length])
+                .expect("JSON request body");
+        }
+    }
+
+    #[tokio::test]
+    async fn non_streaming_codex_request_uses_streaming_upstream_and_aggregates() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("test server addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let body = read_request_body(&mut socket).await;
+            if body.get("stream") != Some(&serde_json::Value::Bool(true)) {
+                let error = r#"{"detail":"Stream must be set to true"}"#;
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    error.len(),
+                    error
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write stream-required response");
+                return;
+            }
+
+            let events = concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_bridge\"}}\n\n",
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"bridge ok\"}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_bridge\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":1}}}}\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+                events.len(),
+                events
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write SSE response");
+        });
+
+        let executor = HttpExecutor::with_defaults().expect("build executor");
+        let target = RoutingTarget {
+            provider_name: "openai-codex".into(),
+            service_id: "gpt-5.6-terra".into(),
+            api_base: format!("http://{addr}"),
+            api_key: "unused".into(),
+            api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        };
+        let prompt = Prompt {
+            model: "gpt-5.6-terra".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "return one action")],
+            tools: vec![],
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let context = PipelineContext::new(PipelineRequest::new(
+            "gpt-5.6-terra",
+            CallerContext::local(),
+            prompt.clone(),
+        ));
+
+        let result = executor
+            .execute(&target, &prompt, &context)
+            .await
+            .expect("openai-codex non-stream request should be bridged");
+        server.await.expect("test server");
+
+        assert_eq!(
+            result.result.content,
+            vec![Content::Text {
+                text: "bridge ok".into(),
+                provider_metadata: Default::default(),
+            }]
+        );
+        assert_eq!(result.result.finish_reason, Some(FinishReason::Stop));
+        assert_eq!(result.result.response_id.as_deref(), Some("resp_bridge"));
+        let usage = result.result.usage.expect("provider usage");
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.cache_read_tokens, 5);
+        assert_eq!(usage.cache_write_tokens, 0);
+        assert_eq!(usage.completion_tokens, 4);
+        assert_eq!(usage.reasoning_tokens, 1);
+        assert_eq!(usage.origin, UsageOrigin::ProviderReported);
     }
 }

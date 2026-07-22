@@ -9,34 +9,38 @@
 //!
 //! 1. [`MeteringRecorder`] is a `SettlementRecorder` registered on the LM
 //!    pipeline. After every request (success or failure) it computes the
-//!    estimated micro-USD from the configured [`PricingTable`] and the
-//!    pipeline-observed token counts, then writes a row to the `requests`
-//!    table via [`MeteringStore`].
+//!    auditable micro-USD evidence from provider usage and the configured
+//!    [`PricingTable`], then writes a row to the `requests` table via
+//!    [`MeteringStore`]. Missing evidence remains an explicit unknown charge.
 //! 2. [`MeteringStore`] owns the `requests` table — the single writer is
 //!    the recorder, the readers are the `policy` and `auth` modules in
 //!    the binary (no SDK trait between them, just a concrete type).
 //!
-//! This module does not charge anyone. The `estimated_charge_micro_usd`
-//! column is what we'd bill *if* we were billing — it's read by the
-//! policy module's `max_spend_micro_usd` enforcement, surfaced by
-//! `bitrouter spend` (future work), and consumed by closed-source
-//! billing plugins via their own recorder.
+//! This module does not charge anyone. Consumers must consult the persisted
+//! charge status before using the legacy non-null
+//! `estimated_charge_micro_usd` column.
 
 pub mod db;
 pub mod entities;
 pub mod pricing;
 pub mod reader;
+pub mod reconciliation;
 pub mod recorder;
 pub mod store;
 
 #[cfg(test)]
 mod tests;
 
-pub use db::RequestMetric;
-pub use pricing::{ContextTier, ModelPricing, PricingTable, calculate_charge_micro_usd};
+pub use db::{ReconciliationStatus, RequestMetric};
+pub use pricing::{
+    ChargeEvidence, ChargeStatus, ContextTier, EffectivePricingRates, ModelPricing, PricingSource,
+    PricingTable, calculate_charge_evidence, calculate_charge_micro_usd,
+};
+pub use reconciliation::{ReconciliationSummary, reconcile_requests};
 pub use recorder::MeteringRecorder;
 pub use store::{
-    MeteringStore, MeteringUsageRecord, RateMetrics, TimeWindow, TokenUsage, UsagePriceOverride,
+    MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord, TimeWindow, TokenUsage,
+    UsagePriceOverride,
 };
 
 /// Render micro-USD for the agent-facing cost surfaces (`status --agent`

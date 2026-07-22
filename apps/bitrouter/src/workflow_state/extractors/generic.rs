@@ -89,6 +89,7 @@ impl WorkflowStateExtractor for GenericPromptExtractor {
             recovery_signal,
             capability_constraints,
             session: resolved_session.signal,
+            identity: Default::default(),
             confidence: 0.7,
             evidence,
         }

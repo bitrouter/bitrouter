@@ -17,14 +17,22 @@ use http::header::HeaderName;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+use crate::workflow_state::extractors::ExtractorInput;
+use crate::workflow_state::fixture::{WorkflowTraceFixture, parse_prompt};
+use crate::workflow_state::ir::{ContextTransition, HarnessId, ProtocolKind};
 use crate::workflow_state::replay::extract_fixture_ir;
+use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
 
 const MAX_CAPTURE_BODY_BYTES: usize = 16 * 1024 * 1024;
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 const BITROUTER_HARNESS_HEADER: &str = "x-bitrouter-harness";
 const BITROUTER_PROTOCOL_HEADER: &str = "x-bitrouter-protocol";
+const BITROUTER_PARENT_SESSION_HEADER: &str = "x-bitrouter-parent-session-id";
+const BITROUTER_AGENT_SESSION_HEADER: &str = "x-bitrouter-agent-session-id";
+const BITROUTER_AGENT_ROLE_HEADER: &str = "x-bitrouter-agent-role";
+const BITROUTER_CONTEXT_EPOCH_HEADER: &str = "x-bitrouter-context-epoch";
+const BITROUTER_CONTEXT_TRANSITION_HEADER: &str = "x-bitrouter-context-transition";
+const BITROUTER_SESSION_FINGERPRINT_HEADER: &str = "x-bitrouter-session-fingerprint";
 
 #[derive(Debug, Clone)]
 pub struct TraceCaptureOptions {
@@ -54,6 +62,49 @@ struct CaptureInner {
     archive_lock: Mutex<()>,
     run_id: uuid::Uuid,
     next_id: AtomicU64,
+    identity_tracker: WorkflowIdentityTracker,
+}
+
+struct PendingIngressTrace {
+    capture: RealTraceCapture,
+    record: Option<CapturedIngressTrace>,
+}
+
+impl PendingIngressTrace {
+    fn new(capture: RealTraceCapture, record: CapturedIngressTrace) -> Self {
+        Self {
+            capture,
+            record: Some(record),
+        }
+    }
+
+    fn finish(mut self, http_status: u16, success: bool) {
+        if let Some(mut record) = self.record.take() {
+            record.captured_at = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+            record.outcome = RealTraceOutcome {
+                http_status,
+                status: if success {
+                    "completed".to_string()
+                } else {
+                    "failed".to_string()
+                },
+            };
+            self.capture.push_record(record);
+        }
+    }
+}
+
+impl Drop for PendingIngressTrace {
+    fn drop(&mut self) {
+        if let Some(mut record) = self.record.take() {
+            record.captured_at = Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
+            record.outcome = RealTraceOutcome {
+                http_status: 499,
+                status: "client_cancelled".to_string(),
+            };
+            self.capture.push_record(record);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,13 +142,22 @@ impl Default for TraceSanitizer {
             "originator",
             "user-agent",
             "x-bitrouter-agent",
+            "x-bitrouter-agent-role",
+            "x-bitrouter-agent-session-id",
+            "x-bitrouter-benchmark-run-id",
             "x-bitrouter-cloud-request-id",
+            "x-bitrouter-context-epoch",
+            "x-bitrouter-context-transition",
             "x-bitrouter-harness",
             "x-bitrouter-inbound-protocol",
+            "x-bitrouter-parent-session-id",
             "x-bitrouter-protocol",
             "x-bitrouter-request-id",
+            "x-bitrouter-session-fingerprint",
+            "x-bitrouter-trial-id",
             "x-bitrouter-workflow-session",
             "x-request-id",
+            "x-session-id",
         ]
         .into_iter()
         .map(String::from)
@@ -115,6 +175,7 @@ impl RealTraceCapture {
                 archive_lock: Mutex::new(()),
                 run_id: uuid::Uuid::new_v4(),
                 next_id: AtomicU64::new(1),
+                identity_tracker: WorkflowIdentityTracker::default(),
             }),
         }
     }
@@ -189,37 +250,94 @@ impl RealTraceCapture {
         {
             parts.headers.insert(name, value);
         }
+        if let (Some(protocol), Some(raw_body)) = (protocol.as_ref(), raw_body.as_ref()) {
+            self.inject_workflow_identity(&mut parts.headers, protocol, raw_body);
+        }
         let headers = headers_to_map(&parts.headers);
         let req = Request::from_parts(parts, Body::from(body_bytes));
-        let response = next.run(req).await;
-
-        if let (Some(protocol), Some(raw_body)) = (protocol, raw_body) {
-            self.push_record(CapturedIngressTrace {
-                id: request_id,
-                captured_at: Some(Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)),
-                harness: self.inner.options.harness.clone(),
-                protocol,
-                method,
-                path,
-                headers,
-                raw_body,
-                outcome: RealTraceOutcome {
-                    http_status: response.status().as_u16(),
-                    status: if response.status().is_success() {
-                        "completed".to_string()
-                    } else {
-                        "failed".to_string()
+        let pending_trace = match (protocol, raw_body) {
+            (Some(protocol), Some(raw_body)) => Some(PendingIngressTrace::new(
+                self.clone(),
+                CapturedIngressTrace {
+                    id: request_id,
+                    captured_at: None,
+                    harness: self.inner.options.harness.clone(),
+                    protocol,
+                    method,
+                    path,
+                    headers,
+                    raw_body,
+                    outcome: RealTraceOutcome {
+                        http_status: 499,
+                        status: "client_cancelled".to_string(),
                     },
                 },
-            });
+            )),
+            _ => None,
+        };
+        if let Some(pending_trace) = pending_trace {
+            return tokio::spawn(async move {
+                let response = next.run(req).await;
+                pending_trace.finish(response.status().as_u16(), response.status().is_success());
+                response
+            })
+            .await
+            .expect("workflow trace downstream task panicked");
         }
 
-        response
+        next.run(req).await
     }
 
     fn next_id(&self) -> String {
         let n = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         format!("real-agent-trace-{}-{n:04}", self.inner.run_id.simple())
+    }
+
+    fn inject_workflow_identity(
+        &self,
+        headers: &mut http::HeaderMap,
+        protocol: &ProtocolKind,
+        raw_body: &serde_json::Value,
+    ) {
+        if self.inner.options.harness != HarnessId::Terminus2 {
+            return;
+        }
+        let Ok(prompt) = parse_prompt(protocol, raw_body.clone(), None) else {
+            return;
+        };
+        let input = ExtractorInput {
+            harness_hint: Some(HarnessId::Terminus2),
+            protocol_hint: protocol.clone(),
+            headers,
+            raw_body,
+            prompt: &prompt,
+        };
+        let identity = resolve_workflow_identity(&input, &self.inner.identity_tracker);
+
+        if let Some(parent) = identity.parent_session_id.as_deref() {
+            insert_header_if_absent(headers, BITROUTER_PARENT_SESSION_HEADER, parent);
+        }
+        if let Some(agent) = identity.agent_session_id.as_deref() {
+            insert_header_if_absent(headers, BITROUTER_AGENT_SESSION_HEADER, agent);
+        }
+        insert_header_if_absent(headers, BITROUTER_AGENT_ROLE_HEADER, identity.role.as_str());
+        insert_header_if_absent(
+            headers,
+            BITROUTER_CONTEXT_EPOCH_HEADER,
+            &identity.context_epoch.to_string(),
+        );
+        insert_header_if_absent(
+            headers,
+            BITROUTER_CONTEXT_TRANSITION_HEADER,
+            transition_header_value(identity.transition),
+        );
+        if !identity.fingerprint.is_empty() {
+            insert_header_if_absent(
+                headers,
+                BITROUTER_SESSION_FINGERPRINT_HEADER,
+                &identity.fingerprint,
+            );
+        }
     }
 
     fn push_record(&self, record: CapturedIngressTrace) {
@@ -232,6 +350,12 @@ impl RealTraceCapture {
             if let Err(e) = append_sanitized_trace(path, &record, &TraceSanitizer::default()) {
                 tracing::warn!(path = %path.display(), error = %e, "workflow trace archive append failed");
             }
+            // Archive-backed daemon capture is a streaming mode. Keeping the
+            // same full request body in `records` as well makes resident memory
+            // grow with the lifetime trace volume and eventually OOMs long
+            // benchmark runs. In-memory capture remains available when no
+            // archive path is configured (the default used by replay tests).
+            return;
         }
         self.inner
             .records
@@ -258,6 +382,7 @@ pub fn capture_from_env() -> Result<Option<RealTraceCapture>> {
         "hermes" => HarnessId::Hermes,
         "claude" | "claude_code" | "claude-code" => HarnessId::ClaudeCode,
         "codex" => HarnessId::Codex,
+        "terminus_2" | "terminus-2" | "terminus2" => HarnessId::Terminus2,
         "openclaw" | "open_claw" | "open-claw" => HarnessId::OpenClaw,
         "unknown" => HarnessId::Unknown,
         other => {
@@ -358,12 +483,22 @@ fn request_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn insert_header_if_absent(headers: &mut http::HeaderMap, name: &'static str, value: &str) {
+    if headers.contains_key(name) {
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(value) {
+        headers.insert(HeaderName::from_static(name), value);
+    }
+}
+
 fn harness_header_value(harness: &HarnessId) -> &'static str {
     match harness {
         HarnessId::Generic => "generic",
         HarnessId::Hermes => "hermes",
         HarnessId::ClaudeCode => "claude_code",
         HarnessId::Codex => "codex",
+        HarnessId::Terminus2 => "terminus_2",
         HarnessId::OpenClaw => "openclaw",
         HarnessId::Unknown => "unknown",
     }
@@ -379,11 +514,21 @@ fn protocol_header_value(protocol: &ProtocolKind) -> &'static str {
     }
 }
 
+fn transition_header_value(transition: ContextTransition) -> &'static str {
+    match transition {
+        ContextTransition::None => "none",
+        ContextTransition::CompactionStart => "compaction_start",
+        ContextTransition::CompactionContinuation => "compaction_continuation",
+        ContextTransition::MainResume => "main_resume",
+    }
+}
+
 fn session_from_raw_body(harness: &HarnessId, raw_body: &serde_json::Value) -> Option<String> {
     match harness {
         HarnessId::Codex => json_str(raw_body, &["previous_response_id"]),
         HarnessId::ClaudeCode => claude_session_from_metadata(raw_body),
         HarnessId::Hermes => json_str(raw_body, &["metadata", "job_id"]),
+        HarnessId::Terminus2 => json_str(raw_body, &["session_id"]),
         HarnessId::Generic | HarnessId::OpenClaw | HarnessId::Unknown => None,
     }
 }
@@ -588,6 +733,124 @@ mod tests {
                 .get("x-bitrouter-workflow-session")
                 .map(String::as_str),
             Some("resp_123")
+        );
+    }
+
+    #[tokio::test]
+    async fn terminus_trace_capture_parses_official_subagent_session_identity() {
+        let capture = RealTraceCapture::new(TraceCaptureOptions {
+            harness: HarnessId::Terminus2,
+            session_header: Some("x-bitrouter-workflow-session".to_string()),
+            archive_path: None,
+        });
+        let router = (capture.router_wrapper())(Router::new().route(
+            "/v1/chat/completions",
+            post(|headers: HeaderMap| async move {
+                let values = [
+                    "x-bitrouter-workflow-session",
+                    "x-bitrouter-parent-session-id",
+                    "x-bitrouter-agent-session-id",
+                    "x-bitrouter-agent-role",
+                    "x-bitrouter-context-epoch",
+                    "x-bitrouter-context-transition",
+                    "x-bitrouter-session-fingerprint",
+                ]
+                .into_iter()
+                .map(|name| {
+                    (
+                        name,
+                        headers
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("")
+                            .to_string(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+                Json(values)
+            }),
+        ));
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("x-bitrouter-benchmark-run-id", "short13-run")
+                    .header("x-bitrouter-trial-id", "trial-01")
+                    .body(Body::from(
+                        json!({
+                            "model": "inbound",
+                            "session_id": "terminus-parent-summarization-1-answers",
+                            "messages": [{
+                                "role": "user",
+                                "content": "This deliberately misleading prompt must not override the session suffix."
+                            }]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response_body = to_bytes(response.into_body(), MAX_CAPTURE_BODY_BYTES)
+            .await
+            .unwrap();
+        let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+
+        assert_eq!(
+            response_json["x-bitrouter-workflow-session"].as_str(),
+            Some("terminus-parent-summarization-1-answers")
+        );
+        assert_eq!(
+            response_json["x-bitrouter-parent-session-id"].as_str(),
+            Some("terminus-parent")
+        );
+        assert_eq!(
+            response_json["x-bitrouter-agent-session-id"].as_str(),
+            Some("terminus-parent-summarization-1-answers")
+        );
+        assert_eq!(
+            response_json["x-bitrouter-agent-role"].as_str(),
+            Some("answers")
+        );
+        assert_eq!(
+            response_json["x-bitrouter-context-epoch"].as_str(),
+            Some("1")
+        );
+        assert_eq!(
+            response_json["x-bitrouter-context-transition"].as_str(),
+            Some("compaction_continuation")
+        );
+        assert!(
+            response_json["x-bitrouter-session-fingerprint"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+
+        let records = capture.records();
+        let sanitized = TraceSanitizer::default().sanitize_trace(&records[0]);
+        assert_eq!(
+            sanitized
+                .headers
+                .get("x-bitrouter-session-fingerprint")
+                .map(String::as_str),
+            response_json["x-bitrouter-session-fingerprint"].as_str()
+        );
+        assert_eq!(
+            sanitized
+                .headers
+                .get("x-bitrouter-benchmark-run-id")
+                .map(String::as_str),
+            Some("short13-run")
+        );
+        assert_eq!(
+            sanitized
+                .headers
+                .get("x-bitrouter-trial-id")
+                .map(String::as_str),
+            Some("trial-01")
         );
     }
 }

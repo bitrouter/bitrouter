@@ -14,7 +14,7 @@ use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::timing::FirstTokenKind;
-use crate::language_model::types::{FinishReason, RoutingTarget};
+use crate::language_model::types::{FinishReason, RoutingTarget, UsageOrigin};
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries
 /// pipeline-observed data only — no charging / funding fields. Deployments
@@ -25,11 +25,13 @@ pub struct SettlementContext {
     pub request_id: String,
     /// The caller.
     pub caller: CallerContext,
-    /// The target that actually served the request.
+    /// The target that served the request, or the latest attempted target when
+    /// execution failed before producing an [`ExecutionResult`](crate::language_model::ExecutionResult).
     pub target: Option<RoutingTarget>,
-    /// Resolved model id.
+    /// Resolved model id, including the attempted model on execution failure.
     pub model_id: String,
-    /// Resolved provider id.
+    /// Resolved provider id, including the attempted provider on execution
+    /// failure.
     pub provider_id: String,
     /// Which account of a multi-account provider served the request —
     /// `None` for a single-credential provider. Reflects any failover
@@ -49,6 +51,10 @@ pub struct SettlementContext {
     /// Subset of `prompt_tokens`. Lets a recorder apply premium pricing
     /// (e.g. Anthropic cache-write at 1.25× the prompt rate).
     pub cache_write_tokens: u64,
+    /// Whether usage was reported by the provider, estimated, or unavailable.
+    pub usage_origin: UsageOrigin,
+    /// Original provider usage object, when the provider reported one.
+    pub raw_usage: Option<serde_json::Value>,
     /// Provider-executed web searches (from `Usage::web_search_count`).
     pub web_search_count: u64,
     /// Media content blocks in the request prompt.
@@ -142,6 +148,8 @@ mod tests {
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            usage_origin: UsageOrigin::Unknown,
+            raw_usage: None,
             web_search_count: 0,
             media_input_count: 0,
             media_output_count: 0,

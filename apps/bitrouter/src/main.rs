@@ -531,7 +531,8 @@ enum WorkflowStateAction {
         /// Output usage JSONL path.
         #[arg(long)]
         output: PathBuf,
-        /// Impute zero/missing charges as provider:model=input_micro_usd,output_micro_usd.
+        /// Impute charges as provider:model=uncached,cache_read,cache_write,output.
+        /// Legacy input,output is accepted only for records with no cache usage.
         #[arg(long = "impute-price")]
         impute_prices: Vec<String>,
         /// Inclusive RFC3339 lower bound. Defaults to the current UTC month.
@@ -541,6 +542,47 @@ enum WorkflowStateAction {
         #[arg(long)]
         until: Option<String>,
     },
+    /// Replay persisted provider reliability state into a deterministic JSON report.
+    ReliabilityReport {
+        /// Database URL for the daemon policy DB.
+        #[arg(long)]
+        database_url: String,
+        /// Frozen BitRouter config that defines the reliability thresholds.
+        #[arg(long)]
+        config: PathBuf,
+        /// Output JSON report path.
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Reconcile selected metering rows against request-scoped receipts.
+    ReconcileMetering {
+        /// Database URL for the daemon metering DB.
+        #[arg(long)]
+        database_url: String,
+        /// Inference API root ending in `/v1`.
+        #[arg(long, default_value = "https://api.bitrouter.ai/v1")]
+        api_base: String,
+        /// Environment variable containing the inference key.
+        #[arg(long, default_value = "BITROUTER_API_KEY")]
+        api_key_env: String,
+        /// Protected BitRouter Cloud credential file. When set, resolves either
+        /// a static API key or an OAuth bearer (with refresh) without exporting
+        /// the credential into the process environment.
+        #[arg(long)]
+        credentials_file: Option<PathBuf>,
+        /// Exact request id to reconcile. Repeat for every selected row.
+        #[arg(long = "request-id", required = true)]
+        request_ids: Vec<String>,
+        /// Frozen price as provider:model=uncached,cache_read,cache_write,output.
+        #[arg(long = "price")]
+        prices: Vec<String>,
+        /// Maximum durable receipt fetches per request.
+        #[arg(long, default_value_t = 12)]
+        max_attempts: u32,
+        /// Delay between pending-receipt polls.
+        #[arg(long, default_value_t = 1_000)]
+        poll_interval_ms: u64,
+    },
     /// Apply task rewards to cheap replacement transitions before the next round.
     ApplyRewardFeedback {
         /// Database URL for the policy daemon DB, for example sqlite:///path/bitrouter.db.
@@ -549,6 +591,9 @@ enum WorkflowStateAction {
         /// Daemon workflow trace JSONL for the just-finished benchmark group.
         #[arg(long)]
         traces: PathBuf,
+        /// Exact, reconciled usage JSONL for the same benchmark group.
+        #[arg(long)]
+        cloud_usage: PathBuf,
         /// Benchmark outcome JSONL for the just-finished benchmark group.
         #[arg(long)]
         outcomes: PathBuf,
@@ -1367,6 +1412,33 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
     }
 }
 
+async fn settlement_bearer_from_credentials(path: &Path) -> Result<String> {
+    use bitrouter_cloud_sdk::auth::credentials::{CredentialsStore, REFRESH_WINDOW};
+
+    let client = reqwest::Client::new();
+    let mut store = CredentialsStore::load(path)
+        .with_context(|| format!("read BitRouter Cloud credentials from {}", path.display()))?;
+    let authorization_server = store
+        .current()
+        .and_then(|credential| credential.oauth())
+        .filter(|credential| credential.access_token_near_expiry(REFRESH_WINDOW))
+        .map(|credential| credential.authorization_server.clone());
+    let metadata = match authorization_server {
+        Some(server) => Some(
+            bitrouter_cloud_sdk::auth::metadata::fetch(&client, &server)
+                .await
+                .with_context(|| {
+                    format!("refresh metadata for credentials at {}", path.display())
+                })?,
+        ),
+        None => None,
+    };
+    store
+        .current_token(&client, metadata.as_ref())
+        .await
+        .with_context(|| format!("resolve bearer from credentials at {}", path.display()))
+}
+
 async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
     match action {
         WorkflowStateAction::HarborOutcomes {
@@ -1474,14 +1546,108 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             );
             Ok(())
         }
+        WorkflowStateAction::ReliabilityReport {
+            database_url,
+            config,
+            output,
+        } => {
+            use bitrouter::adequacy::report::ReliabilityReport;
+            use bitrouter::adequacy::store::AdequacyStore;
+
+            let config_document = bitrouter_sdk::config::load(&config)
+                .await
+                .with_context(|| format!("load reliability config {}", config.display()))?;
+            let db = bitrouter::db::connect(&database_url)
+                .await
+                .with_context(|| format!("connect reliability database {database_url}"))?;
+            let rows = AdequacyStore::new(db)
+                .load_reliability_events()
+                .await
+                .with_context(|| format!("load reliability events from {database_url}"))?;
+            let report = ReliabilityReport::build(&config_document.policy_table.adequacy, &rows)
+                .context("replay provider reliability events")?;
+            report
+                .write(&output)
+                .with_context(|| format!("write reliability report {}", output.display()))?;
+            println!(
+                "✓ wrote {} reliability events to {}",
+                report.event_count,
+                output.display()
+            );
+            Ok(())
+        }
+        WorkflowStateAction::ReconcileMetering {
+            database_url,
+            api_base,
+            api_key_env,
+            credentials_file,
+            request_ids,
+            prices,
+            max_attempts,
+            poll_interval_ms,
+        } => {
+            use std::time::Duration;
+
+            use bitrouter::metering::{MeteringStore, UsagePriceOverride, reconcile_requests};
+            use bitrouter_cloud_sdk::settlement::SettlementClient;
+
+            let prices = prices
+                .iter()
+                .map(|value| UsagePriceOverride::parse(value))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(anyhow::Error::from)?;
+            let api_key = match credentials_file {
+                Some(path) => settlement_bearer_from_credentials(&path).await?,
+                None => std::env::var(&api_key_env).with_context(|| {
+                    format!("read inference key from environment variable {api_key_env}")
+                })?,
+            };
+            let client = SettlementClient::new(&api_base, api_key)
+                .context("build request settlement client")?;
+            let db = bitrouter::db::connect(&database_url)
+                .await
+                .with_context(|| format!("connect metering database {database_url}"))?;
+            bitrouter::db::run_migrations(&db)
+                .await
+                .context("run metering reconciliation migrations")?;
+            let summary = reconcile_requests(
+                &MeteringStore::new(db),
+                &client,
+                &request_ids,
+                &prices,
+                max_attempts,
+                Duration::from_millis(poll_interval_ms),
+            )
+            .await
+            .context("reconcile selected metering requests")?;
+            if !summary.accepted() {
+                anyhow::bail!(
+                    "metering reconciliation failed closed: requested={}, computed={}, \
+                     not_charged={}, unknown={}, attempts={}",
+                    summary.requested,
+                    summary.computed,
+                    summary.not_charged,
+                    summary.unknown,
+                    summary.attempts
+                );
+            }
+            println!(
+                "✓ reconciled {} metering requests (computed: {}, not charged: {}, attempts: {})",
+                summary.requested, summary.computed, summary.not_charged, summary.attempts
+            );
+            Ok(())
+        }
         WorkflowStateAction::ApplyRewardFeedback {
             database_url,
             traces,
+            cloud_usage,
             outcomes,
             policy_decisions,
         } => {
             use bitrouter::adequacy::store::AdequacyStore;
-            use bitrouter::workflow_state::archive::{TraceArchive, WorkflowRunArtifact};
+            use bitrouter::workflow_state::archive::{
+                CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
+            };
             use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
             use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
@@ -1490,12 +1656,18 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
             let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
                 .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
+            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
+                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
             let decisions = PolicyDecisionRecord::load_jsonl(&policy_decisions)
                 .with_context(|| format!("read policy decisions {}", policy_decisions.display()))?;
+            WorkflowRunArtifact::validate_complete_benchmark_integrity(
+                &traces, &usage, &outcomes, &decisions,
+            )
+            .context("validate benchmark integrity before reward feedback")?;
             let artifact = WorkflowRunArtifact::build_with_decisions(
                 "reward-feedback",
                 &traces,
-                &[],
+                &usage,
                 &outcomes,
                 &decisions,
             )
@@ -1520,6 +1692,12 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             }
             for key in summary.semantic_success_request_keys {
                 println!("  confirmed success {key}");
+            }
+            for decision in summary.decisions {
+                println!(
+                    "  feedback {} request={} reason={}",
+                    decision.action, decision.request_id, decision.reason
+                );
             }
             Ok(())
         }
@@ -3295,6 +3473,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reconcile_metering_accepts_explicit_cloud_credentials_file() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "reconcile-metering",
+            "--database-url",
+            "sqlite:///tmp/usage.db",
+            "--credentials-file",
+            "/tmp/account-credentials.json",
+            "--request-id",
+            "req-1",
+        ])
+        .expect("parse credentials file");
+        match cli.command {
+            Some(Command::WorkflowState {
+                action:
+                    WorkflowStateAction::ReconcileMetering {
+                        credentials_file, ..
+                    },
+            }) => assert_eq!(
+                credentials_file.as_deref(),
+                Some(Path::new("/tmp/account-credentials.json"))
+            ),
+            _ => panic!("expected reconcile-metering"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_bearer_reads_fresh_oauth_without_environment_export() {
+        use bitrouter_cloud_sdk::auth::credentials::{Credentials, CredentialsStore};
+        use chrono::{Duration, Utc};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("account-credentials.json");
+        let mut store = CredentialsStore::load(&path).unwrap();
+        store
+            .save(Credentials {
+                access_token: "protected-test-bearer".into(),
+                refresh_token: Some("protected-test-refresh".into()),
+                expires_at: Utc::now() + Duration::minutes(10),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".into(),
+                scope: "inference:invoke".into(),
+                client_id: "test-client".into(),
+                authorization_server: "https://as.example.com".into(),
+                namespace_id: Some("ns-test".into()),
+                subject: None,
+            })
+            .unwrap();
+
+        let bearer = settlement_bearer_from_credentials(&path).await.unwrap();
+        assert_eq!(bearer, "protected-test-bearer");
+    }
+
+    #[test]
     fn cli_definition_is_valid() {
         use clap::CommandFactory;
         // Panics if clap detects a conflict (e.g. `--tag` vs global `--version`).
@@ -3561,6 +3794,40 @@ mod tests {
                 action: PolicyAction::Evolve { apply: true, .. }
             })
         ));
+    }
+
+    #[test]
+    fn workflow_state_reliability_report_flags_parse() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "reliability-report",
+            "--database-url",
+            "sqlite:///tmp/bitrouter.db",
+            "--config",
+            "/tmp/bitrouter.yaml",
+            "--output",
+            "/tmp/reliability.json",
+        ])
+        .expect("parse reliability report");
+
+        match cli.command {
+            Some(Command::WorkflowState {
+                action:
+                    WorkflowStateAction::ReliabilityReport {
+                        database_url,
+                        config,
+                        output,
+                    },
+            }) => {
+                assert_eq!(database_url, "sqlite:///tmp/bitrouter.db");
+                assert_eq!(config, PathBuf::from("/tmp/bitrouter.yaml"));
+                assert_eq!(output, PathBuf::from("/tmp/reliability.json"));
+            }
+            _ => panic!("expected reliability report"),
+        }
     }
 
     #[test]

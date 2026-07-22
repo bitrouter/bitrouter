@@ -1699,7 +1699,7 @@ fn messages_cache_tokens_round_trip() {
         }
     });
     let result = adapter.parse_response(body).unwrap();
-    let usage = result.usage.unwrap();
+    let usage = result.usage.clone().unwrap();
     assert_eq!(usage.cache_read_tokens, 80);
     assert_eq!(usage.cache_write_tokens, 20);
     // Canonical IR: prompt_tokens is the inclusive total (100 + 80 + 20).
@@ -1835,7 +1835,7 @@ fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
     let usage = parts
         .iter()
         .find_map(|p| match p {
-            StreamPart::Usage { usage } => Some(*usage),
+            StreamPart::Usage { usage } => Some(usage.clone()),
             _ => None,
         })
         .expect("terminal Usage frame missing");
@@ -1843,6 +1843,18 @@ fn messages_stream_preserves_cache_inclusive_prompt_tokens() {
     assert_eq!(usage.cache_write_tokens, 20);
     assert_eq!(usage.completion_tokens, 200);
     assert_eq!(usage.prompt_tokens, 5_000 + 30_000 + 20);
+    assert_eq!(
+        usage.raw.as_deref(),
+        Some(&serde_json::json!({
+            "message_start": {
+                "input_tokens": 5_000,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 30_000,
+                "cache_creation_input_tokens": 20,
+            },
+            "message_delta": { "output_tokens": 200 },
+        }))
+    );
 }
 
 #[test]
@@ -1892,7 +1904,7 @@ fn messages_stream_web_search_count_from_delta() {
     let usage = parts
         .iter()
         .find_map(|p| match p {
-            StreamPart::Usage { usage } => Some(*usage),
+            StreamPart::Usage { usage } => Some(usage.clone()),
             _ => None,
         })
         .expect("terminal Usage frame missing");
@@ -1915,7 +1927,7 @@ fn chat_completions_cache_tokens_round_trip() {
         }
     });
     let result = adapter.parse_response(body).unwrap();
-    let usage = result.usage.unwrap();
+    let usage = result.usage.clone().unwrap();
     assert_eq!(usage.cache_read_tokens, 70);
     let rendered = adapter
         .render_response(&result, &sample_prompt(), "c1")
@@ -2731,6 +2743,65 @@ fn responses_stream_error_maps_to_proper_http_status() {
 }
 
 #[test]
+fn responses_stream_top_level_error_retains_status_and_message() {
+    // The Responses API emits a bare `error` event with the error object at
+    // the top level, while `response.failed` nests it below `response`.
+    // Both shapes must preserve provider diagnostics for recovery decisions.
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let err = decoder
+        .decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: serde_json::json!({
+                "type": "error",
+                "error": { "type": "rate_limit_error", "message": "retry later" }
+            })
+            .to_string(),
+        })
+        .unwrap_err();
+    match err {
+        crate::error::BitrouterError::Upstream { status, message } => {
+            assert_eq!(status, 429, "rate_limit_error → 429");
+            assert_eq!(message, "retry later");
+        }
+        other => panic!("expected Upstream, got {other:?}"),
+    }
+}
+
+#[test]
+fn responses_stream_content_policy_error_is_typed_and_publicly_sanitized() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let err = decoder
+        .decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "server_error",
+                    "message": "This content was flagged for possible cybersecurity risk. internal-detail"
+                }
+            })
+            .to_string(),
+        })
+        .unwrap_err();
+
+    match err {
+        crate::error::BitrouterError::UpstreamPolicyViolation { message } => {
+            assert!(message.contains("internal-detail"));
+            let policy_error = crate::error::BitrouterError::UpstreamPolicyViolation { message };
+            assert_eq!(policy_error.status(), 403);
+            assert_eq!(policy_error.error_code(), "upstream_policy_violation");
+            assert_eq!(
+                policy_error.public_message(),
+                "upstream content policy violation"
+            );
+        }
+        other => panic!("expected UpstreamPolicyViolation, got {other:?}"),
+    }
+}
+
+#[test]
 fn streaming_decoders_emit_response_started_once() {
     // The 3 streaming protocols whose canonical IR previously dropped the
     // upstream response id now surface it as a one-shot `ResponseStarted`,
@@ -3127,6 +3198,31 @@ fn store_is_never_silently_discarded_cross_protocol() {
         assert!(
             matches!(error, crate::error::BitrouterError::BadRequest { .. }),
             "store: true should fail clearly for {protocol}, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn chat_completions_does_not_forward_terminus_session_id() {
+    let inbound = adapter_for(ApiProtocol::ChatCompletions);
+    let body = serde_json::json!({
+        "model": "gpt-5.6-terra",
+        "messages": [{"role": "user", "content": "hi"}],
+        "session_id": "terminus-parent-cont-1"
+    });
+    let prompt = inbound.parse_request(body).unwrap();
+
+    assert!(
+        !prompt.params.extra.contains_key("session_id"),
+        "Terminus session identity is router metadata, not an upstream model parameter"
+    );
+    for protocol in [ApiProtocol::ChatCompletions, ApiProtocol::Responses] {
+        let rendered = adapter_for(protocol.clone())
+            .render_request(&prompt)
+            .unwrap();
+        assert!(
+            rendered.get("session_id").is_none(),
+            "{protocol:?} upstream must not receive Terminus session metadata"
         );
     }
 }
@@ -3838,8 +3934,8 @@ fn responses_completed_preserves_id_status_and_usage() {
         Some(StreamPart::ResponseCompleted { id, status, usage }) => {
             assert_eq!(id, "resp_xyz");
             assert_eq!(status, "completed");
-            assert_eq!(usage.unwrap().prompt_tokens, 12);
-            assert_eq!(usage.unwrap().completion_tokens, 8);
+            assert_eq!(usage.as_ref().unwrap().prompt_tokens, 12);
+            assert_eq!(usage.as_ref().unwrap().completion_tokens, 8);
         }
         other => panic!("expected ResponseCompleted, got {other:?}"),
     }

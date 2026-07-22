@@ -27,7 +27,7 @@ use crate::language_model::stream::SseFrame;
 use crate::language_model::types::{
     ApiProtocol, AuthScheme, Content, DataContent, FinishReason, GenerateResult, GenerationParams,
     Message, Prompt, ProviderMetadata, ResponseFormat, Role, RoutingTarget, Source, StopDetails,
-    StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
+    StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin,
     provider_namespace, set_provider_metadata,
 };
 
@@ -1083,7 +1083,7 @@ impl InboundAdapter for MessagesAdapter {
         // among the answer blocks, only the result block is appended and it
         // reuses that call's id; otherwise a synthetic call block is prepended.
         content.extend(render_web_search_result_blocks(result));
-        let usage = result.usage.unwrap_or_default();
+        let usage = result.usage.clone().unwrap_or_default();
         // Prefer the stashed raw `stop_reason` (e.g. `stop_sequence`) over the
         // unified-enum mapping so a same-protocol round-trip is byte-faithful.
         let stop_reason =
@@ -2062,7 +2062,27 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         cache_read_tokens: cache_read,
         cache_write_tokens: cache_write,
         web_search_count,
+        origin: UsageOrigin::ProviderReported,
+        raw: Some(Box::new(value.clone())),
     })
+}
+
+#[cfg(test)]
+#[test]
+fn parse_usage_retains_provider_payload_and_origin() {
+    use crate::language_model::types::UsageOrigin;
+
+    let raw = serde_json::json!({
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 7,
+        "cache_creation_input_tokens": 3,
+        "provider_extension": "retained"
+    });
+
+    let usage = parse_usage(&raw).expect("usage present");
+    assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+    assert_eq!(usage.raw.as_deref(), Some(&raw));
 }
 
 // ===== streaming =====
@@ -2086,6 +2106,9 @@ struct MessagesStreamDecoder {
     /// to the emitted [`StreamPart::ReasoningEnd`] (reasoning continuity — without
     /// it a replayed thinking block is unsigned and Anthropic rejects it).
     block_signatures: Vec<Option<String>>,
+    /// Exact provider usage object from `message_start`, retained separately
+    /// so the final raw evidence can include both lifecycle fragments.
+    initial_usage_raw: Option<Box<serde_json::Value>>,
     usage: Usage,
 }
 
@@ -2128,6 +2151,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                 if let Some(usage) = json.get("message").and_then(|m| m.get("usage"))
                     && let Some(parsed) = parse_usage(usage)
                 {
+                    self.initial_usage_raw = parsed.raw.clone();
                     self.usage = parsed;
                 }
             }
@@ -2333,6 +2357,13 @@ impl StreamDecoder for MessagesStreamDecoder {
                     self.usage.prompt_tokens = new_excl_input
                         .saturating_add(self.usage.cache_read_tokens)
                         .saturating_add(self.usage.cache_write_tokens);
+                    let mut raw = serde_json::Map::new();
+                    if let Some(initial) = self.initial_usage_raw.as_deref() {
+                        raw.insert("message_start".to_string(), initial.clone());
+                    }
+                    raw.insert("message_delta".to_string(), u.clone());
+                    self.usage.raw = Some(Box::new(serde_json::Value::Object(raw)));
+                    self.usage.origin = UsageOrigin::ProviderReported;
                 }
                 if let Some(reason) = json
                     .get("delta")
@@ -2340,7 +2371,9 @@ impl StreamDecoder for MessagesStreamDecoder {
                     .and_then(|s| s.as_str())
                     .and_then(stop_reason_to_finish)
                 {
-                    parts.push(StreamPart::Usage { usage: self.usage });
+                    parts.push(StreamPart::Usage {
+                        usage: self.usage.clone(),
+                    });
                     parts.push(StreamPart::Finish { reason });
                 }
             }
@@ -2920,7 +2953,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                 } else {
                     "end_turn"
                 };
-                self.emit_terminal(&mut frames, stop_reason, *usage);
+                self.emit_terminal(&mut frames, stop_reason, usage.clone());
             }
         }
         Ok(frames)

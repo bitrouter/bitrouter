@@ -77,6 +77,14 @@ pub enum BitrouterError {
         error: serde_json::Value,
     },
 
+    /// 403 — an upstream provider declined the request under its content policy.
+    #[error("upstream policy violation: {message}")]
+    UpstreamPolicyViolation {
+        /// Internal provider diagnostic. Public protocol surfaces use a fixed,
+        /// safe message and never expose this value.
+        message: String,
+    },
+
     /// 502 — upstream provider returned an error.
     #[error("upstream error ({status}): {message}")]
     Upstream {
@@ -143,6 +151,7 @@ impl BitrouterError {
             Self::RateLimited { .. } => 429,
             Self::UpstreamRateLimited { .. } => 429,
             Self::UpstreamBadRequest { .. } => 400,
+            Self::UpstreamPolicyViolation { .. } => 403,
             Self::Upstream { .. } => 502,
             Self::UpstreamInvalidResponse { .. } => 502,
             Self::UpstreamAuth { status, .. } => *status,
@@ -164,6 +173,7 @@ impl BitrouterError {
             Self::RateLimited { .. } => "rate_limit_error",
             Self::UpstreamRateLimited { .. } => "rate_limit_error",
             Self::UpstreamBadRequest { .. } => "invalid_request_error",
+            Self::UpstreamPolicyViolation { .. } => "permission_error",
             Self::Upstream { .. }
             | Self::UpstreamInvalidResponse { .. }
             | Self::UpstreamTimeout => "upstream_error",
@@ -186,6 +196,7 @@ impl BitrouterError {
             Self::RateLimited { .. } => "rate_limit_exceeded",
             Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
             Self::UpstreamBadRequest { .. } => "invalid_request",
+            Self::UpstreamPolicyViolation { .. } => "upstream_policy_violation",
             Self::Upstream { .. } => "upstream_bad_gateway",
             Self::UpstreamInvalidResponse { .. } => "upstream_invalid_response",
             Self::UpstreamAuth { .. } => "upstream_auth_required",
@@ -219,6 +230,7 @@ impl BitrouterError {
             Self::RateLimited { .. } => ErrorKind::RateLimited,
             Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
             Self::UpstreamBadRequest { .. } => ErrorKind::BadRequest,
+            Self::UpstreamPolicyViolation { .. } => ErrorKind::Forbidden,
             Self::Upstream { .. } => ErrorKind::Upstream,
             Self::UpstreamInvalidResponse { .. } => ErrorKind::UpstreamInvalidResponse,
             Self::UpstreamAuth { .. } => ErrorKind::UpstreamAuth,
@@ -244,6 +256,7 @@ impl BitrouterError {
             Self::UpstreamPaymentRequired => "upstream payment required".to_string(),
             Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
             Self::UpstreamBadRequest { error } => upstream_payload_text(error),
+            Self::UpstreamPolicyViolation { .. } => "upstream content policy violation".to_string(),
             Self::Upstream { status, message } => {
                 format!("upstream error ({status}): {message}")
             }
@@ -275,6 +288,7 @@ impl BitrouterError {
     pub fn public_message(&self) -> String {
         match self {
             Self::UpstreamBadRequest { error } => upstream_payload_text(error),
+            Self::UpstreamPolicyViolation { .. } => "upstream content policy violation".to_string(),
             Self::Upstream { .. } => "upstream request failed".to_string(),
             Self::UpstreamInvalidResponse { .. } => {
                 "upstream returned an invalid response".to_string()

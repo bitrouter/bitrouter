@@ -38,7 +38,7 @@ Record:
 | --- | --- |
 | Benchmark | `terminal-bench/terminal-bench-2-1` and its resolved dataset revision |
 | Run class | Non-evaluation canary, mechanism, replicated, or public reproduction |
-| Lineage and round | New immutable names for control, r1, r2, and r3 as applicable |
+| Lineage and round | New immutable names plus the ordered target groups for each model combination |
 | Task manifest | Ordered task names and a content hash |
 | Trial manifest | Explicit trial identities per task and a content hash |
 | Tuning/held-out role | Tuning, held-out, diagnostic, or non-evaluation |
@@ -162,6 +162,23 @@ For each credential, record only:
 
 Provider API keys, subscription OAuth material, AWS keys, and SSH keys stay out of Harbor configs and evidence archives. Sandboxes receive only the private daemon URL and, when local daemon authentication is disabled, a non-secret local token required by the client library.
 
+For a Claude Pro/Max subscription, freeze an explicit
+`claude-code:<model>` target and the protected source of
+`CLAUDE_CODE_OAUTH_TOKEN`. The central daemon must receive that variable before
+provider construction. Terminus 2 and other non-Claude-Code harnesses send
+normal client requests and must not receive the OAuth token or synthesize
+Claude Code identity headers; BitRouter owns the outbound OAuth-compatible
+translation. A bare canonical Claude model is not equivalent to this explicit
+opt-in and must remain outside subscription auto-cascade.
+
+Treat subscription capacity as model-specific. Freeze a separate provider-gate
+key for every explicit target, such as `claude-code:claude-fable-5`,
+`claude-code:claude-opus-4-8`, and `claude-code:claude-sonnet-5`. A `429` on one
+target does not authorize a family-wide cooldown and does not suppress a fresh
+non-evaluation sentinel for either of the others. Never route one target's
+scored identities to another target or label substituted results as the
+original model.
+
 ## Harbor and Terminus 2
 
 Freeze:
@@ -186,6 +203,7 @@ Freeze:
 - exact ordered task list and dataset revision;
 - trial identities, random seeds when exposed, and attempts per task;
 - control versus policy group membership;
+- ordered target groups per model combination, including whether the lineage ends after accepted r2 feedback or evaluates r3;
 - `max_parallel_sandboxes` for the entire lineage;
 - Harbor retry count, normally zero for mechanism runs;
 - task, agent-setup, verifier, settlement, and group timeouts;
@@ -195,7 +213,7 @@ Freeze:
 - predeclared spend and severe-quality stop limits;
 - provider-rate-limit and latency thresholds for canaries.
 
-The manifest must distinguish a predeclared trial from a retry and must state how any public-protocol replacement attempt will be labeled and reported.
+The manifest must distinguish a predeclared trial from a retry and must state how any public-protocol replacement attempt will be labeled and reported. If the run permits a security-policy skip, freeze the two allowed normalized classes, the exact `replacement-01` identity rule, sanitized evidence locations, hash/immutability checks, and both official and runnable-only score formulas before launch.
 
 ## Prices and settlement
 

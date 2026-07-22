@@ -12,6 +12,8 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 | Q16-Q20 | Isolation, resume, postprocessing, controls, and trials |
 | Q21-Q26 | Provider errors, settlement, cache-aware cost, and reward semantics |
 | Q27-Q29 | Concurrency, cleanup, and publication |
+| Q30-Q38 | Target-platform builds, persistent operators, Cloud/Claude OAuth, settlement, protocol shaping, and SSH monitoring |
+| Q39-Q42 | Target groups, model-specific Claude quota, security skips, and dual scoring |
 
 ## Q1. Which parts of the benchmark are fixed, and which are configurable?
 
@@ -139,7 +141,7 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 **Cause / diagnostic:** A partial/failed run was resumed in place or control and policy state overlapped.
 
-**Safe action:** Allocate new run/group paths and ports, use a dedicated control database and one fresh shared r1-r3 policy database, archive the old attempt unchanged, and start a new lineage after implementation/config fixes.
+**Safe action:** Allocate new run/group paths and ports, use a dedicated control database and one fresh policy database shared across every targeted policy round, archive the old attempt unchanged, and start a new lineage after implementation/config fixes.
 
 ## Q17. Which cases may a crash-resume entrypoint launch?
 
@@ -244,3 +246,107 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 **Cause / diagnostic:** Internal mechanism evidence may use short13/~20 tasks and one trial per case; public reproduction uses all 89 tasks and five predeclared trials, declared held-out semantics, provenance, and uncertainty. Actual charge and notional list-price cost are different series, and raw archives may contain secrets.
 
 **Safe action:** Match the claim to the run class, report tuning versus held-out behavior, separate actual/notional economics, publish every round/failure and registry provenance, sanitize credentials/keys/private paths without deleting request/session/usage evidence, checksum the release, and secret-scan both upload and download.
+
+## Q30. Why does a binary with the expected SHA fail with `Exec format error` on EC2?
+
+**Symptom:** The serving binary hash matches the operator's manifest, but the central Linux host refuses to execute it.
+
+**Cause / diagnostic:** SHA-256 proves byte identity, not target compatibility. The artifact was built on macOS or for another architecture and then copied to an `x86_64` Linux central host. Non-interactive SSH may also omit `~/.cargo/bin` from `PATH`, hiding the actual central Rust toolchain.
+
+**Safe action:** Record `uname -m`, build the exact commit on the target host or with a pinned matching cross-toolchain, invoke the recorded absolute Cargo path, and require both the new SHA-256 and an ELF/architecture check before any provider preflight or run identity is created. Never reuse the incompatible artifact's path or hash.
+
+## Q31. Why must a benchmark process not live inside the operator's SSH session?
+
+**Symptom:** A direct SSH command works for short probes but the Tailscale/ProxyJump connection closes during a model call or Harbor trial, leaving the operator unsure whether the remote process survived.
+
+**Cause / diagnostic:** The control connection became the job supervisor. Jump-host banner latency and transport resets are independent of Harbor, the daemon, and EC2 lifecycle; a child started in a new process session may even outlive a killed parent.
+
+**Safe action:** Run provider canaries and benchmark groups under a named persistent central supervisor such as tmux or systemd. Freeze the command before launch, retain output and exit status, and let SSH perform read-only polling. After any disconnect, first audit the exact PID, port, run root, event log, and EC2 tags; never launch a second attempt merely because the local SSH client lost contact.
+
+## Q32. Why must failed preflights keep their logs?
+
+**Symptom:** A direct provider sentinel returns non-2xx, but a temporary-directory cleanup deletes the daemon log and response body before diagnosis.
+
+**Cause / diagnostic:** The preflight was treated as disposable even though it is the evidence that protects scored identities from installation, protocol, credential, and entitlement failures.
+
+**Safe action:** Give every preflight a fresh immutable non-evaluation identity and owner-only directory. Preserve config validation, daemon log, sanitized response, trace, and exactly one `PREFLIGHT_ACCEPTED` or `PREFLIGHT_REJECTED` marker. Refuse in-place reruns; after a fix, advance the preflight identity while leaving scored case identities untouched.
+
+## Q33. Why can BitRouter Cloud routing return `invalid_grant` even though a credential file exists?
+
+**Symptom:** The built-in Cloud provider finds `account-credentials.json`, attempts OAuth refresh, and returns a 401/502 chain ending in `invalid_grant`; receipt reconciliation may separately ask for `BITROUTER_API_KEY`.
+
+**Cause / diagnostic:** Presence and mode `0600` do not prove that an OAuth refresh token is still accepted. A copied or rotated credential can be stale. Older reconciliation CLIs accepted only an exported inference key even though the provider itself could consume the protected OAuth store.
+
+**Safe action:** Preserve the rejected preflight, run a new interactive `bitrouter cloud login` device flow on the central credential store, and never print/copy the resulting bearer. Use a pinned reconciliation interface that accepts the same protected credential file (or a declared API-key environment source), then advance to a new preflight identity and require both real inference and authoritative receipt settlement before a scored launch.
+
+## Q34. Why can a Cloud receipt be computed but reconciliation still fail with `authoritative_charge_mismatch`?
+
+**Symptom:** The receipt contains the same request ID, model, provider, and four token buckets as the local row, yet strict reconciliation stores it as `unknown` and rejects the artifact.
+
+**Cause / diagnostic:** First recompute the charge from the serialized frozen rates with decimal arithmetic and the provider's documented final-rounding rule. If that result differs from the receipt, the price snapshot is stale: Cloud prices can change independently of the OSS registry revision. If decimal recomputation matches the receipt but the pinned binary differs, the defect is local charge arithmetic. In particular, output and reasoning tokens commonly share one output rate; multiplying them as separate binary floating-point buckets can move an exact half-micro-USD boundary below the value the provider rounds.
+
+**Safe action:** For stale prices, fetch the authenticated Cloud `/v1/models` record immediately before freezing a lineage, retain only public model/pricing fields in an owner-only snapshot, and reconcile with those exact rates. For arithmetic divergence, add an exact failing receipt case, combine token classes that share one rate before multiplication while preserving each class's trust cap and audit fields, then deploy a new immutable postprocessing binary. In both cases, treat the receipt as the charge source and frozen rates as an integrity cross-check; archive the rejected staging and use a zero-launch postprocess recovery when the case and TrialResult are complete. Never loosen equality, add an epsilon, rewrite SQLite, or rerun a valid trial to hide the mismatch.
+
+## Q35. Can Terminus 2 use a Claude Code subscription as its model provider?
+
+**Symptom:** A fixed route points Terminus 2 at `claude-code:<model>`, but an older BitRouter build rejects the request for a missing Claude Code agent-profile beta.
+
+**Cause / diagnostic:** Terminus 2 is a normal downstream client and should not originate Claude Code credentials, identity headers, or the Claude Agent SDK identity system block. Current BitRouter treats the explicit `claude-code:<model>` target as the operator's subscription-use boundary and constructs the OAuth-compatible Claude Code request on the upstream side, preserving the client's original system instructions. The older rejection—or a generic upstream 429 when the official CLI succeeds with the same token/model—means the serving binary predates the complete bridge, or the request did not resolve to the explicit provider-qualified target. A bare canonical Claude model still cannot auto-cascade onto a personal subscription.
+
+**Safe action:** Pin and verify a bridge-capable BitRouter source/binary, set the long-lived `CLAUDE_CODE_OAUTH_TOKEN` only in the protected central daemon environment before startup, and use an explicit `claude-code:<model>` target. Keep the token, Claude Code agent-profile header, and injected identity block out of Harbor, Terminus 2, sandbox, manifest, and artifact configuration. First run a no-beta standard Anthropic sentinel, then a real Terminus 2 EC2 canary; accept only with the intended provider/model trace, four-bucket settlement, strict cost/reward/session joins, TrialResult, and zero AWS residue.
+
+## Q36. Why does a Terminus 2 Anthropic canary return 404 without adding a BitRouter trace?
+
+**Symptom:** LiteLLM raises `NotFoundError`, its masked URL ends in `/v1/v1/messages`, and the daemon trace count remains at the direct sentinel only.
+
+**Cause / diagnostic:** The Anthropic handler appends `/v1/messages` to `api_base`. Reusing the OpenAI-style `http://host:port/v1` base therefore duplicates the version segment and misses BitRouter's `/v1/messages` route before routing, metering, or settlement can begin.
+
+**Safe action:** For `model_name: anthropic/<model>`, set `api_base` to `http://host:port` with no `/v1` suffix. Keep `/v1` for OpenAI-provider Terminus 2 configurations. Validate the frozen TrialConfig, run a fresh immutable non-evaluation identity, and preserve the failed identity rather than retrying it.
+
+## Q37. Why does Anthropic reject `extra_body` after the Terminus request reaches BitRouter?
+
+**Symptom:** Route traces appear, but every model call fails with `invalid_request_error: extra_body: Extra inputs are not permitted`; the traced inbound body contains `extra_body.session_id`.
+
+**Cause / diagnostic:** Terminus 2 passes its session into Harbor's LiteLLM wrapper. Some Anthropic-handler versions serialize the provider-extension container instead of merging it, but Anthropic Messages does not accept `extra_body` or a body-level `session_id`. The same session is already present in the immutable BitRouter workflow headers.
+
+**Safe action:** Use a bridge-capable BitRouter build that merges non-conflicting `extra_body` extensions into the outbound body, gives explicit top-level fields precedence, and drops `session_id` only after request/session tracing has captured the headers. Do not patch the scored artifact or retry the consumed identity; rebuild, freeze a new binary and run identity, and repeat the non-evaluation canary.
+
+## Q38. Why can SSH monitoring time out while the benchmark is still healthy?
+
+**Symptom:** The operator loses the Tailscale or bastion SSH path, yet AWS still reports the central host healthy and scored sandboxes remain active. A Tailscale peer may appear online while port 22 initially times out, or direct EC2 SSH may stop working after the operator's public egress address changes.
+
+**Cause / diagnostic:** The management path and benchmark data plane are independent. A persistent central supervisor can keep Harbor, BitRouter, and EC2 sandboxes running after the operator connection disappears. Common control-plane causes are a changed `/32` source not present in the bastion security group, a cold or unstable Tailscale DERP path, and local network policy that blocks direct port 22 even when an HTTP public-IP probe succeeds. First use the declared IAM profile to verify central instance/system health, exact run-tagged sandbox state, and the current security-group rules; use CloudWatch CPU/network activity only as supporting evidence, never as an acceptance result.
+
+**Safe action:** Do not restart the tmux/systemd job or relaunch a case because SSH failed. Prime and verify the Tailscale path with `tailscale ping`, test port 22 separately, then reconnect through the frozen jump chain and read the existing exit marker and case-event log. If the operator is authorized to repair ingress, add only a tagged current `/32` rule to the bastion, keep the central host restricted to the bastion security group, and remove the temporary rule after monitoring is complete. Never widen SSH to `0.0.0.0/0`, copy credentials to a jump host, or treat a transport timeout as benchmark failure.
+
+## Q39. Must every model combination run r3?
+
+**Symptom:** One matrix combination is already running r3, while later combinations can save time by ending after r2.
+
+**Cause / diagnostic:** Target groups were treated as a global runner constant instead of a frozen per-combination experimental input. Omitting r3 after seeing r2 would be cherry-picking, but declaring `control+r1+r2` before that combination starts is a valid, narrower experiment.
+
+**Safe action:** Freeze ordered target groups per combination. Let an already-declared `control+r1+r2+r3` lineage finish; run later declared `control+r1+r2` lineages through accepted r2 feedback and the post-feedback snapshot, then mark them complete. Reject a non-target r3 before daemon startup and case consumption, and report every targeted round.
+
+## Q40. Does a Claude Code subscription `429` block all Claude models?
+
+**Symptom:** `claude-fable-5` returns `429`, so the operator considers pausing Fable, Opus, and Sonnet together.
+
+**Cause / diagnostic:** Claude Code subscription limits may be model-specific. A family-wide gate discards usable capacity and confounds the intended model lineages.
+
+**Safe action:** Key provider-gate evidence by the exact target. A `429` for `claude-fable-5` blocks only that target; independently sentinel `claude-opus-4-8` and `claude-sonnet-5`, and run whichever exact model is ready under its own frozen lineage. Preserve the failed Fable evidence, apply no family-wide cooldown, and never substitute another model's results into Fable.
+
+## Q41. When may a task be skipped for a network/security refusal?
+
+**Symptom:** One case receives a typed security refusal and repeated attempts risk wasting time without producing a TrialResult.
+
+**Cause / diagnostic:** A single refusal can be transient or misclassified, while unlimited retries violate immutable identities. The narrow exception therefore requires two matching typed failures and no valid result.
+
+**Safe action:** Run only the original identity and one immutable `replacement-01`. Mark `skipped_security_policy` only if both were started once, both are terminal-invalid, neither produced a valid TrialResult, and two sanitized HTTP `403` evidence files have the same allowed class (`provider_policy_refusal` or `network_security_policy_denied`). Hash both files into the skip record. Never skip a `429`, `5xx`, timeout, missing-usage case, generic runtime error, non-matching refusal, or any attempt with a valid TrialResult; never fabricate missing evidence.
+
+## Q42. How is a full89 group scored when a task has a validated security skip?
+
+**Symptom:** Removing the skipped case from the denominator makes quality appear better, while assigning a fake zero-reward TrialResult corrupts the evidence bundle.
+
+**Cause / diagnostic:** Runtime coverage and official benchmark scoring are separate. The group can account for all 89 tasks using accepted results plus validated skips without synthesizing an execution.
+
+**Safe action:** Keep the official denominator 89 and give the skipped task zero contribution: `sum(real accepted rewards) / 89`. Also report `runnable-only = sum(real accepted rewards) / accepted_count` as a secondary labeled diagnostic. Publish accepted/skip counts and identities, evidence hashes, and real incurred cost; create no synthetic TrialResult, request, usage, outcome, or reward row.
