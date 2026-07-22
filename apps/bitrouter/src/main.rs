@@ -3845,7 +3845,7 @@ mod tests {
                     freeze: true,
                     ..
                 }
-            }) if path == PathBuf::from("candidate.yaml")
+            }) if path == Path::new("candidate.yaml")
         ));
 
         assert!(Cli::try_parse_from(["bitrouter", "policy", "evolve", "--freeze"]).is_err());
