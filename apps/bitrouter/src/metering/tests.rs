@@ -596,6 +596,83 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
 }
 
 #[tokio::test]
+async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let mut settlement = ctx("rate-limited", 0, 0);
+    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.raw_usage = None;
+    settlement.error =
+        Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited { retry_after: None });
+
+    recorder.record(&mut settlement).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let Some(record) = records.first() else {
+        return Err(bitrouter_sdk::BitrouterError::internal(
+            "missing rate-limit usage record",
+        ));
+    };
+
+    assert_eq!(
+        record.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+    );
+    assert_eq!(
+        record.raw_usage.as_ref(),
+        Some(&serde_json::json!({
+            "error": { "code": "upstream_rate_limited" },
+            "usage": null
+        }))
+    );
+    assert_eq!(record.final_charge_micro_usd, Some(0));
+    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let mut settlement = ctx("legacy-rate-limit", 0, 0);
+    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.error =
+        Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited { retry_after: None });
+    recorder.record(&mut settlement).await?;
+    pool.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "UPDATE requests SET usage_origin='unknown', raw_usage_json=NULL, \
+         charge_status='unknown', charge_evidence_json=NULL, \
+         error='upstream_rate_limited' \
+         WHERE request_id='r-legacy-rate-limit-0-0'",
+    ))
+    .await
+    .map_err(|error| {
+        bitrouter_sdk::BitrouterError::internal(format!("rewrite legacy rate-limit usage: {error}"))
+    })?;
+
+    let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
+    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    let Some(record) = records.first() else {
+        return Err(bitrouter_sdk::BitrouterError::internal(
+            "missing legacy rate-limit usage record",
+        ));
+    };
+
+    assert_eq!(
+        record.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::ProviderReported
+    );
+    assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
+    assert_eq!(record.final_charge_micro_usd, Some(0));
+    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
