@@ -524,7 +524,8 @@ impl PolicyTableRouter {
                 && self.exploration_allowed_for(&decision)
                 && let Some(explore) = self.table.explore_tier()
             {
-                let should_trial = ledger.should_trial(&ledger_key);
+                let should_trial = ledger
+                    .should_trial_with_semantic_threshold(&ledger_key, state_semantic_minimum);
                 if decision.locked || should_trial {
                     let (guarded_explore, explore_clamped) =
                         self.table.guardrail_with_status(explore, prompt);
@@ -1433,7 +1434,9 @@ mod tests {
         assert_eq!(gated.semantic_successes, 0);
         assert_eq!(gated.semantic_success_threshold, 2);
         assert!(!gated.locked);
-        assert_eq!(gated.selected_tier.as_deref(), Some("flagship"));
+        assert!(gated.trialed);
+        assert_eq!(gated.reason, PolicyDecisionReason::ExplorationTrial);
+        assert_eq!(gated.selected_tier.as_deref(), Some("cheap"));
 
         store
             .record_semantic_success("opening", "terminal-bench/regex-log")
@@ -1452,6 +1455,9 @@ mod tests {
         assert_eq!(still_gated.semantic_successes, 1);
         assert_eq!(still_gated.semantic_success_threshold, 2);
         assert!(!still_gated.locked);
+        assert!(still_gated.trialed);
+        assert_eq!(still_gated.reason, PolicyDecisionReason::ExplorationTrial);
+        assert_eq!(still_gated.selected_tier.as_deref(), Some("cheap"));
 
         store
             .record_semantic_success("opening", "terminal-bench/fix-git")
