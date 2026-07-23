@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
@@ -47,6 +47,7 @@ pub enum PolicyDecisionReason {
     AdequacyPin,
     ReliabilityCircuitOpen,
     ReliabilityHalfOpenProbe,
+    SessionDowngradeBudget,
     ToolGuardrail,
     NoMatch,
 }
@@ -60,6 +61,7 @@ impl PolicyDecisionReason {
             Self::AdequacyPin => "adequacy_pin",
             Self::ReliabilityCircuitOpen => "reliability_circuit_open",
             Self::ReliabilityHalfOpenProbe => "reliability_half_open_probe",
+            Self::SessionDowngradeBudget => "session_downgrade_budget",
             Self::ToolGuardrail => "tool_guardrail",
             Self::NoMatch => "no_match",
         }
@@ -123,6 +125,9 @@ pub struct PolicyTable {
     explore_opening: bool,
     /// Future task-reward guardrail for opening downgrades.
     min_semantic_successes_for_opening: u32,
+    /// Maximum downgraded requests admitted for one agent session. Zero keeps
+    /// the legacy unlimited behavior.
+    max_downgraded_requests_per_session: u32,
     /// Reverse index model id → tier name, for mapping a served model back to
     /// its tier at observe time.
     model_to_tier: HashMap<String, String>,
@@ -163,6 +168,9 @@ impl PolicyTable {
             exploration_enabled,
             explore_opening: config.adequacy.explore_opening,
             min_semantic_successes_for_opening: config.adequacy.min_semantic_successes_for_opening,
+            max_downgraded_requests_per_session: config
+                .adequacy
+                .max_downgraded_requests_per_session,
             model_to_tier,
             key_strategy: config.key_strategy,
         }))
@@ -367,6 +375,52 @@ pub struct PolicyTableRouter {
     pending_adequacy: Option<Arc<PendingAdequacyStore>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
+    session_downgrade_budgets: Mutex<SessionDowngradeBudgets>,
+}
+
+const MAX_TRACKED_DOWNGRADE_SESSIONS: usize = 4096;
+
+#[derive(Debug, Default)]
+struct SessionDowngradeBudgets {
+    sequence: u64,
+    sessions: HashMap<String, SessionDowngradeBudget>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SessionDowngradeBudget {
+    consumed: u32,
+    last_seen: u64,
+}
+
+impl SessionDowngradeBudgets {
+    fn try_consume(&mut self, session: String, maximum: u32) -> bool {
+        self.sequence = self.sequence.wrapping_add(1);
+        if let Some(budget) = self.sessions.get_mut(&session) {
+            budget.last_seen = self.sequence;
+            if budget.consumed >= maximum {
+                return false;
+            }
+            budget.consumed += 1;
+            return true;
+        }
+        if self.sessions.len() >= MAX_TRACKED_DOWNGRADE_SESSIONS
+            && let Some(oldest) = self
+                .sessions
+                .iter()
+                .min_by_key(|(_, budget)| budget.last_seen)
+                .map(|(session, _)| session.clone())
+        {
+            self.sessions.remove(&oldest);
+        }
+        self.sessions.insert(
+            session,
+            SessionDowngradeBudget {
+                consumed: 1,
+                last_seen: self.sequence,
+            },
+        );
+        true
+    }
 }
 
 impl PolicyTableRouter {
@@ -382,6 +436,7 @@ impl PolicyTableRouter {
             pending_adequacy: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
+            session_downgrade_budgets: Mutex::new(SessionDowngradeBudgets::default()),
         })
     }
 
@@ -395,6 +450,7 @@ impl PolicyTableRouter {
             pending_adequacy: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
+            session_downgrade_budgets: Mutex::new(SessionDowngradeBudgets::default()),
         }
     }
 
@@ -560,6 +616,15 @@ impl PolicyTableRouter {
             }
         }
 
+        if Some(selected_tier) != self.table.escalation_tier()
+            && !self.try_consume_session_downgrade_budget(&decision.workflow_identity)
+            && let Some(escalation) = self.table.escalation_tier()
+        {
+            (selected_tier, _) = self.table.guardrail_with_status(escalation, prompt);
+            decision.reason = PolicyDecisionReason::SessionDowngradeBudget;
+            decision.trialed = false;
+        }
+
         decision.selected_tier = Some(selected_tier.to_string());
         decision.selected_model = self
             .table
@@ -569,6 +634,29 @@ impl PolicyTableRouter {
             decision.reason = PolicyDecisionReason::NoMatch;
         }
         decision
+    }
+
+    fn try_consume_session_downgrade_budget(&self, identity: &WorkflowIdentity) -> bool {
+        let maximum = self.table.max_downgraded_requests_per_session;
+        if maximum == 0 {
+            return true;
+        }
+        let session = identity
+            .agent_session_id
+            .as_deref()
+            .or(identity.trial_id.as_deref())
+            .or(identity.parent_session_id.as_deref())
+            .or((!identity.fingerprint.is_empty()).then_some(identity.fingerprint.as_str()));
+        let Some(session) = session else {
+            return false;
+        };
+        match self.session_downgrade_budgets.lock() {
+            Ok(mut budgets) => budgets.try_consume(session.to_string(), maximum),
+            Err(error) => {
+                tracing::warn!(%error, "session downgrade budget lock poisoned");
+                false
+            }
+        }
     }
 
     fn exploration_allowed_for(&self, decision: &PolicyDecision) -> bool {
@@ -1547,6 +1635,38 @@ mod tests {
             "vendor/flagship",
             "a pinned fingerprint escalates over the static downgrade"
         );
+    }
+
+    #[test]
+    fn session_budget_escalates_after_three_downgraded_requests() {
+        let mut cfg = config_with_escalation();
+        cfg.adequacy.max_downgraded_requests_per_session = 3;
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut session_a = smithers_headers("implement");
+        session_a.insert(
+            "x-bitrouter-agent-session-id",
+            HeaderValue::from_static("smithers-session-a"),
+        );
+        let mut p = prompt("inbound");
+        p.messages = read_step();
+
+        for _ in 0..3 {
+            let decision = router.decision_for(&p, &session_a);
+            assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+            assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        }
+        let guarded = router.decision_for(&p, &session_a);
+        assert_eq!(guarded.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(guarded.reason, PolicyDecisionReason::SessionDowngradeBudget);
+
+        let mut session_b = smithers_headers("implement");
+        session_b.insert(
+            "x-bitrouter-agent-session-id",
+            HeaderValue::from_static("smithers-session-b"),
+        );
+        let fresh = router.decision_for(&p, &session_b);
+        assert_eq!(fresh.selected_tier.as_deref(), Some("cheap"));
+        assert_eq!(fresh.reason, PolicyDecisionReason::StaticTable);
     }
 
     #[tokio::test]

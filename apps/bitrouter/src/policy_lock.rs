@@ -1111,6 +1111,7 @@ mod tests {
         policy.adequacy.enabled = true;
         policy.adequacy.explore_enabled = true;
         policy.adequacy.explore_tier = Some("economy".into());
+        policy.adequacy.max_downgraded_requests_per_session = 3;
         let lock = PolicyLock {
             lockfile_version: 1,
             policies: BTreeMap::from([("coding".into(), policy)]),
@@ -1123,6 +1124,12 @@ mod tests {
         assert_eq!(
             frozen.policies["coding"].adequacy.explore_tier.as_deref(),
             Some("economy")
+        );
+        assert_eq!(
+            frozen.policies["coding"]
+                .adequacy
+                .max_downgraded_requests_per_session,
+            3
         );
     }
 

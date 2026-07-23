@@ -850,6 +850,7 @@ policy_table:
     explore_tier: cheap
     explore_interval: 8
     explore_threshold: 4
+    max_downgraded_requests_per_session: 3
     min_semantic_successes_for_lock: 3
     explore_opening: true
     min_semantic_successes_for_opening: 2
@@ -860,6 +861,7 @@ policy_table:
     assert_eq!(adequacy.explore_tier.as_deref(), Some("cheap"));
     assert_eq!(adequacy.explore_interval, 8);
     assert_eq!(adequacy.explore_threshold, 4);
+    assert_eq!(adequacy.max_downgraded_requests_per_session, 3);
     assert_eq!(adequacy.min_semantic_successes_for_lock, 3);
     assert!(adequacy.explore_opening);
     assert_eq!(adequacy.min_semantic_successes_for_opening, 2);
@@ -877,6 +879,26 @@ policy_table:
     assert!(!adequacy.explore_enabled);
     assert_eq!(adequacy.explore_interval, 5);
     assert_eq!(adequacy.explore_threshold, 3);
+    assert_eq!(adequacy.max_downgraded_requests_per_session, 0);
+}
+
+#[test]
+fn session_downgrade_budget_requires_adequacy_learning() {
+    let yaml = r#"
+policy_table:
+  tiers:
+    cheap: vendor/cheap
+    capable: vendor/capable
+  default_tier: capable
+  adequacy:
+    max_downgraded_requests_per_session: 3
+"#;
+    let err = parse_with(yaml, |_| None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("adequacy.max_downgraded_requests_per_session requires adequacy.enabled"),
+        "got: {err}"
+    );
 }
 
 #[test]
