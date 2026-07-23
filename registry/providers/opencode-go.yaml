@@ -69,6 +69,8 @@ models:
     provider_model_id: grok-4.5
   - id: moonshotai/kimi-k3
     provider_model_id: kimi-k3
+  - id: tencent/hy3
+    provider_model_id: hy3
 status: active
 auto_sync:
   feed: models_dev
