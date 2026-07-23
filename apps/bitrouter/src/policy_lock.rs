@@ -339,11 +339,12 @@ pub fn evolve_document(
     Ok(EvolutionResult { document, changes })
 }
 
-/// Turn an evolved candidate into a deployment artifact. Existing routes and
-/// hard-failure adequacy protection remain active; only future exploration is
-/// disabled so holdout and production routing are deterministic.
+/// Turn an evolved candidate into a deployment artifact. Learned routes and
+/// routing-only session budgets remain active, while the adequacy learner and
+/// future exploration are disabled so holdout routing cannot mutate itself.
 pub fn freeze_document(mut document: PolicyLock) -> PolicyLock {
     for policy in document.policies.values_mut() {
+        policy.adequacy.enabled = false;
         policy.adequacy.explore_enabled = false;
     }
     document
@@ -1106,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn freezing_disables_exploration_but_preserves_adequacy() {
+    fn freezing_disables_all_learning_but_preserves_the_session_cap() {
         let mut policy = definition();
         policy.adequacy.enabled = true;
         policy.adequacy.explore_enabled = true;
@@ -1119,7 +1120,7 @@ mod tests {
 
         let frozen = freeze_document(lock);
 
-        assert!(frozen.policies["coding"].adequacy.enabled);
+        assert!(!frozen.policies["coding"].adequacy.enabled);
         assert!(!frozen.policies["coding"].adequacy.explore_enabled);
         assert_eq!(
             frozen.policies["coding"].adequacy.explore_tier.as_deref(),
@@ -1523,7 +1524,7 @@ presets:
         );
         let candidate = load(&candidate_path).await.unwrap();
         assert!(
-            candidate.document.policies["terminal-bench"]
+            !candidate.document.policies["terminal-bench"]
                 .adequacy
                 .enabled
         );

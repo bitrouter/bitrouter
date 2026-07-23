@@ -197,7 +197,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
     );
     assert_eq!(frozen.policies["smithers"].routes[target_key], "economy");
     assert!(!frozen.policies["smithers"].routes.contains_key(other_key));
-    assert!(frozen.policies["smithers"].adequacy.enabled);
+    assert!(!frozen.policies["smithers"].adequacy.enabled);
     assert!(!frozen.policies["smithers"].adequacy.explore_enabled);
 
     let independently_frozen = freeze_document(

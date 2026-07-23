@@ -125,8 +125,8 @@ pub struct PolicyTable {
     explore_opening: bool,
     /// Future task-reward guardrail for opening downgrades.
     min_semantic_successes_for_opening: u32,
-    /// Maximum downgraded requests admitted for one agent session. Zero keeps
-    /// the legacy unlimited behavior.
+    /// Process-local maximum downgraded requests admitted for one agent session.
+    /// Zero keeps the legacy unlimited behavior.
     max_downgraded_requests_per_session: u32,
     /// Reverse index model id → tier name, for mapping a served model back to
     /// its tier at observe time.
@@ -378,6 +378,9 @@ pub struct PolicyTableRouter {
     session_downgrade_budgets: Mutex<SessionDowngradeBudgets>,
 }
 
+// The guard is deliberately process-local and memory-bounded. Restarting the
+// daemon or evicting the least-recently-used entry starts a fresh allowance;
+// callers that need a lifetime cap must enforce one outside this router.
 const MAX_TRACKED_DOWNGRADE_SESSIONS: usize = 4096;
 
 #[derive(Debug, Default)]

@@ -371,10 +371,11 @@ pub struct AdequacyConfig {
     /// Consecutive adequate trials before a fingerprint is locked to the cheap
     /// tier (the learned downgrade). Default `3`.
     pub explore_threshold: u32,
-    /// Maximum downgraded requests admitted within one agent session. Once the
-    /// budget is exhausted, later downgraded requests route to the escalation
-    /// tier so a cheap model cannot monopolize a long tool loop. `0` disables
-    /// the guard. Default `0` for backward compatibility.
+    /// Maximum downgraded requests admitted within one agent session for the
+    /// current daemon process. Once the budget is exhausted, later downgraded
+    /// requests route to the escalation tier so a cheap model cannot monopolize
+    /// a long tool loop. This routing guard remains usable when adequacy learning
+    /// is disabled. `0` disables the guard. Default `0` for compatibility.
     pub max_downgraded_requests_per_session: u32,
     /// Distinct benchmark tasks that must finish successfully after using a
     /// cheap replacement before a request-level lock becomes active. `0` keeps
@@ -1365,13 +1366,6 @@ pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     if adequacy.explore_enabled && !adequacy.enabled {
         return Err(BitrouterError::bad_request(
             "policy_table.adequacy.explore_enabled requires adequacy.enabled".to_string(),
-        ));
-    }
-    if adequacy.max_downgraded_requests_per_session > 0 && !adequacy.enabled {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.max_downgraded_requests_per_session requires \
-             adequacy.enabled"
-                .to_string(),
         ));
     }
     Ok(())

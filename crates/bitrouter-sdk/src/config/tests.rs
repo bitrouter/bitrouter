@@ -883,7 +883,7 @@ policy_table:
 }
 
 #[test]
-fn session_downgrade_budget_requires_adequacy_learning() {
+fn session_downgrade_budget_can_guard_a_frozen_policy_without_learning() {
     let yaml = r#"
 policy_table:
   tiers:
@@ -893,12 +893,8 @@ policy_table:
   adequacy:
     max_downgraded_requests_per_session: 3
 "#;
-    let err = parse_with(yaml, |_| None).unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("adequacy.max_downgraded_requests_per_session requires adequacy.enabled"),
-        "got: {err}"
-    );
+    let config = parse_with(yaml, |_| None).unwrap();
+    assert!(!config.policy_table.adequacy.enabled);
 }
 
 #[test]

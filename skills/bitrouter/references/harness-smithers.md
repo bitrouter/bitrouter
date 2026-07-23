@@ -78,6 +78,10 @@ bitrouter policy evolve --config bitrouter.yaml \
   --output artifacts/policy-lock.candidate.yaml --freeze
 ```
 
+`--freeze` materializes qualified routes, then disables both adequacy learning
+and exploration. Routing-only guards such as the process-local per-session
+downgrade budget remain active, so holdout cannot mutate the evidence ledger.
+
 Run holdout against a fresh router using the exported lock. Export the same
 unchanged evidence twice and compare both file bytes and semantic digests before
 accepting the candidate.
