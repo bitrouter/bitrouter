@@ -8,6 +8,7 @@ pub mod codex;
 pub mod generic;
 pub mod hermes;
 pub mod openclaw;
+pub mod smithers;
 pub mod terminus_2;
 
 pub trait WorkflowStateExtractor {
@@ -28,12 +29,14 @@ pub fn extract_workflow_state(input: &ExtractorInput<'_>) -> WorkflowStateIR {
     use generic::GenericPromptExtractor;
     use hermes::HermesExtractor;
     use openclaw::OpenClawExtractor;
+    use smithers::SmithersExtractor;
     use terminus_2::Terminus2Extractor;
 
     match input.harness_hint.as_ref().unwrap_or(&HarnessId::Generic) {
         HarnessId::Hermes => HermesExtractor.extract(input),
         HarnessId::ClaudeCode => ClaudeCodeExtractor.extract(input),
         HarnessId::Codex => CodexResponsesExtractor.extract(input),
+        HarnessId::Smithers => SmithersExtractor.extract(input),
         HarnessId::Terminus2 => Terminus2Extractor.extract(input),
         HarnessId::OpenClaw => OpenClawExtractor.extract(input),
         HarnessId::Generic | HarnessId::Unknown => GenericPromptExtractor.extract(input),

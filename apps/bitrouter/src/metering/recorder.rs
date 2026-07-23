@@ -71,11 +71,16 @@ impl MeteringRecorder {
         }
     }
 
-    fn normalize_policy_rejection(ctx: &mut SettlementContext) {
-        let is_policy_rejection = matches!(
-            ctx.error,
-            Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation { .. })
-        );
+    fn normalize_zero_usage_rejection(ctx: &mut SettlementContext) {
+        let error_code = match ctx.error {
+            Some(bitrouter_sdk::BitrouterError::UpstreamPolicyViolation { .. }) => {
+                Some("upstream_policy_violation")
+            }
+            Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited { .. }) => {
+                Some("upstream_rate_limited")
+            }
+            _ => None,
+        };
         let has_no_usage = ctx.prompt_tokens == 0
             && ctx.completion_tokens == 0
             && ctx.reasoning_tokens == 0
@@ -83,10 +88,10 @@ impl MeteringRecorder {
             && ctx.cache_write_tokens == 0
             && ctx.usage_origin == UsageOrigin::Unknown
             && ctx.raw_usage.is_none();
-        if is_policy_rejection && has_no_usage {
+        if let (Some(error_code), true) = (error_code, has_no_usage) {
             ctx.usage_origin = UsageOrigin::ProviderReported;
             ctx.raw_usage = Some(serde_json::json!({
-                "error": { "code": "upstream_policy_violation" },
+                "error": { "code": error_code },
                 "usage": null
             }));
         }
@@ -102,7 +107,7 @@ impl SettlementRecorder for MeteringRecorder {
             model = %ctx.model_id,
             "metering settlement started"
         );
-        Self::normalize_policy_rejection(ctx);
+        Self::normalize_zero_usage_rejection(ctx);
         let charge_evidence = self.charge_evidence(ctx);
         if charge_evidence.charge_micro_usd.is_none() {
             // Demoted from `warn` to `debug` — the per-request "finished"

@@ -201,6 +201,7 @@ Read these on demand — don't load them all upfront.
 | `references/agent-plugin.md` | The installable Claude Code / Codex agent plugin — hooks, cost feed, MCP enable steps, restart handoff |
 | `references/harness-hermes-agent.md` | Wiring Hermes Agent |
 | `references/harness-openclaw.md` | Wiring OpenClaw |
+| `references/harness-smithers.md` | Wiring Smithers eval identity, scoped exploration, reward feedback, and frozen policy export |
 | `references/harness-terminus-2.md` | Wiring Harbor Terminus-2, session identity, compaction epochs, benchmark capture |
 | `references/metering.md` | Cache-aware pricing, charge evidence, usage export, strict benchmark bundles |
 | `references/mcp-server.md` | Origin MCP server — all flags, tool shapes, transport/backend details, roadmap |
