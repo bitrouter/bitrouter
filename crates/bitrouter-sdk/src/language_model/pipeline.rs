@@ -838,11 +838,18 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
         let retry_after = errors
             .iter()
             .filter_map(|error| match error {
-                BitrouterError::UpstreamRateLimited { retry_after } => *retry_after,
+                BitrouterError::UpstreamRateLimited { retry_after, .. } => *retry_after,
                 _ => None,
             })
             .min();
-        return BitrouterError::UpstreamRateLimited { retry_after };
+        let detail = errors
+            .iter()
+            .find_map(BitrouterError::upstream_detail)
+            .map(str::to_owned);
+        return BitrouterError::UpstreamRateLimited {
+            retry_after,
+            detail,
+        };
     }
 
     if errors
@@ -854,14 +861,29 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
 
     if errors
         .iter()
-        .all(|error| matches!(error, BitrouterError::UpstreamPaymentRequired))
+        .all(|error| matches!(error, BitrouterError::UpstreamPaymentRequired { .. }))
     {
-        return BitrouterError::UpstreamPaymentRequired;
+        let detail = errors
+            .iter()
+            .find_map(BitrouterError::upstream_detail)
+            .map(str::to_owned);
+        return BitrouterError::UpstreamPaymentRequired { detail };
     }
 
-    if let Some(error) = errors
+    if errors.iter().all(|error| {
+        matches!(
+            error,
+            BitrouterError::UpstreamBadRequest { .. }
+                | BitrouterError::UpstreamPolicyViolation { .. }
+        )
+    }) && let Some(error) = errors.last()
+    {
+        return error.clone();
+    }
+    if errors
         .iter()
-        .find(|error| matches!(error, BitrouterError::UpstreamInvalidResponse { .. }))
+        .all(|error| matches!(error, BitrouterError::UpstreamInvalidResponse { .. }))
+        && let Some(error) = errors.first()
     {
         return error.clone();
     }
@@ -883,10 +905,88 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
         return BitrouterError::UpstreamUnavailable;
     }
 
+    let is_provider_failure = |error: &BitrouterError| {
+        matches!(
+            error,
+            BitrouterError::UpstreamPaymentRequired { .. }
+                | BitrouterError::UpstreamRateLimited { .. }
+                | BitrouterError::Upstream { .. }
+                | BitrouterError::UpstreamAuth { .. }
+                | BitrouterError::UpstreamTimeout
+                | BitrouterError::UpstreamUnavailable
+        )
+    };
+    if errors.iter().all(is_provider_failure) {
+        return BitrouterError::UpstreamUnavailable;
+    }
+
     errors
         .into_iter()
         .last()
         .unwrap_or_else(|| BitrouterError::NotFound("empty routing chain".to_string()))
+}
+
+#[cfg(test)]
+mod fallback_error_tests {
+    use super::aggregate_fallback_errors;
+    use crate::error::BitrouterError;
+
+    #[test]
+    fn mixed_provider_failures_aggregate_to_unavailable() {
+        let error = aggregate_fallback_errors(vec![
+            BitrouterError::UpstreamPaymentRequired {
+                detail: Some("insufficient balance".to_owned()),
+            },
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(30),
+                detail: Some("quota exceeded".to_owned()),
+            },
+            BitrouterError::Upstream {
+                status: 503,
+                message: "service unavailable".to_owned(),
+            },
+        ]);
+
+        assert!(matches!(error, BitrouterError::UpstreamUnavailable));
+    }
+
+    #[test]
+    fn homogeneous_rate_limits_keep_retry_and_diagnostic() {
+        let error = aggregate_fallback_errors(vec![
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(60),
+                detail: Some("requests exhausted".to_owned()),
+            },
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(15),
+                detail: None,
+            },
+        ]);
+
+        assert!(matches!(
+            error,
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(15),
+                detail: Some(ref detail),
+            } if detail == "requests exhausted"
+        ));
+    }
+
+    #[test]
+    fn homogeneous_payment_failures_keep_diagnostic() {
+        let error = aggregate_fallback_errors(vec![
+            BitrouterError::UpstreamPaymentRequired {
+                detail: Some("insufficient credit".to_owned()),
+            },
+            BitrouterError::UpstreamPaymentRequired { detail: None },
+        ]);
+
+        assert!(matches!(
+            error,
+            BitrouterError::UpstreamPaymentRequired { detail: Some(ref detail) }
+                if detail == "insufficient credit"
+        ));
+    }
 }
 
 /// Owns the streaming `StreamProcessor` + `PipelineContext` for the lifetime of

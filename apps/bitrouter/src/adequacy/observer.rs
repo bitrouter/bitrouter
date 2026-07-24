@@ -271,7 +271,7 @@ pub(crate) fn classify_failure(error: &BitrouterError) -> InadequacyCause {
         | BitrouterError::UpstreamUnavailable
         | BitrouterError::RateLimited { .. }
         | BitrouterError::Internal(_) => InadequacyCause::ProviderTransient,
-        BitrouterError::UpstreamPaymentRequired
+        BitrouterError::UpstreamPaymentRequired { .. }
         | BitrouterError::UpstreamAuth { .. }
         | BitrouterError::Unauthorized(_)
         | BitrouterError::Forbidden(_)
@@ -815,6 +815,7 @@ mod tests {
         assert_eq!(
             classify_failure(&BitrouterError::UpstreamRateLimited {
                 retry_after: Some(30),
+                detail: None,
             }),
             InadequacyCause::ProviderTransient
         );
@@ -827,7 +828,7 @@ mod tests {
     #[test]
     fn classifies_upstream_billing_and_protocol_errors() {
         assert_eq!(
-            classify_failure(&BitrouterError::UpstreamPaymentRequired),
+            classify_failure(&BitrouterError::UpstreamPaymentRequired { detail: None }),
             InadequacyCause::Auth
         );
         assert_eq!(

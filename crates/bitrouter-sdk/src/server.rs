@@ -878,7 +878,7 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
                 response.headers_mut().insert(header::RETRY_AFTER, v);
             }
         }
-        BitrouterError::UpstreamRateLimited { retry_after } => {
+        BitrouterError::UpstreamRateLimited { retry_after, .. } => {
             if let Some(secs) = retry_after
                 && let Ok(v) = header::HeaderValue::from_str(&secs.to_string())
             {
@@ -1028,6 +1028,7 @@ mod tests {
             serde_json::json!(7),
             &BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             },
         );
 
@@ -1216,6 +1217,7 @@ mod tests {
     async fn upstream_rate_limit_has_wrapped_code_source_and_retry_after() {
         let response = BitrouterError::UpstreamRateLimited {
             retry_after: Some(12),
+            detail: None,
         }
         .into_response();
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
@@ -1274,6 +1276,7 @@ mod tests {
             test_state_with_executor(Arc::new(MockExecutor::new(vec![MockResponse::Error(
                 BitrouterError::UpstreamRateLimited {
                     retry_after: Some(7),
+                    detail: None,
                 },
             )])));
         let response = build_router(state)
@@ -1365,6 +1368,7 @@ mod tests {
             Arc::new(MockExecutor::new(vec![MockResponse::Error(
                 BitrouterError::UpstreamRateLimited {
                     retry_after: Some(7),
+                    detail: None,
                 },
             )])),
             true,
