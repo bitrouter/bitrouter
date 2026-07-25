@@ -1,0 +1,9 @@
+{
+  "name": "superpowers-quorum-policy-demo",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.2.20",
+  "scripts": {
+    "test": "bun test test"
+  }
+}
