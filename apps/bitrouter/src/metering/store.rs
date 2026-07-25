@@ -938,7 +938,9 @@ impl From<requests::Model> for MeteringUsageRecord {
             .as_deref()
             .and_then(|json| serde_json::from_str(json).ok());
         let error_code = row.error.as_deref().map(|error| {
-            if error == "upstream_policy_violation"
+            if error == "upstream_rate_limited" || error.contains("upstream rate limited") {
+                "upstream_rate_limited".to_string()
+            } else if error == "upstream_policy_violation"
                 || error.contains("upstream policy violation")
                 || error.contains("upstream content policy violation")
             {
@@ -947,18 +949,20 @@ impl From<requests::Model> for MeteringUsageRecord {
                 "request_failed".to_string()
             }
         });
-        let legacy_policy_rejection = error_code.as_deref() == Some("upstream_policy_violation")
-            && usage_origin == UsageOrigin::Unknown
+        let zero_usage_rejection_code = error_code
+            .as_deref()
+            .filter(|code| matches!(*code, "upstream_policy_violation" | "upstream_rate_limited"));
+        let legacy_zero_usage_rejection = usage_origin == UsageOrigin::Unknown
             && raw_usage.is_none()
             && row.prompt_tokens == 0
             && row.completion_tokens == 0
             && row.reasoning_tokens == 0
             && row.cache_read_tokens == 0
             && row.cache_write_tokens == 0;
-        if legacy_policy_rejection {
+        if let (Some(error_code), true) = (zero_usage_rejection_code, legacy_zero_usage_rejection) {
             usage_origin = UsageOrigin::ProviderReported;
             raw_usage = Some(serde_json::json!({
-                "error": { "code": "upstream_policy_violation" },
+                "error": { "code": error_code },
                 "usage": null
             }));
         }

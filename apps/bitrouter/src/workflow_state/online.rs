@@ -171,6 +171,7 @@ fn parse_harness(value: &str) -> Option<HarnessId> {
         "hermes" => Some(HarnessId::Hermes),
         "claude" | "claude_code" | "claude-code" => Some(HarnessId::ClaudeCode),
         "codex" => Some(HarnessId::Codex),
+        "smithers" => Some(HarnessId::Smithers),
         "terminus_2" | "terminus-2" | "terminus2" => Some(HarnessId::Terminus2),
         "openclaw" | "open_claw" | "open-claw" => Some(HarnessId::OpenClaw),
         "unknown" => Some(HarnessId::Unknown),
@@ -256,6 +257,51 @@ mod tests {
             state
                 .routing_key()
                 .starts_with("codex|responses|tool_followup")
+        );
+    }
+
+    #[test]
+    fn smithers_headers_are_part_of_the_workflow_routing_key() {
+        let prompt = prompt_after_tool("analyze");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-harness", "smithers".parse().unwrap());
+        headers.insert("x-bitrouter-protocol", "chat".parse().unwrap());
+        headers.insert("x-smithers-workflow-id", "release-review".parse().unwrap());
+        headers.insert("x-smithers-node-id", "analyze-risk".parse().unwrap());
+        headers.insert("x-bitrouter-workflow-session", "run-1".parse().unwrap());
+
+        let state = OnlineWorkflowState::from_headers(&headers, &prompt);
+
+        assert_eq!(state.ir.harness_id, HarnessId::Smithers);
+        assert_eq!(state.ir.active_workflow.as_deref(), Some("release-review"));
+        assert_eq!(state.ir.subagent_role.as_deref(), Some("analyze-risk"));
+        assert!(
+            state.routing_key().starts_with(
+                "smithers|chat_completions|tool_followup|release-review|analyze-risk|"
+            )
+        );
+    }
+
+    #[test]
+    fn smithers_blank_identity_headers_are_ignored() {
+        let prompt = prompt_after_tool("analyze");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-harness", "smithers".parse().unwrap());
+        headers.insert("x-bitrouter-protocol", "chat".parse().unwrap());
+        headers.insert("x-smithers-workflow-id", "   ".parse().unwrap());
+        headers.insert("x-smithers-node-id", "\t".parse().unwrap());
+
+        let state = OnlineWorkflowState::from_headers(&headers, &prompt);
+
+        assert_eq!(state.ir.active_workflow, None);
+        assert_eq!(state.ir.subagent_role, None);
+    }
+
+    #[test]
+    fn smithers_harness_serializes_stably() {
+        assert_eq!(
+            serde_json::to_string(&HarnessId::Smithers).unwrap(),
+            "\"smithers\""
         );
     }
 }

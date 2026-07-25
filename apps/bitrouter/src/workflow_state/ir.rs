@@ -8,6 +8,7 @@ pub enum HarnessId {
     Hermes,
     ClaudeCode,
     Codex,
+    Smithers,
     #[serde(rename = "terminus_2", alias = "terminus-2", alias = "terminus2")]
     Terminus2,
     #[serde(alias = "openclaw")]

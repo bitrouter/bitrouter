@@ -148,6 +148,7 @@ fn harness_key(harness: &HarnessId) -> String {
         HarnessId::Hermes => "hermes",
         HarnessId::ClaudeCode => "claude_code",
         HarnessId::Codex => "codex",
+        HarnessId::Smithers => "smithers",
         HarnessId::Terminus2 => "terminus_2",
         HarnessId::OpenClaw => "openclaw",
         HarnessId::Unknown => "unknown",

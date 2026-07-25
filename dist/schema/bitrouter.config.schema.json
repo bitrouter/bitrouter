@@ -122,6 +122,7 @@
           "explore_tier": null,
           "explore_interval": 5,
           "explore_threshold": 3,
+          "max_downgraded_requests_per_session": 0,
           "min_semantic_successes_for_lock": 0,
           "explore_opening": false,
           "min_semantic_successes_for_opening": 1
@@ -1696,6 +1697,7 @@
             "explore_tier": null,
             "explore_interval": 5,
             "explore_threshold": 3,
+            "max_downgraded_requests_per_session": 0,
             "min_semantic_successes_for_lock": 0,
             "explore_opening": false,
             "min_semantic_successes_for_opening": 1
@@ -1803,6 +1805,13 @@
           "format": "uint32",
           "minimum": 0,
           "default": 3
+        },
+        "max_downgraded_requests_per_session": {
+          "description": "Maximum downgraded requests admitted within one agent session for the\ncurrent daemon process. Once the budget is exhausted, later downgraded\nrequests route to the escalation tier so a cheap model cannot monopolize\na long tool loop. This routing guard remains usable when adequacy learning\nis disabled. `0` disables the guard. Default `0` for compatibility.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
         },
         "min_semantic_successes_for_lock": {
           "description": "Distinct benchmark tasks that must finish successfully after using a\ncheap replacement before a request-level lock becomes active. `0` keeps\nthe legacy request-only behavior. Default `0`.",
