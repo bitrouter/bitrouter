@@ -1,0 +1,9 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "superpowers-quorum-policy-demo",
+      "packageManager": "bun@1.2.20"
+    }
+  }
+}
