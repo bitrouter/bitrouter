@@ -7594,27 +7594,6 @@
           }
         },
         {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 5.25
-            }
-          },
-          "provider": "tinfoil",
-          "provider_model_id": "glm-5-1",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
           "api_protocol": [
             "openai",
             "anthropic"

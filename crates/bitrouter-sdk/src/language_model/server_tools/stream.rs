@@ -322,6 +322,7 @@ mod tests {
         async fn run(&self, _prompt: &Prompt) -> Result<StreamPartStream> {
             Err(crate::error::BitrouterError::UpstreamRateLimited {
                 retry_after: Some(9),
+                detail: None,
             })
         }
     }
@@ -394,7 +395,8 @@ mod tests {
         assert!(matches!(
             result,
             Err(crate::error::BitrouterError::UpstreamRateLimited {
-                retry_after: Some(9)
+                retry_after: Some(9),
+                ..
             })
         ));
     }

@@ -209,6 +209,15 @@ fn truncate_upstream_message(text: &str) -> String {
     }
 }
 
+fn bounded_upstream_detail(body: &str) -> Option<String> {
+    let body = body.trim();
+    if body.is_empty() {
+        None
+    } else {
+        Some(truncate_upstream_message(body))
+    }
+}
+
 fn normalize_upstream_error_payload(body: &str) -> serde_json::Value {
     let parsed = match serde_json::from_str::<serde_json::Value>(body) {
         Ok(value) => value,
@@ -232,7 +241,10 @@ fn normalize_upstream_error_payload(body: &str) -> serde_json::Value {
 /// variants so callers can apply explicit fallback and response policies.
 fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) -> BitrouterError {
     if status == 429 {
-        return BitrouterError::UpstreamRateLimited { retry_after };
+        return BitrouterError::UpstreamRateLimited {
+            retry_after,
+            detail: bounded_upstream_detail(body),
+        };
     }
     // RFC 9110 section 15.5.1 defines 400 as the server being unable or
     // unwilling to process the request because of a perceived client error:
@@ -243,7 +255,9 @@ fn classify_upstream_error(status: u16, body: &str, retry_after: Option<u64>) ->
         };
     }
     if matches!(status, 401..=403) && looks_like_credit_exhaustion(body) {
-        return BitrouterError::UpstreamPaymentRequired;
+        return BitrouterError::UpstreamPaymentRequired {
+            detail: bounded_upstream_detail(body),
+        };
     }
     BitrouterError::Upstream {
         status,
@@ -1171,7 +1185,9 @@ mod error_classification_tests {
         let body =
             r#"{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance."}}"#;
         match classify_upstream_error(401, body, None) {
-            BitrouterError::UpstreamPaymentRequired => {}
+            BitrouterError::UpstreamPaymentRequired { detail } => {
+                assert_eq!(detail.as_deref(), Some(body));
+            }
             other => panic!("expected UpstreamPaymentRequired, got {other:?}"),
         }
     }
@@ -1198,8 +1214,12 @@ mod error_classification_tests {
     #[test]
     fn upstream_429_has_a_distinct_safe_error() {
         match classify_upstream_error(429, r#"{"secret":"provider quota"}"#, Some(17)) {
-            BitrouterError::UpstreamRateLimited { retry_after } => {
+            BitrouterError::UpstreamRateLimited {
+                retry_after,
+                detail,
+            } => {
                 assert_eq!(retry_after, Some(17));
+                assert_eq!(detail.as_deref(), Some(r#"{"secret":"provider quota"}"#));
             }
             other => panic!("expected UpstreamRateLimited, got {other:?}"),
         }

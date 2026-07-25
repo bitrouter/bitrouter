@@ -300,6 +300,7 @@ fn conversion_matrix_4x4_streaming() {
 fn upstream_rate_limit_has_typed_terminal_frames_in_every_protocol() {
     let error = crate::error::BitrouterError::UpstreamRateLimited {
         retry_after: Some(9),
+        detail: None,
     };
     for protocol in all_protocols() {
         let mut encoder = adapter_for(protocol.clone()).stream_encoder("resp_429", "m");

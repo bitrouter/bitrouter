@@ -212,7 +212,7 @@ impl FallbackPolicy for DefaultFallbackPolicy {
             // a plain cascade it tries the next provider, which may
             // still have funds. If every target is drained the chain
             // exhausts and the original error is returned.
-            BitrouterError::PaymentRequired(_) | BitrouterError::UpstreamPaymentRequired => {
+            BitrouterError::PaymentRequired(_) | BitrouterError::UpstreamPaymentRequired { .. } => {
                 FallbackDecision::TryNext
             }
             BitrouterError::UpstreamInvalidResponse { .. } => FallbackDecision::TryNext,

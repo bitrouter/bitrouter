@@ -45,7 +45,11 @@ pub enum BitrouterError {
 
     /// 402 — an upstream provider account has insufficient credit.
     #[error("upstream payment required")]
-    UpstreamPaymentRequired,
+    UpstreamPaymentRequired {
+        /// Bounded provider diagnostic retained for trusted observers. Public
+        /// protocol surfaces never expose this value.
+        detail: Option<String>,
+    },
 
     /// 403 — policy violation.
     #[error("forbidden: {0}")]
@@ -67,6 +71,9 @@ pub enum BitrouterError {
     UpstreamRateLimited {
         /// Seconds the caller should wait before retrying the earliest route.
         retry_after: Option<u64>,
+        /// Bounded provider diagnostic retained for trusted observers. Public
+        /// protocol surfaces never expose this value.
+        detail: Option<String>,
     },
 
     /// 400 — an upstream provider rejected the request parameters.
@@ -145,7 +152,7 @@ impl BitrouterError {
             Self::BadRequest { .. } => 400,
             Self::Unauthorized(_) => 401,
             Self::PaymentRequired(_) => 402,
-            Self::UpstreamPaymentRequired => 402,
+            Self::UpstreamPaymentRequired { .. } => 402,
             Self::Forbidden(_) => 403,
             Self::NotFound(_) => 404,
             Self::RateLimited { .. } => 429,
@@ -167,7 +174,7 @@ impl BitrouterError {
             Self::BadRequest { .. } => "invalid_request_error",
             Self::Unauthorized(_) => "authentication_error",
             Self::PaymentRequired(_) => "payment_required",
-            Self::UpstreamPaymentRequired => "payment_required",
+            Self::UpstreamPaymentRequired { .. } => "payment_required",
             Self::Forbidden(_) => "permission_error",
             Self::NotFound(_) => "not_found_error",
             Self::RateLimited { .. } => "rate_limit_error",
@@ -190,7 +197,7 @@ impl BitrouterError {
             Self::BadRequest { .. } => "invalid_request",
             Self::Unauthorized(_) => "authentication_error",
             Self::PaymentRequired(_) => "payment_required",
-            Self::UpstreamPaymentRequired => "upstream_payment_required",
+            Self::UpstreamPaymentRequired { .. } => "upstream_payment_required",
             Self::Forbidden(_) => "permission_denied",
             Self::NotFound(_) => "not_found",
             Self::RateLimited { .. } => "rate_limit_exceeded",
@@ -218,13 +225,27 @@ impl BitrouterError {
         Self::Internal(message.to_string())
     }
 
+    /// Provider diagnostic retained for trusted telemetry. HTTP/SSE protocol
+    /// renderers deliberately use [`Self::public_message`] instead.
+    pub fn upstream_detail(&self) -> Option<&str> {
+        match self {
+            Self::UpstreamPaymentRequired { detail } | Self::UpstreamRateLimited { detail, .. } => {
+                detail.as_deref()
+            }
+            Self::UpstreamPolicyViolation { message }
+            | Self::Upstream { message, .. }
+            | Self::UpstreamInvalidResponse { message } => Some(message),
+            _ => None,
+        }
+    }
+
     /// The machine-readable [`ErrorKind`] for this error.
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::BadRequest { .. } => ErrorKind::BadRequest,
             Self::Unauthorized(_) => ErrorKind::Unauthorized,
             Self::PaymentRequired(_) => ErrorKind::PaymentRequired,
-            Self::UpstreamPaymentRequired => ErrorKind::UpstreamPaymentRequired,
+            Self::UpstreamPaymentRequired { .. } => ErrorKind::UpstreamPaymentRequired,
             Self::Forbidden(_) => ErrorKind::Forbidden,
             Self::NotFound(_) => ErrorKind::NotFound,
             Self::RateLimited { .. } => ErrorKind::RateLimited,
@@ -253,7 +274,7 @@ impl BitrouterError {
             | Self::NotFound(m)
             | Self::Internal(m) => m.clone(),
             Self::RateLimited { .. } => "rate limited".to_string(),
-            Self::UpstreamPaymentRequired => "upstream payment required".to_string(),
+            Self::UpstreamPaymentRequired { .. } => "upstream payment required".to_string(),
             Self::UpstreamRateLimited { .. } => "upstream rate limited".to_string(),
             Self::UpstreamBadRequest { error } => upstream_payload_text(error),
             Self::UpstreamPolicyViolation { .. } => "upstream content policy violation".to_string(),
@@ -387,6 +408,33 @@ mod tests {
                 .error
                 .message
                 .contains("provider secret")
+        );
+    }
+
+    #[test]
+    fn upstream_payment_and_rate_details_stay_private() {
+        let payment = BitrouterError::UpstreamPaymentRequired {
+            detail: Some("account balance exhausted".into()),
+        };
+        assert_eq!(payment.upstream_detail(), Some("account balance exhausted"));
+        assert_eq!(payment.public_message(), "upstream payment required");
+        assert_eq!(
+            payment.to_envelope().error.message,
+            "upstream payment required"
+        );
+
+        let rate_limited = BitrouterError::UpstreamRateLimited {
+            retry_after: Some(30),
+            detail: Some("provider quota for tenant-123".into()),
+        };
+        assert_eq!(
+            rate_limited.upstream_detail(),
+            Some("provider quota for tenant-123")
+        );
+        assert_eq!(rate_limited.public_message(), "upstream rate limited");
+        assert_eq!(
+            rate_limited.to_envelope().error.message,
+            "upstream rate limited"
         );
     }
 
