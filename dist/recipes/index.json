@@ -1,0 +1,70 @@
+{
+  "data": [
+    {
+      "body": {
+        "en": "A Codex loop spends most of its calls on steps that do not need a frontier\nmodel: reading a file back, checking whether a command succeeded, restating what\njust happened. This recipe keeps GPT-5.5 on the turn that plans, and lets\nBitRouter learn which of the routine follow-up steps can run on Kimi K2.7 Code\ninstead.\n\n## How it routes\n\nThe routing key is the **step in the loop**, not the model name. `opening` — the\nfirst turn, before any tool has run — stays on the flagship, because that is\nwhere the plan is formed. `after_bash`, `after_exec_command`, and `midstream`\ndrop to the cheap tier. Anything the table does not name falls back to the\nflagship, so an unfamiliar step never silently downgrades.\n\nTwo guardrails keep the downgrade from costing more than it saves:\n\n- **Tool calls stay flagship.** A request carrying tools is clamped up to a\n  tier known to handle tool calls reliably, so a downgrade never strands a tool\n  call on a model that fumbles it.\n- **A failing downgrade escalates itself.** With `adequacy.enabled`, a\n  fingerprint whose downgraded route hard-fails is pinned back to the flagship\n  for 30 minutes, then re-tried. The table is a starting point that the daemon\n  corrects while it runs.\n\n## Where the numbers come from\n\nThe measured run is [experiment 001](https://github.com/bitrouter/bitrouter/blob/main/benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md):\nTerminal-Bench 2.1, an 88-task comparable set, **one attempt per task**. Against\na GPT-5.5-only control, the learned policy round replaced 373 strong calls with\n219 Kimi calls — a replacement, not exploration piled on top — cutting total\ntokens 21.2% and zero-cache imputed cost 32.8%, while scoring one task lower.\n\nRead the report's limitations before citing it. In short: this is a mechanism\nstudy under a modified protocol, not a Terminal-Bench leaderboard submission;\nthe cost figures are reproducible zero-cache upper bounds (a post-run audit\nplaces the reduction at 28.6–32.8% under equal cache-read shares); and at one\nattempt per task a one-task score difference is within noise.\n\n## Tuning it\n\nThe fingerprints are the part worth editing. Start by moving one step at a time\ninto `cheap` and watching `bitrouter route` and your own eval — a fingerprint\nthat is broad enough to cover two different kinds of step will average out to a\nworse decision on both.\n"
+      },
+      "config": "# Recipe: codex-cost-cut — drop this next to your Codex project and start the\n# daemon, then point Codex at http://127.0.0.1:4356.\n#\n#   bitrouter providers login openai-codex   # ChatGPT plan sign-in\n#   export MOONSHOTAI_API_KEY=...            # or use any provider serving Kimi\n#   bitrouter start\n\nserver:\n  listen: \"127.0.0.1:4356\"\n  skip_auth: true\n\nproviders:\n  openai-codex: {} # ChatGPT Codex subscription — `bitrouter providers login openai-codex`\n  moonshotai: {} # uses MOONSHOTAI_API_KEY\n\n# Context-aware routing: the key is the *step in the loop*, not the model name.\n# Planning stays on the flagship; routine tool follow-ups drop to the cheap\n# model; anything unmapped stays flagship.\npolicy_table:\n  tiers:\n    flagship: openai-codex:gpt-5.5\n    cheap: moonshotai/kimi-k2.7-code\n  fingerprints:\n    opening: flagship # first turn — plan on the strong model\n    after_bash: cheap # routine shell follow-up\n    after_exec_command: cheap\n    midstream: cheap\n  default_tier: flagship\n  # Guardrail: a tool-carrying request is never stranded on a model that\n  # handles tool calls less reliably.\n  tool_use_tier: flagship\n  tool_safe_tiers: [flagship]\n  # The measured mechanism: downgrades are *learned* per fingerprint, and one\n  # that starts hard-failing escalates itself back to the flagship rather than\n  # burning the run.\n  adequacy:\n    enabled: true\n    escalation_tier: flagship\n    escalation_threshold: 1\n    pin_cooldown_secs: 1800\n\ninherit_defaults: true\n",
+      "description": {
+        "en": "Keeps GPT-5.5 on the planning turn and lets BitRouter learn which routine tool-follow-up steps can drop to Kimi K2.7 Code, escalating any downgrade that starts failing.",
+        "zh": "规划回合仍走 GPT-5.5，由 BitRouter 学习哪些常规工具后续步骤可以降级到 Kimi K2.7 Code；一旦降级开始失败会自动升回。"
+      },
+      "env": [],
+      "evaluation": {
+        "as_of": "2026-07-14",
+        "baseline": {
+          "accuracy": 77.27,
+          "cost_per_task": 3.758,
+          "label": "GPT-5.5 only, no routing"
+        },
+        "config": "policy-round-r2",
+        "delta": {
+          "accuracy_points": -1.1,
+          "cost_per_task_pct": -32.8
+        },
+        "eval": "terminal-bench-2.1",
+        "harness": "codex",
+        "measured_by": "bitrouter",
+        "recipe": {
+          "accuracy": 76.14,
+          "cost_per_task": 2.525,
+          "label": "GPT-5.5 with learned Kimi K2.7 Code downgrades"
+        },
+        "runs": 1,
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/main/benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md"
+      },
+      "harness": [
+        "codex"
+      ],
+      "models": [
+        "moonshotai/kimi-k2.7-code",
+        "openai/gpt-5.5"
+      ],
+      "objectives": [
+        "cost"
+      ],
+      "providers": [
+        {
+          "name": "moonshotai",
+          "requires": [
+            "api_key"
+          ]
+        },
+        {
+          "name": "openai-codex",
+          "requires": [
+            "local_pkce"
+          ]
+        }
+      ],
+      "slug": "codex-cost-cut",
+      "source_url": "https://github.com/bitrouter/bitrouter/tree/main/recipes/codex-cost-cut",
+      "title": {
+        "en": "Codex on GPT-5.5, a third cheaper",
+        "zh": "Codex + GPT-5.5：成本降三成"
+      },
+      "updated_at": "2026-07-25",
+      "workflow": "coding"
+    }
+  ]
+}

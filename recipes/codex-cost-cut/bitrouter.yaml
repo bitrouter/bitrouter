@@ -1,0 +1,42 @@
+# Recipe: codex-cost-cut — drop this next to your Codex project and start the
+# daemon, then point Codex at http://127.0.0.1:4356.
+#
+#   bitrouter providers login openai-codex   # ChatGPT plan sign-in
+#   export MOONSHOTAI_API_KEY=...            # or use any provider serving Kimi
+#   bitrouter start
+
+server:
+  listen: "127.0.0.1:4356"
+  skip_auth: true
+
+providers:
+  openai-codex: {} # ChatGPT Codex subscription — `bitrouter providers login openai-codex`
+  moonshotai: {} # uses MOONSHOTAI_API_KEY
+
+# Context-aware routing: the key is the *step in the loop*, not the model name.
+# Planning stays on the flagship; routine tool follow-ups drop to the cheap
+# model; anything unmapped stays flagship.
+policy_table:
+  tiers:
+    flagship: openai-codex:gpt-5.5
+    cheap: moonshotai/kimi-k2.7-code
+  fingerprints:
+    opening: flagship # first turn — plan on the strong model
+    after_bash: cheap # routine shell follow-up
+    after_exec_command: cheap
+    midstream: cheap
+  default_tier: flagship
+  # Guardrail: a tool-carrying request is never stranded on a model that
+  # handles tool calls less reliably.
+  tool_use_tier: flagship
+  tool_safe_tiers: [flagship]
+  # The measured mechanism: downgrades are *learned* per fingerprint, and one
+  # that starts hard-failing escalates itself back to the flagship rather than
+  # burning the run.
+  adequacy:
+    enabled: true
+    escalation_tier: flagship
+    escalation_threshold: 1
+    pin_cooldown_secs: 1800
+
+inherit_defaults: true

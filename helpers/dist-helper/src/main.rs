@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod recipes;
 mod registry;
 mod schema;
 
@@ -30,8 +31,25 @@ enum Command {
         #[command(subcommand)]
         command: RegistryCommand,
     },
+    /// Workflow-recipe source-data and dist operations.
+    Recipes {
+        #[command(subcommand)]
+        command: RecipesCommand,
+    },
     /// Check every committed dist artifact managed by this helper.
     Check,
+}
+
+#[derive(Debug, Subcommand)]
+enum RecipesCommand {
+    /// Validate `recipes/` source data against the registry.
+    Validate,
+    /// Generate `dist/recipes/index.json`.
+    Build {
+        /// Fail if committed recipes dist is stale instead of writing it.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,9 +100,14 @@ async fn run(cli: Cli) -> Result<()> {
             }
             RegistryCommand::AgenticDiffCheck => registry::agentic_diff_check(&root),
         },
+        Command::Recipes { command } => match command {
+            RecipesCommand::Validate => recipes::validate(&root),
+            RecipesCommand::Build { check } => recipes::build(&root, check),
+        },
         Command::Check => {
             schema::generate(&root, true)?;
-            registry::build(&root, true)
+            registry::build(&root, true)?;
+            recipes::build(&root, true)
         }
     }
 }
