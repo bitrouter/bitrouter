@@ -603,8 +603,10 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
     let mut settlement = ctx("rate-limited", 0, 0);
     settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
     settlement.raw_usage = None;
-    settlement.error =
-        Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited { retry_after: None });
+    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited {
+        retry_after: None,
+        detail: None,
+    });
 
     recorder.record(&mut settlement).await?;
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
@@ -638,8 +640,10 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
     let recorder = MeteringRecorder::new(store.clone(), pricing());
     let mut settlement = ctx("legacy-rate-limit", 0, 0);
     settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
-    settlement.error =
-        Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited { retry_after: None });
+    settlement.error = Some(bitrouter_sdk::BitrouterError::UpstreamRateLimited {
+        retry_after: None,
+        detail: None,
+    });
     recorder.record(&mut settlement).await?;
     pool.execute(Statement::from_string(
         DatabaseBackend::Sqlite,

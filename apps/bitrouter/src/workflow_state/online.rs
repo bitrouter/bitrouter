@@ -77,7 +77,8 @@ impl OnlineWorkflowState {
             }
         }
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
-        let routing_key = ir.routing_key();
+        let routing_key =
+            superpowers_agent_context_key(headers, &ir).unwrap_or_else(|| ir.routing_key());
         Self {
             ir,
             legacy_fingerprint,
@@ -165,6 +166,29 @@ fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+fn superpowers_agent_context_key(headers: &HeaderMap, ir: &WorkflowStateIR) -> Option<String> {
+    if ir.harness_id != HarnessId::Codex
+        || ir.active_workflow.as_deref() != Some("superpowers:subagent-driven-development")
+    {
+        return None;
+    }
+    let role = header_value(headers, "x-bitrouter-agent-role")?
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        role.as_str(),
+        "controller" | "implementer" | "reviewer" | "re-reviewer" | "fixer" | "quorum-evaluator"
+    ) {
+        return None;
+    }
+    let complexity = header_value(headers, "x-bitrouter-task-complexity")
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| matches!(value.as_str(), "mechanical" | "standard" | "complex"))
+        .unwrap_or_else(|| "standard".to_string());
+    Some(format!("superpowers|{role}|{complexity}"))
+}
+
 fn parse_harness(value: &str) -> Option<HarnessId> {
     match value.trim().to_ascii_lowercase().as_str() {
         "generic" => Some(HarnessId::Generic),
@@ -196,8 +220,9 @@ mod tests {
     use bitrouter_sdk::language_model::types::{
         Content, GenerationParams, Message, Prompt, ProviderMetadata, Role,
     };
+    use http::HeaderValue;
 
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateKind};
     use crate::workflow_state::online::OnlineWorkflowState;
 
     fn prompt_after_tool(tool: &str) -> Prompt {
@@ -280,6 +305,45 @@ mod tests {
                 "smithers|chat_completions|tool_followup|release-review|analyze-risk|"
             )
         );
+    }
+
+    #[test]
+    fn superpowers_role_and_complexity_form_a_sticky_agent_context_key() {
+        let prompt = prompt_after_tool("apply_patch");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
+        headers.insert(
+            "x-bitrouter-protocol",
+            HeaderValue::from_static("responses"),
+        );
+        headers.insert(
+            "x-superpowers-phase",
+            HeaderValue::from_static("implementation"),
+        );
+        headers.insert(
+            "x-superpowers-skill",
+            HeaderValue::from_static("superpowers:subagent-driven-development"),
+        );
+        headers.insert(
+            "x-bitrouter-agent-role",
+            HeaderValue::from_static("implementer"),
+        );
+        headers.insert(
+            "x-bitrouter-task-complexity",
+            HeaderValue::from_static("mechanical"),
+        );
+
+        let implementation = OnlineWorkflowState::from_headers(&headers, &prompt);
+        headers.insert("x-superpowers-phase", HeaderValue::from_static("test"));
+        let test = OnlineWorkflowState::from_headers(&headers, &prompt);
+
+        assert_eq!(
+            implementation.routing_key(),
+            "superpowers|implementer|mechanical"
+        );
+        assert_eq!(implementation.routing_key(), test.routing_key());
+        assert_eq!(implementation.ir.state_kind, WorkflowStateKind::Edit);
+        assert_eq!(test.ir.state_kind, WorkflowStateKind::Test);
     }
 
     #[test]

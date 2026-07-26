@@ -337,8 +337,8 @@ mod tests {
         PolicyTable::from_config(&cfg).expect("configured")
     }
 
-    // The same table with exploration on: `opening` (static = capable = the
-    // escalation tier) is a candidate trialed toward `cheap`.
+    // The same table with exploration on. Eligible tool-followup keys absent
+    // from the static map resolve to capable and can be trialed toward cheap.
     fn explore_table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
@@ -658,13 +658,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_trial_pins_the_candidate() {
-        // `opening` is an exploration candidate (static = capable = escalation).
-        // A request served by the cheap (explore) tier is a trial; failing it pins.
+        // `after_bash` is an exploration candidate (static default = capable =
+        // escalation). A cheap-tier trial that fails pins that exact key.
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
         let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
-        hook.on_request_end(&ctx("vendor/cheap", vec![user("start")]), &failed())
+        hook.on_request_end(&ctx("vendor/cheap", bash_step()), &failed())
             .await;
-        assert!(ledger.is_pinned("opening"));
+        assert!(ledger.is_pinned("after_bash"));
     }
 
     #[tokio::test]
@@ -694,11 +694,11 @@ mod tests {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
         let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
         hook.on_request_end(
-            &ctx("vendor/cheap", vec![user("start")]),
+            &ctx("vendor/cheap", bash_step()),
             &RequestOutcome::Completed,
         )
         .await;
-        assert!(ledger.is_locked("opening"), "an adequate trial locks it");
+        assert!(ledger.is_locked("after_bash"), "an adequate trial locks it");
     }
 
     #[tokio::test]
@@ -707,15 +707,15 @@ mod tests {
         // advances the trial cadence (interval 2 → due after two such requests).
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
-        assert!(!ledger.should_trial("opening"));
+        assert!(!ledger.should_trial("after_bash"));
         for _ in 0..2 {
             hook.on_request_end(
-                &ctx("vendor/capable", vec![user("start")]),
+                &ctx("vendor/capable", bash_step()),
                 &RequestOutcome::Completed,
             )
             .await;
         }
-        assert!(ledger.should_trial("opening"), "the cadence advanced");
+        assert!(ledger.should_trial("after_bash"), "the cadence advanced");
     }
 
     #[tokio::test]

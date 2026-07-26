@@ -121,8 +121,6 @@ pub struct PolicyTable {
     explore_tier: Option<String>,
     /// Whether aggressive downgrade discovery is enabled.
     exploration_enabled: bool,
-    /// Whether the opening turn is eligible for exploration.
-    explore_opening: bool,
     /// Future task-reward guardrail for opening downgrades.
     min_semantic_successes_for_opening: u32,
     /// Process-local maximum downgraded requests admitted for one agent session.
@@ -166,7 +164,6 @@ impl PolicyTable {
             escalation_tier,
             explore_tier: config.adequacy.explore_tier.clone(),
             exploration_enabled,
-            explore_opening: config.adequacy.explore_opening,
             min_semantic_successes_for_opening: config.adequacy.min_semantic_successes_for_opening,
             max_downgraded_requests_per_session: config
                 .adequacy
@@ -276,10 +273,6 @@ impl PolicyTable {
         self.exploration_enabled
     }
 
-    fn can_explore_opening(&self) -> bool {
-        self.explore_opening
-    }
-
     fn minimum_semantic_successes_for(&self, decision: &PolicyDecision) -> u32 {
         if decision.legacy_fingerprint == "opening" || decision.workflow_state_kind == "opening" {
             self.min_semantic_successes_for_opening
@@ -308,12 +301,13 @@ impl PolicyTable {
         {
             return false;
         }
-        match online.ir.state_kind {
-            WorkflowStateKind::Finalization => false,
-            WorkflowStateKind::Opening => self.can_explore_opening(),
-            _ if online.legacy_fingerprint() == "opening" => self.can_explore_opening(),
-            _ => true,
-        }
+        matches!(
+            online.ir.state_kind,
+            WorkflowStateKind::ToolFollowup
+                | WorkflowStateKind::Edit
+                | WorkflowStateKind::Test
+                | WorkflowStateKind::Debug
+        )
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -831,11 +825,10 @@ fn exploration_target_matches(headers: &HeaderMap, request_key: &str) -> bool {
     let Some(value) = headers.get("x-bitrouter-exploration-target") else {
         return true;
     };
-    value
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .is_some_and(|target| !target.is_empty() && target == request_key)
+    value.to_str().ok().map(str::trim).is_some_and(|target| {
+        !target.is_empty()
+            && (target == request_key || target == "__first_eligible_workflow_state__")
+    })
 }
 
 #[cfg(test)]
@@ -1427,11 +1420,11 @@ mod tests {
             trialed: false,
             cause: InadequacyCause::None,
         };
-        ledger.observe("opening", non_trial()).await;
-        ledger.observe("opening", non_trial()).await;
+        ledger.observe("after_grep", non_trial()).await;
+        ledger.observe("after_grep", non_trial()).await;
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
-        p.messages = vec![user("start")];
+        p.messages = vec![user("start"), assistant_calls("grep")];
 
         let decision = router.decision_for(&p, &HeaderMap::new());
 
@@ -1488,10 +1481,10 @@ mod tests {
     #[tokio::test]
     async fn decision_reason_exploration_locked() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
-        ledger.observe("opening", trial_ok()).await;
+        ledger.observe("after_grep", trial_ok()).await;
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
-        p.messages = vec![user("start")];
+        p.messages = vec![user("start"), assistant_calls("grep")];
 
         let decision = router.decision_for(&p, &HeaderMap::new());
 
@@ -1504,7 +1497,7 @@ mod tests {
     async fn decision_exposes_semantic_gate_before_effective_lock() {
         let mut cfg = config_with_opening_exploration();
         cfg.adequacy.explore_threshold = 1;
-        cfg.adequacy.min_semantic_successes_for_lock = 1;
+        cfg.adequacy.min_semantic_successes_for_lock = 2;
         cfg.adequacy.min_semantic_successes_for_opening = 2;
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
@@ -1514,11 +1507,11 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        ledger.observe("opening", trial_ok()).await;
+        ledger.observe("after_grep", trial_ok()).await;
         let table = PolicyTable::from_config(&cfg).expect("configured");
         let router = PolicyTableRouter::new(table, Some(ledger));
         let mut p = prompt("inbound");
-        p.messages = vec![user("start")];
+        p.messages = vec![user("start"), assistant_calls("grep")];
 
         let gated = router.decision_for(&p, &HeaderMap::new());
         assert!(gated.request_qualified);
@@ -1530,7 +1523,7 @@ mod tests {
         assert_eq!(gated.selected_tier.as_deref(), Some("cheap"));
 
         store
-            .record_semantic_success("opening", "terminal-bench/regex-log")
+            .record_semantic_success("after_grep", "terminal-bench/regex-log")
             .await
             .unwrap();
         let one_success = Arc::new(
@@ -1551,7 +1544,7 @@ mod tests {
         assert_eq!(still_gated.selected_tier.as_deref(), Some("cheap"));
 
         store
-            .record_semantic_success("opening", "terminal-bench/fix-git")
+            .record_semantic_success("after_grep", "terminal-bench/fix-git")
             .await
             .unwrap();
         let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await.unwrap());
@@ -1738,6 +1731,44 @@ mod tests {
         PolicyTable::from_config(&cfg).expect("configured")
     }
 
+    #[test]
+    fn superpowers_unsafe_phases_never_allow_exploration() {
+        let table = workflow_exploration_table();
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("start"), assistant_calls("read_file")];
+        let phases = [
+            HeaderValue::from_static("unknown"),
+            HeaderValue::from_static("opening"),
+            HeaderValue::from_static("planning"),
+            HeaderValue::from_static("quality-review"),
+            HeaderValue::from_static("recovery"),
+            HeaderValue::from_static("subagent-dispatch"),
+            HeaderValue::from_static("finalization"),
+        ];
+        for phase in phases {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
+            headers.insert(
+                "x-bitrouter-protocol",
+                HeaderValue::from_static("responses"),
+            );
+            headers.insert("x-superpowers-phase", phase);
+            assert!(!table.exploration_allowed_for_prompt(&prompt, &headers));
+        }
+
+        let mut eligible = HeaderMap::new();
+        eligible.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
+        eligible.insert(
+            "x-bitrouter-protocol",
+            HeaderValue::from_static("responses"),
+        );
+        eligible.insert(
+            "x-superpowers-phase",
+            HeaderValue::from_static("implementation"),
+        );
+        assert!(table.exploration_allowed_for_prompt(&prompt, &eligible));
+    }
+
     fn trial_ok() -> Outcome {
         Outcome::Exploration {
             trialed: true,
@@ -1753,7 +1784,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_due_trial_routes_a_candidate_to_the_explore_tier() {
+    async fn opening_remains_strong_even_when_a_trial_is_due() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         // Two non-trial observations advance the cadence so a trial is due.
         let non_trial = || Outcome::Exploration {
@@ -1765,8 +1796,8 @@ mod tests {
         let router = exploring_router(ledger);
         assert_eq!(
             route_with(&router, vec![user("start")]),
-            "vendor/cheap",
-            "a candidate due for a trial routes to the explore tier"
+            "vendor/flagship",
+            "opening is never eligible for a weak-model trial"
         );
     }
 
@@ -1774,7 +1805,7 @@ mod tests {
     async fn exploration_target_allows_only_the_matching_request_key() {
         let table = workflow_exploration_table();
         let mut prompt = prompt("inbound");
-        prompt.messages = vec![user("start")];
+        prompt.messages = vec![user("start"), assistant_calls("read_file")];
         let mut matching_headers = smithers_headers("plan");
         let target_key = table.request_key(&prompt, &matching_headers);
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
@@ -1806,11 +1837,34 @@ mod tests {
         assert_eq!(other.selected_tier.as_deref(), Some("flagship"));
     }
 
+    #[test]
+    fn first_eligible_target_defers_safety_to_the_workflow_state_gate() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-exploration-target",
+            "__first_eligible_workflow_state__"
+                .parse()
+                .expect("valid target"),
+        );
+        assert!(exploration_target_matches(
+            &headers,
+            "codex|responses|test|skill|-|exec_command"
+        ));
+        headers.insert(
+            "x-bitrouter-exploration-target",
+            "another-exact-key".parse().expect("valid target"),
+        );
+        assert!(!exploration_target_matches(
+            &headers,
+            "codex|responses|test|skill|-|exec_command"
+        ));
+    }
+
     #[tokio::test]
     async fn mismatching_exploration_target_suppresses_a_learned_lock() {
         let table = workflow_exploration_table();
         let mut prompt = prompt("inbound");
-        prompt.messages = vec![user("start")];
+        prompt.messages = vec![user("start"), assistant_calls("read_file")];
         let mut headers = smithers_headers("plan");
         let target_key = table.request_key(&prompt, &headers);
         let other_key = table.request_key(&prompt, &smithers_headers("review"));
@@ -1831,12 +1885,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_locked_candidate_routes_to_the_explore_tier() {
+    async fn a_locked_opening_candidate_stays_on_the_strong_tier() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         ledger.observe("opening", trial_ok()).await; // 1 adequate trial
         ledger.observe("opening", trial_ok()).await; // 2 → locked
         let router = exploring_router(ledger);
-        assert_eq!(route_with(&router, vec![user("start")]), "vendor/cheap");
+        assert_eq!(route_with(&router, vec![user("start")]), "vendor/flagship");
     }
 
     #[tokio::test]
@@ -1902,8 +1956,8 @@ mod tests {
         use crate::adequacy::reliability::{ReliabilityKey, ReliabilityObservation};
 
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
-        ledger.observe("opening", trial_ok()).await;
-        ledger.observe("opening", trial_ok()).await;
+        ledger.observe("after_read_file", trial_ok()).await;
+        ledger.observe("after_read_file", trial_ok()).await;
         let endpoint = ReliabilityKey {
             provider: "vendor".to_string(),
             model: "cheap".to_string(),
@@ -1933,7 +1987,7 @@ mod tests {
             .unwrap();
         let router = exploring_router(ledger);
         let mut prompt = prompt("inbound");
-        prompt.messages = vec![user("start")];
+        prompt.messages = vec![user("start"), assistant_calls("read_file")];
 
         let decision = router.decision_for(&prompt, &HeaderMap::new());
 
@@ -1971,10 +2025,10 @@ mod tests {
         // guardrail: a tool request is never downgraded below the tool-safe tier,
         // even when exploration has locked the cheap tier.
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
-        ledger.observe("opening", trial_ok()).await; // locks (threshold 1)
+        ledger.observe("after_read_file", trial_ok()).await; // locks (threshold 1)
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
-        p.messages = vec![user("start")];
+        p.messages = vec![user("start"), assistant_calls("read_file")];
         p.tools = vec![a_tool()];
         router.apply(&mut p);
         assert_eq!(p.model, "vendor/flagship", "guardrail clamps the trial");

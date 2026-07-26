@@ -184,16 +184,6 @@ See `references/mcp-server.md` for all flags, tool JSON shapes, and deferred roa
 
 ## 6. References
 
-## 6a. Local policy demo
-
-From the repository root, run the deterministic, network-free policy demo with:
-
-```bash
-bun install --cwd demos/superpowers-quorum-policy-demo --frozen-lockfile && bun demos/superpowers-quorum-policy-demo/src/cli.ts fixture && bun demos/superpowers-quorum-policy-demo/src/cli.ts verify artifacts/superpowers-policy-demo/latest
-```
-
-It writes a static artifact-only dashboard and an evidence bundle under `artifacts/superpowers-policy-demo` (also at `latest`). Fixture artifacts are explicitly simulated and never claim `realExecution`; `smoke` and `full` run the local ingress/arm runner. See `demos/superpowers-quorum-policy-demo/README.md` for the arm isolation, frozen policy, and verifier contract.
-
 Read these on demand — don't load them all upfront.
 
 | File | When to read |

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "bitrouter-outcome-supervision-contextual-terminal-risk-role-budgeted-key-v5",
+  "sourcePolicyHash": "3c9afc0ec4001bf014c3b98d0d1cb5e6f3ea66d6b0be300d7763fea9569f64f6",
+  "candidateSha256": "5442e0c277eba4e9619319c455168de1b721e21dc8375d53418111e55c2c6c0b",
+  "strongModel": "openai-codex:gpt-5.6-sol",
+  "economyModel": "bitrouter:deepseek/deepseek-v4-pro",
+  "economyTurnBudgetsByRole": {
+    "implementer": 24,
+    "fixer": 20,
+    "reviewer": 12
+  },
+  "terminalRiskRule": "final, final-fix, and re-review aliases always use the strong route regardless of caller-supplied mechanical complexity",
+  "evaluation": {
+    "pairedRuns": 3,
+    "workflowSavingsRatio": {
+      "minimum": 0.23163585160118383,
+      "median": 0.34483872529935355,
+      "mean": 0.3812112266038157,
+      "maximum": 0.5671591029109095
+    },
+    "everyOutcomePassed": true,
+    "sameFrozenConfiguration": true,
+    "stableWithinScenario": true,
+    "stableAcrossScenarios": false
+  }
+}

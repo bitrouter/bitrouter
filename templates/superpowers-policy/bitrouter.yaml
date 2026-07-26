@@ -1,0 +1,21 @@
+providers:
+  openai-codex:
+    api_protocol:
+      - "*": responses
+    models:
+      - id: gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+  bitrouter:
+    api_protocol:
+      - "*": responses
+    models:
+      - id: deepseek/deepseek-v4-pro
+        provider_model_id: deepseek/deepseek-v4-pro
+inherit_defaults: true
+policy:
+  path: "./policy-lock.yaml"
+  writeback: locked
+presets:
+  superpowers:
+    model: "openai-codex:gpt-5.6-sol"
+    policy: demo

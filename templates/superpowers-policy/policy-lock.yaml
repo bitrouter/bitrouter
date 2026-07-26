@@ -1,0 +1,29 @@
+lockfileVersion: 1
+policies:
+  demo:
+    key_strategy: workflow_state
+    tiers:
+      economy: "bitrouter:deepseek/deepseek-v4-pro"
+      strong: "openai-codex:gpt-5.6-sol"
+    routes:
+      "superpowers|fixer|mechanical": economy
+      "superpowers|implementer|mechanical": economy
+      "superpowers|reviewer|mechanical": economy
+    default_tier: strong
+    tool_use_tier: strong
+    tool_safe_tiers:
+      - strong
+      - economy
+    adequacy:
+      enabled: false
+      escalation_tier: strong
+      escalation_threshold: 1
+      pin_cooldown_secs: 0
+      explore_enabled: false
+      explore_tier: economy
+      explore_interval: 1
+      explore_threshold: 1
+      max_downgraded_requests_per_session: 0
+      min_semantic_successes_for_lock: 1
+      explore_opening: false
+      min_semantic_successes_for_opening: 1
