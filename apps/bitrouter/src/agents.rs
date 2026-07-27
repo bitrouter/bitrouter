@@ -251,7 +251,8 @@ fn render_stub(spec: &StubSpec<'_>) -> String {
 /// special at the start of a plain scalar (`@`, `` ` ``, `!`, `&`, `*`, `|`,
 /// `>`, `'`, `"`, `%`, `#`, `?`, `:`, `-`, `,`, `{`, `}`, `[`, `]`), or
 /// contains a space or `#`. Conservative: when in doubt, double-quote.
-fn yaml_scalar(s: &str) -> String {
+/// Shared with the MCP registry stub renderer (`crate::mcp_registry`).
+pub(crate) fn yaml_scalar(s: &str) -> String {
     if s.is_empty() {
         // An unquoted empty plain scalar parses as YAML null, which would
         // silently corrupt a command/arg field. Always quote.
@@ -284,7 +285,11 @@ fn yaml_scalar(s: &str) -> String {
             )
         })
         .unwrap_or(false);
-    let needs_quotes = first_special || s.contains(' ') || s.contains('#') || s.contains(':');
+    let needs_quotes = first_special
+        || s.contains(' ')
+        || s.contains('#')
+        || s.contains(':')
+        || parses_as_non_string(s);
     if needs_quotes {
         // Escape backslashes and double quotes so the result is a valid
         // YAML / JSON double-quoted scalar.
@@ -293,6 +298,55 @@ fn yaml_scalar(s: &str) -> String {
     } else {
         s.to_string()
     }
+}
+
+/// True when YAML would parse an unquoted `s` as a non-string scalar
+/// (bool / null / number) — emitting it bare would change the type of a
+/// String-typed config field (`env` values, header values, args). The stub
+/// renderers only emit strings, so these always get quoted.
+fn parses_as_non_string(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "true"
+            | "false"
+            | "yes"
+            | "no"
+            | "on"
+            | "off"
+            | "null"
+            | "~"
+            | ".nan"
+            | ".inf"
+            | "+.inf"
+            | "-.inf"
+    ) {
+        return true;
+    }
+    if s.parse::<i64>().is_ok() || s.parse::<f64>().is_ok() {
+        return true;
+    }
+    // Underscored / hex / octal integers per the YAML core schema.
+    let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
+    if !digits.is_empty()
+        && digits.chars().any(|c| c.is_ascii_digit())
+        && digits.chars().all(|c| c.is_ascii_digit() || c == '_')
+    {
+        return true;
+    }
+    if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        return !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    if let Some(oct) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
+        return !oct.is_empty() && oct.chars().all(|c| matches!(c, '0'..='7'));
+    }
+    false
 }
 
 #[cfg(test)]
@@ -503,6 +557,28 @@ mod tests {
         // corrupt a command / arg field. Regression check: the empty case
         // must be double-quoted.
         assert_eq!(yaml_scalar(""), "\"\"");
+    }
+
+    #[test]
+    fn yaml_scalar_quotes_non_string_scalars() {
+        // `env` / header values and args are String-typed config fields: an
+        // unquoted `false` / `123` would parse as bool/int and fail schema
+        // validation on the pasted stub. Regression check: YAML non-string
+        // scalars are always quoted.
+        for s in [
+            "false", "true", "yes", "no", "on", "off", "null", "Null", "~", "123", "-1", "+1",
+            "1.5", ".5", "1e3", "0x1F", "0o17", "1_000", ".nan", "-.inf",
+        ] {
+            let quoted = yaml_scalar(s);
+            assert!(
+                quoted.starts_with('"') && quoted.ends_with('"'),
+                "{s} must be quoted, got {quoted}"
+            );
+        }
+        // Strings that merely look numeric-ish stay plain.
+        for s in ["1.2.3", "v2", "npx", "false-positive"] {
+            assert_eq!(yaml_scalar(s), s, "{s} must stay unquoted");
+        }
     }
 
     #[test]

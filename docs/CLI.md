@@ -206,6 +206,36 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 
 ---
 
+## MCP registry discovery
+
+Discovery over the official MCP Registry (`https://registry.modelcontextprotocol.io`, unauthenticated v0.1 REST API) — the find-and-enable surface for `mcp_servers:`, mirroring `bitrouter agents list --remote` / `install` for the ACP registry. Only `active`, latest-version entries are surfaced; fetches carry a 10s timeout and cache for 24h under `$XDG_CACHE_HOME/bitrouter/mcp-registry/` (stale fallback when the registry is unreachable). `mcp_servers:` in `bitrouter.yaml` remains the sole source of truth for what can launch — nothing here writes config.
+
+### `bitrouter mcp search <query>`
+
+```
+bitrouter mcp search filesystem [--limit N]
+```
+
+Searches the registry server-side and prints rows of `name / version / install / description`. The install column classifies support: `remote` (zero-install `streamable-http` entry), `npx` / `uvx` (auto-stub-able stdio package), `manual` (oci/mcpb-only), `-` (no distribution).
+
+### `bitrouter mcp list`
+
+```
+bitrouter mcp list [--limit N]
+```
+
+Lists registry servers with the same install-support column (default 50 rows).
+
+### `bitrouter mcp add <name>`
+
+```
+bitrouter mcp add com.pulsemcp/remote-filesystem
+```
+
+Prints a YAML stub to review and paste under `mcp_servers:` — the same reviewed-stub flow as `bitrouter agents install` (SEP-1024-compliant by construction: the full command is visible before it ever runs). Preference order: a published `streamable-http` remote becomes a zero-install `http` entry (header `{var}` templates become `${VAR}` env references); otherwise an npm/pypi stdio package becomes a version-pinned `npx -y <id>@<version>` / `uvx <id>@<version>` stub with required `environmentVariables` as `""` placeholders (optional ones listed as comments). oci/mcpb-only entries are refused with a manual-install pointer. The `mcp_servers:` key is derived from the registry name's last segment.
+
+---
+
 ## ACP agent management
 
 ### `bitrouter agents list`

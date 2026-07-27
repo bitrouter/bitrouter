@@ -3,7 +3,8 @@
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `route` / `init` / `key sign` / `models` / `tools` /
 //! `policy create` / `providers (list|login|logout)` / `agents` /
-//! `spawn` / `cloud` / `skills`. Cloud-account sign-in lives under
+//! `spawn` / `cloud` / `skills` / `mcp (serve|install|search|list|add)`.
+//! Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
 //! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
 //! (a Unix domain socket, or a Windows named pipe) — `start` spawns `serve`
@@ -32,6 +33,7 @@ use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
+use bitrouter::output::reports::mcp::{McpAddReport, McpRegistryReport, McpRegistryRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
 use bitrouter::output::reports::policy::PolicyReport;
 use bitrouter::output::reports::routing::{ModelRow, ModelsReport, ProviderRow, ProvidersReport};
@@ -402,7 +404,9 @@ enum Command {
         #[command(subcommand)]
         action: bitrouter::skills::cli::SkillsAction,
     },
-    /// Run or install BitRouter's origin MCP server.
+    /// Run or install BitRouter's origin MCP server, and discover upstream
+    /// MCP servers from the official registry (`mcp search` / `list` /
+    /// `add`).
     Mcp {
         #[command(subcommand)]
         action: McpAction,
@@ -645,6 +649,35 @@ enum McpAction {
         /// Config file to merge into; omit to print to stdout.
         #[arg(long)]
         config: Option<PathBuf>,
+    },
+    /// Search the official MCP registry (registry.modelcontextprotocol.io)
+    /// for upstream MCP servers. Rows carry an install-support column:
+    /// `remote` (zero-install), `npx`/`uvx` (stub-able), `manual`
+    /// (oci/mcpb-only).
+    Search {
+        /// Search text (matched server-side against name/description).
+        query: String,
+        /// Maximum rows to print.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// List servers from the official MCP registry with an install-support
+    /// column. Responses are cached for 24h under
+    /// `$XDG_CACHE_HOME/bitrouter/mcp-registry/`.
+    List {
+        /// Maximum rows to print.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Print a YAML stub for a registry server (paste under `mcp_servers:`
+    /// in `bitrouter.yaml`). Prefers a zero-install `streamable-http` remote
+    /// when the entry publishes one; otherwise stubs `npx`/`uvx` stdio
+    /// packages with required env vars as placeholders. oci/mcpb-only
+    /// entries are refused with a manual-install pointer.
+    Add {
+        /// Registry name, e.g. `com.pulsemcp/remote-filesystem` (see
+        /// `bitrouter mcp search` / `bitrouter mcp list`).
+        name: String,
     },
 }
 
@@ -1362,7 +1395,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
         Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
-        Command::Mcp { action } => mcp_cmd(action).await,
+        Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
         #[cfg(feature = "tui")]
@@ -1890,7 +1923,7 @@ fn non_fleet_flag_notes(allow_writes: bool, budget_usd: Option<f64>) -> Vec<&'st
     notes
 }
 
-async fn mcp_cmd(action: McpAction) -> Result<()> {
+async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
         McpAction::Serve {
             transport,
@@ -2085,7 +2118,56 @@ async fn mcp_cmd(action: McpAction) -> Result<()> {
                 config_path: config,
             })
         }
+        McpAction::Search { query, limit } => {
+            let outcome = bitrouter::mcp_registry::RegistryClient::new()?
+                .servers(Some(&query), limit)
+                .await?;
+            output.emit(&mcp_registry_report(outcome)?)?;
+            Ok(())
+        }
+        McpAction::List { limit } => {
+            let outcome = bitrouter::mcp_registry::RegistryClient::new()?
+                .servers(None, limit)
+                .await?;
+            output.emit(&mcp_registry_report(outcome)?)?;
+            Ok(())
+        }
+        McpAction::Add { name } => {
+            let outcome = bitrouter::mcp_registry::RegistryClient::new()?
+                .latest(&name)
+                .await?;
+            match bitrouter::mcp_registry::add_stub(&outcome.data) {
+                Ok(stub) => {
+                    output.emit(&McpAddReport {
+                        name,
+                        id: stub.id,
+                        yaml: stub.yaml,
+                    })?;
+                    Ok(())
+                }
+                Err(e) => anyhow::bail!(e),
+            }
+        }
     }
+}
+
+/// Map fetched registry entries to the `mcp list` / `mcp search` report.
+fn mcp_registry_report(
+    outcome: bitrouter::mcp_registry::FetchOutcome<Vec<bitrouter::mcp_registry::ServerEntry>>,
+) -> Result<McpRegistryReport> {
+    let servers = bitrouter::mcp_registry::registry_rows(&outcome.data)
+        .into_iter()
+        .map(|row| McpRegistryRow {
+            name: row.name,
+            version: row.version,
+            install: row.install.to_string(),
+            description: row.description,
+        })
+        .collect();
+    Ok(McpRegistryReport {
+        servers,
+        from_cache: outcome.from_cache,
+    })
 }
 
 // ===== serve / daemon control =====

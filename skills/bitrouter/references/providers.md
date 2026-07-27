@@ -286,7 +286,7 @@ mcp_servers:
       args: ["mcp-server-git"]
 ```
 
-Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect with `bitrouter tools list` / `bitrouter tools status` / `bitrouter tools discover <name>`.
+Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect with `bitrouter tools list` / `bitrouter tools status` / `bitrouter tools discover <name>`. To find servers without hand-writing the block: `bitrouter mcp search <query>` / `bitrouter mcp list` browse the official MCP registry (with an install-support column), and `bitrouter mcp add <name>` prints a reviewed stub to paste under `mcp_servers:`.
 
 ## Server tools (router-executed)
 
