@@ -260,7 +260,7 @@ impl RmcpExecutor {
     /// raising it cannot strand a working upstream. What it *does* change is
     /// which response shapes an upstream is permitted to send — at
     /// `2026-07-28` a `tools/call` may come back as MRTR `input_required` or a
-    /// Tasks handle, which [`map_call_tool_result`] turns into explicit errors.
+    /// Tasks handle, which `map_call_tool_result` turns into explicit errors.
     ///
     /// Applies to connections opened after this call; pooled ones keep the
     /// version they negotiated.

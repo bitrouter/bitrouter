@@ -10,7 +10,7 @@
 //! [`CachingExecutor::with_invalidation`], affected entries are also evicted
 //! on demand. The TTL on each entry honours the MCP spec's SEP-2549
 //! `ttlMs` / `cacheScope` cache-control hints when the upstream supplies them
-//! — see [`extract_cache_hint`].
+//! — see `extract_cache_hint`.
 //!
 //! Caching applies per [`McpTarget::Direct`] member; when used inside an
 //! [`super::aggregating_executor::AggregatingExecutor`], the cache key
