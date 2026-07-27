@@ -761,11 +761,51 @@ impl Builder {
     }
 }
 
+/// How long a client may treat our `tools/list` as fresh (SEP-2549).
+///
+/// The router is frozen at [`Builder::build`] from the wired capabilities and
+/// never varies per caller or over a connection's life, so this is bounded only
+/// by how quickly a client should notice a *restarted* server with a different
+/// profile. Five minutes keeps a re-dial cheap without pinning a stale list.
+const TOOLS_LIST_TTL_MS: u64 = 5 * 60 * 1000;
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BitrouterMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(self.instructions())
+    }
+
+    /// Same as the `#[tool_handler]`-generated implementation (the macro skips
+    /// generating one when the impl already defines it), plus SEP-2549 cache
+    /// hints for peers that negotiated `2026-07-28`.
+    ///
+    /// `cacheScope: public` is accurate here and worth stating explicitly: the
+    /// tool set is fixed at [`Builder::build`] from the wired capabilities, so
+    /// every caller of a given server instance sees the same list. It would
+    /// *not* be accurate if tool visibility ever became caller-dependent — that
+    /// change must revisit this scope.
+    ///
+    /// The hints are version-gated because rmcp only strips `resultType` for
+    /// legacy peers (`ServerResult::strip_result_type_for_legacy_peer`), not
+    /// `ttlMs`/`cacheScope`; emitting them unconditionally would send
+    /// draft-only fields to a `2025-11-25` client.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        let draft = context
+            .protocol_version()
+            .is_some_and(|v| v.as_str() >= rmcp::model::ProtocolVersion::V_2026_07_28.as_str());
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: draft.then_some(TOOLS_LIST_TTL_MS),
+            cache_scope: draft.then_some(rmcp::model::CacheScope::Public),
+        })
     }
 }
 
@@ -839,6 +879,17 @@ async fn require_bearer(
 /// change — take a handler factory, keep the profile strictly loopback and
 /// incompatible with the cloud backend, and prefer modeling that read-only
 /// data as MCP resources over widening the tool surface.
+///
+/// That invariant is now load-bearing for a second reason. Under SEP-2567 a
+/// peer negotiating `2026-07-28` is **always served statelessly**, regardless
+/// of `StreamableHttpServerConfig::legacy_session_mode` — each request gets a
+/// fresh handler from the factory below, so nothing connection-scoped
+/// survives between requests. The orchestrator tools are exactly the
+/// connection-scoped ones (`EscalationState` captures the live server→client
+/// peer at the first fleet call), and they stay correct only because stdio
+/// sessions are long-lived. Adding a stateful tool to this HTTP profile would
+/// therefore break under draft-version clients even though it works today
+/// against `2025-11-25`.
 fn build_http_router(
     backend: Arc<dyn Backend>,
     require_auth: bool,
