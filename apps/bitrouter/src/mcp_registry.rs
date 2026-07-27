@@ -702,7 +702,7 @@ impl RegistryClient {
 
     /// `mcp search <query>` / `mcp list` — fetch visible (active + latest)
     /// entries, following cursors until `limit` rows are gathered, the
-    /// registry runs out of pages, or [`MAX_PAGES`] is reached.
+    /// registry runs out of pages, or the page cap is reached.
     pub async fn servers(
         &self,
         query: Option<&str>,
@@ -1446,8 +1446,8 @@ mod tests {
             dir
         }
 
-        fn client(server: &MockServer, cache: &PathBuf) -> RegistryClient {
-            RegistryClient::with_base(server.uri(), Some(cache.clone())).expect("client")
+        fn client(server: &MockServer, cache: &std::path::Path) -> RegistryClient {
+            RegistryClient::with_base(server.uri(), Some(cache.to_path_buf())).expect("client")
         }
 
         /// Two-list-page fixture: page 1 carries a cursor, page 2 terminates.
