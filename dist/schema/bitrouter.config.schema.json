@@ -886,6 +886,10 @@
         "cache": {
           "description": "List-call cache settings.",
           "$ref": "#/$defs/McpCacheConfig"
+        },
+        "upstream_protocol": {
+          "description": "MCP protocol version to request when dialing upstream servers.",
+          "$ref": "#/$defs/McpUpstreamProtocol"
         }
       }
     },
@@ -950,6 +954,21 @@
           "default": 64
         }
       }
+    },
+    "McpUpstreamProtocol": {
+      "description": "`mcp.upstream_protocol` — the protocol version the gateway asks for in its\nupstream `initialize` handshake.\n\nA server that does not know the requested version answers with one it does\nsupport, and the connection proceeds on that; nothing here can strand a\nworking upstream. The setting only raises the *ceiling* of what may be\nnegotiated.",
+      "oneOf": [
+        {
+          "description": "The latest version the MCP SDK treats as current — today `2025-11-25`.\nThe default, and what every release before the rmcp 3.0 upgrade used.",
+          "type": "string",
+          "const": "latest"
+        },
+        {
+          "description": "`2026-07-28`. Opting in lets upstreams answer `tools/call` with MRTR\n`input_required` or a Tasks `task` handle. Neither is a shape this\ngateway can carry — see `docs/MCP_2026_07_28_SPEC.md` (D1) — so both\nsurface as explicit errors rather than silent failures.",
+          "type": "string",
+          "const": "2026-07-28"
+        }
+      ]
     },
     "McpServerConfig": {
       "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`super::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",

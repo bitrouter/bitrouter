@@ -450,6 +450,30 @@ pub struct McpConfig {
     pub aggregate: McpAggregateConfig,
     /// List-call cache settings.
     pub cache: McpCacheConfig,
+    /// MCP protocol version to request when dialing upstream servers.
+    pub upstream_protocol: McpUpstreamProtocol,
+}
+
+/// `mcp.upstream_protocol` — the protocol version the gateway asks for in its
+/// upstream `initialize` handshake.
+///
+/// A server that does not know the requested version answers with one it does
+/// support, and the connection proceeds on that; nothing here can strand a
+/// working upstream. The setting only raises the *ceiling* of what may be
+/// negotiated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpUpstreamProtocol {
+    /// The latest version the MCP SDK treats as current — today `2025-11-25`.
+    /// The default, and what every release before the rmcp 3.0 upgrade used.
+    #[default]
+    Latest,
+    /// `2026-07-28`. Opting in lets upstreams answer `tools/call` with MRTR
+    /// `input_required` or a Tasks `task` handle. Neither is a shape this
+    /// gateway can carry — see `docs/MCP_2026_07_28_SPEC.md` (D1) — so both
+    /// surface as explicit errors rather than silent failures.
+    #[serde(rename = "2026-07-28")]
+    V2026_07_28,
 }
 
 /// `mcp.aggregate` — the virtual aggregate endpoint.

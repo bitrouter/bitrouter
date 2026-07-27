@@ -24,7 +24,7 @@ use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, ElicitRequestParams,
     ElicitResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams, Implementation,
-    ProgressNotificationParam, ReadResourceRequestParams, ServerResult,
+    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ServerResult,
 };
 #[expect(
     deprecated,
@@ -57,12 +57,15 @@ struct BitrouterMcpClient {
     server_name: String,
     progress: Arc<ProgressDispatcher>,
     invalidation: Arc<broadcast::Sender<InvalidationEvent>>,
+    /// Version to request in the upstream `initialize` handshake.
+    protocol_version: ProtocolVersion,
 }
 
 impl ClientHandler for BitrouterMcpClient {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
         info.client_info = Implementation::new("bitrouter", env!("CARGO_PKG_VERSION"));
+        info.protocol_version = self.protocol_version.clone();
         info
     }
 
@@ -227,6 +230,7 @@ const INVALIDATION_CHANNEL_CAPACITY: usize = 256;
 pub struct RmcpExecutor {
     pool: Pool,
     invalidation_tx: Arc<broadcast::Sender<InvalidationEvent>>,
+    protocol_version: ProtocolVersion,
 }
 
 impl Default for RmcpExecutor {
@@ -235,14 +239,34 @@ impl Default for RmcpExecutor {
         Self {
             pool: Default::default(),
             invalidation_tx: Arc::new(tx),
+            protocol_version: ProtocolVersion::LATEST,
         }
     }
 }
 
 impl RmcpExecutor {
-    /// Fresh executor with an empty connection pool.
+    /// Fresh executor with an empty connection pool, dialing upstreams at
+    /// [`ProtocolVersion::LATEST`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Request `version` in the upstream `initialize` handshake instead of
+    /// [`ProtocolVersion::LATEST`].
+    ///
+    /// This is the whole of the client-side `2026-07-28` opt-in. It is a
+    /// ceiling, not a demand: a server that does not know the version answers
+    /// with one it does support and the connection proceeds on that, so
+    /// raising it cannot strand a working upstream. What it *does* change is
+    /// which response shapes an upstream is permitted to send — at
+    /// `2026-07-28` a `tools/call` may come back as MRTR `input_required` or a
+    /// Tasks handle, which [`map_call_tool_result`] turns into explicit errors.
+    ///
+    /// Applies to connections opened after this call; pooled ones keep the
+    /// version they negotiated.
+    pub fn with_protocol_version(mut self, version: ProtocolVersion) -> Self {
+        self.protocol_version = version;
+        self
     }
 
     /// Subscribe to upstream cache-invalidation notifications. Each
@@ -293,6 +317,7 @@ impl RmcpExecutor {
             server_name: server_name.to_string(),
             progress: progress.clone(),
             invalidation: self.invalidation_tx.clone(),
+            protocol_version: self.protocol_version.clone(),
         };
         let service = connect(server_name, transport, client).await?;
         // rmcp 3.x allocates a per-`Peer` SEP-2549 response cache that is
@@ -733,6 +758,36 @@ mod tests {
     #[test]
     fn executor_constructs_with_empty_pool() {
         let _ = RmcpExecutor::new();
+    }
+
+    fn client_for(exec: &RmcpExecutor) -> BitrouterMcpClient {
+        BitrouterMcpClient {
+            server_name: "srv".into(),
+            progress: Arc::new(ProgressDispatcher::new()),
+            invalidation: exec.invalidation_tx.clone(),
+            protocol_version: exec.protocol_version.clone(),
+        }
+    }
+
+    /// The default must stay `LATEST`: opting an upstream into `2026-07-28`
+    /// lets it answer `tools/call` with shapes this gateway can only turn into
+    /// errors, so it has to be a choice someone makes.
+    #[test]
+    fn upstream_handshake_requests_latest_by_default() {
+        let exec = RmcpExecutor::new();
+        assert_eq!(
+            client_for(&exec).get_info().protocol_version,
+            ProtocolVersion::LATEST,
+        );
+    }
+
+    #[test]
+    fn with_protocol_version_is_carried_into_the_handshake() {
+        let exec = RmcpExecutor::new().with_protocol_version(ProtocolVersion::V_2026_07_28);
+        assert_eq!(
+            client_for(&exec).get_info().protocol_version,
+            ProtocolVersion::V_2026_07_28,
+        );
     }
 
     /// Build a `ServerResult` from JSON. The rmcp result types are
