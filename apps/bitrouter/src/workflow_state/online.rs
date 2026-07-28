@@ -3,9 +3,7 @@ use bitrouter_sdk::language_model::types::{Content, Prompt};
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::extractors::{ExtractorInput, extract_workflow_state};
-use crate::workflow_state::ir::{
-    AgentRole, HarnessId, ProtocolKind, RequirementLevel, WorkflowStateIR,
-};
+use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
 use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
 
 pub struct OnlineWorkflowState {
@@ -64,23 +62,9 @@ impl OnlineWorkflowState {
         };
         let mut ir = extract_workflow_state(&input);
         ir.identity = resolve_workflow_identity(&input, tracker);
-        if ir.harness_id == HarnessId::Terminus2 && ir.identity.role == AgentRole::Unknown {
-            ir.capability_constraints.tool_reliability = RequirementLevel::High;
-            ir.capability_constraints.expected_redo_penalty = RequirementLevel::High;
-            if !ir
-                .capability_constraints
-                .compatibility
-                .contains(&"requires_terminal_interaction".to_string())
-            {
-                ir.capability_constraints
-                    .compatibility
-                    .push("requires_terminal_interaction".to_string());
-            }
-        }
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
         let routing_key = ir.route_projection().key();
-        let legacy_routing_key =
-            superpowers_agent_context_key(headers, &ir).unwrap_or_else(|| ir.legacy_routing_key());
+        let legacy_routing_key = ir.legacy_routing_key();
         Self {
             ir,
             legacy_fingerprint,
@@ -173,29 +157,6 @@ fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
 }
 
-fn superpowers_agent_context_key(headers: &HeaderMap, ir: &WorkflowStateIR) -> Option<String> {
-    if ir.harness_id != HarnessId::Codex
-        || ir.active_workflow.as_deref() != Some("superpowers:subagent-driven-development")
-    {
-        return None;
-    }
-    let role = header_value(headers, "x-bitrouter-agent-role")?
-        .trim()
-        .to_ascii_lowercase();
-    if !matches!(
-        role.as_str(),
-        "controller" | "implementer" | "reviewer" | "re-reviewer" | "fixer" | "quorum-evaluator"
-    ) {
-        return None;
-    }
-    let complexity = header_value(headers, "x-bitrouter-task-complexity")
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .filter(|value| matches!(value.as_str(), "mechanical" | "standard" | "complex"))
-        .unwrap_or_else(|| "standard".to_string());
-    Some(format!("superpowers|{role}|{complexity}"))
-}
-
 fn parse_harness(value: &str) -> Option<HarnessId> {
     match value.trim().to_ascii_lowercase().as_str() {
         "generic" => Some(HarnessId::Generic),
@@ -229,7 +190,7 @@ mod tests {
     };
     use http::HeaderValue;
 
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateKind};
+    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
 
     fn prompt_after_tool(tool: &str) -> Prompt {
@@ -312,18 +273,22 @@ mod tests {
     }
 
     #[test]
-    fn superpowers_role_and_complexity_form_a_sticky_agent_context_key() {
+    fn superpowers_headers_do_not_change_online_route_key() {
         let prompt = prompt_after_tool("apply_patch");
+        let mut baseline_headers = HeaderMap::new();
+        baseline_headers.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
+        baseline_headers.insert(
+            "x-bitrouter-protocol",
+            HeaderValue::from_static("responses"),
+        );
+        let baseline = OnlineWorkflowState::from_headers(&baseline_headers, &prompt);
         let mut headers = HeaderMap::new();
         headers.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
         headers.insert(
             "x-bitrouter-protocol",
             HeaderValue::from_static("responses"),
         );
-        headers.insert(
-            "x-superpowers-phase",
-            HeaderValue::from_static("implementation"),
-        );
+        headers.insert("x-superpowers-phase", HeaderValue::from_static("unknown"));
         headers.insert(
             "x-superpowers-skill",
             HeaderValue::from_static("superpowers:subagent-driven-development"),
@@ -337,22 +302,10 @@ mod tests {
             HeaderValue::from_static("mechanical"),
         );
 
-        let implementation = OnlineWorkflowState::from_headers(&headers, &prompt);
-        headers.insert("x-superpowers-phase", HeaderValue::from_static("test"));
-        let test = OnlineWorkflowState::from_headers(&headers, &prompt);
+        let state = OnlineWorkflowState::from_headers(&headers, &prompt);
 
-        assert_eq!(
-            implementation.legacy_routing_key(),
-            "superpowers|implementer|mechanical"
-        );
-        assert_eq!(
-            implementation.legacy_routing_key(),
-            test.legacy_routing_key()
-        );
-        assert_eq!(implementation.routing_key(), "agent_trace/v1|edit|normal");
-        assert_eq!(test.routing_key(), "agent_trace/v1|test|normal");
-        assert_eq!(implementation.ir.state_kind, WorkflowStateKind::Edit);
-        assert_eq!(test.ir.state_kind, WorkflowStateKind::Test);
+        assert_eq!(state.ir.state_kind, baseline.ir.state_kind);
+        assert_eq!(state.routing_key(), baseline.routing_key());
     }
 
     #[test]

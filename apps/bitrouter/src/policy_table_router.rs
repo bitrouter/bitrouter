@@ -35,7 +35,7 @@ use crate::adequacy::AdequacyLedger;
 use crate::adequacy::reliability::RoutePermit;
 use crate::adequacy::settlement::{PendingAdequacyDecision, PendingAdequacyStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
-use crate::workflow_state::ir::{AgentRole, HarnessId, WorkflowIdentity, WorkflowStateKind};
+use crate::workflow_state::ir::{HarnessId, WorkflowIdentity, WorkflowStateKind};
 use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
@@ -296,11 +296,6 @@ impl PolicyTable {
     }
 
     fn exploration_allowed_for_online(&self, online: &OnlineWorkflowState) -> bool {
-        if online.ir.harness_id == HarnessId::Terminus2
-            && online.ir.identity.role == AgentRole::Unknown
-        {
-            return false;
-        }
         matches!(
             online.ir.state_kind,
             WorkflowStateKind::ToolFollowup
@@ -1434,30 +1429,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminus_unknown_role_stays_on_strong_tier_when_exploration_is_due() {
+    async fn generic_and_terminus_unknown_role_share_route_tier_and_ledger_state() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         let non_trial = || Outcome::Exploration {
             trialed: false,
             cause: InadequacyCause::None,
         };
-        ledger.observe("opening", non_trial()).await;
-        ledger.observe("opening", non_trial()).await;
-        let router = exploring_router(ledger);
+        let table = workflow_exploration_table();
         let p = prompt("inbound");
-        let mut headers = HeaderMap::new();
-        headers.insert(
+        let generic_headers = HeaderMap::new();
+        let mut terminus_headers = HeaderMap::new();
+        terminus_headers.insert(
             "x-bitrouter-harness",
             HeaderValue::from_static("terminus_2"),
         );
-        headers.insert("x-session-id", HeaderValue::from_static("parent-unknown"));
+        terminus_headers.insert("x-session-id", HeaderValue::from_static("parent-unknown"));
+        let generic_key = table.request_key(&p, &generic_headers);
+        ledger.observe(&generic_key, non_trial()).await;
+        ledger.observe(&generic_key, non_trial()).await;
+        let router = PolicyTableRouter::new(table, Some(ledger));
 
-        let decision = router.decision_for(&p, &headers);
+        let generic = router.decision_for(&p, &generic_headers);
+        let terminus = router.decision_for(&p, &terminus_headers);
 
-        assert_eq!(decision.workflow_identity.role, AgentRole::Unknown);
-        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
-        assert!(!decision.trialed);
-        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
-        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(terminus.workflow_identity.role, AgentRole::Unknown);
+        assert_eq!(terminus.request_key, generic.request_key);
+        assert_eq!(terminus.selected_tier, generic.selected_tier);
+        assert_eq!(terminus.selected_model, generic.selected_model);
+        assert_eq!(terminus.semantic_successes, generic.semantic_successes);
+        assert_eq!(terminus.locked, generic.locked);
+        assert_eq!(terminus.trialed, generic.trialed);
+        assert_eq!(terminus.exploration_allowed, generic.exploration_allowed);
     }
 
     #[tokio::test]
@@ -1731,42 +1733,50 @@ mod tests {
         PolicyTable::from_config(&cfg).expect("configured")
     }
 
-    #[test]
-    fn superpowers_unsafe_phases_never_allow_exploration() {
+    #[tokio::test]
+    async fn superpowers_headers_do_not_change_route_tier_ledger_or_exploration() {
         let table = workflow_exploration_table();
         let mut prompt = prompt("inbound");
         prompt.messages = vec![user("start"), assistant_calls("read_file")];
-        let phases = [
-            HeaderValue::from_static("unknown"),
-            HeaderValue::from_static("opening"),
-            HeaderValue::from_static("planning"),
-            HeaderValue::from_static("quality-review"),
-            HeaderValue::from_static("recovery"),
-            HeaderValue::from_static("subagent-dispatch"),
-            HeaderValue::from_static("finalization"),
-        ];
-        for phase in phases {
-            let mut headers = HeaderMap::new();
-            headers.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
-            headers.insert(
-                "x-bitrouter-protocol",
-                HeaderValue::from_static("responses"),
-            );
-            headers.insert("x-superpowers-phase", phase);
-            assert!(!table.exploration_allowed_for_prompt(&prompt, &headers));
-        }
-
-        let mut eligible = HeaderMap::new();
-        eligible.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
-        eligible.insert(
+        let mut baseline = HeaderMap::new();
+        baseline.insert("x-bitrouter-harness", HeaderValue::from_static("codex"));
+        baseline.insert(
             "x-bitrouter-protocol",
             HeaderValue::from_static("responses"),
         );
-        eligible.insert(
-            "x-superpowers-phase",
-            HeaderValue::from_static("implementation"),
+        let mut private_headers = baseline.clone();
+        private_headers.insert("x-superpowers-phase", HeaderValue::from_static("unknown"));
+        private_headers.insert(
+            "x-superpowers-skill",
+            HeaderValue::from_static("superpowers:subagent-driven-development"),
         );
-        assert!(table.exploration_allowed_for_prompt(&prompt, &eligible));
+        let baseline_key = table.request_key(&prompt, &baseline);
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            cause: InadequacyCause::None,
+        };
+        ledger.observe(&baseline_key, non_trial()).await;
+        ledger.observe(&baseline_key, non_trial()).await;
+        let router = PolicyTableRouter::new(table, Some(ledger));
+        let generic = router.decision_for(&prompt, &baseline);
+        let private = router.decision_for(&prompt, &private_headers);
+
+        assert_eq!(private.request_key, generic.request_key);
+        assert_eq!(private.selected_tier, generic.selected_tier);
+        assert_eq!(private.selected_model, generic.selected_model);
+        assert_eq!(private.semantic_successes, generic.semantic_successes);
+        assert_eq!(private.locked, generic.locked);
+        assert_eq!(private.trialed, generic.trialed);
+        assert_eq!(private.exploration_allowed, generic.exploration_allowed);
+        assert_eq!(
+            router
+                .table
+                .exploration_allowed_for_prompt(&prompt, &private_headers),
+            router
+                .table
+                .exploration_allowed_for_prompt(&prompt, &baseline)
+        );
     }
 
     fn trial_ok() -> Outcome {
