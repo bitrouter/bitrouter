@@ -99,10 +99,6 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
         headers: [
             ("x-bitrouter-request-id".to_string(), request_id.to_string()),
             (
-                "x-bitrouter-workflow-session".to_string(),
-                run_id.to_string(),
-            ),
-            (
                 "x-smithers-workflow-id".to_string(),
                 "release-review".to_string(),
             ),
@@ -120,6 +116,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
         },
     };
     let outcome = BenchmarkOutcomeRecord {
+        request_id: Some(request_id.to_string()),
         session_key: run_id.to_string(),
         task_id: task_id.to_string(),
         reward: 1.0,

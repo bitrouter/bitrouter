@@ -25,7 +25,6 @@ use bitrouter::workflow_state::real_trace::{
 };
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
-use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
 use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
@@ -395,20 +394,13 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 }
 
 #[tokio::test]
-async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger() {
+async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger_without_private_headers()
+ {
     let canonical_key = "agent_trace/v1|tool_followup|normal";
     let ledger_key = format!("coding\0{canonical_key}");
-    let mut generic = benchmark_trace("req-reward-generic-merge");
-    generic.headers.insert(
-        "x-bitrouter-workflow-session".to_string(),
-        "episode-generic".to_string(),
-    );
+    let generic = benchmark_trace("req-reward-generic-merge");
     let mut terminus = benchmark_trace("req-reward-terminus-merge");
     terminus.harness = HarnessId::Terminus2;
-    terminus.headers.insert(
-        "x-bitrouter-workflow-session".to_string(),
-        "episode-terminus".to_string(),
-    );
 
     let mut generic_decision = benchmark_decision("req-reward-generic-merge");
     generic_decision.key_strategy = "agent_trace".to_string();
@@ -421,6 +413,7 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
 
     let outcomes = vec![
         BenchmarkOutcomeRecord {
+            request_id: Some("req-reward-generic-merge".to_string()),
             session_key: "episode-generic".to_string(),
             task_id: "terminal-bench/regex-log".to_string(),
             reward: 1.0,
@@ -431,6 +424,7 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
             agent_finished_at: None,
         },
         BenchmarkOutcomeRecord {
+            request_id: Some("req-reward-terminus-merge".to_string()),
             session_key: "episode-terminus".to_string(),
             task_id: "terminal-bench/regex-log".to_string(),
             reward: 1.0,
@@ -447,12 +441,19 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
     let mut terminus_usage =
         computed_usage("req-reward-terminus-merge", "openai", "gpt-test", 10, 2, 30);
     terminus_usage.status = Some("completed".to_string());
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[generic.clone(), terminus.clone()],
+        &[generic_usage.clone(), terminus_usage.clone()],
+        &outcomes,
+        &[generic_decision.clone(), terminus_decision.clone()],
+    )
+    .expect("source-neutral reward admission without private workflow headers");
     let artifact = WorkflowRunArtifact::build_with_decisions(
         "equivalent-adapters",
-        &[generic, terminus],
-        &[generic_usage, terminus_usage],
+        &[generic.clone(), terminus.clone()],
+        &[generic_usage.clone(), terminus_usage.clone()],
         &outcomes,
-        &[generic_decision, terminus_decision],
+        &[generic_decision.clone(), terminus_decision.clone()],
     )
     .expect("source-neutral reward candidate construction");
 
@@ -464,17 +465,142 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
             .all(|candidate| candidate.ledger_key.as_deref() == Some(ledger_key.as_str()))
     );
 
-    let db = bitrouter::db::connect("sqlite::memory:").await.unwrap();
-    bitrouter::db::run_migrations(&db).await.unwrap();
-    let store = AdequacyStore::new(db);
-    let summary =
-        apply_semantic_reward_feedback(&store, &artifact.semantic_policy_transition_candidates)
-            .await
-            .expect("canonical candidates update the shared ledger");
-    assert_eq!(summary.semantic_success_evidence_count, 1);
-    let counts = store.load_semantic_success_counts().await.unwrap();
+    assert!(
+        generic
+            .headers
+            .keys()
+            .chain(terminus.headers.keys())
+            .all(|header| !header.starts_with("x-bitrouter-workflow-")
+                && !header.starts_with("x-bitrouter-parent-session")
+                && !header.starts_with("x-bitrouter-agent-")),
+        "feedback fixtures must not smuggle private workflow/session/identity headers"
+    );
+
+    let root = temp_path("source-neutral-reward-feedback-command");
+    std::fs::create_dir_all(&root).unwrap();
+    let traces_path = root.join("traces.jsonl");
+    let usage_path = root.join("usage.jsonl");
+    let outcomes_path = root.join("outcomes.jsonl");
+    let decisions_path = root.join("decisions.jsonl");
+    let database_url = format!("sqlite://{}", root.join("adequacy.db").display());
+    let setup_db = bitrouter::db::connect(&database_url).await.unwrap();
+    bitrouter::db::run_migrations(&setup_db).await.unwrap();
+    setup_db.close().await.unwrap();
+    std::fs::write(
+        &traces_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&generic).unwrap(),
+            serde_json::to_string(&terminus).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &usage_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&generic_usage).unwrap(),
+            serde_json::to_string(&terminus_usage).unwrap()
+        ),
+    )
+    .unwrap();
+    BenchmarkOutcomeRecord::write_jsonl(&outcomes_path, &outcomes).unwrap();
+    PolicyDecisionRecord::write_jsonl(&decisions_path, &[generic_decision, terminus_decision])
+        .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+        .args([
+            "workflow-state",
+            "apply-reward-feedback",
+            "--database-url",
+            &database_url,
+            "--traces",
+            traces_path.to_str().unwrap(),
+            "--cloud-usage",
+            usage_path.to_str().unwrap(),
+            "--outcomes",
+            outcomes_path.to_str().unwrap(),
+            "--policy-decisions",
+            decisions_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "reward feedback command failed (status={}): stdout={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("2 candidates"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let db = bitrouter::db::connect(&database_url).await.unwrap();
+    let counts = AdequacyStore::new(db)
+        .load_semantic_success_counts()
+        .await
+        .unwrap();
     assert_eq!(counts.len(), 1);
     assert_eq!(counts.get(&ledger_key), Some(&1));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reward_feedback_identity_join_fails_closed_for_duplicate_ambiguous_missing_and_mismatched_ids() {
+    let trace = benchmark_trace("req-reward-identity");
+    let usage = computed_usage("req-reward-identity", "openai", "gpt-test", 10, 2, 30);
+    let decision = benchmark_decision("req-reward-identity");
+    let outcome = |request_id: Option<&str>| BenchmarkOutcomeRecord {
+        request_id: request_id.map(ToString::to_string),
+        session_key: "legacy-session-is-not-an-admission-key".to_string(),
+        task_id: "terminal-bench/regex-log".to_string(),
+        reward: 1.0,
+        failed_reason: None,
+        finished_at: None,
+        trial_name: None,
+        agent_started_at: None,
+        agent_finished_at: None,
+    };
+
+    let cases = [
+        (
+            "ambiguous duplicate outcome",
+            vec![
+                outcome(Some("req-reward-identity")),
+                outcome(Some("req-reward-identity")),
+            ],
+        ),
+        ("missing outcome identity", vec![outcome(None)]),
+        (
+            "mismatched outcome identity",
+            vec![outcome(Some("another-request"))],
+        ),
+    ];
+    for (case, outcomes) in cases {
+        let error = WorkflowRunArtifact::validate_reward_feedback_integrity(
+            std::slice::from_ref(&trace),
+            std::slice::from_ref(&usage),
+            &outcomes,
+            std::slice::from_ref(&decision),
+        )
+        .expect_err(case);
+        assert!(
+            error.to_string().contains("outcome join incomplete"),
+            "{case}: {error}"
+        );
+    }
+
+    let error = WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[trace.clone(), trace],
+        &[usage.clone(), usage],
+        &[outcome(Some("req-reward-identity"))],
+        &[decision.clone(), decision],
+    )
+    .expect_err("duplicate trace/request identity must fail closed");
+    assert!(error.to_string().contains("duplicate"), "{error}");
 }
 
 #[test]
@@ -1114,6 +1240,7 @@ fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "session-a".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1155,6 +1282,7 @@ fn terminus_subagent_reward_joins_by_explicit_trial_not_agent_session() {
         ),
     ]);
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "regex-log__trial-a".to_string(),
         task_id: "regex-log".to_string(),
         reward: 1.0,
@@ -1199,6 +1327,7 @@ fn run_artifact_joins_trace_to_benchmark_outcome_by_agent_time_window() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "regex-log__abc123".to_string(),
         task_id: "terminal-bench/regex-log".to_string(),
         reward: 0.0,
@@ -1228,6 +1357,7 @@ fn complete_benchmark_integrity_rejects_time_only_reward_join() {
     trace.captured_at = Some("2026-07-09T08:01:30Z".to_string());
     let usage = computed_usage("req-time-only", "openai", "gpt-test", 10, 2, 30);
     let outcome = BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "regex-log__abc123".to_string(),
         task_id: "terminal-bench/regex-log".to_string(),
         reward: 1.0,
@@ -1276,6 +1406,7 @@ fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
     }];
     let outcomes = vec![
         BenchmarkOutcomeRecord {
+            request_id: None,
             session_key: "regex-log__abc123".to_string(),
             task_id: "terminal-bench/regex-log".to_string(),
             reward: 0.0,
@@ -1286,6 +1417,7 @@ fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
             agent_finished_at: Some("2026-07-09T08:04:00Z".to_string()),
         },
         BenchmarkOutcomeRecord {
+            request_id: None,
             session_key: "fix-git__def456".to_string(),
             task_id: "terminal-bench/fix-git".to_string(),
             reward: 1.0,
@@ -1709,6 +1841,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-001".to_string()),
         session_key: "trial-a".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1813,6 +1946,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-success-001".to_string()),
         session_key: "trial-success-a".to_string(),
         task_id: "terminal-bench/regex-log".to_string(),
         reward: 1.0,
@@ -1919,6 +2053,7 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-outcome-a".to_string()),
         session_key: "session-a".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1969,6 +2104,7 @@ fn benchmark_bundle_rejects_unmatched_outcomes_before_writing() {
         .headers
         .insert("x-bitrouter-trial-id".to_string(), "trial-a".to_string());
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-2".to_string()),
         session_key: "trial-b".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
