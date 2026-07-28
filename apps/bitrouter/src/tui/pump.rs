@@ -93,10 +93,7 @@ mod tests {
             &stub_catalog(),
             "stub",
             base.path().to_path_buf(),
-            bitrouter_substrate::engine::LaunchOptions {
-                transcript: false, // tempdir test — no durable transcript
-                ..Default::default()
-            },
+            bitrouter_substrate::engine::LaunchOptions::default(),
         )
         .await
         .expect("launch");

@@ -195,13 +195,6 @@ impl PaneState {
         }
     }
 
-    /// A durable orchestrator session: a PTY pane that isn't a transient
-    /// interactive attach (attaches belong to their ACP agent, not the
-    /// sessions memory).
-    pub fn is_session(&self) -> bool {
-        self.kind == PaneKind::Pty && !self.record_id.starts_with("attach:")
-    }
-
     pub(super) fn push(&mut self, line: Line) {
         self.lines.push(line);
         if self.lines.len() > SCROLLBACK_CAP {
