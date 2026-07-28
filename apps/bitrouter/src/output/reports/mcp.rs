@@ -14,7 +14,7 @@ pub struct McpRegistryRow {
     pub name: String,
     pub version: String,
     /// How the entry installs: `remote` (zero-install), `npx` / `uvx`
-    /// (stub-able), `manual` (oci/mcpb-only), or `-` (no distribution).
+    /// (stub-able), `manual` (other package types), or `-` (no distribution).
     pub install: String,
     pub description: String,
 }

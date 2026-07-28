@@ -29,6 +29,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 
 /// Base URL of the official MCP registry's v0.1 REST API.
 pub const REGISTRY_BASE_URL: &str = "https://registry.modelcontextprotocol.io";
@@ -171,6 +172,9 @@ pub struct Argument {
     /// Verbatim value (may carry `{var}` templates).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Default value supplied by the registry when no fixed value is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
     /// Placeholder id for user-supplied positional arguments.
     #[serde(rename = "valueHint", default, skip_serializing_if = "Option::is_none")]
     pub value_hint: Option<String>,
@@ -181,19 +185,18 @@ impl Argument {
     /// arguments with only a `valueHint` render as a `<hint>` placeholder the
     /// user must replace when reviewing the stub.
     fn cli_fragment(&self) -> Option<String> {
+        let value = self.value.as_ref().or(self.default.as_ref());
         match self.kind.as_deref() {
             Some("named") => {
                 let name = self.name.as_ref()?;
-                Some(match &self.value {
+                Some(match value {
                     Some(v) => format!("{name}={}", template_to_env_refs(v)),
                     None => name.clone(),
                 })
             }
             // Positional (and drift-tolerant fallback for unknown kinds):
             // verbatim value, else a `<valueHint>` placeholder.
-            _ => self
-                .value
-                .as_ref()
+            _ => value
                 .map(|v| template_to_env_refs(v))
                 .or_else(|| self.value_hint.as_ref().map(|h| format!("<{h}>"))),
         }
@@ -221,15 +224,13 @@ impl RegistryServer {
         self.remotes.iter().find(|r| r.kind == "streamable-http")
     }
 
-    /// The first npm/pypi package wired for stdio (a missing transport block
-    /// is treated as stdio — the only local option). Preference: npm, then
-    /// pypi, matching the runner preference order.
+    /// The first version-pinned npm/pypi package explicitly wired for stdio.
+    /// Preference: npm, then pypi, matching the runner preference order.
     fn stdio_package(&self) -> Option<&Package> {
         let is_stdio = |p: &&Package| {
-            p.transport
-                .as_ref()
-                .map(|t| t.kind == "stdio")
-                .unwrap_or(true)
+            p.transport.as_ref().is_some_and(|t| t.kind == "stdio")
+                && p.version.as_deref().is_some_and(|v| !v.is_empty())
+                && !p.identifier.is_empty()
         };
         self.packages
             .iter()
@@ -552,7 +553,7 @@ pub fn add_stub(entry: &ServerEntry) -> Result<AddStub, String> {
             .unwrap_or("the project's documentation");
         return Err(match server.install_support() {
             InstallSupport::Manual => format!(
-                "'{}' ships only as an oci/mcpb package — no runner mapping exists yet, so install it manually from {hint} and add an `mcp_servers:` entry pointing at the installed server.",
+                "'{}' has no safely stub-able, version-pinned npm/pypi stdio package (unsupported packages include oci/mcpb) — install it manually from {hint} and add an `mcp_servers:` entry pointing at the installed server.",
                 server.name
             ),
             _ => format!(
@@ -676,6 +677,7 @@ pub struct RegistryClient {
     http: reqwest::Client,
     base_url: String,
     cache_dir: Option<PathBuf>,
+    timeout: Duration,
 }
 
 impl RegistryClient {
@@ -688,15 +690,24 @@ impl RegistryClient {
     /// A client against an explicit base URL and cache directory. Tests use
     /// this to point at a mock server; production uses [`Self::new`].
     fn with_base(base_url: String, cache_dir: Option<PathBuf>) -> Result<Self> {
+        Self::with_base_and_timeout(base_url, cache_dir, FETCH_TIMEOUT)
+    }
+
+    fn with_base_and_timeout(
+        base_url: String,
+        cache_dir: Option<PathBuf>,
+        timeout: Duration,
+    ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("bitrouter/", env!("CARGO_PKG_VERSION")))
-            .timeout(FETCH_TIMEOUT)
+            .timeout(timeout)
             .build()
             .context("building MCP registry http client")?;
         Ok(Self {
             http,
             base_url,
             cache_dir,
+            timeout,
         })
     }
 
@@ -708,11 +719,21 @@ impl RegistryClient {
         query: Option<&str>,
         limit: usize,
     ) -> Result<FetchOutcome<Vec<ServerEntry>>> {
-        let cache = self
-            .cache_dir
-            .as_ref()
-            .map(|d| d.join(format!("servers--{}.json", slugify(query.unwrap_or("all")))));
-        let outcome = fetch_with_cache(cache, || self.fetch_servers(query, limit)).await?;
+        let cache = self.cache_dir.as_ref().map(|d| {
+            let identity = format!("{}\0{limit}", query.unwrap_or(""));
+            d.join(format!("servers--{}.json", cache_key(&identity)))
+        });
+        let outcome = fetch_with_cache(cache, || async {
+            tokio::time::timeout(self.timeout, self.fetch_servers(query, limit))
+                .await
+                .with_context(|| {
+                    format!(
+                        "MCP registry command timed out after {}s",
+                        self.timeout.as_secs_f64()
+                    )
+                })?
+        })
+        .await?;
         Ok(FetchOutcome {
             data: truncate(outcome.data, limit),
             from_cache: outcome.from_cache,
@@ -724,8 +745,12 @@ impl RegistryClient {
         let cache = self
             .cache_dir
             .as_ref()
-            .map(|d| d.join(format!("server--{}.json", slugify(name))));
-        fetch_with_cache(cache, || self.fetch_latest(name)).await
+            .map(|d| d.join(format!("server--{}.json", cache_key(name))));
+        let outcome = fetch_with_cache(cache, || self.fetch_latest(name)).await?;
+        if outcome.data.server.name != name || !visible(&outcome.data) {
+            anyhow::bail!("cached MCP registry entry does not match active server '{name}'");
+        }
+        Ok(outcome)
     }
 
     /// Paginate `/v0.1/servers`, keeping only visible entries.
@@ -799,6 +824,7 @@ fn servers_url(
             pairs.append_pair("cursor", c);
         }
         pairs.append_pair("limit", &limit.to_string());
+        pairs.append_pair("version", "latest");
     }
     Ok(url.into())
 }
@@ -838,6 +864,14 @@ fn slugify(s: &str) -> String {
     } else {
         out
     }
+}
+
+/// A readable, collision-resistant cache key. The slug is diagnostic only;
+/// the SHA-256 suffix preserves the exact query/name identity.
+fn cache_key(s: &str) -> String {
+    let slug: String = slugify(s).chars().take(48).collect();
+    let digest = Sha256::digest(s.as_bytes());
+    format!("{slug}--{}", hex::encode(digest))
 }
 
 /// Resolve the MCP registry cache directory under
@@ -905,6 +939,7 @@ where
         }
         Err(net_err) => {
             if let Some(path) = &cache
+                && permits_stale_fallback(&net_err)
                 && let Some(stale) = cache_read_any::<T>(path)
             {
                 eprintln!(
@@ -918,6 +953,27 @@ where
             Err(net_err)
         }
     }
+}
+
+/// Stale data is safe only for transient transport/server failures. An
+/// authoritative client error (notably 404 for a deleted registry entry) or
+/// a local parse/validation error must surface instead of reviving old data.
+fn permits_stale_fallback(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        if cause
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some()
+        {
+            return true;
+        }
+        let Some(error) = cause.downcast_ref::<reqwest::Error>() else {
+            return false;
+        };
+        if let Some(status) = error.status() {
+            return status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+        }
+        error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
+    })
 }
 
 fn now_secs() -> u64 {
@@ -1158,6 +1214,40 @@ mod tests {
     }
 
     #[test]
+    fn package_stubs_require_explicit_stdio_and_pinned_version() {
+        let package = |transport: Option<&str>, version: Option<&str>| Package {
+            registry_type: "npm".to_string(),
+            identifier: "example-mcp".to_string(),
+            version: version.map(str::to_string),
+            transport: transport.map(|kind| PackageTransport {
+                kind: kind.to_string(),
+            }),
+            runtime_arguments: Vec::new(),
+            package_arguments: Vec::new(),
+            environment_variables: Vec::new(),
+        };
+        let server = |package| RegistryServer {
+            name: "com.example/server".to_string(),
+            title: None,
+            description: None,
+            version: Some("1.0.0".to_string()),
+            repository: None,
+            remotes: Vec::new(),
+            packages: vec![package],
+        };
+
+        for unsafe_package in [
+            package(None, Some("1.0.0")),
+            package(Some("stdio"), None),
+            package(Some("stdio"), Some("")),
+        ] {
+            let server = server(unsafe_package);
+            assert_eq!(server.install_support(), InstallSupport::Manual);
+            assert_eq!(server.invocation(), None);
+        }
+    }
+
+    #[test]
     fn rows_classify_and_sort() {
         let rows = registry_rows(&entries());
         assert_eq!(rows.len(), 3);
@@ -1269,6 +1359,25 @@ mod tests {
                 "<newsletter_slug>"
             ]
         );
+    }
+
+    #[test]
+    fn arguments_render_registry_defaults() {
+        let named: Argument = serde_json::from_value(serde_json::json!({
+            "type": "named",
+            "name": "--port",
+            "default": "3000"
+        }))
+        .expect("named argument");
+        assert_eq!(named.cli_fragment().as_deref(), Some("--port=3000"));
+
+        let positional: Argument = serde_json::from_value(serde_json::json!({
+            "type": "positional",
+            "valueHint": "workspace",
+            "default": "/srv/project"
+        }))
+        .expect("positional argument");
+        assert_eq!(positional.cli_fragment().as_deref(), Some("/srv/project"));
     }
 
     #[test]
@@ -1410,10 +1519,13 @@ mod tests {
         .expect("url");
         assert_eq!(
             url,
-            "https://registry.example/v0.1/servers?search=file+system&cursor=cur%3A1&limit=100"
+            "https://registry.example/v0.1/servers?search=file+system&cursor=cur%3A1&limit=100&version=latest"
         );
         let bare = servers_url("https://registry.example", None, None, 25).expect("url");
-        assert_eq!(bare, "https://registry.example/v0.1/servers?limit=25");
+        assert_eq!(
+            bare,
+            "https://registry.example/v0.1/servers?limit=25&version=latest"
+        );
     }
 
     #[test]
@@ -1448,6 +1560,21 @@ mod tests {
 
         fn client(server: &MockServer, cache: &std::path::Path) -> RegistryClient {
             RegistryClient::with_base(server.uri(), Some(cache.to_path_buf())).expect("client")
+        }
+
+        fn age_only_cache_entry(cache: &std::path::Path) {
+            let entries: Vec<_> = std::fs::read_dir(cache)
+                .expect("cache dir")
+                .collect::<std::io::Result<_>>()
+                .expect("cache entries");
+            assert_eq!(entries.len(), 1, "test expects exactly one cache file");
+            let path = entries[0].path();
+            let mut raw: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("read cache"))
+                    .expect("cache json");
+            raw["fetched_at"] = serde_json::json!(0);
+            std::fs::write(&path, serde_json::to_vec(&raw).expect("serialize cache"))
+                .expect("age cache");
         }
 
         /// Two-list-page fixture: page 1 carries a cursor, page 2 terminates.
@@ -1496,29 +1623,138 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn server_list_cache_does_not_truncate_larger_limits() {
+            let server = MockServer::start().await;
+            let cache = tmp_cache("limit");
+            let active = |name: String| {
+                serde_json::json!({
+                    "server": {"name": name, "version": "1.0.0"},
+                    "_meta": {"io.modelcontextprotocol.registry/official": {
+                        "status": "active", "isLatest": true
+                    }}
+                })
+            };
+            let first: Vec<_> = (0..100)
+                .map(|i| active(format!("com.example/server-{i:03}")))
+                .collect();
+            let page1 = serde_json::json!({
+                "servers": first,
+                "metadata": {"nextCursor": "cursor-100"}
+            });
+            let page2 = serde_json::json!({
+                "servers": [active("com.example/server-100".to_string())],
+                "metadata": {}
+            });
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers"))
+                .and(query_param("cursor", "cursor-100"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(page2))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(page1))
+                .mount(&server)
+                .await;
+
+            let c = client(&server, &cache);
+            let small = c.servers(None, 50).await.expect("small fetch");
+            assert_eq!(small.data.len(), 50);
+            let large = c.servers(None, 150).await.expect("larger fetch");
+            assert!(!large.from_cache, "a smaller cached result is incomplete");
+            assert_eq!(large.data.len(), 101);
+            assert_eq!(large.data[100].server.name, "com.example/server-100");
+            let _ = std::fs::remove_dir_all(&cache);
+        }
+
+        #[tokio::test]
+        async fn pagination_obeys_one_timeout_for_the_whole_command() {
+            let server = MockServer::start().await;
+            let page1 = r#"{"servers": [{
+                    "server": {"name": "com.example/one", "version": "1.0.0"},
+                    "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": true}}
+                }], "metadata": {"nextCursor": "cursor-1"}}"#;
+            let page2 = r#"{"servers": [{
+                    "server": {"name": "com.example/two", "version": "1.0.0"},
+                    "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": true}}
+                }], "metadata": {}}"#;
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers"))
+                .and(query_param("cursor", "cursor-1"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(Duration::from_millis(70))
+                        .set_body_string(page2),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(Duration::from_millis(70))
+                        .set_body_string(page1),
+                )
+                .mount(&server)
+                .await;
+
+            let c = RegistryClient::with_base_and_timeout(
+                server.uri(),
+                None,
+                Duration::from_millis(100),
+            )
+            .expect("client");
+            let err = c.servers(None, 2).await.unwrap_err();
+            assert!(err.to_string().contains("timed out"), "{err:#}");
+        }
+
+        #[tokio::test]
+        async fn latest_cache_keys_do_not_alias_distinct_registry_names() {
+            let server = MockServer::start().await;
+            let cache = tmp_cache("name-collision");
+            for name in ["com.example/a-b", "com.example/a_b"] {
+                let encoded = name.replace('/', "%2F");
+                let detail = serde_json::json!({
+                    "server": {"name": name, "description": "test", "version": "1.0.0"},
+                    "_meta": {"io.modelcontextprotocol.registry/official": {
+                        "status": "active", "isLatest": true
+                    }}
+                });
+                Mock::given(method("GET"))
+                    .and(path(format!("/v0.1/servers/{encoded}/versions/latest")))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(detail))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+
+            let c = client(&server, &cache);
+            let first = c.latest("com.example/a-b").await.expect("first fetch");
+            assert_eq!(first.data.server.name, "com.example/a-b");
+            let second = c.latest("com.example/a_b").await.expect("second fetch");
+            assert_eq!(second.data.server.name, "com.example/a_b");
+            let _ = std::fs::remove_dir_all(&cache);
+        }
+
+        #[tokio::test]
         async fn servers_falls_back_to_stale_cache_on_network_failure() {
             let cache = tmp_cache("stale");
-            let entries = vec![ServerEntry {
-                server: RegistryServer {
-                    name: "cached.example/one".to_string(),
-                    title: None,
-                    description: None,
-                    version: Some("1.0.0".to_string()),
-                    repository: None,
-                    remotes: Vec::new(),
-                    packages: Vec::new(),
-                },
-                meta: EntryMeta::default(),
-            }];
-            // A stale (TTL-expired) cache entry: fetched_at = 0.
-            cache_write(&cache.join("servers--all.json"), &entries);
-            // Force staleness by rewriting fetched_at to 0.
-            let path = cache.join("servers--all.json");
-            let raw: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
-            let mut raw = raw;
-            raw["fetched_at"] = serde_json::json!(0);
-            std::fs::write(&path, serde_json::to_vec(&raw).expect("ser")).expect("write");
+            let live = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(
+                    r#"{"servers": [{
+                        "server": {"name": "cached.example/one", "version": "1.0.0"},
+                        "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": true}}
+                    }], "metadata": {}}"#,
+                ))
+                .mount(&live)
+                .await;
+            client(&live, &cache)
+                .servers(None, 50)
+                .await
+                .expect("populate cache");
+            age_only_cache_entry(&cache);
 
             // No mock server listening on this port → connection refused.
             let c =
@@ -1601,6 +1837,35 @@ mod tests {
             let err = c.latest("no/such").await.unwrap_err();
             let msg = format!("{err:#}");
             assert!(msg.contains("bitrouter mcp search"), "{msg}");
+            let _ = std::fs::remove_dir_all(&cache);
+        }
+
+        #[tokio::test]
+        async fn latest_does_not_revive_stale_entry_after_404() {
+            let cache = tmp_cache("removed");
+            let live = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers/no%2Fsuch/versions/latest"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(
+                    r#"{"server": {"name": "no/such", "description": "test", "version": "1.0.0"},
+                        "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": true}}}"#,
+                ))
+                .mount(&live)
+                .await;
+            let c = client(&live, &cache);
+            c.latest("no/such").await.expect("populate cache");
+
+            age_only_cache_entry(&cache);
+
+            let removed = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v0.1/servers/no%2Fsuch/versions/latest"))
+                .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"error":"deleted"}"#))
+                .mount(&removed)
+                .await;
+            let c = client(&removed, &cache);
+            let err = c.latest("no/such").await.unwrap_err();
+            assert!(format!("{err:#}").contains("bitrouter mcp search"));
             let _ = std::fs::remove_dir_all(&cache);
         }
 

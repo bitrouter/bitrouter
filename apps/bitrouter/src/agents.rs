@@ -286,15 +286,14 @@ pub(crate) fn yaml_scalar(s: &str) -> String {
         })
         .unwrap_or(false);
     let needs_quotes = first_special
-        || s.contains(' ')
+        || s.chars().any(|c| c.is_whitespace() || c.is_control())
         || s.contains('#')
         || s.contains(':')
         || parses_as_non_string(s);
     if needs_quotes {
-        // Escape backslashes and double quotes so the result is a valid
-        // YAML / JSON double-quoted scalar.
-        let escaped = s.replace('\\', r"\\").replace('"', r#"\""#);
-        format!("\"{escaped}\"")
+        // JSON string syntax is a valid YAML double-quoted scalar and handles
+        // every control character, not just backslashes and quotes.
+        serde_json::Value::String(s.to_string()).to_string()
     } else {
         s.to_string()
     }
@@ -578,6 +577,16 @@ mod tests {
         // Strings that merely look numeric-ish stay plain.
         for s in ["1.2.3", "v2", "npx", "false-positive"] {
             assert_eq!(yaml_scalar(s), s, "{s} must stay unquoted");
+        }
+    }
+
+    #[test]
+    fn yaml_scalar_round_trips_control_characters() {
+        for value in ["line one\nline two", "tab\tseparated", "carriage\rreturn"] {
+            let yaml = format!("value: {}\n", yaml_scalar(value));
+            let parsed: std::collections::HashMap<String, String> =
+                serde_saphyr::from_str(&yaml).expect("rendered scalar must be valid YAML");
+            assert_eq!(parsed.get("value").map(String::as_str), Some(value));
         }
     }
 

@@ -653,9 +653,9 @@ enum McpAction {
     /// Search the official MCP registry (registry.modelcontextprotocol.io)
     /// for upstream MCP servers. Rows carry an install-support column:
     /// `remote` (zero-install), `npx`/`uvx` (stub-able), `manual`
-    /// (oci/mcpb-only).
+    /// (other package types).
     Search {
-        /// Search text (matched server-side against name/description).
+        /// Search text (matched server-side against registry names).
         query: String,
         /// Maximum rows to print.
         #[arg(long, default_value_t = 50)]
@@ -672,8 +672,9 @@ enum McpAction {
     /// Print a YAML stub for a registry server (paste under `mcp_servers:`
     /// in `bitrouter.yaml`). Prefers a zero-install `streamable-http` remote
     /// when the entry publishes one; otherwise stubs `npx`/`uvx` stdio
-    /// packages with required env vars as placeholders. oci/mcpb-only
-    /// entries are refused with a manual-install pointer.
+    /// packages with required env vars as placeholders. Entries without a
+    /// pinned npm/PyPI stdio package are refused with a manual-install
+    /// pointer.
     Add {
         /// Registry name, e.g. `com.pulsemcp/remote-filesystem` (see
         /// `bitrouter mcp search` / `bitrouter mcp list`).

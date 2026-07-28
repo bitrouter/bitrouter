@@ -216,7 +216,7 @@ Discovery over the official MCP Registry (`https://registry.modelcontextprotocol
 bitrouter mcp search filesystem [--limit N]
 ```
 
-Searches the registry server-side and prints rows of `name / version / install / description`. The install column classifies support: `remote` (zero-install `streamable-http` entry), `npx` / `uvx` (auto-stub-able stdio package), `manual` (oci/mcpb-only), `-` (no distribution).
+Searches registry names server-side and prints rows of `name / version / install / description`. The install column classifies support: `remote` (zero-install `streamable-http` entry), `npx` / `uvx` (auto-stub-able, version-pinned stdio package), `manual` (another package type or an entry that is not safe to auto-stub), `-` (no distribution).
 
 ### `bitrouter mcp list`
 
@@ -232,7 +232,7 @@ Lists registry servers with the same install-support column (default 50 rows).
 bitrouter mcp add com.pulsemcp/remote-filesystem
 ```
 
-Prints a YAML stub to review and paste under `mcp_servers:` — the same reviewed-stub flow as `bitrouter agents install` (SEP-1024-compliant by construction: the full command is visible before it ever runs). Preference order: a published `streamable-http` remote becomes a zero-install `http` entry (header `{var}` templates become `${VAR}` env references); otherwise an npm/pypi stdio package becomes a version-pinned `npx -y <id>@<version>` / `uvx <id>@<version>` stub with required `environmentVariables` as `""` placeholders (optional ones listed as comments). oci/mcpb-only entries are refused with a manual-install pointer. The `mcp_servers:` key is derived from the registry name's last segment.
+Prints a YAML stub to review and paste under `mcp_servers:` — the same reviewed-stub flow as `bitrouter agents install` (SEP-1024-compliant by construction: the full command is visible before it ever runs). Preference order: a published `streamable-http` remote becomes a zero-install `http` entry (header `{var}` templates become `${VAR}` env references); otherwise an explicitly declared, version-pinned npm/pypi stdio package becomes an `npx -y <id>@<version>` / `uvx <id>@<version>` stub with required `environmentVariables` as `""` placeholders (optional ones listed as comments). Other package types and incomplete/unpinned package entries are refused with a manual-install pointer. The `mcp_servers:` key is derived from the registry name's last segment.
 
 ---
 
