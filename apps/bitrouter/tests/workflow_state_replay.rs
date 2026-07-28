@@ -530,12 +530,13 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
     );
 
     let db = bitrouter::db::connect(&database_url).await.unwrap();
-    let counts = AdequacyStore::new(db)
+    let counts = AdequacyStore::new(db.clone())
         .load_semantic_success_counts()
         .await
         .unwrap();
     assert_eq!(counts.len(), 1);
     assert_eq!(counts.get(&ledger_key), Some(&1));
+    db.close().await.unwrap();
 
     let mut conflicting_trace = benchmark_trace("header-public-b");
     conflicting_trace.id = "artifact-trace-a".to_string();
@@ -596,7 +597,7 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
         String::from_utf8_lossy(&conflicting_output.stderr)
     );
     let db = bitrouter::db::connect(&database_url).await.unwrap();
-    let counts = AdequacyStore::new(db)
+    let counts = AdequacyStore::new(db.clone())
         .load_semantic_success_counts()
         .await
         .unwrap();
@@ -606,6 +607,7 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
         "failed feedback must not mutate the ledger"
     );
     assert_eq!(counts.get(&ledger_key), Some(&1));
+    db.close().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
 
