@@ -90,7 +90,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
     let other_key = "agent_trace/v1|tool_followup|normal";
     let ledger_key = format!("smithers\0{target_key}");
     let trace = CapturedIngressTrace {
-        id: "trace-smithers-1".to_string(),
+        id: request_id.to_string(),
         captured_at: None,
         harness: HarnessId::Smithers,
         protocol: ProtocolKind::ChatCompletions,
@@ -115,17 +115,9 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
             status: "completed".to_string(),
         },
     };
-    let outcome = BenchmarkOutcomeRecord {
-        request_id: Some(request_id.to_string()),
-        session_key: run_id.to_string(),
-        task_id: task_id.to_string(),
-        reward: 1.0,
-        failed_reason: None,
-        finished_at: None,
-        trial_name: Some(run_id.to_string()),
-        agent_started_at: None,
-        agent_finished_at: None,
-    };
+    let outcome = BenchmarkOutcomeRecord::new(run_id, task_id, 1.0)
+        .with_request_id(request_id)
+        .with_trial_name(run_id);
     let decision = PolicyDecisionRecord {
         captured_at: None,
         request_id: Some(request_id.to_string()),

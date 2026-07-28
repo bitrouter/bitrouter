@@ -349,12 +349,12 @@ impl CostJoinSummary {
             .collect::<BTreeSet<_>>();
         let trace_request_ids = traces
             .iter()
-            .filter_map(trace_request_id)
+            .filter_map(|trace| trace.artifact_request_id().map(ToString::to_string))
             .collect::<BTreeSet<_>>();
 
         let matched_trace_count = traces
             .iter()
-            .filter_map(trace_request_id)
+            .filter_map(|trace| trace.artifact_request_id().map(ToString::to_string))
             .filter(|request_id| usage_request_ids.contains(request_id))
             .count();
         let unmatched_trace_count = traces.len().saturating_sub(matched_trace_count);
@@ -396,13 +396,13 @@ impl WorkflowRunArtifact {
 
         let mut trace_ids = BTreeSet::new();
         for trace in traces {
-            let request_id = trace_request_id(trace).ok_or_else(|| {
+            let request_id = trace.artifact_request_id().ok_or_else(|| {
                 BitrouterError::bad_request(format!(
                     "benchmark integrity: trace {} has no request id",
                     trace.id
                 ))
             })?;
-            if !trace_ids.insert(request_id.clone()) {
+            if !trace_ids.insert(request_id.to_string()) {
                 return Err(BitrouterError::bad_request(format!(
                     "benchmark integrity: duplicate trace request id {request_id}"
                 )));
@@ -453,14 +453,14 @@ impl WorkflowRunArtifact {
 
         let mut traces_by_request_id = BTreeMap::new();
         for trace in traces {
-            let request_id = trace_request_id(trace).ok_or_else(|| {
+            let request_id = trace.artifact_request_id().ok_or_else(|| {
                 BitrouterError::bad_request(format!(
                     "benchmark integrity: trace {} has no request id for decision join",
                     trace.id
                 ))
             })?;
             if traces_by_request_id
-                .insert(request_id.clone(), trace)
+                .insert(request_id.to_string(), trace)
                 .is_some()
             {
                 return Err(BitrouterError::bad_request(format!(
@@ -563,12 +563,15 @@ impl WorkflowRunArtifact {
         let trace_ids = traces
             .iter()
             .map(|trace| {
-                trace_request_id(trace).ok_or_else(|| {
-                    BitrouterError::bad_request(format!(
-                        "reward feedback integrity: trace {} has no request id",
-                        trace.id
-                    ))
-                })
+                trace
+                    .artifact_request_id()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        BitrouterError::bad_request(format!(
+                            "reward feedback integrity: trace {} has no request id",
+                            trace.id
+                        ))
+                    })
             })
             .collect::<Result<BTreeSet<_>>>()?;
         let decision_ids = decisions
@@ -1049,16 +1052,6 @@ fn read_jsonl_values(path: &Path) -> Result<Vec<serde_json::Value>> {
     Ok(values)
 }
 
-fn trace_request_id(trace: &CapturedIngressTrace) -> Option<String> {
-    [
-        "x-bitrouter-cloud-request-id",
-        "x-bitrouter-request-id",
-        "x-request-id",
-    ]
-    .into_iter()
-    .find_map(|name| header_value(&trace.headers, name))
-}
-
 fn semantic_policy_transition_candidates(
     semantic_candidates: &[SemanticOutcomeCandidate],
     traces: &[CapturedIngressTrace],
@@ -1068,7 +1061,9 @@ fn semantic_policy_transition_candidates(
     let request_id_by_trace_id = traces
         .iter()
         .filter_map(|trace| {
-            trace_request_id(trace).map(|request_id| (trace.id.clone(), request_id))
+            trace
+                .artifact_request_id()
+                .map(|request_id| (trace.id.clone(), request_id.to_string()))
         })
         .collect::<BTreeMap<_, _>>();
     let decisions_by_request_id = decisions

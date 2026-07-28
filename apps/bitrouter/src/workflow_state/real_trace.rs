@@ -328,6 +328,17 @@ pub fn capture_from_env() -> Result<Option<RealTraceCapture>> {
 }
 
 impl CapturedIngressTrace {
+    /// Canonical persisted request identity for strict artifact joins.
+    ///
+    /// This deliberately reads the captured artifact ID only, never inbound
+    /// headers. The capture middleware assigns the same value to the
+    /// downstream request header so usage and policy-decision artifacts can
+    /// persist it independently.
+    pub fn artifact_request_id(&self) -> Option<&str> {
+        let request_id = self.id.trim();
+        (!request_id.is_empty()).then_some(request_id)
+    }
+
     pub fn to_replay_fixture_json(&self, sanitizer: &TraceSanitizer) -> Result<serde_json::Value> {
         let mut fixture_json = json!({
             "id": self.id,

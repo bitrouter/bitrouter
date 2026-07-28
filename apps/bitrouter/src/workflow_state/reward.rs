@@ -65,6 +65,38 @@ pub struct RewardJoin {
 }
 
 impl BenchmarkOutcomeRecord {
+    /// Construct an outcome artifact without a strict-feedback identity.
+    ///
+    /// Analytical callers may omit it; feedback import requires
+    /// [`Self::with_request_id`] for every outcome.
+    pub fn new(session_key: impl Into<String>, task_id: impl Into<String>, reward: f64) -> Self {
+        Self {
+            request_id: None,
+            session_key: session_key.into(),
+            task_id: task_id.into(),
+            reward,
+            failed_reason: None,
+            finished_at: None,
+            trial_name: None,
+            agent_started_at: None,
+            agent_finished_at: None,
+        }
+    }
+
+    /// Attach the canonical persisted trace identity used by strict feedback.
+    pub fn with_request_id(mut self, request_id: impl AsRef<str>) -> Self {
+        let request_id = request_id.as_ref().trim();
+        self.request_id = (!request_id.is_empty()).then(|| request_id.to_string());
+        self
+    }
+
+    /// Attach an optional analytical trial label without affecting strict
+    /// request-identity attribution.
+    pub fn with_trial_name(mut self, trial_name: impl Into<String>) -> Self {
+        self.trial_name = Some(trial_name.into());
+        self
+    }
+
     pub fn load_jsonl(path: impl AsRef<Path>) -> Result<Vec<Self>> {
         let file = File::open(path.as_ref()).map_err(|e| {
             BitrouterError::internal(format!(
@@ -173,17 +205,14 @@ impl BenchmarkOutcomeRecord {
             harbor_exception_reason(&value).or_else(|| Some("verifier_failed".to_string()))
         };
 
-        Ok(Self {
-            request_id: json_str(&value, &["request_id"]),
-            session_key: trial_name.clone(),
-            task_id,
-            reward,
-            failed_reason,
-            finished_at,
-            trial_name: Some(trial_name),
-            agent_started_at,
-            agent_finished_at,
-        })
+        let mut outcome = Self::new(trial_name.clone(), task_id, reward);
+        outcome.request_id = json_str(&value, &["request_id"]);
+        outcome.failed_reason = failed_reason;
+        outcome.finished_at = finished_at;
+        outcome.trial_name = Some(trial_name);
+        outcome.agent_started_at = agent_started_at;
+        outcome.agent_finished_at = agent_finished_at;
+        Ok(outcome)
     }
 }
 
@@ -282,8 +311,8 @@ impl RewardJoin {
         let mut outcome_candidates = Vec::new();
         for trace in traces {
             let mut matched = Vec::new();
-            if let Some(request_id) = trace_request_id(trace)
-                && let Some(request_outcome_indices) = outcomes_by_request_id.get(&request_id)
+            if let Some(request_id) = trace.artifact_request_id()
+                && let Some(request_outcome_indices) = outcomes_by_request_id.get(request_id)
             {
                 for index in request_outcome_indices {
                     matched_outcome_indices.insert(*index);
@@ -369,11 +398,11 @@ impl RewardJoin {
         let mut outcome_candidates = Vec::new();
 
         for trace in traces {
-            let Some(request_id) = trace_request_id(trace) else {
+            let Some(request_id) = trace.artifact_request_id() else {
                 summary.unmatched_trace_count += 1;
                 continue;
             };
-            let Some(indices) = outcomes_by_request_id.get(&request_id) else {
+            let Some(indices) = outcomes_by_request_id.get(request_id) else {
                 summary.unmatched_trace_count += 1;
                 continue;
             };
@@ -448,16 +477,6 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
                 .ok()
                 .map(|dt| dt.and_utc())
         })
-}
-
-fn trace_request_id(trace: &CapturedIngressTrace) -> Option<String> {
-    [
-        "x-request-id",
-        "x-bitrouter-request-id",
-        "x-bitrouter-cloud-request-id",
-    ]
-    .into_iter()
-    .find_map(|name| header_value(trace, name))
 }
 
 fn legacy_trace_session_key(trace: &CapturedIngressTrace) -> Option<String> {
