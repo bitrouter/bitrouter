@@ -435,6 +435,14 @@ models:
         cache_read: 0.3
       output_tokens:
         text: 15
+  - id: meituan/longcat-2.0
+    provider_model_id: meituan/longcat-2.0
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.006
+      output_tokens:
+        text: 1.2
 status: active
 weight: 1
 community: false
