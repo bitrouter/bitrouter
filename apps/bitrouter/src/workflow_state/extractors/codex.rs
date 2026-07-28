@@ -207,7 +207,7 @@ mod tests {
             Some("superpowers:subagent-driven-development")
         );
         assert!(
-            ir.routing_key()
+            ir.legacy_routing_key()
                 .contains("|edit|superpowers:subagent-driven-development|")
         );
         assert!(

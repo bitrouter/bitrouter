@@ -246,7 +246,7 @@ impl PolicyTable {
     pub(crate) fn request_key(&self, prompt: &Prompt, headers: &HeaderMap) -> String {
         match self.key_strategy {
             PolicyKeyStrategy::LegacyFingerprint => Self::fingerprint(prompt),
-            PolicyKeyStrategy::WorkflowState => OnlineWorkflowState::from_headers(headers, prompt)
+            PolicyKeyStrategy::AgentTrace => OnlineWorkflowState::from_headers(headers, prompt)
                 .routing_key()
                 .to_string(),
         }
@@ -289,7 +289,7 @@ impl PolicyTable {
         let online = OnlineWorkflowState::from_headers(headers, prompt);
         let request_key = match self.key_strategy {
             PolicyKeyStrategy::LegacyFingerprint => online.legacy_fingerprint(),
-            PolicyKeyStrategy::WorkflowState => online.routing_key(),
+            PolicyKeyStrategy::AgentTrace => online.routing_key(),
         };
         self.exploration_allowed_for_online(&online)
             && exploration_target_matches(headers, request_key)
@@ -510,7 +510,7 @@ impl PolicyTableRouter {
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let request_key = match self.table.key_strategy() {
             PolicyKeyStrategy::LegacyFingerprint => legacy_fingerprint.clone(),
-            PolicyKeyStrategy::WorkflowState => online.routing_key().to_string(),
+            PolicyKeyStrategy::AgentTrace => online.routing_key().to_string(),
         };
         let exploration_allowed = self.table.exploration_allowed_for_online(&online)
             && exploration_target_matches(headers, &request_key);
@@ -778,7 +778,7 @@ impl PolicyTableRouter {
 fn key_strategy_name(strategy: PolicyKeyStrategy) -> &'static str {
     match strategy {
         PolicyKeyStrategy::LegacyFingerprint => "legacy_fingerprint",
-        PolicyKeyStrategy::WorkflowState => "workflow_state",
+        PolicyKeyStrategy::AgentTrace => "agent_trace",
     }
 }
 
@@ -1312,7 +1312,7 @@ mod tests {
     #[test]
     fn workflow_state_key_strategy_uses_ir_key_for_lookup() {
         let mut cfg = config();
-        cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
+        cfg.key_strategy = PolicyKeyStrategy::AgentTrace;
         cfg.fingerprints.clear();
         cfg.default_tier = Some("flagship".to_string());
 
@@ -1564,7 +1564,7 @@ mod tests {
     #[tokio::test]
     async fn workflow_state_key_strategy_uses_ir_key_for_ledger_pins() {
         let mut cfg = config_with_escalation();
-        cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
+        cfg.key_strategy = PolicyKeyStrategy::AgentTrace;
         cfg.fingerprints.clear();
         cfg.default_tier = Some("flagship".to_string());
 
@@ -1726,7 +1726,7 @@ mod tests {
 
     fn workflow_exploration_table() -> Arc<PolicyTable> {
         let mut cfg = config_with_opening_exploration();
-        cfg.key_strategy = PolicyKeyStrategy::WorkflowState;
+        cfg.key_strategy = PolicyKeyStrategy::AgentTrace;
         cfg.fingerprints.clear();
         PolicyTable::from_config(&cfg).expect("configured")
     }
@@ -1802,7 +1802,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exploration_target_allows_only_the_matching_request_key() {
+    async fn exploration_target_groups_source_equivalent_request_keys() {
         let table = workflow_exploration_table();
         let mut prompt = prompt("inbound");
         prompt.messages = vec![user("start"), assistant_calls("read_file")];
@@ -1832,9 +1832,10 @@ mod tests {
             target_key.parse().expect("valid request-key header"),
         );
         let other = router.decision_for(&prompt, &other_headers);
-        assert!(!other.exploration_allowed);
-        assert_eq!(other.reason, PolicyDecisionReason::StaticTable);
-        assert_eq!(other.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(other.request_key, target_key);
+        assert!(other.exploration_allowed);
+        assert_eq!(other.reason, PolicyDecisionReason::ExplorationTrial);
+        assert_eq!(other.selected_tier.as_deref(), Some("cheap"));
     }
 
     #[test]
@@ -1867,7 +1868,7 @@ mod tests {
         prompt.messages = vec![user("start"), assistant_calls("read_file")];
         let mut headers = smithers_headers("plan");
         let target_key = table.request_key(&prompt, &headers);
-        let other_key = table.request_key(&prompt, &smithers_headers("review"));
+        let other_key = "agent_trace/v1|test|normal";
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
         ledger.observe(&target_key, trial_ok()).await;
         headers.insert(

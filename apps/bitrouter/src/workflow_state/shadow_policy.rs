@@ -101,7 +101,7 @@ impl ShadowPolicyEvaluator {
                 fixture_id: fixture.id.clone(),
                 harness: fixture.harness.clone(),
                 baseline_key,
-                ir_key: ir.routing_key(),
+                ir_key: ir.legacy_routing_key(),
                 ir_state_kind: ir.state_kind,
                 baseline_tier,
                 ir_tier,

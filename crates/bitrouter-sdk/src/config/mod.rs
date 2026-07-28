@@ -259,8 +259,8 @@ impl Default for RegistryConfig {
 pub struct PolicyTableConfig {
     /// Which request key the policy table uses for `fingerprints`. The default
     /// preserves the original coarse key (`opening`, `after_<tool>`,
-    /// `midstream`). `workflow_state` switches lookup and adequacy learning to
-    /// the cross-harness Workflow State IR routing key.
+    /// `midstream`). `agent_trace` switches lookup and adequacy learning to a
+    /// source-independent agent trace projection key.
     pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
@@ -303,8 +303,9 @@ pub enum PolicyKeyStrategy {
     /// `after_<tool>`.
     #[default]
     LegacyFingerprint,
-    /// The cross-harness Workflow State IR routing key.
-    WorkflowState,
+    /// The canonical source-independent agent trace projection key.
+    #[serde(rename = "agent_trace", alias = "workflow_state")]
+    AgentTrace,
 }
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.

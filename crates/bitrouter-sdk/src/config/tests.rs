@@ -620,20 +620,35 @@ fn policy_table_absent_leaves_section_empty() {
 }
 
 #[test]
-fn parses_policy_table_workflow_state_key_strategy() {
+fn policy_table_agent_trace_key_strategy_is_canonical_and_workflow_state_is_compatible() {
     let yaml = r#"
 policy_table:
-  key_strategy: workflow_state
+  key_strategy: agent_trace
   tiers:
     cheap: vendor/cheap
   fingerprints:
-    "generic|unknown|opening|-|-|-|none|small|none|low|low|low|low|medium|medium|": cheap
+    "agent_trace/v1|opening|normal": cheap
 "#;
     let cfg = parse_with(yaml, |_| None).unwrap();
+    assert_eq!(cfg.policy_table.key_strategy, PolicyKeyStrategy::AgentTrace);
+
+    let serialized = serde_saphyr::to_string(&cfg.policy_table).unwrap();
+    assert!(serialized.contains("key_strategy: agent_trace"));
+
+    let compatible = parse_with(
+        "policy_table:\n  key_strategy: workflow_state\n  tiers: { cheap: vendor/cheap }\n",
+        |_| None,
+    )
+    .unwrap();
     assert_eq!(
-        cfg.policy_table.key_strategy,
-        PolicyKeyStrategy::WorkflowState
+        compatible.policy_table.key_strategy,
+        PolicyKeyStrategy::AgentTrace
     );
+
+    let schema = serde_json::to_value(schemars::schema_for!(PolicyTableConfig)).unwrap();
+    let rendered = serde_json::to_string(&schema).unwrap();
+    assert!(rendered.contains("agent_trace"));
+    assert!(!rendered.contains("workflow_state"));
 }
 
 #[test]

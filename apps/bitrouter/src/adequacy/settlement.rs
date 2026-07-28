@@ -229,7 +229,7 @@ mod tests {
 
     fn policy_table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
-            key_strategy: PolicyKeyStrategy::WorkflowState,
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: [
                 ("capable".to_string(), "openai-codex:gpt-5.5".to_string()),
                 (

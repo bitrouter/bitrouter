@@ -64,7 +64,7 @@ impl ReplayEvaluator {
                 summary.covered += 1;
             }
 
-            let key = ir.routing_key();
+            let key = ir.legacy_routing_key();
             ir_buckets.insert(key.clone());
             labels_by_ir_key
                 .entry(key)

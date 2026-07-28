@@ -69,7 +69,7 @@ pub struct PolicyDefinition {
 impl Default for PolicyDefinition {
     fn default() -> Self {
         Self {
-            key_strategy: PolicyKeyStrategy::WorkflowState,
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: BTreeMap::new(),
             routes: BTreeMap::new(),
             default_tier: None,
@@ -1132,6 +1132,32 @@ mod tests {
                 .max_downgraded_requests_per_session,
             3
         );
+    }
+
+    #[test]
+    fn legacy_workflow_state_locks_deserialize_as_agent_trace_and_freeze_canonically() {
+        let lock: PolicyLock = serde_saphyr::from_str(
+            r#"
+lockfileVersion: 1
+policies:
+  coding:
+    key_strategy: workflow_state
+    tiers:
+      strong: vendor:strong
+    routes:
+      agent_trace/v1|edit|normal: strong
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            lock.policies["coding"].key_strategy,
+            PolicyKeyStrategy::AgentTrace
+        );
+
+        let frozen = freeze_document(lock);
+        let rendered = deterministic_yaml(&frozen).unwrap();
+        assert!(rendered.contains("key_strategy: agent_trace"));
+        assert!(!rendered.contains("key_strategy: workflow_state"));
     }
 
     #[test]

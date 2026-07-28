@@ -12,6 +12,7 @@ pub struct OnlineWorkflowState {
     pub ir: WorkflowStateIR,
     legacy_fingerprint: String,
     routing_key: String,
+    legacy_routing_key: String,
 }
 
 impl OnlineWorkflowState {
@@ -77,17 +78,23 @@ impl OnlineWorkflowState {
             }
         }
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
-        let routing_key =
-            superpowers_agent_context_key(headers, &ir).unwrap_or_else(|| ir.routing_key());
+        let routing_key = ir.route_projection().key();
+        let legacy_routing_key =
+            superpowers_agent_context_key(headers, &ir).unwrap_or_else(|| ir.legacy_routing_key());
         Self {
             ir,
             legacy_fingerprint,
             routing_key,
+            legacy_routing_key,
         }
     }
 
     pub fn routing_key(&self) -> &str {
         &self.routing_key
+    }
+
+    pub fn legacy_routing_key(&self) -> &str {
+        &self.legacy_routing_key
     }
 
     pub fn legacy_fingerprint(&self) -> &str {
@@ -263,7 +270,7 @@ mod tests {
         );
 
         assert_eq!(state.legacy_fingerprint(), "after_Bash");
-        assert!(state.routing_key().contains("tool_followup"));
+        assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
         assert_eq!(state.ir.last_tool_name.as_deref(), Some("Bash"));
     }
 
@@ -278,15 +285,11 @@ mod tests {
 
         assert_eq!(state.ir.harness_id, HarnessId::Codex);
         assert_eq!(state.ir.protocol, ProtocolKind::Responses);
-        assert!(
-            state
-                .routing_key()
-                .starts_with("codex|responses|tool_followup")
-        );
+        assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
     }
 
     #[test]
-    fn smithers_headers_are_part_of_the_workflow_routing_key() {
+    fn smithers_headers_remain_available_only_in_the_legacy_routing_key() {
         let prompt = prompt_after_tool("analyze");
         let mut headers = HeaderMap::new();
         headers.insert("x-bitrouter-harness", "smithers".parse().unwrap());
@@ -300,8 +303,9 @@ mod tests {
         assert_eq!(state.ir.harness_id, HarnessId::Smithers);
         assert_eq!(state.ir.active_workflow.as_deref(), Some("release-review"));
         assert_eq!(state.ir.subagent_role.as_deref(), Some("analyze-risk"));
+        assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
         assert!(
-            state.routing_key().starts_with(
+            state.legacy_routing_key().starts_with(
                 "smithers|chat_completions|tool_followup|release-review|analyze-risk|"
             )
         );
@@ -338,10 +342,15 @@ mod tests {
         let test = OnlineWorkflowState::from_headers(&headers, &prompt);
 
         assert_eq!(
-            implementation.routing_key(),
+            implementation.legacy_routing_key(),
             "superpowers|implementer|mechanical"
         );
-        assert_eq!(implementation.routing_key(), test.routing_key());
+        assert_eq!(
+            implementation.legacy_routing_key(),
+            test.legacy_routing_key()
+        );
+        assert_eq!(implementation.routing_key(), "agent_trace/v1|edit|normal");
+        assert_eq!(test.routing_key(), "agent_trace/v1|test|normal");
         assert_eq!(implementation.ir.state_kind, WorkflowStateKind::Edit);
         assert_eq!(test.ir.state_kind, WorkflowStateKind::Test);
     }

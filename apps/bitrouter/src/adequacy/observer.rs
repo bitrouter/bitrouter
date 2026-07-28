@@ -323,7 +323,7 @@ mod tests {
 
     fn workflow_table(workflow_key: String) -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
-            key_strategy: PolicyKeyStrategy::WorkflowState,
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("capable".to_string(), "vendor/capable".to_string()),
@@ -387,7 +387,7 @@ mod tests {
 
     fn explicit_route_workflow_explore_table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
-            key_strategy: PolicyKeyStrategy::WorkflowState,
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
                 (
                     "cheap".to_string(),
