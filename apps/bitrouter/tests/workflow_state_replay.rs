@@ -1904,6 +1904,40 @@ fn policy_decision_summary_counts_static_to_selected_replacements() {
 }
 
 #[test]
+fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decisions_are_canonical() {
+    let old_path = temp_path("legacy-source-specific-policy-decision.jsonl");
+    std::fs::write(
+        &old_path,
+        r#"{"captured_at":null,"request_id":"legacy-001","input_model":"gpt-5.5","key_strategy":"workflow_state","request_key":"codex|responses|tool_followup","legacy_fingerprint":"after_bash","workflow_state":"tool_followup","static_tier":"strong","static_model":"openai-codex:gpt-5.5","selected_tier":"economy","selected_model":"bitrouter:deepseek/deepseek-v4-pro","reason":"static_table","pinned":false,"locked":false,"trialed":false}
+"#,
+    )
+    .unwrap();
+    let legacy = PolicyDecisionRecord::load_jsonl(&old_path).unwrap();
+    assert_eq!(legacy.len(), 1);
+    assert_eq!(legacy[0].key_strategy, "workflow_state");
+    assert_eq!(legacy[0].request_key, "codex|responses|tool_followup");
+    assert_eq!(legacy[0].trace_state, "tool_followup");
+
+    let new_path = temp_path("canonical-agent-trace-policy-decision.jsonl");
+    let mut canonical = benchmark_decision("agent-trace-001");
+    canonical.key_strategy = "agent_trace".to_string();
+    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
+    PolicyDecisionRecord::write_jsonl(&new_path, &[canonical]).unwrap();
+    let rendered = std::fs::read_to_string(&new_path).unwrap();
+    let new_value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(new_value["key_strategy"], "agent_trace");
+    assert_eq!(
+        new_value["request_key"],
+        "agent_trace/v1|tool_followup|normal"
+    );
+    assert_eq!(new_value["trace_state"], "opening");
+    assert!(new_value.get("workflow_state").is_none());
+
+    let _ = std::fs::remove_file(old_path);
+    let _ = std::fs::remove_file(new_path);
+}
+
+#[test]
 fn run_artifact_attributes_failed_task_to_policy_transition() {
     let output_dir = temp_path("workflow-run-bundle-semantic-policy-transition");
     let traces = vec![CapturedIngressTrace {
