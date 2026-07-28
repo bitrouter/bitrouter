@@ -44,12 +44,12 @@ Accept a group only when every row below is true.
 | Attempts | Accepted task coverage plus validated security-policy skips equals the frozen manifest; no duplicate `started` event |
 | TrialResult | Exactly one complete real TrialResult per accepted task; skipped tasks have none and are never synthesized |
 | Runtime | All non-skipped started cases are `terminal_valid`; every skip has exactly the validated original plus `replacement-01` terminal-invalid pair |
-| Requests | Stable request IDs are unique and equal across expected trace/settlement membership |
+| Requests | Persisted request IDs are unique and equal across trace, settlement, decision, and supplied-outcome membership |
 | Decisions | One policy decision per policy request where the pinned schema requires it |
 | Settlement | Every request is authoritative `computed` or authoritative `not_charged` |
 | Cost join | Every trace matches exactly one usage/charge row; no unmatched trace or usage row |
-| Reward join | Every trace maps to exactly one intended task outcome; no unmatched outcome |
-| Session join | Every request maps to the exact Harbor `session_key` with High confidence |
+| Reward join | Every supplied outcome maps one-to-one to its trace through `request_id`; no unmatched outcome |
+| Diagnostic identity | Session/trial and adapter identity, when captured, may explain a harness run but do not affect acceptance or learning |
 | Replay | Offline reconstruction covers every policy request and agrees with online decisions |
 | Cleanup | Observed sandbox peak respects frozen concurrency; final instances, volumes, and interfaces are zero |
 | Secrets | Sanitized archive contains no live credential or private key material |
@@ -70,7 +70,8 @@ group-wide provider gate or for transient failures.
 
 A rejected group may still produce a diagnostic report. It must not drive policy feedback, a cost claim, or the next round.
 
-The cost join, reward join, and session join are exact set-and-identity checks, not best-effort ratios.
+The cost, decision, and reward joins are exact request-ID set-and-identity
+checks, not best-effort ratios. Session/trial fields are diagnostic only.
 
 ## Four-bucket settlement
 
@@ -116,11 +117,14 @@ For each trace, require:
 
 - one authoritative settlement row;
 - one routing decision when applicable;
-- one explicit workflow session equal to the outcome `session_key`;
-- one task outcome selected by that session;
+- one supplied task outcome with the same persisted `request_id`;
 - an HTTP/runtime outcome consistent across logs and artifacts.
 
 Do not join by overlapping timestamps when trials run in parallel. A time window may bound a scan but cannot establish membership.
+
+The `session_key`, trial identity, and native adapter identity can be retained
+for benchmark diagnostics and case management. They never select a route, make
+a bundle valid, or admit reward feedback.
 
 TrialResult completeness means the verifier ran, reward is present, and exception metadata is empty or an explicitly accepted typed terminal condition. A typed `TerminalSessionEnded` may still yield a valid TrialResult when the environment remains reachable and the verifier completes. An environment disconnect, missing verifier result, corrupt output, or generic agent exception is runtime-invalid.
 
@@ -131,9 +135,9 @@ Maintain two evidence planes:
 | Plane | Key | Positive/negative signal |
 | --- | --- | --- |
 | Provider reliability | Provider + model + credential class + region/protocol | Timeout, 429, 5xx, successful completion, half-open probe |
-| Semantic adequacy | Workflow/task capability state + model transition | Verifier reward after a successfully completed, attributable request |
+| Semantic adequacy | Source-neutral trace projection + model transition | Verifier reward after a successfully completed request with an exact request-ID join |
 
-Do not let task success give semantic success to an earlier timed-out/ejected weak request. Do not let a provider timeout permanently prove that the model lacks task capability. Require successful transport, attributable outcome, and authoritative settlement before writing positive semantic evidence.
+Do not let task success give semantic success to an earlier timed-out/ejected weak request. Do not let a provider timeout permanently prove that the model lacks task capability. Require successful transport, an exact request-ID outcome join, and authoritative settlement before writing positive semantic evidence. Benchmark identity diagnostics do not enter this learning decision.
 
 Report exploration trials, learned selections, static route choices, escalations, and fallbacks separately. Savings attributed only to fallbacks are reliability behavior, not learned replacement.
 

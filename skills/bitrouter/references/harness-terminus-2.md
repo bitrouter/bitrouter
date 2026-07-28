@@ -70,9 +70,9 @@ adds `/v1/messages` itself. A base ending in `/v1` becomes
 `/v1/v1/messages`, fails with 404 before reaching BitRouter, and produces no
 route trace. The OpenAI provider configuration above still requires `/v1`.
 Current bridge-capable BitRouter builds also unwrap Terminus/LiteLLM's
-`extra_body` and remove its body-level `session_id`; keep the immutable
-workflow/session headers because they remain the authoritative correlation
-channel.
+`extra_body` and remove its body-level `session_id`. Harbor's native
+`X-Session-ID` and body `session_id` are sufficient for adapter diagnostics;
+they are not routing inputs or strict reward identifiers.
 
 Run a Harbor task with `terminus-2` after applying the equivalent agent config:
 
@@ -95,20 +95,12 @@ export BITROUTER_POLICY_DECISION_JSONL="$PWD/artifacts/policy-decisions.jsonl"
 bitrouter start --config ./bitrouter.yaml
 ```
 
-The ingress capture preserves the provider-neutral request id and promotes
-`X-Session-ID` or body `session_id` into structured workflow identity. It
-attaches:
-
-- `x-bitrouter-parent-session-id`
-- `x-bitrouter-agent-session-id`
-- `x-bitrouter-agent-role`
-- `x-bitrouter-context-epoch`
-- `x-bitrouter-context-transition`
-- `x-bitrouter-session-fingerprint`
-
-The fingerprint is a SHA-256 digest of benchmark run, trial, parent session,
-and context epoch. It is attribution metadata and does not enter the routing
-key.
+The ingress capture persists a provider-neutral request ID and can promote
+`X-Session-ID` or body `session_id` into diagnostic workflow identity. It does
+not require callers to add `x-bitrouter-*` workflow, role, trial, or
+fingerprint headers. Native evidence and the official Terminus prompt contract
+help the Terminus adapter explain a trace; they never affect the policy key,
+tier, or exploration eligibility.
 
 ## Compaction-aware identity
 
@@ -120,37 +112,38 @@ identity in Harbor's generated session ids:
 - `<root>-summarization-<N>-answers`
 - `<root>-cont-<N>` for the resumed main agent
 
-BitRouter retains the complete value as the agent session id, extracts `<root>`
-as the parent, and groups all four requests into context epoch `N`. Summary
-starts compaction, questions and answers continue it, and the resumed main
-request records `main_resume`. This suffix evidence takes precedence over
-prompt inference. Interleaved trials remain isolated by benchmark run, trial,
-and root parent session.
+BitRouter retains the complete value as diagnostic session evidence, extracts
+`<root>` as a diagnostic parent, and can group the related requests into
+context epoch `N`. Summary starts compaction, questions and answers continue
+it, and the resumed main request records `main_resume`. This suffix evidence
+takes precedence over prompt inference for diagnostics only. Interleaved trials
+remain manageable through their harness records, but neither trial nor role is
+a policy input.
 
-For benchmark-grade bundles, the driver or gateway in front of BitRouter must
-also attach immutable `x-bitrouter-benchmark-run-id` and
-`x-bitrouter-trial-id` headers. A bundle with decisions is rejected if any
-Terminus-2 request has an unknown role, incomplete identity, duplicate request
-id, or a trace/decision identity mismatch. Ordinary traffic remains fail-open:
-an unrecognized Terminus role stays on the strong tier and is not explored on a
-cheaper model.
+Benchmark bundles and reward feedback are source-neutral. They require unique,
+persisted request IDs with exact trace/usage/decision/outcome joins and
+authoritative settlement evidence. Session, role, prompt, run, and trial data
+may be retained to diagnose a benchmark, but are not bundle acceptance gates or
+learning-admission keys. Unknown Terminus roles fall back to generic diagnostic
+evidence; they do not force a tier or suppress exploration.
 
 ## Benchmark checklist
 
 1. Use one immutable output directory per run.
 2. Keep the task list, model, parser, retry count, and attempt count fixed.
-3. Verify every request has trace, policy-decision, provider-reported usage,
-   charge evidence, run id, trial id, parent session, role, epoch, and
-   fingerprint.
+3. Verify every request has a persisted request ID, trace, policy decision,
+   authoritative usage/charge evidence, and an exactly matching outcome when
+   outcomes are supplied. Retain run, trial, parent-session, role, and epoch
+   fields as diagnostic context when available.
 4. Treat infrastructure errors separately from verifier failures.
 5. Export metering and build the strict evidence bundle as described in
    `references/metering.md`.
 
 ## Gotchas
 
-- Prefer Chat Completions for general current Terminus-2 session correlation.
+- Prefer Chat Completions for general current Terminus-2 session diagnostics.
   For an explicit `claude-code:<model>` route, use the Anthropic configuration
-  above and pass the same immutable workflow session through
+  above; do not add BitRouter-private workflow headers or
   `llm_call_kwargs.extra_headers`.
 - A Claude Pro/Max subscription is valid only through an explicit
   `claude-code:<model>` BitRouter route. Terminus-2 keeps its normal downstream

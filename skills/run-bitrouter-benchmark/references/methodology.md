@@ -26,7 +26,7 @@ Answer it only when the same case/trial identities have:
 - a fixed-strong quality and cost baseline;
 - complete policy-round quality and cost;
 - request-level model selections and decision reasons;
-- exact trace, decision, usage, reward, and workflow-session attribution;
+- exact request-ID joins across trace, decision, usage, and reward artifacts;
 - authoritative cache-aware settlement;
 - comparable harness, sandbox, protocol, and pricing inputs.
 
@@ -42,7 +42,8 @@ Use all of the following for benchmark evidence:
 4. One ephemeral AWS EC2 sandbox for each trial.
 5. A separate central EC2 host running the pinned BitRouter daemon and the benchmark controller.
 6. Private sandbox-to-daemon traffic; public network access only where package bootstrap or controller SSH requires it.
-7. Request-level BitRouter traces, decisions, metering, reward attribution, and explicit workflow sessions.
+7. Request-level BitRouter traces, decisions, metering, reward attribution, and
+   optional session diagnostics.
 
 Local Docker, direct model probes, and fixture tests are useful smoke evidence. They do not satisfy the benchmark gate because they omit the production EC2 lifecycle and cleanup behavior.
 
@@ -154,7 +155,11 @@ Benchmark verifier reward is an oracle unavailable in normal product traffic unl
 
 ## Concurrency and temporal drift
 
-Treat concurrency as a frozen lineage input. Establish explicit workflow-session attribution at concurrency 1, then test higher values with separate non-evaluation canaries. A cautious ladder may evaluate 3, 4, 6, and 8 in new identities; no historical result makes those values safe in another AWS account or provider environment.
+Treat concurrency as a frozen lineage input. Establish exact persisted
+request-ID joins at concurrency 1, then test higher values with separate
+non-evaluation canaries. A cautious ladder may evaluate 3, 4, 6, and 8 in new
+identities; no historical result makes those values safe in another AWS account
+or provider environment.
 
 Never raise or lower concurrency inside a targeted policy lineage. If a canary fails, diagnose it and start a new canary or lineage with a newly frozen value.
 

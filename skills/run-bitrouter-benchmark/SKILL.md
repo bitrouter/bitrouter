@@ -62,7 +62,7 @@ Stop the current lineage, preserve partial evidence, and clean up when any of th
 
 - the AWS identity, source revision, binary checksum, task manifest, or price snapshot differs from the frozen manifest;
 - quota, daemon health, provider sentinel, sandbox bootstrap, or session canary fails before a batch;
-- a group has a missing TrialResult not covered by the narrowly validated security-policy skip contract, a runtime exception, duplicate request ID, incomplete settlement, weak session attribution, or unmatched join;
+- a group has a missing TrialResult not covered by the narrowly validated security-policy skip contract, a runtime exception, duplicate request ID, incomplete settlement, or an unmatched strict request-ID join;
 - exact-tag resource cleanup does not reach zero;
 - a predeclared spend or severe quality stop limit is crossed.
 

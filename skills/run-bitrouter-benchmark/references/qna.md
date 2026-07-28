@@ -113,19 +113,30 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 ## Q13. Why do request traces fail to join the Harbor outcome?
 
-**Symptom:** Requests have timing/model data but the artifact reports Low/ambiguous session confidence or unmatched outcomes.
+**Symptom:** Requests have timing/model data but the artifact reports unmatched
+outcomes or incomplete strict joins.
 
-**Cause / diagnostic:** `x-bitrouter-workflow-session` is absent or differs from the Harbor outcome `session_key`. Prompt hashes, provider response IDs, and body metadata are weaker fallbacks.
+**Cause / diagnostic:** A trace, usage row, policy decision, or outcome omitted
+the persisted `request_id`, duplicated it, or used a different value. Session,
+trial, prompt, and body metadata are diagnostics; they cannot repair a missing
+strict join.
 
-**Safe action:** Generate one exact trial session value, place it in Terminus 2 `session_id` and the explicit header, capture a canary request, and assert equality with the emitted outcome before enabling parallelism.
+**Safe action:** Capture a canary and make the persisted request ID available
+unchanged in the trace, usage, decision, and outcome artifacts. Keep
+Terminus-2 `session_id` only for the native harness and diagnostics; do not add
+an `x-bitrouter-*` workflow header.
 
 ## Q14. Why is time-window attribution unsafe with parallel trials?
 
 **Symptom:** Multiple outcomes can plausibly own the same request because trial windows overlap.
 
-**Cause / diagnostic:** The assembler used timestamps as identity rather than a high-confidence session/request key.
+**Cause / diagnostic:** The assembler used timestamps, a session, or a trial as
+identity instead of the persisted request ID.
 
-**Safe action:** Keep concurrency 1 until explicit sessions are proven. Use time only to bound scans; use stable request IDs and exact workflow sessions for final set membership and reward joins.
+**Safe action:** Keep concurrency 1 until the request-ID joins are proven. Use
+time only to bound scans; use unique persisted request IDs for final set
+membership and reward joins. Sessions may help diagnose a harness run but do
+not enter the strict join.
 
 ## Q15. What should happen when the Terminus 2 tmux session disappears?
 
@@ -293,7 +304,7 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 **Cause / diagnostic:** Terminus 2 is a normal downstream client and should not originate Claude Code credentials, identity headers, or the Claude Agent SDK identity system block. Current BitRouter treats the explicit `claude-code:<model>` target as the operator's subscription-use boundary and constructs the OAuth-compatible Claude Code request on the upstream side, preserving the client's original system instructions. The older rejection—or a generic upstream 429 when the official CLI succeeds with the same token/model—means the serving binary predates the complete bridge, or the request did not resolve to the explicit provider-qualified target. A bare canonical Claude model still cannot auto-cascade onto a personal subscription.
 
-**Safe action:** Pin and verify a bridge-capable BitRouter source/binary, set the long-lived `CLAUDE_CODE_OAUTH_TOKEN` only in the protected central daemon environment before startup, and use an explicit `claude-code:<model>` target. Keep the token, Claude Code agent-profile header, and injected identity block out of Harbor, Terminus 2, sandbox, manifest, and artifact configuration. First run a no-beta standard Anthropic sentinel, then a real Terminus 2 EC2 canary; accept only with the intended provider/model trace, four-bucket settlement, strict cost/reward/session joins, TrialResult, and zero AWS residue.
+**Safe action:** Pin and verify a bridge-capable BitRouter source/binary, set the long-lived `CLAUDE_CODE_OAUTH_TOKEN` only in the protected central daemon environment before startup, and use an explicit `claude-code:<model>` target. Keep the token, Claude Code agent-profile header, and injected identity block out of Harbor, Terminus 2, sandbox, manifest, and artifact configuration. First run a no-beta standard Anthropic sentinel, then a real Terminus 2 EC2 canary; accept only with the intended provider/model trace, four-bucket settlement, strict request-ID cost/reward joins, TrialResult, and zero AWS residue.
 
 ## Q36. Why does a Terminus 2 Anthropic canary return 404 without adding a BitRouter trace?
 
@@ -307,9 +318,9 @@ Use this symptom-driven reference during preflight, execution, recovery, and pub
 
 **Symptom:** Route traces appear, but every model call fails with `invalid_request_error: extra_body: Extra inputs are not permitted`; the traced inbound body contains `extra_body.session_id`.
 
-**Cause / diagnostic:** Terminus 2 passes its session into Harbor's LiteLLM wrapper. Some Anthropic-handler versions serialize the provider-extension container instead of merging it, but Anthropic Messages does not accept `extra_body` or a body-level `session_id`. The same session is already present in the immutable BitRouter workflow headers.
+**Cause / diagnostic:** Terminus 2 passes its session into Harbor's LiteLLM wrapper. Some Anthropic-handler versions serialize the provider-extension container instead of merging it, but Anthropic Messages does not accept `extra_body` or a body-level `session_id`. Native session evidence remains available only for adapter diagnostics.
 
-**Safe action:** Use a bridge-capable BitRouter build that merges non-conflicting `extra_body` extensions into the outbound body, gives explicit top-level fields precedence, and drops `session_id` only after request/session tracing has captured the headers. Do not patch the scored artifact or retry the consumed identity; rebuild, freeze a new binary and run identity, and repeat the non-evaluation canary.
+**Safe action:** Use a bridge-capable BitRouter build that merges non-conflicting `extra_body` extensions into the outbound body, gives explicit top-level fields precedence, and drops `session_id` after native diagnostic capture. Do not patch the scored artifact or retry the consumed identity; rebuild, freeze a new binary and run identity, and repeat the non-evaluation canary.
 
 ## Q38. Why can SSH monitoring time out while the benchmark is still healthy?
 

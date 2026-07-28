@@ -128,11 +128,16 @@ bitrouter workflow-state bundle \
 For any non-empty trace set, bundle creation requires an exact one-to-one
 trace/usage request-id join, provider-reported raw usage, consistent normalized
 buckets, a computed charge, complete effective rates, and a full pricing hash.
-When policy decisions are supplied, trace/decision request ids must also match
-exactly. Outcome attribution requires an explicit session/trial key; timestamp
-overlap is analytical evidence only and is rejected by the strict bundle gate.
-Terminus-2 bundles additionally require complete structured workflow identity;
-see `references/harness-terminus-2.md`.
+When policy decisions or outcomes are supplied, their persisted `request_id`
+sets must each match the trace set exactly and one-to-one. Timestamp overlap,
+session IDs, and trial IDs are useful benchmark diagnostics only; none can
+replace the strict request-ID join. Terminus-2 identity is likewise diagnostic
+adapter evidence, not a source-specific bundle requirement.
+
+The benchmark bundle gate validates archival completeness. Reward-feedback
+admission additionally requires the exact request-ID joins, a completed
+request, and authoritative computed settlement; diagnostic identity fields do
+not participate in learning.
 
 The in-memory analytical `build*` APIs may omit usage and decisions for
 extractor development. The `workflow-state bundle` command is benchmark-grade

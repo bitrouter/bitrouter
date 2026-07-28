@@ -78,15 +78,21 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | `bitrouter policy init <name> --preset <preset> --economy <model> [--strong <model>] [--config PATH]` | Create or extend the deterministic `policy-lock.yaml`, bind the named policy to a preset, and leave programmatic writeback locked. The strong model is inferred from an existing preset when omitted. Presets use `@preset[:variant]`; `templates/auto-router` provides `@auto` and `@auto:cost`. |
 | `bitrouter policy check|status [--config PATH]` | Cross-validate the main config and lock, or report the resolved path, semantic digest, writeback mode, policies, and preset bindings. |
 | `bitrouter policy show <name> [--config PATH]` | Print one validated effective policy. |
-| `bitrouter policy evolve [--apply \| --output FILE [--freeze]] [--config PATH]` | Project policy-namespaced adequacy evidence into a deterministic candidate. Dry-run by default; `--apply` requires writeback to be unlocked. `--output` writes a separate atomic candidate while locked and refuses the active lock path; `--freeze` disables the adequacy learner and future exploration after materializing qualified routes while preserving routing-only session guards. Existing routes are never overwritten or removed. |
+| `bitrouter policy evolve [--apply \| --output FILE [--freeze]] [--config PATH]` | Project policy-namespaced adequacy evidence into a deterministic candidate. Dry-run by default; `--apply` requires writeback to be unlocked. `--output` writes a separate atomic candidate while locked and refuses the active lock path; `--freeze` disables the adequacy learner and future exploration after materializing qualified routes. Existing routes are never overwritten or removed. |
 | `bitrouter policy lock|unlock [--config PATH]` | Forbid or permit programmatic replacement of `policy-lock.yaml`. Manual/Git edits and reload remain allowed while locked. |
 | `bitrouter policy reload [--config PATH] [--socket PATH]` | Hot-reload main config and policy lock through the existing daemon control socket. Invalid locks preserve the last-known-good runtime snapshot. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |
 
 Adaptive routing uses generic `agent_trace` projections. Native runtime adapters
 add diagnostics only, not policy keys, and private BitRouter headers are not
-needed. Existing `workflow_state` lock configuration is readable for
-compatibility, while canonical lock output uses `agent_trace`.
+needed. `agent_trace` is the active and default strategy;
+`key_strategy: legacy_fingerprint` is rejected and must be migrated to
+canonical `agent_trace/v1|<state>|<risk>` routes. Existing `workflow_state`
+lock configuration is readable for compatibility, while canonical lock output
+uses `agent_trace`. `adequacy.explore_opening: true` enables exploration for
+source-neutral opening projections. The removed
+`adequacy.max_downgraded_requests_per_session` setting is rejected because
+session identity is diagnostic-only.
 
 ## Per-provider OAuth
 
