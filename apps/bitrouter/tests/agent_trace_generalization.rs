@@ -36,7 +36,7 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     let temp = TempDir::new().expect("temporary decision directory");
     let decisions_path = temp.path().join("decisions.jsonl");
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
-    let (server, capture) = generalization_server(&upstream.uri(), temp.path()).await;
+    let (server, capture) = generalization_server(&upstream.uri()).await;
 
     for case in native_cases() {
         let mut request = server.post(case.path);
@@ -100,7 +100,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let temp = TempDir::new().expect("temporary decision directory");
     let decisions_path = temp.path().join("decisions.jsonl");
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
-    let (server, _) = generalization_server(&upstream.uri(), temp.path()).await;
+    let (server, _) = generalization_server(&upstream.uri()).await;
 
     for (path, body) in [
         (
@@ -175,6 +175,172 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         decisions[3].selected_model.as_deref(),
         Some("openai-codex:gpt-5.6-sol")
     );
+}
+
+#[tokio::test]
+async fn native_sources_share_template_projection_keys_and_tiers() {
+    let _env_lock = DECISION_RECORDER_ENV_LOCK.lock().await;
+    let upstream = mock_chat_upstream().await;
+    let temp = TempDir::new().expect("temporary decision directory");
+    let decisions_path = temp.path().join("decisions.jsonl");
+    let _decision_env = DecisionRecorderEnv::set(&decisions_path);
+    let (server, capture) = generalization_server(&upstream.uri()).await;
+
+    let scenarios = [
+        (
+            "edit",
+            "agent_trace/v1|edit|normal",
+            terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
+            openclaw_action_case("@auto:cost", "edit"),
+            "economy",
+            "bitrouter:deepseek/deepseek-v4-pro",
+        ),
+        (
+            "test",
+            "agent_trace/v1|test|normal",
+            terminus_action_case("@auto", "cargo test -p bitrouter"),
+            openclaw_action_case("@auto:cost", "test"),
+            "economy",
+            "bitrouter:deepseek/deepseek-v4-pro",
+        ),
+        (
+            "tool followup",
+            "agent_trace/v1|tool_followup|normal",
+            native_tool_followup_case("@auto", HarnessId::Terminus2),
+            native_tool_followup_case("@auto:cost", HarnessId::OpenClaw),
+            "economy",
+            "bitrouter:deepseek/deepseek-v4-pro",
+        ),
+        (
+            "recovery",
+            "agent_trace/v1|recovery|guarded",
+            native_recovery_case("@auto", HarnessId::Terminus2),
+            native_recovery_case("@auto:cost", HarnessId::OpenClaw),
+            "strong",
+            "openai-codex:gpt-5.6-sol",
+        ),
+    ];
+
+    for (_, _, first, second, _, _) in &scenarios {
+        post_native_case(&server, first).await;
+        post_native_case(&server, second).await;
+    }
+
+    let traces = capture.records();
+    assert_eq!(traces.len(), 8);
+    for pair in traces.chunks_exact(2) {
+        assert_eq!(pair[0].harness, HarnessId::Terminus2);
+        assert_eq!(pair[1].harness, HarnessId::OpenClaw);
+        assert!(pair.iter().all(|trace| {
+            trace
+                .headers
+                .keys()
+                .all(|header| !is_private_identity_header(header))
+        }));
+    }
+
+    let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
+        .expect("native HTTP traffic emits policy decisions");
+    assert_eq!(decisions.len(), 8);
+    for ((name, key, _, _, tier, model), pair) in scenarios.iter().zip(decisions.chunks_exact(2)) {
+        assert_eq!(pair[0].request_key, *key, "{name} first source");
+        assert_eq!(pair[1].request_key, *key, "{name} second source");
+        assert_eq!(pair[0].selected_tier.as_deref(), Some(*tier), "{name}");
+        assert_eq!(pair[1].selected_tier.as_deref(), Some(*tier), "{name}");
+        assert_eq!(pair[0].selected_model.as_deref(), Some(*model), "{name}");
+        assert_eq!(pair[1].selected_model.as_deref(), Some(*model), "{name}");
+    }
+}
+
+async fn post_native_case(server: &TestServer, case: &NativeCase) {
+    let mut request = server.post(case.path);
+    for (name, value) in case.headers {
+        request = request.add_header(*name, *value);
+    }
+    request.json(&case.body).await.assert_status_ok();
+}
+
+fn terminus_action_case(model: &str, command: &str) -> NativeCase {
+    NativeCase {
+        name: "Terminus 2",
+        source: HarnessId::Terminus2,
+        path: "/v1/chat/completions",
+        headers: &[],
+        body: json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": terminus_contract()},
+                {"role": "user", "content": "continue"},
+                {"role": "assistant", "content": format!("{{\"commands\":[{{\"keystrokes\":{}}}],\"task_complete\":false}}", serde_json::to_string(command).expect("command serializes"))}
+            ]
+        }),
+    }
+}
+
+fn openclaw_action_case(model: &str, action: &str) -> NativeCase {
+    NativeCase {
+        name: "OpenClaw",
+        source: HarnessId::OpenClaw,
+        path: "/v1/chat/completions",
+        headers: &[],
+        body: json!({
+            "model": model,
+            "agentRuntime": {"id": "openclaw.default"},
+            "runtimePlan": {"action": action},
+            "messages": [{"role": "user", "content": "continue"}]
+        }),
+    }
+}
+
+fn native_tool_followup_case(model: &str, source: HarnessId) -> NativeCase {
+    native_tool_case(model, source, None)
+}
+
+fn native_recovery_case(model: &str, source: HarnessId) -> NativeCase {
+    native_tool_case(model, source, Some("error: cargo test failed"))
+}
+
+fn native_tool_case(model: &str, source: HarnessId, tool_result: Option<&str>) -> NativeCase {
+    let mut messages = vec![
+        json!({"role": "user", "content": "continue"}),
+        json!({"role": "assistant", "tool_calls": [{
+            "id": "call_native", "type": "function",
+            "function": {"name": "bash", "arguments": "{}"}
+        }]}),
+    ];
+    if let Some(result) = tool_result {
+        messages.push(json!({
+            "role": "tool", "tool_call_id": "call_native", "content": result
+        }));
+    }
+    match source {
+        HarnessId::Terminus2 => {
+            messages.insert(0, json!({"role": "system", "content": terminus_contract()}));
+            NativeCase {
+                name: "Terminus 2",
+                source,
+                path: "/v1/chat/completions",
+                headers: &[],
+                body: json!({"model": model, "messages": messages}),
+            }
+        }
+        HarnessId::OpenClaw => NativeCase {
+            name: "OpenClaw",
+            source,
+            path: "/v1/chat/completions",
+            headers: &[],
+            body: json!({
+                "model": model,
+                "agentRuntime": {"id": "openclaw.default"},
+                "messages": messages
+            }),
+        },
+        _ => unreachable!("only native matrix sources are supported"),
+    }
+}
+
+fn terminus_contract() -> &'static str {
+    "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with commands and task_complete."
 }
 
 fn native_cases() -> Vec<NativeCase> {
@@ -252,9 +418,8 @@ fn native_cases() -> Vec<NativeCase> {
     ]
 }
 
-async fn generalization_server(upstream: &str, root: &Path) -> (TestServer, RealTraceCapture) {
-    let config_path = root.join("bitrouter.yaml");
-    let cfg = test_config(upstream, &config_path);
+async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture) {
+    let (cfg, config_path) = template_config_with_mock(upstream);
     let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path))
         .await
         .expect("app assembles");
@@ -277,57 +442,26 @@ async fn generalization_server(upstream: &str, root: &Path) -> (TestServer, Real
     (TestServer::new(router), capture)
 }
 
-fn test_config(upstream: &str, config_path: &Path) -> config::Config {
-    let policy_path = template_root().join("policy-lock.yaml");
-    let yaml = format!(
-        r#"
-server:
-  skip_auth: true
-database:
-  url: "sqlite::memory:"
-providers:
-  mock:
-    api_base: {upstream}
-    api_key: test-key
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - id: test-model
-        pricing:
-          input_micro_usd_per_token: 1.0
-          output_micro_usd_per_token: 1.0
-models:
-  "openai-codex:gpt-5.6-sol":
-    strategy: priority
-    endpoints:
-      - provider: mock
-        service_id: test-model
-  "bitrouter:deepseek/deepseek-v4-pro":
-    strategy: priority
-    endpoints:
-      - provider: mock
-        service_id: test-model
-policy:
-  path: "{}"
-  writeback: locked
-presets:
-  auto:
-    model: "openai-codex:gpt-5.6-sol"
-    policy: auto
-variants:
-  cost:
-    routing: {{ sort: cost }}
-"#,
-        policy_path.display()
-    );
-    std::fs::write(config_path, &yaml).expect("write generalization config");
-    config::parse_with(&yaml, |_| None).expect("generalization config parses")
-}
-
 fn template_config() -> config::Config {
     let path = template_root().join("bitrouter.yaml");
     let yaml = std::fs::read_to_string(&path).expect("read auto template");
     config::parse_with(&yaml, |_| None).expect("auto template config parses")
+}
+
+fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf) {
+    let config_path = template_root().join("bitrouter.yaml");
+    let mut config = template_config();
+    config.server.skip_auth = true;
+    config.database.url = "sqlite::memory:".to_string();
+    for provider_id in ["openai-codex", "bitrouter"] {
+        let provider = config
+            .providers
+            .get_mut(provider_id)
+            .expect("template provider exists");
+        provider.api_base = upstream.to_string();
+        provider.api_key = "test-key".to_string();
+    }
+    (config, config_path)
 }
 
 fn template_root() -> PathBuf {
@@ -339,17 +473,20 @@ fn template_root() -> PathBuf {
 async fn mock_chat_upstream() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/chat/completions"))
+        .and(path("/responses"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "chatcmpl-generalization",
-            "object": "chat.completion",
+            "id": "resp-generalization",
+            "object": "response",
+            "status": "completed",
             "model": "test-model",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "ok"},
-                "finish_reason": "stop"
+            "output": [{
+                "id": "msg-generalization",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}]
             }],
-            "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5}
+            "usage": {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5}
         })))
         .mount(&server)
         .await;
@@ -362,18 +499,23 @@ fn is_private_identity_header(header: &str) -> bool {
         .any(|prefix| header.starts_with(prefix))
 }
 
-struct DecisionRecorderEnv;
+struct DecisionRecorderEnv(Option<std::ffi::OsString>);
 
 impl DecisionRecorderEnv {
     fn set(path: &Path) -> Self {
         // Tests run this setup before building the app, which reads the recorder path once.
+        let previous = std::env::var_os(POLICY_DECISION_JSONL_ENV);
         unsafe { std::env::set_var(POLICY_DECISION_JSONL_ENV, path) };
-        Self
+        Self(previous)
     }
 }
 
 impl Drop for DecisionRecorderEnv {
     fn drop(&mut self) {
-        unsafe { std::env::remove_var(POLICY_DECISION_JSONL_ENV) };
+        if let Some(previous) = &self.0 {
+            unsafe { std::env::set_var(POLICY_DECISION_JSONL_ENV, previous) };
+        } else {
+            unsafe { std::env::remove_var(POLICY_DECISION_JSONL_ENV) };
+        }
     }
 }

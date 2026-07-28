@@ -11,6 +11,7 @@ use bitrouter::adequacy::store::AdequacyStore;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
+use bitrouter::policy_lock;
 use bitrouter::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
@@ -26,6 +27,7 @@ use bitrouter::workflow_state::real_trace::{
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter_sdk::config;
 use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1935,6 +1937,113 @@ fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decision
 
     let _ = std::fs::remove_file(old_path);
     let _ = std::fs::remove_file(new_path);
+}
+
+#[tokio::test]
+async fn legacy_workflow_state_lock_and_artifact_replay_without_projection_migration() {
+    let root = temp_path("legacy-workflow-state-replay");
+    std::fs::create_dir_all(&root).unwrap();
+    let config_path = root.join("bitrouter.yaml");
+    let lock_path = root.join("policy-lock.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+policy:
+  path: "./policy-lock.yaml"
+presets:
+  legacy:
+    model: "vendor/strong"
+    policy: legacy
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &lock_path,
+        r#"
+lockfileVersion: 1
+policies:
+  legacy:
+    key_strategy: workflow_state
+    tiers:
+      economy: "vendor/economy"
+      strong: "vendor/strong"
+    routes:
+      "codex|responses|tool_followup": economy
+    default_tier: strong
+    tool_use_tier: strong
+    tool_safe_tiers:
+      - strong
+      - economy
+"#,
+    )
+    .unwrap();
+    let config =
+        config::parse_with(&std::fs::read_to_string(&config_path).unwrap(), |_| None).unwrap();
+    let loaded = policy_lock::load_for_config(&config, Some(&config_path))
+        .await
+        .unwrap()
+        .expect("legacy bound lock loads");
+    let definition = loaded.document.policies.get("legacy").unwrap();
+    assert_eq!(
+        definition.as_table_config().key_strategy,
+        bitrouter_sdk::config::PolicyKeyStrategy::AgentTrace
+    );
+    assert!(
+        definition
+            .routes
+            .contains_key("codex|responses|tool_followup"),
+        "legacy source-specific route remains legacy evidence"
+    );
+
+    let trace_path = root.join("traces.jsonl");
+    let legacy_trace = CapturedIngressTrace {
+        id: "legacy-request".to_string(),
+        captured_at: None,
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: Default::default(),
+        raw_body: json!({
+            "model": "vendor/strong",
+            "previous_response_id": "resp_legacy",
+            "input": "continue"
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    };
+    TraceArchive::write_jsonl(&trace_path, &[legacy_trace], &TraceSanitizer::default()).unwrap();
+    let fixtures = TraceArchive::read_replay_fixtures(&trace_path).unwrap();
+    let replay = ReplayEvaluator.run(&fixtures);
+    assert_eq!(replay.total, 1);
+    assert_eq!(replay.covered, 1);
+
+    let decision_path = root.join("legacy-decisions.jsonl");
+    let mut legacy_decision = benchmark_decision("legacy-request");
+    legacy_decision.key_strategy = "workflow_state".to_string();
+    legacy_decision.request_key = "codex|responses|tool_followup".to_string();
+    PolicyDecisionRecord::write_jsonl(&decision_path, &[legacy_decision]).unwrap();
+    let legacy_records = PolicyDecisionRecord::load_jsonl(&decision_path).unwrap();
+    assert_eq!(
+        legacy_records[0].request_key,
+        "codex|responses|tool_followup"
+    );
+    assert!(!legacy_records[0].request_key.starts_with("agent_trace/"));
+
+    let canonical_path = root.join("agent-trace-decisions.jsonl");
+    let mut canonical = benchmark_decision("agent-trace-request");
+    canonical.key_strategy = "agent_trace".to_string();
+    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
+    PolicyDecisionRecord::write_jsonl(&canonical_path, &[canonical]).unwrap();
+    let canonical_records = PolicyDecisionRecord::load_jsonl(&canonical_path).unwrap();
+    assert_eq!(
+        canonical_records[0].request_key,
+        "agent_trace/v1|tool_followup|normal"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
