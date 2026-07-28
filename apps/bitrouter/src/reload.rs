@@ -369,7 +369,7 @@ presets:
             r#"lockfileVersion: 1
 policies:
   coding:
-    key_strategy: legacy_fingerprint
+    key_strategy: agent_trace
     tiers: { strong: vendor:old }
     routes: {}
     default_tier: strong
