@@ -620,7 +620,7 @@ fn replay_summary_matches_current_experiment_fixture_set() {
     assert_eq!(summary.covered, 7, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
     assert_eq!(summary.baseline_bucket_count, 3, "{summary:#?}");
-    assert_eq!(summary.ir_bucket_count, 6, "{summary:#?}");
+    assert_eq!(summary.ir_bucket_count, 7, "{summary:#?}");
     assert_eq!(summary.collision_count, 0, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 1, "{summary:#?}");
     assert_eq!(summary.baseline_midstream_count, 1, "{summary:#?}");
@@ -750,7 +750,6 @@ async fn real_trace_capture_writes_sanitized_trace_jsonl_to_archive_path() {
     let path = temp_path("daemon-traces.jsonl");
     let capture = RealTraceCapture::new(TraceCaptureOptions {
         harness: HarnessId::Hermes,
-        session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: Some(path.clone()),
     });
     let router = axum::Router::new().route(
@@ -794,7 +793,6 @@ async fn real_trace_capture_finishes_downstream_after_client_cancellation() {
     let path = temp_path("cancelled-daemon-traces.jsonl");
     let capture = RealTraceCapture::new(TraceCaptureOptions {
         harness: HarnessId::Terminus2,
-        session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: Some(path.clone()),
     });
     let downstream_completed = Arc::new(AtomicBool::new(false));

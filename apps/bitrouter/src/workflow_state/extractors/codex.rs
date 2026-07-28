@@ -19,6 +19,7 @@ impl WorkflowStateExtractor for CodexResponsesExtractor {
                 source: HarnessId::Codex,
                 confidence: 0.95,
                 evidence_kind: "responses_codex_user_agent",
+                native: true,
             });
         }
         input
@@ -30,6 +31,7 @@ impl WorkflowStateExtractor for CodexResponsesExtractor {
                 source: HarnessId::Codex,
                 confidence: 0.9,
                 evidence_kind: "responses_previous_response_id",
+                native: true,
             })
     }
 

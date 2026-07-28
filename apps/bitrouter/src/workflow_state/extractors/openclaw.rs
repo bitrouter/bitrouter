@@ -20,6 +20,7 @@ impl WorkflowStateExtractor for OpenClawExtractor {
                 source: HarnessId::OpenClaw,
                 confidence: 0.9,
                 evidence_kind: "agent_runtime",
+                native: true,
             })
     }
 

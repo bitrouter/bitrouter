@@ -26,13 +26,26 @@ pub struct TraceAdapterMatch {
     pub source: HarnessId,
     pub confidence: f32,
     pub evidence_kind: &'static str,
+    pub native: bool,
+}
+
+impl TraceAdapterMatch {
+    fn parser_source(&self) -> HarnessId {
+        if self.native {
+            self.source.clone()
+        } else {
+            HarnessId::Generic
+        }
+    }
 }
 
 pub(crate) struct AdapterSessionHints {
     pub session_key: Option<String>,
     pub session_confidence: crate::workflow_state::ir::SessionConfidence,
     pub session_source: Option<&'static str>,
-    pub terminus_identity: Option<terminus_2::TerminusSessionIdentity>,
+    pub parent_session_id: Option<String>,
+    pub inferred_role: Option<crate::workflow_state::ir::AgentRole>,
+    pub observed_context_epoch: Option<u32>,
     pub tracks_context_epoch: bool,
 }
 
@@ -45,6 +58,14 @@ pub struct ExtractorInput<'a> {
 }
 
 pub fn extract_workflow_state(input: &ExtractorInput<'_>) -> WorkflowStateIR {
+    let adapter = detect_trace_adapter(input);
+    extract_workflow_state_with_adapter(input, adapter)
+}
+
+fn extract_workflow_state_with_adapter(
+    input: &ExtractorInput<'_>,
+    adapter: TraceAdapterMatch,
+) -> WorkflowStateIR {
     use claude_code::ClaudeCodeExtractor;
     use codex::CodexResponsesExtractor;
     use generic::GenericPromptExtractor;
@@ -53,15 +74,15 @@ pub fn extract_workflow_state(input: &ExtractorInput<'_>) -> WorkflowStateIR {
     use smithers::SmithersExtractor;
     use terminus_2::Terminus2Extractor;
 
-    let adapter = detect_trace_adapter(input);
+    let parser_source = adapter.parser_source();
     let selected_input = ExtractorInput {
-        harness_hint: Some(adapter.source.clone()),
+        harness_hint: Some(parser_source.clone()),
         protocol_hint: adapter_protocol_hint(input, &adapter),
         headers: input.headers,
         raw_body: input.raw_body,
         prompt: input.prompt,
     };
-    let mut ir = match adapter.source {
+    let mut ir = match parser_source {
         HarnessId::Hermes => HermesExtractor.extract(&selected_input),
         HarnessId::ClaudeCode => ClaudeCodeExtractor.extract(&selected_input),
         HarnessId::Codex => CodexResponsesExtractor.extract(&selected_input),
@@ -72,7 +93,7 @@ pub fn extract_workflow_state(input: &ExtractorInput<'_>) -> WorkflowStateIR {
     };
     ir.evidence.push(Evidence {
         kind: "trace_adapter".to_string(),
-        value: adapter.evidence_kind.to_string(),
+        value: format!("{}:{:?}", adapter.evidence_kind, adapter.source),
         confidence: adapter.confidence,
         level: if adapter.confidence >= 0.9 {
             EvidenceLevel::Observed
@@ -120,6 +141,7 @@ pub fn detect_trace_adapter(input: &ExtractorInput<'_>) -> TraceAdapterMatch {
             source: HarnessId::Generic,
             confidence: 0.0,
             evidence_kind: "conflicting_native_evidence",
+            native: false,
         };
     }
 
@@ -130,6 +152,7 @@ pub fn detect_trace_adapter(input: &ExtractorInput<'_>) -> TraceAdapterMatch {
             source,
             confidence: 0.1,
             evidence_kind: "compatibility_harness_hint",
+            native: false,
         };
     }
 
@@ -137,6 +160,7 @@ pub fn detect_trace_adapter(input: &ExtractorInput<'_>) -> TraceAdapterMatch {
         source: HarnessId::Generic,
         confidence: 0.0,
         evidence_kind: "generic_fallback",
+        native: false,
     }
 }
 
@@ -144,7 +168,7 @@ pub fn adapter_protocol_hint(
     input: &ExtractorInput<'_>,
     adapter: &TraceAdapterMatch,
 ) -> ProtocolKind {
-    if input.protocol_hint != ProtocolKind::Unknown {
+    if input.protocol_hint != ProtocolKind::Unknown || !adapter.native {
         return input.protocol_hint.clone();
     }
     match adapter.source {
@@ -174,12 +198,25 @@ pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessio
     use crate::workflow_state::ir::SessionConfidence;
 
     let adapter = detect_trace_adapter(input);
+    if !adapter.native {
+        return AdapterSessionHints {
+            session_key: None,
+            session_confidence: SessionConfidence::None,
+            session_source: None,
+            parent_session_id: None,
+            inferred_role: None,
+            observed_context_epoch: None,
+            tracks_context_epoch: false,
+        };
+    }
     match adapter.source {
         HarnessId::Codex => AdapterSessionHints {
             session_key: codex::previous_response_id(input.raw_body),
             session_confidence: SessionConfidence::Medium,
             session_source: Some("raw_body.previous_response_id"),
-            terminus_identity: None,
+            parent_session_id: None,
+            inferred_role: None,
+            observed_context_epoch: None,
             tracks_context_epoch: false,
         },
         HarnessId::ClaudeCode => {
@@ -197,7 +234,9 @@ pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessio
                 } else {
                     Some("raw_body.metadata.user_id")
                 },
-                terminus_identity: None,
+                parent_session_id: None,
+                inferred_role: None,
+                observed_context_epoch: None,
                 tracks_context_epoch: false,
             }
         }
@@ -205,7 +244,9 @@ pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessio
             session_key: hermes::metadata_job_id(input.raw_body),
             session_confidence: SessionConfidence::Medium,
             session_source: Some("raw_body.metadata.job_id"),
-            terminus_identity: None,
+            parent_session_id: None,
+            inferred_role: None,
+            observed_context_epoch: None,
             tracks_context_epoch: false,
         },
         HarnessId::Terminus2 => {
@@ -217,7 +258,16 @@ pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessio
                 session_key,
                 session_confidence: SessionConfidence::High,
                 session_source: Some("adapter.terminus_2.session_id"),
-                terminus_identity,
+                parent_session_id: terminus_identity
+                    .as_ref()
+                    .map(|identity| identity.parent_session_id.clone()),
+                inferred_role: terminus_identity
+                    .as_ref()
+                    .and_then(|identity| identity.role)
+                    .or_else(|| Some(terminus_2::infer_role(input.prompt))),
+                observed_context_epoch: terminus_identity
+                    .as_ref()
+                    .and_then(|identity| identity.context_epoch),
                 tracks_context_epoch: true,
             }
         }
@@ -226,7 +276,9 @@ pub(crate) fn adapter_session_hints(input: &ExtractorInput<'_>) -> AdapterSessio
                 session_key: None,
                 session_confidence: SessionConfidence::None,
                 session_source: None,
-                terminus_identity: None,
+                parent_session_id: None,
+                inferred_role: None,
+                observed_context_epoch: None,
                 tracks_context_epoch: false,
             }
         }
@@ -387,6 +439,7 @@ mod tests {
         let detected = detect_trace_adapter(&input);
         assert_eq!(detected.source, HarnessId::Generic);
         assert_eq!(detected.evidence_kind, "conflicting_native_evidence");
+        assert!(!detected.native);
     }
 
     #[test]
@@ -405,5 +458,6 @@ mod tests {
         let detected = detect_trace_adapter(&input);
         assert_eq!(detected.source, HarnessId::Codex);
         assert_eq!(detected.evidence_kind, "responses_previous_response_id");
+        assert!(detected.native);
     }
 }

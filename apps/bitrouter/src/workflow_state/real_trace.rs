@@ -29,7 +29,6 @@ const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 #[derive(Debug, Clone)]
 pub struct TraceCaptureOptions {
     pub harness: HarnessId,
-    pub session_header: Option<String>,
     pub archive_path: Option<PathBuf>,
 }
 
@@ -37,7 +36,6 @@ impl Default for TraceCaptureOptions {
     fn default() -> Self {
         Self {
             harness: HarnessId::Generic,
-            session_header: Some("x-bitrouter-workflow-session".to_string()),
             archive_path: None,
         }
     }
@@ -325,7 +323,6 @@ pub fn capture_from_env() -> Result<Option<RealTraceCapture>> {
 
     Ok(Some(RealTraceCapture::new(TraceCaptureOptions {
         harness,
-        session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: Some(PathBuf::from(path)),
     })))
 }
@@ -473,7 +470,6 @@ mod tests {
     async fn trace_capture_keeps_runtime_headers_out_of_downstream_requests() {
         let capture = RealTraceCapture::new(TraceCaptureOptions {
             harness: HarnessId::Codex,
-            session_header: None,
             archive_path: None,
         });
         let router = (capture.router_wrapper())(Router::new().route(
@@ -546,10 +542,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trace_capture_does_not_inject_session_header_from_codex_body() {
+    async fn trace_capture_does_not_inject_workflow_session_from_codex_body() {
         let capture = RealTraceCapture::new(TraceCaptureOptions {
             harness: HarnessId::Codex,
-            session_header: Some("x-bitrouter-workflow-session".to_string()),
             archive_path: None,
         });
         let router = (capture.router_wrapper())(Router::new().route(
@@ -599,7 +594,6 @@ mod tests {
     async fn terminus_trace_capture_does_not_inject_derived_identity_headers() {
         let capture = RealTraceCapture::new(TraceCaptureOptions {
             harness: HarnessId::Terminus2,
-            session_header: Some("x-bitrouter-workflow-session".to_string()),
             archive_path: None,
         });
         let router = (capture.router_wrapper())(Router::new().route(

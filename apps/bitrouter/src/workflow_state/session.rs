@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use bitrouter_sdk::language_model::types::{Content, Message, Role};
 use sha2::{Digest, Sha256};
 
-use crate::workflow_state::extractors::{ExtractorInput, adapter_session_hints, terminus_2};
+use crate::workflow_state::extractors::{ExtractorInput, adapter_session_hints};
 use crate::workflow_state::ir::{
     AgentRole, ContextTransition, Evidence, EvidenceLevel, SessionConfidence, SessionSignal,
     WorkflowIdentity,
@@ -57,23 +57,11 @@ pub fn resolve_workflow_identity(
     let explicit_transition =
         header_value(input, "x-bitrouter-context-transition").map(|value| parse_transition(&value));
     let explicit_fingerprint = header_value(input, "x-bitrouter-session-fingerprint");
-    let terminus_session = adapter_hints.terminus_identity.as_ref();
-
     let role = explicit_role
-        .or_else(|| terminus_session.as_ref().and_then(|identity| identity.role))
-        .unwrap_or_else(|| {
-            if adapter_hints.tracks_context_epoch {
-                terminus_2::infer_role(input.prompt)
-            } else {
-                AgentRole::Unknown
-            }
-        });
+        .or(adapter_hints.inferred_role)
+        .unwrap_or(AgentRole::Unknown);
     let parent_session_id = explicit_parent
-        .or_else(|| {
-            terminus_session
-                .as_ref()
-                .map(|identity| identity.parent_session_id.clone())
-        })
+        .or(adapter_hints.parent_session_id)
         .or_else(|| session.key.clone());
     let state_key = parent_session_id.as_ref().map(|parent| {
         format!(
@@ -90,10 +78,8 @@ pub fn resolve_workflow_identity(
         }
         (Some(epoch), transition, None) => (epoch, transition.unwrap_or(ContextTransition::None)),
         (None, transition, Some(key)) if adapter_hints.tracks_context_epoch => {
-            let observed_epoch = terminus_session
-                .as_ref()
-                .and_then(|identity| identity.context_epoch);
-            let (epoch, inferred) = advance_epoch(tracker, key, role, observed_epoch);
+            let (epoch, inferred) =
+                advance_epoch(tracker, key, role, adapter_hints.observed_context_epoch);
             (epoch, transition.unwrap_or(inferred))
         }
         (None, transition, None) | (None, transition, Some(_)) => {
@@ -132,8 +118,8 @@ pub fn resolve_workflow_identity(
         fingerprint,
         source: if explicit {
             "explicit_headers".to_string()
-        } else if terminus_session.is_some() {
-            "terminus_session_id".to_string()
+        } else if adapter_hints.tracks_context_epoch {
+            "adapter_session".to_string()
         } else {
             "inferred".to_string()
         },
@@ -424,7 +410,11 @@ mod tests {
     #[test]
     fn claude_metadata_user_id_json_session_id_is_high_confidence() {
         let prompt = prompt("inspect");
-        let headers = HeaderMap::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("claude-code-20250219"),
+        );
         let raw_body = serde_json::json!({
             "metadata": {
                 "user_id": "{\"device_id\":\"device-1\",\"account_uuid\":\"acct-1\",\"session_id\":\"00000000-0000-4000-8000-000000000001\"}"

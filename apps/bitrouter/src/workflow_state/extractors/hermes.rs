@@ -22,6 +22,7 @@ impl WorkflowStateExtractor for HermesExtractor {
                 source: HarnessId::Hermes,
                 confidence: 0.9,
                 evidence_kind: "hermes_metadata",
+                native: true,
             });
         }
         input
@@ -33,6 +34,7 @@ impl WorkflowStateExtractor for HermesExtractor {
                 source: HarnessId::Hermes,
                 confidence: 0.9,
                 evidence_kind: "hermes_user_agent",
+                native: true,
             })
     }
 

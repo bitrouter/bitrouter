@@ -944,7 +944,9 @@ mod tests {
 
     fn terminus_finalization() -> Vec<Message> {
         vec![
-            user("finish the task"),
+            user(
+                "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON commands with task_complete.",
+            ),
             assistant_text(r#"{"commands":[],"task_complete":true}"#),
         ]
     }
@@ -1138,6 +1140,9 @@ mod tests {
         );
         headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-01"));
         let mut p = prompt("inbound");
+        p.system = Some(
+            "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON commands with task_complete.".to_string(),
+        );
         p.messages = vec![user("fix the bug"), assistant_calls("read_file")];
 
         assert!(r.route_prompt(&mut p, &headers));

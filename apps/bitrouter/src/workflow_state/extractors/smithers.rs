@@ -16,6 +16,7 @@ impl WorkflowStateExtractor for SmithersExtractor {
             source: HarnessId::Smithers,
             confidence: 0.9,
             evidence_kind: "smithers_metadata",
+            native: true,
         })
     }
 

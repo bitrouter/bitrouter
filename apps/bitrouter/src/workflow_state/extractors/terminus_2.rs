@@ -29,6 +29,7 @@ impl WorkflowStateExtractor for Terminus2Extractor {
                 source: HarnessId::Terminus2,
                 confidence: 0.95,
                 evidence_kind: "terminus_2_prompt_contract",
+                native: true,
             },
         )
     }

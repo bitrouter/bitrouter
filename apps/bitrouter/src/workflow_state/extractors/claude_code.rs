@@ -16,6 +16,7 @@ impl WorkflowStateExtractor for ClaudeCodeExtractor {
                 source: HarnessId::ClaudeCode,
                 confidence: 0.95,
                 evidence_kind: "anthropic_beta",
+                native: true,
             },
         )
     }

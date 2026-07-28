@@ -3,8 +3,7 @@ use bitrouter_sdk::language_model::types::Prompt;
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::extractors::{
-    ExtractorInput, adapter_protocol_hint, detect_trace_adapter, extract_workflow_state,
-    parse_compatibility_harness,
+    ExtractorInput, extract_workflow_state, parse_compatibility_harness,
 };
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
 use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
@@ -63,16 +62,8 @@ impl OnlineWorkflowState {
             raw_body: &raw_body,
             prompt,
         };
-        let adapter = detect_trace_adapter(&input);
-        let selected_input = ExtractorInput {
-            harness_hint: Some(adapter.source.clone()),
-            protocol_hint: adapter_protocol_hint(&input, &adapter),
-            headers,
-            raw_body: &raw_body,
-            prompt,
-        };
-        let mut ir = extract_workflow_state(&selected_input);
-        ir.identity = resolve_workflow_identity(&selected_input, tracker);
+        let mut ir = extract_workflow_state(&input);
+        ir.identity = resolve_workflow_identity(&input, tracker);
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
         let routing_key = ir.route_projection().key();
         let legacy_routing_key = ir.legacy_routing_key();
@@ -163,6 +154,26 @@ mod tests {
         }
     }
 
+    fn prompt_with_unrecognized_json_action() -> Prompt {
+        Prompt {
+            model: "inbound".to_string(),
+            system: None,
+            system_provider_metadata: ProviderMetadata::new(),
+            messages: vec![
+                Message::text(Role::User, "continue"),
+                Message::text(
+                    Role::Assistant,
+                    r#"{"commands":[{"keystrokes":"cargo test -p bitrouter"}]}"#,
+                ),
+            ],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
     #[test]
     fn online_state_exposes_ir_key_and_legacy_fingerprint() {
         let prompt = prompt_after_tool("Bash");
@@ -179,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn online_state_uses_explicit_harness_and_protocol_headers() {
+    fn online_state_keeps_legacy_headers_as_diagnostic_evidence() {
         let prompt = prompt_after_tool("exec_command");
         let mut headers = HeaderMap::new();
         headers.insert("x-bitrouter-harness", "codex".parse().unwrap());
@@ -187,9 +198,12 @@ mod tests {
 
         let state = OnlineWorkflowState::from_headers(&headers, &prompt);
 
-        assert_eq!(state.ir.harness_id, HarnessId::Codex);
+        assert_eq!(state.ir.harness_id, HarnessId::Generic);
         assert_eq!(state.ir.protocol, ProtocolKind::Responses);
         assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
+        assert!(state.ir.evidence.iter().any(|e| {
+            e.kind == "trace_adapter" && e.value == "compatibility_harness_hint:Codex"
+        }));
     }
 
     #[test]
@@ -249,6 +263,36 @@ mod tests {
 
         assert_eq!(state.ir.state_kind, baseline.ir.state_kind);
         assert_eq!(state.routing_key(), baseline.routing_key());
+    }
+
+    #[test]
+    fn compatibility_harness_headers_cannot_select_runtime_parsers() {
+        let prompt = prompt_with_unrecognized_json_action();
+        let baseline = OnlineWorkflowState::from_headers(&HeaderMap::new(), &prompt);
+        assert_eq!(
+            baseline.ir.state_kind,
+            crate::workflow_state::ir::WorkflowStateKind::Planning
+        );
+
+        for harness in [
+            "generic",
+            "hermes",
+            "claude_code",
+            "codex",
+            "smithers",
+            "terminus_2",
+            "openclaw",
+            "unknown",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-bitrouter-harness", harness.parse().unwrap());
+            let state = OnlineWorkflowState::from_headers(&headers, &prompt);
+
+            assert_eq!(state.ir.state_kind, baseline.ir.state_kind, "{harness}");
+            assert_eq!(state.routing_key(), baseline.routing_key(), "{harness}");
+            assert_eq!(state.ir.protocol, baseline.ir.protocol, "{harness}");
+            assert_eq!(state.ir.session, baseline.ir.session, "{harness}");
+        }
     }
 
     #[test]
