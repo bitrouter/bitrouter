@@ -68,7 +68,9 @@ providers:
 
 # Upstream MCP (Model Context Protocol) servers — `bitrouter tools
 # list/status` reads this, and `POST /mcp/<name>` proxies JSON-RPC
-# against the entry. Spec:
+# against the entry. Discover servers from the official MCP registry
+# with `bitrouter mcp search <query>` and print a paste-ready stub with
+# `bitrouter mcp add <name>`. Spec:
 # https://modelcontextprotocol.io/specification/2025-06-18
 # mcp_servers:
 #   ctx7:
