@@ -19,7 +19,7 @@ pub enum TierName {
 #[derive(Debug, Default)]
 pub struct ShadowPolicyEvaluator;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ShadowPolicySummary {
     pub total: usize,
     pub changed_count: usize,
@@ -33,12 +33,14 @@ pub struct ShadowPolicySummary {
     pub decisions: Vec<ShadowPolicyDecision>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowPolicyDecision {
     pub fixture_id: String,
     pub harness: HarnessId,
     pub baseline_key: String,
     pub ir_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_evidence_key: Option<String>,
     pub ir_state_kind: WorkflowStateKind,
     pub baseline_tier: TierName,
     pub ir_tier: TierName,
@@ -46,7 +48,7 @@ pub struct ShadowPolicyDecision {
     pub direction: TierDirection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TierDirection {
     Same,
@@ -101,7 +103,8 @@ impl ShadowPolicyEvaluator {
                 fixture_id: fixture.id.clone(),
                 harness: fixture.harness.clone(),
                 baseline_key,
-                ir_key: ir.legacy_routing_key(),
+                ir_key: ir.route_projection().key(),
+                legacy_evidence_key: Some(ir.legacy_routing_key()),
                 ir_state_kind: ir.state_kind,
                 baseline_tier,
                 ir_tier,
@@ -285,5 +288,24 @@ mod tests {
             ),
             TierName::Flagship
         );
+    }
+
+    #[test]
+    fn legacy_shadow_decision_json_remains_readable_without_a_learning_key_migration() {
+        let decision: ShadowPolicyDecision = serde_json::from_value(serde_json::json!({
+            "fixture_id": "legacy-terminus",
+            "harness": "terminus_2",
+            "baseline_key": "opening",
+            "ir_key": "terminus_2|chat_completions|opening|-|-|-",
+            "ir_state_kind": "opening",
+            "baseline_tier": "flagship",
+            "ir_tier": "cheap_fast",
+            "changed": true,
+            "direction": "downgrade"
+        }))
+        .unwrap();
+
+        assert_eq!(decision.ir_key, "terminus_2|chat_completions|opening|-|-|-");
+        assert_eq!(decision.legacy_evidence_key, None);
     }
 }

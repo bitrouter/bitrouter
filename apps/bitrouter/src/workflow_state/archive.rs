@@ -12,14 +12,12 @@ use crate::metering::pricing::calculate_normalized_charge_micro_usd;
 use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
 use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::ir::{AgentRole, ContextTransition, HarnessId};
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
 use crate::workflow_state::reward::{
     BenchmarkOutcomeRecord, RewardJoin, RewardJoinSummary, SemanticInadequacyCandidate,
     SemanticOutcomeCandidate,
 };
-use crate::workflow_state::session::identity_fingerprint;
 use crate::workflow_state::shadow_policy::{ShadowPolicyEvaluator, ShadowPolicySummary};
 
 pub struct TraceArchive;
@@ -440,7 +438,7 @@ impl WorkflowRunArtifact {
 
     /// Validate trace, settlement, and policy-decision joins for a benchmark
     /// bundle. Decision capture is optional, but when present it must cover the
-    /// trace set exactly and Terminus 2 identity must be explicit and complete.
+    /// trace set exactly through persisted request IDs.
     pub fn validate_benchmark_integrity_with_decisions(
         traces: &[CapturedIngressTrace],
         usage: &[CloudUsageRecord],
@@ -508,22 +506,12 @@ impl WorkflowRunArtifact {
             )));
         }
 
-        for (request_id, trace) in traces_by_request_id {
-            if trace.harness == HarnessId::Terminus2 {
-                let decision = decisions_by_request_id.get(&request_id).ok_or_else(|| {
-                    BitrouterError::bad_request(format!(
-                        "benchmark integrity: trace {request_id} has no policy decision"
-                    ))
-                })?;
-                validate_terminus_identity(trace, decision, &request_id)?;
-            }
-        }
         Ok(())
     }
 
     /// Validate every benchmark-grade join before an artifact directory is
     /// accepted. Outcomes are optional for analytical bundles; when supplied,
-    /// every trace and outcome must join through an explicit session/trial key.
+    /// every trace and outcome must join through persisted request IDs.
     pub fn validate_complete_benchmark_integrity(
         traces: &[CapturedIngressTrace],
         usage: &[CloudUsageRecord],
@@ -896,88 +884,6 @@ fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
         .ok()
 }
 
-fn validate_terminus_identity(
-    trace: &CapturedIngressTrace,
-    decision: &PolicyDecisionRecord,
-    request_id: &str,
-) -> Result<()> {
-    let identity = &decision.trace_identity;
-    if identity.role == AgentRole::Unknown
-        || identity.parent_session_id.is_none()
-        || identity.agent_session_id.is_none()
-        || identity.benchmark_run_id.is_none()
-        || identity.trial_id.is_none()
-        || identity.source != "explicit_headers"
-        || !valid_pricing_version(&identity.fingerprint)
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: Terminus 2 decision {request_id} has incomplete workflow identity"
-        )));
-    }
-    let expected_fingerprint = identity_fingerprint(
-        identity.benchmark_run_id.as_deref(),
-        identity.trial_id.as_deref(),
-        identity.parent_session_id.as_deref(),
-        identity.context_epoch,
-    );
-    if identity.fingerprint != expected_fingerprint {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: Terminus 2 decision {request_id} has invalid session fingerprint"
-        )));
-    }
-
-    let expected = [
-        (
-            "x-bitrouter-benchmark-run-id",
-            identity.benchmark_run_id.as_deref().unwrap_or_default(),
-        ),
-        (
-            "x-bitrouter-trial-id",
-            identity.trial_id.as_deref().unwrap_or_default(),
-        ),
-        (
-            "x-bitrouter-parent-session-id",
-            identity.parent_session_id.as_deref().unwrap_or_default(),
-        ),
-        (
-            "x-bitrouter-agent-session-id",
-            identity.agent_session_id.as_deref().unwrap_or_default(),
-        ),
-        ("x-bitrouter-agent-role", identity.role.as_str()),
-        (
-            "x-bitrouter-session-fingerprint",
-            identity.fingerprint.as_str(),
-        ),
-    ];
-    for (header, expected_value) in expected {
-        if header_value(&trace.headers, header).as_deref() != Some(expected_value) {
-            return Err(BitrouterError::bad_request(format!(
-                "benchmark integrity: Terminus 2 trace/decision identity mismatch for {request_id} header {header}"
-            )));
-        }
-    }
-    if header_value(&trace.headers, "x-bitrouter-context-epoch")
-        .and_then(|value| value.parse::<u32>().ok())
-        != Some(identity.context_epoch)
-        || header_value(&trace.headers, "x-bitrouter-context-transition").as_deref()
-            != Some(context_transition_value(identity.transition))
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: Terminus 2 trace/decision context mismatch for {request_id}"
-        )));
-    }
-    Ok(())
-}
-
-fn context_transition_value(transition: ContextTransition) -> &'static str {
-    match transition {
-        ContextTransition::None => "none",
-        ContextTransition::CompactionStart => "compaction_start",
-        ContextTransition::CompactionContinuation => "compaction_continuation",
-        ContextTransition::MainResume => "main_resume",
-    }
-}
-
 fn valid_pricing_version(version: &str) -> bool {
     version.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1169,15 +1075,6 @@ fn transition_option(left: &Option<String>, right: &Option<String>) -> Option<St
         (Some(left), Some(right)) => Some(format!("{left} -> {right}")),
         _ => None,
     }
-}
-
-fn header_value(headers: &BTreeMap<String, String>, name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 fn micro_usd_to_usd(value: u64) -> f64 {
