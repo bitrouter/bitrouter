@@ -178,11 +178,21 @@ fn canonical_test_command(arguments: &str, expected_field: &str) -> bool {
     else {
         return false;
     };
-    let command = command.trim();
+    if !is_ascii_shell_input(command) {
+        return false;
+    }
+    let command = command.trim_matches([' ', '\t']);
     if command.is_empty() || contains_shell_syntax(command) {
         return false;
     }
     is_canonical_test_command(command)
+}
+
+fn is_ascii_shell_input(command: &str) -> bool {
+    command.is_ascii()
+        && !command
+            .bytes()
+            .any(|byte| byte.is_ascii_control() && byte != b'\t')
 }
 
 fn contains_shell_syntax(command: &str) -> bool {
@@ -216,7 +226,7 @@ fn contains_shell_syntax(command: &str) -> bool {
 }
 
 fn is_canonical_test_command(command: &str) -> bool {
-    let mut tokens = command.split_whitespace();
+    let mut tokens = command.split([' ', '\t']).filter(|token| !token.is_empty());
     match tokens.next() {
         Some("cargo") | Some("go") | Some("npm") | Some("pnpm") | Some("yarn") | Some("make") => {
             matches!(tokens.next(), Some("test"))
@@ -485,6 +495,10 @@ mod tests {
             ("Bash", r#"{"command":"cargo test > results.txt"}"#),
             ("Bash", r#"{"command":"cargo test $(date)"}"#),
             ("Bash", r#"{"command":"cargo test `date`"}"#),
+            ("Bash", r#"{"command":"cargo test\r"}"#),
+            ("Bash", "{\"command\":\"cargo\\u00a0test\"}"),
+            ("Bash", r#"{"command":"cargo test\u000b"}"#),
+            ("Bash", r#"{"command":"cargo test\u000c"}"#),
         ] {
             let ir = extract(&prompt(
                 vec![user("continue"), assistant_call(tool, arguments)],

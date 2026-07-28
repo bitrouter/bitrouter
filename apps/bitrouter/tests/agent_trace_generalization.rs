@@ -155,6 +155,19 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
                 ]
             }),
         ),
+        (
+            "/v1/chat/completions",
+            json!({
+                "model": "@auto:cost",
+                "messages": [
+                    {"role": "user", "content": "continue"},
+                    {"role": "assistant", "tool_calls": [{
+                        "id": "call_carriage_return", "type": "function",
+                        "function": {"name": "bash", "arguments": "{\"cmd\":\"cargo test\\r\"}"}
+                    }]}
+                ]
+            }),
+        ),
     ] {
         server.post(path).json(&body).await.assert_status_ok();
     }
@@ -177,20 +190,21 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
 
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("HTTP traffic emits readable policy decisions");
-    assert_eq!(decisions.len(), 5);
-    for (decision, key) in decisions[..4].iter().zip([
+    assert_eq!(decisions.len(), 6);
+    for (decision, key) in decisions[..5].iter().zip([
         "agent_trace/v1|edit|normal",
         "agent_trace/v1|test|normal",
+        "agent_trace/v1|tool_followup|normal",
         "agent_trace/v1|tool_followup|normal",
         "agent_trace/v1|tool_followup|normal",
     ]) {
         assert_eq!(decision.request_key, key);
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
     }
-    assert_eq!(decisions[4].request_key, "agent_trace/v1|recovery|guarded");
-    assert_eq!(decisions[4].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[5].request_key, "agent_trace/v1|recovery|guarded");
+    assert_eq!(decisions[5].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
-        decisions[4].selected_model.as_deref(),
+        decisions[5].selected_model.as_deref(),
         Some("openai-codex:gpt-5.6-sol")
     );
 }
