@@ -32,8 +32,8 @@ use rmcp::model::{
 )]
 use rmcp::model::{CreateMessageRequestParams, CreateMessageResult, ListRootsResult};
 use rmcp::service::{
-    ClientCacheConfig, NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient,
-    RunningService,
+    ClientCacheConfig, ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer,
+    PeerRequestOptions, RequestContext, RoleClient, RunningService,
 };
 use tokio::sync::{Mutex, broadcast};
 
@@ -343,11 +343,43 @@ impl RmcpExecutor {
     }
 }
 
+/// How to open a connection for the protocol version the executor is
+/// configured to request.
+///
+/// MCP `2026-07-28` removed the `initialize` handshake (SEP-2575): a client on
+/// that version opens with `server/discover` and then sends self-contained
+/// requests. Declaring `2026-07-28` inside an `initialize` — a method the
+/// version does not define — would be incoherent, and a conformant non-rmcp
+/// server would reject it outright.
+///
+/// So the opt-in switches lifecycle, not just the version string:
+///
+/// - `latest` keeps rmcp's plain `serve` (the `initialize` handshake), exactly
+///   as every release before this one.
+/// - `2026-07-28` uses [`ClientLifecycleMode::Auto`], which probes
+///   `server/discover` and falls back to `initialize` only when the peer
+///   answers `METHOD_NOT_FOUND` — so pointing the opt-in at a server that has
+///   not caught up still connects.
+///
+/// This is the reason to accept `Auto`'s one weakness (a server that rejects an
+/// unknown method with something other than `METHOD_NOT_FOUND` gets no
+/// fallback): on the `2026-07-28` path there is no correct alternative, and the
+/// default path never reaches this branch.
+fn lifecycle_for(version: &ProtocolVersion) -> Option<ClientLifecycleMode> {
+    (version.as_str() >= ProtocolVersion::V_2026_07_28.as_str()).then(|| {
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![version.clone()],
+            legacy_version: Some(ProtocolVersion::LATEST),
+        }
+    })
+}
+
 async fn connect(
     server_name: &str,
     transport: &McpTransport,
     client: BitrouterMcpClient,
 ) -> Result<RunningService<RoleClient, BitrouterMcpClient>> {
+    let lifecycle = lifecycle_for(&client.protocol_version);
     match transport {
         McpTransport::Http { url, headers } => {
             // Streamable HTTP transport per the MCP spec
@@ -378,10 +410,11 @@ async fn connect(
                 )
                 .custom_headers(header_map);
             let transport = rmcp::transport::StreamableHttpClientTransport::from_config(cfg);
-            client
-                .serve(transport)
-                .await
-                .map_err(|e| map_initialize_error(server_name, e))
+            match lifecycle {
+                Some(lifecycle) => client.serve_with_lifecycle(transport, lifecycle).await,
+                None => client.serve(transport).await,
+            }
+            .map_err(|e| map_initialize_error(server_name, e))
         }
         McpTransport::Stdio { command, args, env } => {
             // stdio child-process transport per the MCP spec
@@ -393,10 +426,11 @@ async fn connect(
             }
             let transport = rmcp::transport::TokioChildProcess::new(cmd)
                 .map_err(|e| upstream(server_name, format!("spawning '{command}': {e}")))?;
-            client
-                .serve(transport)
-                .await
-                .map_err(|e| map_initialize_error(server_name, e))
+            match lifecycle {
+                Some(lifecycle) => client.serve_with_lifecycle(transport, lifecycle).await,
+                None => client.serve(transport).await,
+            }
+            .map_err(|e| map_initialize_error(server_name, e))
         }
     }
 }
@@ -667,14 +701,46 @@ async fn dispatch(
     request: &McpRequest,
 ) -> Result<serde_json::Value> {
     let method = request.method.as_str();
-    match method {
-        "tools/list" => {
-            let tools = peer
-                .list_all_tools()
+
+    /// Aggregate every page of a paginated list method while **preserving the
+    /// rest of the result envelope**.
+    ///
+    /// rmcp's `list_all_*` helpers return only the item `Vec`, which meant we
+    /// used to rebuild the response as a bare `{"tools": [...]}` — silently
+    /// dropping the SEP-2549 `ttlMs` / `cacheScope` hints that `2026-07-28`
+    /// *requires* on exactly these methods, along with `resultType` and
+    /// `_meta`. `CachingExecutor` reads those hints, so the gateway was
+    /// discarding the upstream's cache policy before anything could honour it.
+    ///
+    /// Hints are taken from the first page and applied to the aggregate: the
+    /// pages compose into one logical result, so the freshness the server
+    /// stated for it governs the whole thing. `next_cursor` is cleared because
+    /// the aggregate has no further pages.
+    macro_rules! list_all_preserving {
+        ($call:ident, $items:ident) => {{
+            let mut result = peer
+                .$call(None)
                 .await
                 .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "tools": tools }))
-        }
+            let mut cursor = result.next_cursor.take();
+            while let Some(next) = cursor {
+                let mut page = peer
+                    .$call(Some(
+                        rmcp::model::PaginatedRequestParams::default().with_cursor(Some(next)),
+                    ))
+                    .await
+                    .map_err(|e| map_service_error(server, method, e))?;
+                result.$items.append(&mut page.$items);
+                cursor = page.next_cursor;
+            }
+            serde_json::to_value(&result).map_err(|e| {
+                BitrouterError::internal(format!("mcp '{server}' {method} serialise: {e}"))
+            })
+        }};
+    }
+
+    match method {
+        "tools/list" => list_all_preserving!(list_tools, tools),
         "tools/call" => {
             let params: CallToolRequestParams = serde_json::from_value(request.params.clone())
                 .map_err(|e| bad_params(server, method, e))?;
@@ -689,13 +755,7 @@ async fn dispatch(
                 .map_err(|e| map_service_error(server, method, e))?;
             map_call_tool_result(server, result)
         }
-        "resources/list" => {
-            let resources = peer
-                .list_all_resources()
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "resources": resources }))
-        }
+        "resources/list" => list_all_preserving!(list_resources, resources),
         "resources/read" => {
             let params: ReadResourceRequestParams = serde_json::from_value(request.params.clone())
                 .map_err(|e| bad_params(server, method, e))?;
@@ -708,19 +768,9 @@ async fn dispatch(
             })
         }
         "resources/templates/list" => {
-            let templates = peer
-                .list_all_resource_templates()
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "resourceTemplates": templates }))
+            list_all_preserving!(list_resource_templates, resource_templates)
         }
-        "prompts/list" => {
-            let prompts = peer
-                .list_all_prompts()
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "prompts": prompts }))
-        }
+        "prompts/list" => list_all_preserving!(list_prompts, prompts),
         "prompts/get" => {
             let params: GetPromptRequestParams = serde_json::from_value(request.params.clone())
                 .map_err(|e| bad_params(server, method, e))?;

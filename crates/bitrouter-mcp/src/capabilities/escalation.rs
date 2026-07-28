@@ -21,6 +21,23 @@
 //!   the escalation branch is never taken — the default, guaranteed path stays
 //!   the HumanBridge / deny fallback. A failed/declined round-trip maps to
 //!   `Deny` (never silently "allow").
+//!
+//! ## This seam is legacy-lifecycle only
+//!
+//! MCP `2026-07-28` removed server-initiated requests, replacing them with
+//! Multi Round-Trip Requests (SEP-2322): a server that needs input returns an
+//! `InputRequiredResult` and the client retries with `inputResponses`. There is
+//! no channel on which to issue `elicitation/create` to a client on that
+//! version, so this seam is inert there **by construction** — capability
+//! detection reads the `initialize` handshake info, which a stateless client
+//! never produces, so `can_escalate` stays `false` and the HumanBridge / deny
+//! fallback takes every gated permission.
+//!
+//! That is the correct behavior, not a gap to paper over: see the note on
+//! `BitrouterMcp::record_escalation` for why widening the capability read would
+//! make things worse. Carrying escalation onto the modern lifecycle means
+//! returning an MRTR `InputRequiredResult` from the fleet tools instead — a
+//! different design, tracked in `docs/MCP_2026_07_28_SPEC.md`.
 
 use std::sync::Arc;
 use std::sync::Mutex;

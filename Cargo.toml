@@ -88,11 +88,15 @@ schemars = "1"
 # MCP (sdk `mcp` feature) — official Rust MCP SDK.
 # Source: <https://github.com/modelcontextprotocol/rust-sdk>
 #
-# Exact-pinned on the 3.0 beta line on purpose: beta.2 shipped a breaking
-# change one day after beta.1 (#1038, "omit resultType for legacy protocol
-# sessions"), so a caret range would let a breaking beta.3 land silently in
-# CI. Relax to "3.0" once 3.0 is stable — see `docs/MCP_2026_07_28_SPEC.md`.
-rmcp = { version = "=3.0.0-beta.2", default-features = false, features = [
+# Exact-pinned on the 3.0 beta line on purpose: this line has already shipped
+# breaking changes on consecutive days (beta.2's #1038 "omit resultType for
+# legacy protocol sessions", beta.3's #1054 auth-metadata `issuer`), so a caret
+# range would let a breaking beta land silently in CI.
+#
+# The MCP `2026-07-28` *spec* is released; rmcp's latest *stable* is still
+# 2.2.0. Relax to "3.0" once the 3.0 line itself is stable — the checklist is
+# in `docs/MCP_2026_07_28_SPEC.md`.
+rmcp = { version = "=3.0.0-beta.4", default-features = false, features = [
     "client",
     "reqwest",
     "transport-streamable-http-client-reqwest",

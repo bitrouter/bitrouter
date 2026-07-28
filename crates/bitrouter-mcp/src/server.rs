@@ -638,6 +638,18 @@ impl BitrouterMcp {
     /// Reads the capabilities the client declared at `initialize` (available on
     /// the recorded peer handshake info). A no-op when no escalation state is
     /// wired (public profile) or before the peer info is recorded.
+    ///
+    /// Reading `peer_info` — rather than `ctx.client_capabilities()`, which
+    /// would also see the per-request `_meta` capabilities of a `2026-07-28`
+    /// client — is deliberate, and must stay that way. Escalation delivers its
+    /// question as a server→client `elicitation/create`, and `2026-07-28`
+    /// removed server-initiated requests entirely in favour of MRTR (SEP-2322):
+    /// on a stateless connection there is no channel to ask on. Detecting the
+    /// capability there would route a gated permission into a round-trip that
+    /// cannot be answered, and our fail-safe would turn that into `Deny` —
+    /// strictly worse than the HumanBridge prompt the no-op leaves in place.
+    /// Making this seam work on the modern lifecycle means rebuilding it as an
+    /// MRTR `InputRequiredResult`, not widening the capability read.
     fn record_escalation(&self, ctx: &RequestContext<RoleServer>) {
         if let Some(escalation) = &self.caps.escalation
             && let Some(info) = ctx.peer.peer_info()
@@ -773,6 +785,16 @@ const TOOLS_LIST_TTL_MS: u64 = 5 * 60 * 1000;
 impl ServerHandler for BitrouterMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            // Without this the identity defaults to `Implementation::from_build_env()`,
+            // which resolves against *rmcp's* build environment — every client
+            // asking who we are (via `server/discover`, `initialize`, or the
+            // SEP-2575 `io.modelcontextprotocol/serverInfo` result metadata)
+            // would be told it is talking to "rmcp". The client half of the
+            // gateway has always identified itself; this is the matching half.
+            .with_server_info(rmcp::model::Implementation::new(
+                "bitrouter",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(self.instructions())
     }
 
@@ -934,12 +956,30 @@ pub async fn serve_stdio(
     server: BitrouterMcp,
     cost_footer: Option<Arc<dyn CostFooter>>,
 ) -> anyhow::Result<()> {
-    use rmcp::{ServiceExt, transport::stdio};
+    use rmcp::transport::stdio;
     let server = match cost_footer {
         Some(footer) => server.with_cost_footer(footer),
         None => server,
     };
-    let service = server.serve(stdio()).await?;
+    // `serve_directly` rather than `serve`: MCP `2026-07-28` removed the
+    // `initialize` / `notifications/initialized` handshake (SEP-2575), and a
+    // client on that version opens a stdio connection by sending
+    // `server/discover` — or an ordinary request carrying its protocol version
+    // in `_meta`. rmcp's `serve` waits for `initialize` and hard-errors on
+    // anything else ("expect initialized request"), which would reject every
+    // conformant `2026-07-28` client outright.
+    //
+    // Skipping the handshake costs nothing for older clients: `initialize` is
+    // dispatched to the handler as an ordinary request, and rmcp's default
+    // implementation still negotiates the version and records peer info. So
+    // one entry point serves both lifecycles — covered by the stdio tests.
+    let service = rmcp::service::serve_directly::<rmcp::RoleServer, _, _, _, _>(
+        server,
+        stdio(),
+        // No pre-seeded peer info: a legacy client's `initialize` fills it in,
+        // and a modern one carries identity per request in `_meta`.
+        None,
+    );
     service.waiting().await?;
     Ok(())
 }
