@@ -30,7 +30,7 @@
   },
   "expected": {
     "state_kind": "edit",
-    "baseline_fingerprint": "after_apply_patch",
+    "baseline_fingerprint": "after_Edit",
     "confidence_min": 0.7
   }
 }

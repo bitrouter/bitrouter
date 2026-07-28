@@ -938,6 +938,14 @@ fn workflow_constraints_report_model_ladder_compatibility() {
 #[test]
 fn replay_summary_matches_current_experiment_fixture_set() {
     let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    for fixture in &fixtures {
+        assert_eq!(
+            fixture.expected.baseline_fingerprint,
+            fixture.baseline_fingerprint(),
+            "fixture {} has a stale baseline fingerprint",
+            fixture.id
+        );
+    }
     let summary = ReplayEvaluator.run(&fixtures);
     assert_eq!(summary.total, 10, "{summary:#?}");
     assert_eq!(summary.covered, 10, "{summary:#?}");

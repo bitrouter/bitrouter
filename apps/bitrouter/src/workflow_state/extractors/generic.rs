@@ -178,15 +178,45 @@ fn canonical_test_command(arguments: &str, expected_field: &str) -> bool {
     else {
         return false;
     };
-    command
-        .split(['\n', ';'])
-        .flat_map(|line| line.split("&&"))
-        .flat_map(|segment| segment.split("||"))
-        .any(is_canonical_test_command_segment)
+    let command = command.trim();
+    if command.is_empty() || contains_shell_syntax(command) {
+        return false;
+    }
+    is_canonical_test_command(command)
 }
 
-fn is_canonical_test_command_segment(segment: &str) -> bool {
-    let mut tokens = segment.split_whitespace();
+fn contains_shell_syntax(command: &str) -> bool {
+    command.chars().any(|character| {
+        matches!(
+            character,
+            '\n' | '\r'
+                | ';'
+                | '&'
+                | '|'
+                | '#'
+                | '\''
+                | '"'
+                | '`'
+                | '$'
+                | '<'
+                | '>'
+                | '\\'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '*'
+                | '?'
+                | '!'
+                | '~'
+        )
+    })
+}
+
+fn is_canonical_test_command(command: &str) -> bool {
+    let mut tokens = command.split_whitespace();
     match tokens.next() {
         Some("cargo") | Some("go") | Some("npm") | Some("pnpm") | Some("yarn") | Some("make") => {
             matches!(tokens.next(), Some("test"))
@@ -426,6 +456,15 @@ mod tests {
         ));
         assert_eq!(claude_bash.state_kind, WorkflowStateKind::Test);
 
+        let pytest = extract(&prompt(
+            vec![
+                user("continue"),
+                assistant_call("Bash", r#"{"command":"pytest -q"}"#),
+            ],
+            Vec::new(),
+        ));
+        assert_eq!(pytest.state_kind, WorkflowStateKind::Test);
+
         for (tool, arguments) in [
             ("bash", r#"{"cmd":"echo hello","description":"cargo test"}"#),
             ("Bash", r#"{"command":"echo cargo test"}"#),
@@ -437,6 +476,15 @@ mod tests {
             ("Bash", "[]"),
             ("bash", r#"{"cmd":"pwd","metadata":{"tool_name":"Edit"}}"#),
             ("not_a_shell", r#"{"command":"cargo test"}"#),
+            ("Bash", r##"{"command":"# ignored; cargo test"}"##),
+            ("Bash", r##"{"command":"# ignored && cargo test"}"##),
+            ("Bash", r#"{"command":"echo hello && cargo test"}"#),
+            ("Bash", r#"{"command":"cargo test \"quoted; data\""}"#),
+            ("Bash", "{\"command\":\"cat <<'EOF'\\ncargo test\\nEOF\"}"),
+            ("Bash", r#"{"command":"cargo test | cat"}"#),
+            ("Bash", r#"{"command":"cargo test > results.txt"}"#),
+            ("Bash", r#"{"command":"cargo test $(date)"}"#),
+            ("Bash", r#"{"command":"cargo test `date`"}"#),
         ] {
             let ir = extract(&prompt(
                 vec![user("continue"), assistant_call(tool, arguments)],

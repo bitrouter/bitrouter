@@ -28,7 +28,7 @@
   },
   "expected": {
     "state_kind": "test",
-    "baseline_fingerprint": "after_bash",
+    "baseline_fingerprint": "after_Bash",
     "confidence_min": 0.7
   }
 }
