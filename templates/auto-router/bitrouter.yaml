@@ -16,6 +16,9 @@ policy:
   path: "./policy-lock.yaml"
   writeback: locked
 presets:
-  superpowers:
+  auto:
     model: "openai-codex:gpt-5.6-sol"
-    policy: demo
+    policy: auto
+variants:
+  cost:
+    routing: { sort: cost }

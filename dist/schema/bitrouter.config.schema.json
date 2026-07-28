@@ -1637,7 +1637,7 @@
       "type": "object",
       "properties": {
         "key_strategy": {
-          "description": "Which request key the policy table uses for `fingerprints`. The default\npreserves the original coarse key (`opening`, `after_<tool>`,\n`midstream`). `workflow_state` switches lookup and adequacy learning to\nthe cross-harness Workflow State IR routing key.",
+          "description": "Which request key the policy table uses for `fingerprints`. The default\npreserves the original coarse key (`opening`, `after_<tool>`,\n`midstream`). `agent_trace` switches lookup and adequacy learning to a\nsource-independent agent trace projection key.",
           "$ref": "#/$defs/PolicyKeyStrategy",
           "default": "legacy_fingerprint"
         },
@@ -1714,9 +1714,9 @@
           "const": "legacy_fingerprint"
         },
         {
-          "description": "The cross-harness Workflow State IR routing key.",
+          "description": "The canonical source-independent agent trace projection key.",
           "type": "string",
-          "const": "workflow_state"
+          "const": "agent_trace"
         }
       ]
     },

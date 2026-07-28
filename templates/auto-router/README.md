@@ -1,0 +1,26 @@
+# Adaptive `@auto` routing
+
+This starter policy uses GPT-5.6 as the strong route and DeepSeek V4 Pro as
+the economy route. It is agent- and workflow-independent: ordinary `edit`,
+`test`, and `tool_followup` projections use economy; guarded and unmatched
+projections use strong.
+
+Start BitRouter from this directory:
+
+```bash
+bitrouter serve --config bitrouter.yaml
+```
+
+Use `@auto` for the strong base policy, or `@auto:cost` to add the top-level
+cost routing variant. Physical model ids remain passthrough, so an explicit
+`openai-codex:gpt-5.6-sol` request is not converted to a preset.
+
+The lock uses the generic `agent_trace` key strategy. Runtime adapters can
+enrich diagnostics from native request shapes, but do not supply policy keys.
+No private BitRouter headers are required. The strong/economy tool capability
+guardrails remain in the lock, so a request only uses economy when its route
+and capability constraints permit it.
+
+This policy was migrated from a same-scenario evaluation. Cross-agent quality
+has not been validated; evaluate it against your own traffic before broadening
+the economy routes.

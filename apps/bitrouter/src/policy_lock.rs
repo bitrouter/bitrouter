@@ -1161,6 +1161,38 @@ policies:
     }
 
     #[test]
+    fn auto_router_template_lock_is_bound_and_canonical() {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let config = bitrouter_sdk::config::parse(
+            &std::fs::read_to_string(template_dir.join("bitrouter.yaml")).unwrap(),
+        )
+        .unwrap();
+        let lock: PolicyLock = serde_saphyr::from_str(
+            &std::fs::read_to_string(template_dir.join("policy-lock.yaml")).unwrap(),
+        )
+        .unwrap();
+
+        validate_for_config(&config, &lock).unwrap();
+        let policy = &lock.policies["auto"];
+        assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
+        assert_eq!(policy.routes["agent_trace/v1|edit|normal"], "economy");
+        assert_eq!(policy.routes["agent_trace/v1|test|normal"], "economy");
+        assert_eq!(
+            policy.routes["agent_trace/v1|tool_followup|normal"],
+            "economy"
+        );
+        assert_eq!(policy.default_tier.as_deref(), Some("strong"));
+        assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
+        assert_eq!(policy.tool_safe_tiers, ["strong", "economy"]);
+
+        let rendered = deterministic_yaml(&lock).unwrap();
+        assert!(rendered.contains("key_strategy: agent_trace"));
+        assert!(!rendered.contains("key_strategy: workflow_state"));
+    }
+
+    #[test]
     fn candidate_export_refuses_to_replace_the_active_lock() {
         let dir = tempfile::tempdir().unwrap();
         let active = dir.path().join("policy-lock.yaml");

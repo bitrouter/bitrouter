@@ -1,14 +1,14 @@
 lockfileVersion: 1
 policies:
-  demo:
-    key_strategy: workflow_state
+  auto:
+    key_strategy: agent_trace
     tiers:
       economy: "bitrouter:deepseek/deepseek-v4-pro"
       strong: "openai-codex:gpt-5.6-sol"
     routes:
-      "superpowers|fixer|mechanical": economy
-      "superpowers|implementer|mechanical": economy
-      "superpowers|reviewer|mechanical": economy
+      "agent_trace/v1|edit|normal": economy
+      "agent_trace/v1|test|normal": economy
+      "agent_trace/v1|tool_followup|normal": economy
     default_tier: strong
     tool_use_tier: strong
     tool_safe_tiers:
