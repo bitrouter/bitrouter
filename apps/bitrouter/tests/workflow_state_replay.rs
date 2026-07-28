@@ -345,8 +345,8 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         request_key: "terminus_2|chat_completions|opening".to_string(),
         ledger_key: None,
         legacy_fingerprint: "opening".to_string(),
-        workflow_state: "opening".to_string(),
-        workflow_identity: Default::default(),
+        trace_state: "opening".to_string(),
+        trace_identity: Default::default(),
         static_tier: Some("strong".to_string()),
         static_model: Some("vendor/strong".to_string()),
         selected_tier: Some("strong".to_string()),
@@ -505,7 +505,7 @@ fn benchmark_integrity_requires_unambiguous_terminus_identity_join() {
         ),
     ]);
     let mut decision = benchmark_decision("req-1");
-    decision.workflow_identity = WorkflowIdentity {
+    decision.trace_identity = WorkflowIdentity {
         benchmark_run_id: Some("short13-run".to_string()),
         trial_id: Some("trial-01".to_string()),
         agent_session_id: Some("parent-01:main:0".to_string()),
@@ -527,11 +527,11 @@ fn benchmark_integrity_requires_unambiguous_terminus_identity_join() {
     .expect("complete Terminus identity should join");
 
     let mut forged = decision.clone();
-    forged.workflow_identity.fingerprint = format!("sha256:{}", "1".repeat(64));
+    forged.trace_identity.fingerprint = format!("sha256:{}", "1".repeat(64));
     let mut forged_trace = trace.clone();
     forged_trace.headers.insert(
         "x-bitrouter-session-fingerprint".to_string(),
-        forged.workflow_identity.fingerprint.clone(),
+        forged.trace_identity.fingerprint.clone(),
     );
     let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
         &[forged_trace],
@@ -542,8 +542,8 @@ fn benchmark_integrity_requires_unambiguous_terminus_identity_join() {
     assert!(error.to_string().contains("fingerprint"));
 
     let mut mismatched = decision.clone();
-    mismatched.workflow_identity.parent_session_id = Some("other-parent".to_string());
-    mismatched.workflow_identity.fingerprint =
+    mismatched.trace_identity.parent_session_id = Some("other-parent".to_string());
+    mismatched.trace_identity.fingerprint =
         workflow_fingerprint("short13-run", "trial-01", "other-parent", 0);
     let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
         &[trace.clone()],
@@ -1497,8 +1497,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         request_key: "codex|responses|tool_followup|-|-|bash|low|small|none|high|low|low|low|medium|medium|requires_structured_tools".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
-        workflow_state: "tool_followup".to_string(),
-        workflow_identity: Default::default(),
+        trace_state: "tool_followup".to_string(),
+        trace_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -1623,8 +1623,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         request_key: "codex|responses|tool_followup".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
-        workflow_state: "tool_followup".to_string(),
-        workflow_identity: Default::default(),
+        trace_state: "tool_followup".to_string(),
+        trace_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -1727,8 +1727,8 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         request_key: "codex|responses|tool_followup".to_string(),
         ledger_key: Some("coding\0codex|responses|tool_followup".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
-        workflow_state: "tool_followup".to_string(),
-        workflow_identity: Default::default(),
+        trace_state: "tool_followup".to_string(),
+        trace_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),

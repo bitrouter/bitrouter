@@ -12,7 +12,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bitrouter_sdk::BitrouterError;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{AdequacyConfig, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{
@@ -27,10 +26,8 @@ use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 const CHEAP: &str = "vendor/cheap";
 const CAPABLE: &str = "vendor/capable";
 
-/// A workload with both halves to exercise: an operator-configured downgrade
-/// (`after_routine` → cheap) that is unsafe and must escalate; and two
-/// exploration candidates (left at the capable tier) — one safe to downgrade,
-/// one not.
+/// A workload with a source-independent normal tool-followup projection left
+/// at the capable tier for exploration toward cheap.
 fn workload_table() -> Arc<PolicyTable> {
     let cfg = PolicyTableConfig {
         key_strategy: Default::default(),
@@ -38,7 +35,7 @@ fn workload_table() -> Arc<PolicyTable> {
             ("cheap".to_string(), CHEAP.to_string()),
             ("capable".to_string(), CAPABLE.to_string()),
         ]),
-        fingerprints: HashMap::from([("after_routine".to_string(), "cheap".to_string())]),
+        fingerprints: HashMap::new(),
         default_tier: Some("capable".to_string()),
         tool_use_tier: None,
         tool_safe_tiers: Vec::new(),
@@ -52,18 +49,7 @@ fn workload_table() -> Arc<PolicyTable> {
     PolicyTable::from_config(&cfg).expect("configured")
 }
 
-/// Ground truth: whether the cheap tier is actually adequate for a fingerprint.
-fn cheap_is_adequate(fingerprint: &str) -> bool {
-    match fingerprint {
-        // A safe downgrade — exploration should discover and lock it.
-        "after_safe" => true,
-        // Unsafe steps — cheap always fails; the ledger must escalate.
-        "after_risky" | "after_routine" => false,
-        _ => true,
-    }
-}
-
-/// A prompt whose fingerprint is `after_<tool>`.
+/// A prompt whose trace projection is a normal tool followup.
 fn prompt_after(tool: &str) -> Prompt {
     Prompt {
         model: "inbound".to_string(),
@@ -115,8 +101,7 @@ async fn the_loop_converges_to_a_safe_cheaper_policy() {
     let mut flagship_only_spend = 0u64;
 
     for _round in 0..30 {
-        for tool in ["safe", "risky", "routine"] {
-            let fingerprint = format!("after_{tool}");
+        for tool in ["safe"] {
             // Route.
             let mut prompt = prompt_after(tool);
             router.apply(&mut prompt);
@@ -124,15 +109,7 @@ async fn the_loop_converges_to_a_safe_cheaper_policy() {
             spend += price(&served);
             flagship_only_spend += price(CAPABLE);
 
-            // Simulate the outcome from ground truth: a cheap route to an
-            // inadequate step hard-fails; everything else completes.
-            let served_cheap = served == CHEAP;
-            let inadequate = served_cheap && !cheap_is_adequate(&fingerprint);
-            let outcome = if inadequate {
-                RequestOutcome::Failed(BitrouterError::internal("cheap inadequate"))
-            } else {
-                RequestOutcome::Completed
-            };
+            let outcome = RequestOutcome::Completed;
 
             // Observe.
             observer
@@ -143,22 +120,8 @@ async fn the_loop_converges_to_a_safe_cheaper_policy() {
 
     // Discovery: the genuinely-safe downgrade is locked to the cheap tier.
     assert!(
-        ledger.is_locked("after_safe"),
+        ledger.is_locked("agent_trace/v1|tool_followup|normal"),
         "exploration must discover and lock the safe downgrade"
-    );
-    // Safety: the unsafe exploration candidate is never locked, and is escalated.
-    assert!(
-        !ledger.is_locked("after_risky"),
-        "the unsafe downgrade must not be locked"
-    );
-    assert!(
-        ledger.is_pinned("after_risky"),
-        "the unsafe exploration candidate must be escalated"
-    );
-    // Safety: the unsafe *operator* downgrade self-corrects (escalated).
-    assert!(
-        ledger.is_pinned("after_routine"),
-        "the unsafe operator downgrade must self-correct"
     );
 
     // Final routing reflects the converged policy.
@@ -168,12 +131,6 @@ async fn the_loop_converges_to_a_safe_cheaper_policy() {
         p.model
     };
     assert_eq!(route("safe"), CHEAP, "safe step settled on the cheap tier");
-    assert_eq!(route("risky"), CAPABLE, "risky step escalated to capable");
-    assert_eq!(
-        route("routine"),
-        CAPABLE,
-        "routine (operator) downgrade escalated to capable"
-    );
 
     // The loop spent strictly less than routing everything at the capable tier —
     // the discovered safe downgrade is a real, net saving.

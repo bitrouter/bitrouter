@@ -1598,7 +1598,7 @@ presets:
         let config = bitrouter_sdk::config::load(&config_path).await.unwrap();
         let lock_path = dir.path().join("policy-lock.yaml");
         let mut reloadable = definition();
-        reloadable.key_strategy = PolicyKeyStrategy::LegacyFingerprint;
+        reloadable.key_strategy = PolicyKeyStrategy::AgentTrace;
         let mut lock = PolicyLock {
             lockfile_version: 1,
             policies: BTreeMap::from([("coding".into(), reloadable)]),
@@ -1624,7 +1624,7 @@ presets:
             .get_mut("coding")
             .unwrap()
             .routes
-            .insert("opening".into(), "economy".into());
+            .insert("agent_trace/v1|opening|normal".into(), "economy".into());
         write_atomic(&lock_path, None, &lock).unwrap();
         runtime
             .reload_for_config(&config, Some(&config_path))

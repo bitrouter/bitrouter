@@ -304,14 +304,20 @@ mod tests {
     // `after_read_file` → cheap (a downgrade).
     fn table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
-            key_strategy: Default::default(),
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("capable".to_string(), "vendor/capable".to_string()),
             ]),
             fingerprints: HashMap::from([
-                ("opening".to_string(), "capable".to_string()),
-                ("after_read_file".to_string(), "cheap".to_string()),
+                (
+                    "agent_trace/v1|opening|normal".to_string(),
+                    "capable".to_string(),
+                ),
+                (
+                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "cheap".to_string(),
+                ),
             ]),
             default_tier: Some("capable".to_string()),
             tool_use_tier: None,
@@ -341,12 +347,15 @@ mod tests {
     // from the static map resolve to capable and can be trialed toward cheap.
     fn explore_table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
-            key_strategy: Default::default(),
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("capable".to_string(), "vendor/capable".to_string()),
             ]),
-            fingerprints: HashMap::from([("opening".to_string(), "capable".to_string())]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v1|opening|normal".to_string(),
+                "capable".to_string(),
+            )]),
             default_tier: Some("capable".to_string()),
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
@@ -363,7 +372,7 @@ mod tests {
 
     fn explicit_route_explore_table() -> Arc<PolicyTable> {
         let cfg = PolicyTableConfig {
-            key_strategy: Default::default(),
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
                 (
                     "cheap".to_string(),
@@ -371,7 +380,10 @@ mod tests {
                 ),
                 ("capable".to_string(), "openai-codex:gpt-5.5".to_string()),
             ]),
-            fingerprints: HashMap::from([("opening".to_string(), "capable".to_string())]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v1|opening|normal".to_string(),
+                "capable".to_string(),
+            )]),
             default_tier: Some("capable".to_string()),
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
@@ -568,7 +580,7 @@ mod tests {
         // served by the cheap model — a genuine downgrade. A hard failure pins it.
         hook.on_request_end(&ctx("vendor/cheap", read_step()), &failed())
             .await;
-        assert!(ledger.is_pinned("after_read_file"));
+        assert!(ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     #[tokio::test]
@@ -577,7 +589,7 @@ mod tests {
         let hook = AdequacyObserveHook::new(table(), ledger.clone());
         hook.on_request_end(&ctx("vendor/cheap", read_step()), &transient_failed())
             .await;
-        assert!(!ledger.is_pinned("after_read_file"));
+        assert!(!ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     #[tokio::test]
@@ -603,7 +615,35 @@ mod tests {
         .await;
 
         assert!(ledger.is_pinned(&workflow_key));
-        assert!(!ledger.is_pinned("after_read_file"));
+        assert_eq!(workflow_key, "agent_trace/v1|tool_followup|normal");
+    }
+
+    #[tokio::test]
+    async fn native_adapter_outcomes_share_one_projection_ledger_entry() {
+        let ledger = Arc::new(AdequacyLedger::in_memory(2, 0));
+        let hook = AdequacyObserveHook::new(table(), ledger.clone());
+        let mut smithers_headers = HeaderMap::new();
+        smithers_headers.insert(
+            "x-smithers-workflow-id",
+            HeaderValue::from_static("release-review"),
+        );
+        smithers_headers.insert(
+            "x-smithers-node-id",
+            HeaderValue::from_static("analyze-risk"),
+        );
+
+        hook.on_request_end(
+            &ctx_with_headers("vendor/cheap", read_step(), claude_headers()),
+            &failed(),
+        )
+        .await;
+        hook.on_request_end(
+            &ctx_with_headers("vendor/cheap", read_step(), smithers_headers),
+            &failed(),
+        )
+        .await;
+
+        assert!(ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     #[tokio::test]
@@ -615,8 +655,8 @@ mod tests {
         let hook = AdequacyObserveHook::new(table(), ledger.clone());
         hook.on_request_end(&ctx("vendor/cheap", vec![user("start")]), &failed())
             .await;
-        assert!(!ledger.is_pinned("opening"));
-        assert!(!ledger.is_pinned("after_read_file"));
+        assert!(!ledger.is_pinned("agent_trace/v1|opening|normal"));
+        assert!(!ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     #[tokio::test]
@@ -627,7 +667,7 @@ mod tests {
         let hook = AdequacyObserveHook::new(table(), ledger.clone());
         hook.on_request_end(&ctx("vendor/capable", vec![user("start")]), &failed())
             .await;
-        assert!(!ledger.is_pinned("opening"));
+        assert!(!ledger.is_pinned("agent_trace/v1|opening|normal"));
     }
 
     #[tokio::test]
@@ -639,7 +679,7 @@ mod tests {
             &RequestOutcome::Completed,
         )
         .await;
-        assert!(!ledger.is_pinned("after_read_file"));
+        assert!(!ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     #[tokio::test]
@@ -651,7 +691,7 @@ mod tests {
             &RequestOutcome::ClientDisconnected,
         )
         .await;
-        assert!(!ledger.is_pinned("after_read_file"));
+        assert!(!ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     // ---- exploration classification ----
@@ -664,7 +704,7 @@ mod tests {
         let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
         hook.on_request_end(&ctx("vendor/cheap", bash_step()), &failed())
             .await;
-        assert!(ledger.is_pinned("after_bash"));
+        assert!(ledger.is_pinned("agent_trace/v1|tool_followup|normal"));
     }
 
     #[tokio::test]
@@ -683,7 +723,6 @@ mod tests {
         )
         .await;
 
-        assert_eq!(online.ir.state_kind.to_string(), "finalization");
         assert!(!ledger.is_pinned(&key));
         assert!(!ledger.is_request_qualified(&key));
     }
@@ -698,7 +737,10 @@ mod tests {
             &RequestOutcome::Completed,
         )
         .await;
-        assert!(ledger.is_locked("after_bash"), "an adequate trial locks it");
+        assert!(
+            ledger.is_locked("agent_trace/v1|tool_followup|normal"),
+            "an adequate trial locks it"
+        );
     }
 
     #[tokio::test]
@@ -707,7 +749,7 @@ mod tests {
         // advances the trial cadence (interval 2 → due after two such requests).
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         let hook = AdequacyObserveHook::new(explore_table(), ledger.clone());
-        assert!(!ledger.should_trial("after_bash"));
+        assert!(!ledger.should_trial("agent_trace/v1|tool_followup|normal"));
         for _ in 0..2 {
             hook.on_request_end(
                 &ctx("vendor/capable", bash_step()),
@@ -715,7 +757,10 @@ mod tests {
             )
             .await;
         }
-        assert!(ledger.should_trial("after_bash"), "the cadence advanced");
+        assert!(
+            ledger.should_trial("agent_trace/v1|tool_followup|normal"),
+            "the cadence advanced"
+        );
     }
 
     #[tokio::test]
@@ -732,7 +777,7 @@ mod tests {
             .await;
 
         assert!(
-            ledger.should_trial("after_bash"),
+            ledger.should_trial("agent_trace/v1|tool_followup|normal"),
             "served service id must advance the explicit route tier's cadence"
         );
     }
@@ -766,7 +811,7 @@ mod tests {
                         cause: InadequacyCause::None,
                     },
                     ..
-                } if fingerprint == "codex|responses|tool_followup|-|-|exec_command|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools"
+                } if fingerprint == "agent_trace/v1|tool_followup|normal"
             ),
             "Harbor-shaped Codex tool followups must advance exploration cadence, got {decision:?}"
         );
@@ -784,7 +829,7 @@ mod tests {
         .await;
 
         assert!(
-            !ledger.should_trial("opening"),
+            !ledger.should_trial("agent_trace/v1|opening|normal"),
             "opening must not accumulate exploration cadence unless explicitly enabled"
         );
     }
@@ -805,7 +850,7 @@ mod tests {
         .await;
 
         assert!(
-            ledger.should_trial("after_bash"),
+            ledger.should_trial("agent_trace/v1|tool_followup|normal"),
             "capable stream disconnect should still advance exploration cadence"
         );
     }

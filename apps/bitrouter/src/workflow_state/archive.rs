@@ -132,7 +132,8 @@ pub struct SemanticPolicyTransitionCandidate {
     pub request_key: String,
     #[serde(default)]
     pub ledger_key: Option<String>,
-    pub workflow_state: String,
+    #[serde(alias = "workflow_state")]
+    pub trace_state: String,
     pub static_tier: Option<String>,
     pub selected_tier: Option<String>,
     pub tier_transition: Option<String>,
@@ -837,7 +838,7 @@ fn validate_terminus_identity(
     decision: &PolicyDecisionRecord,
     request_id: &str,
 ) -> Result<()> {
-    let identity = &decision.workflow_identity;
+    let identity = &decision.trace_identity;
     if identity.role == AgentRole::Unknown
         || identity.parent_session_id.is_none()
         || identity.agent_session_id.is_none()
@@ -1051,7 +1052,7 @@ fn semantic_policy_transition_candidates(
                 settlement_outcome: semantic_settlement_outcome(usage),
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
-                workflow_state: decision.workflow_state.clone(),
+                trace_state: decision.trace_state.clone(),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 tier_transition: transition_option(&decision.static_tier, &decision.selected_tier),

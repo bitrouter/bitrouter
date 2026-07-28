@@ -206,7 +206,7 @@ mod tests {
             settlement_outcome: SemanticSettlementOutcome::AuthoritativeComputed,
             request_key: request_key.to_string(),
             ledger_key: None,
-            workflow_state: "tool_followup".to_string(),
+            trace_state: "tool_followup".to_string(),
             static_tier: Some("capable".to_string()),
             selected_tier: Some("cheap".to_string()),
             tier_transition: Some("capable -> cheap".to_string()),

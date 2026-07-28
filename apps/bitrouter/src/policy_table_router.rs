@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
@@ -47,7 +47,6 @@ pub enum PolicyDecisionReason {
     AdequacyPin,
     ReliabilityCircuitOpen,
     ReliabilityHalfOpenProbe,
-    SessionDowngradeBudget,
     ToolGuardrail,
     NoMatch,
 }
@@ -61,7 +60,6 @@ impl PolicyDecisionReason {
             Self::AdequacyPin => "adequacy_pin",
             Self::ReliabilityCircuitOpen => "reliability_circuit_open",
             Self::ReliabilityHalfOpenProbe => "reliability_half_open_probe",
-            Self::SessionDowngradeBudget => "session_downgrade_budget",
             Self::ToolGuardrail => "tool_guardrail",
             Self::NoMatch => "no_match",
         }
@@ -79,9 +77,9 @@ pub struct PolicyDecision {
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
     pub legacy_fingerprint: String,
-    pub workflow_state_kind: String,
+    pub trace_state: String,
     pub harness_id: HarnessId,
-    pub workflow_identity: WorkflowIdentity,
+    pub trace_identity: WorkflowIdentity,
     pub static_tier: Option<String>,
     pub static_model: Option<String>,
     pub selected_tier: Option<String>,
@@ -123,14 +121,9 @@ pub struct PolicyTable {
     exploration_enabled: bool,
     /// Future task-reward guardrail for opening downgrades.
     min_semantic_successes_for_opening: u32,
-    /// Process-local maximum downgraded requests admitted for one agent session.
-    /// Zero keeps the legacy unlimited behavior.
-    max_downgraded_requests_per_session: u32,
     /// Reverse index model id → tier name, for mapping a served model back to
     /// its tier at observe time.
     model_to_tier: HashMap<String, String>,
-    /// The request key family used by `fingerprints` and adequacy state.
-    key_strategy: PolicyKeyStrategy,
 }
 
 impl PolicyTable {
@@ -165,11 +158,7 @@ impl PolicyTable {
             explore_tier: config.adequacy.explore_tier.clone(),
             exploration_enabled,
             min_semantic_successes_for_opening: config.adequacy.min_semantic_successes_for_opening,
-            max_downgraded_requests_per_session: config
-                .adequacy
-                .max_downgraded_requests_per_session,
             model_to_tier,
-            key_strategy: config.key_strategy,
         }))
     }
 
@@ -244,16 +233,9 @@ impl PolicyTable {
     }
 
     pub(crate) fn request_key(&self, prompt: &Prompt, headers: &HeaderMap) -> String {
-        match self.key_strategy {
-            PolicyKeyStrategy::LegacyFingerprint => Self::fingerprint(prompt),
-            PolicyKeyStrategy::AgentTrace => OnlineWorkflowState::from_headers(headers, prompt)
-                .routing_key()
-                .to_string(),
-        }
-    }
-
-    pub(crate) fn key_strategy(&self) -> PolicyKeyStrategy {
-        self.key_strategy
+        OnlineWorkflowState::from_headers(headers, prompt)
+            .routing_key()
+            .to_string()
     }
 
     /// [`Self::static_tier`] for an already-computed fingerprint.
@@ -274,7 +256,7 @@ impl PolicyTable {
     }
 
     fn minimum_semantic_successes_for(&self, decision: &PolicyDecision) -> u32 {
-        if decision.legacy_fingerprint == "opening" || decision.workflow_state_kind == "opening" {
+        if decision.trace_state == "opening" {
             self.min_semantic_successes_for_opening
         } else {
             0
@@ -287,12 +269,7 @@ impl PolicyTable {
         headers: &HeaderMap,
     ) -> bool {
         let online = OnlineWorkflowState::from_headers(headers, prompt);
-        let request_key = match self.key_strategy {
-            PolicyKeyStrategy::LegacyFingerprint => online.legacy_fingerprint(),
-            PolicyKeyStrategy::AgentTrace => online.routing_key(),
-        };
         self.exploration_allowed_for_online(&online)
-            && exploration_target_matches(headers, request_key)
     }
 
     fn exploration_allowed_for_online(&self, online: &OnlineWorkflowState) -> bool {
@@ -364,55 +341,6 @@ pub struct PolicyTableRouter {
     pending_adequacy: Option<Arc<PendingAdequacyStore>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
-    session_downgrade_budgets: Mutex<SessionDowngradeBudgets>,
-}
-
-// The guard is deliberately process-local and memory-bounded. Restarting the
-// daemon or evicting the least-recently-used entry starts a fresh allowance;
-// callers that need a lifetime cap must enforce one outside this router.
-const MAX_TRACKED_DOWNGRADE_SESSIONS: usize = 4096;
-
-#[derive(Debug, Default)]
-struct SessionDowngradeBudgets {
-    sequence: u64,
-    sessions: HashMap<String, SessionDowngradeBudget>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SessionDowngradeBudget {
-    consumed: u32,
-    last_seen: u64,
-}
-
-impl SessionDowngradeBudgets {
-    fn try_consume(&mut self, session: String, maximum: u32) -> bool {
-        self.sequence = self.sequence.wrapping_add(1);
-        if let Some(budget) = self.sessions.get_mut(&session) {
-            budget.last_seen = self.sequence;
-            if budget.consumed >= maximum {
-                return false;
-            }
-            budget.consumed += 1;
-            return true;
-        }
-        if self.sessions.len() >= MAX_TRACKED_DOWNGRADE_SESSIONS
-            && let Some(oldest) = self
-                .sessions
-                .iter()
-                .min_by_key(|(_, budget)| budget.last_seen)
-                .map(|(session, _)| session.clone())
-        {
-            self.sessions.remove(&oldest);
-        }
-        self.sessions.insert(
-            session,
-            SessionDowngradeBudget {
-                consumed: 1,
-                last_seen: self.sequence,
-            },
-        );
-        true
-    }
 }
 
 impl PolicyTableRouter {
@@ -428,7 +356,6 @@ impl PolicyTableRouter {
             pending_adequacy: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
-            session_downgrade_budgets: Mutex::new(SessionDowngradeBudgets::default()),
         })
     }
 
@@ -442,7 +369,6 @@ impl PolicyTableRouter {
             pending_adequacy: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
-            session_downgrade_budgets: Mutex::new(SessionDowngradeBudgets::default()),
         }
     }
 
@@ -503,19 +429,15 @@ impl PolicyTableRouter {
         let online =
             OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker);
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
-        let request_key = match self.table.key_strategy() {
-            PolicyKeyStrategy::LegacyFingerprint => legacy_fingerprint.clone(),
-            PolicyKeyStrategy::AgentTrace => online.routing_key().to_string(),
-        };
-        let exploration_allowed = self.table.exploration_allowed_for_online(&online)
-            && exploration_target_matches(headers, &request_key);
+        let request_key = online.routing_key().to_string();
+        let exploration_allowed = self.table.exploration_allowed_for_online(&online);
         let mut decision = PolicyDecision {
-            key_strategy: self.table.key_strategy(),
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             request_key,
             legacy_fingerprint,
-            workflow_state_kind: online.ir.state_kind.to_string(),
+            trace_state: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
-            workflow_identity: online.ir.identity.clone(),
+            trace_identity: online.ir.identity.clone(),
             static_tier: None,
             static_model: None,
             selected_tier: None,
@@ -608,15 +530,6 @@ impl PolicyTableRouter {
             }
         }
 
-        if Some(selected_tier) != self.table.escalation_tier()
-            && !self.try_consume_session_downgrade_budget(&decision.workflow_identity)
-            && let Some(escalation) = self.table.escalation_tier()
-        {
-            (selected_tier, _) = self.table.guardrail_with_status(escalation, prompt);
-            decision.reason = PolicyDecisionReason::SessionDowngradeBudget;
-            decision.trialed = false;
-        }
-
         decision.selected_tier = Some(selected_tier.to_string());
         decision.selected_model = self
             .table
@@ -626,29 +539,6 @@ impl PolicyTableRouter {
             decision.reason = PolicyDecisionReason::NoMatch;
         }
         decision
-    }
-
-    fn try_consume_session_downgrade_budget(&self, identity: &WorkflowIdentity) -> bool {
-        let maximum = self.table.max_downgraded_requests_per_session;
-        if maximum == 0 {
-            return true;
-        }
-        let session = identity
-            .agent_session_id
-            .as_deref()
-            .or(identity.trial_id.as_deref())
-            .or(identity.parent_session_id.as_deref())
-            .or((!identity.fingerprint.is_empty()).then_some(identity.fingerprint.as_str()));
-        let Some(session) = session else {
-            return false;
-        };
-        match self.session_downgrade_budgets.lock() {
-            Ok(mut budgets) => budgets.try_consume(session.to_string(), maximum),
-            Err(error) => {
-                tracing::warn!(%error, "session downgrade budget lock poisoned");
-                false
-            }
-        }
     }
 
     fn exploration_allowed_for(&self, decision: &PolicyDecision) -> bool {
@@ -699,11 +589,11 @@ impl PolicyTableRouter {
             key_strategy = ?decision.key_strategy,
             request_key = %decision.request_key,
             legacy_fingerprint = %decision.legacy_fingerprint,
-            workflow_state = %decision.workflow_state_kind,
-            workflow_parent_session = ?decision.workflow_identity.parent_session_id,
-            workflow_agent_role = decision.workflow_identity.role.as_str(),
-            workflow_context_epoch = decision.workflow_identity.context_epoch,
-            workflow_session_fingerprint = %decision.workflow_identity.fingerprint,
+            trace_state = %decision.trace_state,
+            trace_parent_session = ?decision.trace_identity.parent_session_id,
+            trace_agent_role = decision.trace_identity.role.as_str(),
+            trace_context_epoch = decision.trace_identity.context_epoch,
+            trace_session_fingerprint = %decision.trace_identity.fingerprint,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
@@ -722,15 +612,15 @@ impl PolicyTableRouter {
                 captured_at: None,
                 request_id: request_id.map(ToString::to_string),
                 input_model,
-                key_strategy: key_strategy_name(decision.key_strategy).to_string(),
+                key_strategy: key_strategy_name().to_string(),
                 request_key: decision.request_key.clone(),
                 ledger_key: self
                     .state_namespace
                     .as_ref()
                     .map(|_| self.ledger_key(&decision.request_key)),
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
-                workflow_state: decision.workflow_state_kind.clone(),
-                workflow_identity: decision.workflow_identity.clone(),
+                trace_state: decision.trace_state.clone(),
+                trace_identity: decision.trace_identity.clone(),
                 static_tier: decision.static_tier.clone(),
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
@@ -770,11 +660,8 @@ impl PolicyTableRouter {
     }
 }
 
-fn key_strategy_name(strategy: PolicyKeyStrategy) -> &'static str {
-    match strategy {
-        PolicyKeyStrategy::LegacyFingerprint => "legacy_fingerprint",
-        PolicyKeyStrategy::AgentTrace => "agent_trace",
-    }
+fn key_strategy_name() -> &'static str {
+    "agent_trace"
 }
 
 impl PromptTransform for PolicyTableRouter {
@@ -816,16 +703,6 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
         .is_some_and(|(namespace, _)| namespace == "bitrouter")
 }
 
-fn exploration_target_matches(headers: &HeaderMap, request_key: &str) -> bool {
-    let Some(value) = headers.get("x-bitrouter-exploration-target") else {
-        return true;
-    };
-    value.to_str().ok().map(str::trim).is_some_and(|target| {
-        !target.is_empty()
-            && (target == request_key || target == "__first_eligible_workflow_state__")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -843,14 +720,20 @@ mod tests {
     /// tool-safe.
     fn config() -> PolicyTableConfig {
         PolicyTableConfig {
-            key_strategy: Default::default(),
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("flagship".to_string(), "vendor/flagship".to_string()),
             ]),
             fingerprints: HashMap::from([
-                ("opening".to_string(), "flagship".to_string()),
-                ("after_read_file".to_string(), "cheap".to_string()),
+                (
+                    "agent_trace/v1|opening|normal".to_string(),
+                    "flagship".to_string(),
+                ),
+                (
+                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "cheap".to_string(),
+                ),
             ]),
             default_tier: Some("flagship".to_string()),
             tool_use_tier: Some("flagship".to_string()),
@@ -1033,15 +916,15 @@ mod tests {
     }
 
     #[test]
-    fn unmapped_fingerprint_falls_back_to_default_tier() {
-        // `after_grep` is not mapped → default_tier (flagship).
+    fn equivalent_tool_followups_share_the_trace_projection_route() {
+        // Raw tool names do not participate in the agent-trace projection.
         assert_eq!(
             route(
                 "inbound",
                 vec![user("fix the bug"), assistant_calls("grep")],
                 vec![],
             ),
-            "vendor/flagship"
+            "vendor/cheap"
         );
     }
 
@@ -1102,7 +985,10 @@ mod tests {
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
-            fingerprints: HashMap::from([("opening".to_string(), "cheap".to_string())]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v1|opening|normal".to_string(),
+                "cheap".to_string(),
+            )]),
             default_tier: None,
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
@@ -1155,30 +1041,25 @@ mod tests {
         assert_eq!(records[0].input_model, "inbound");
         assert_eq!(
             records[0].ledger_key.as_deref(),
-            Some("coding\0after_read_file")
+            Some("coding\0agent_trace/v1|tool_followup|normal")
         );
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].reason, "static_table");
-        assert_eq!(records[0].workflow_identity.role, AgentRole::Main);
+        assert_eq!(records[0].trace_identity.role, AgentRole::Main);
         assert_eq!(
-            records[0].workflow_identity.parent_session_id.as_deref(),
+            records[0].trace_identity.parent_session_id.as_deref(),
             Some("parent-001")
         );
         assert_eq!(
-            records[0].workflow_identity.benchmark_run_id.as_deref(),
+            records[0].trace_identity.benchmark_run_id.as_deref(),
             Some("short13-run")
         );
         assert_eq!(
-            records[0].workflow_identity.trial_id.as_deref(),
+            records[0].trace_identity.trial_id.as_deref(),
             Some("trial-01")
         );
-        assert!(
-            records[0]
-                .workflow_identity
-                .fingerprint
-                .starts_with("sha256:")
-        );
+        assert!(records[0].trace_identity.fingerprint.starts_with("sha256:"));
 
         let _ = std::fs::remove_file(path);
     }
@@ -1230,7 +1111,10 @@ mod tests {
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([("flagship".to_string(), "vendor:exact".to_string())]),
-            fingerprints: HashMap::from([("opening".to_string(), "flagship".to_string())]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v1|opening|normal".to_string(),
+                "flagship".to_string(),
+            )]),
             default_tier: None,
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
@@ -1255,7 +1139,10 @@ mod tests {
                 ("cheap".to_string(), "vendor/cheap".to_string()),
                 ("flagship".to_string(), "vendor/flagship".to_string()),
             ]),
-            fingerprints: HashMap::from([("after_read_file".to_string(), "cheap".to_string())]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v1|tool_followup|normal".to_string(),
+                "cheap".to_string(),
+            )]),
             default_tier: Some("flagship".to_string()),
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
@@ -1373,7 +1260,10 @@ mod tests {
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([("cheap".to_string(), "vendor/cheap".to_string())]),
-            fingerprints: HashMap::from([("opening".to_string(), "cheap".to_string())]),
+            fingerprints: HashMap::from([(
+                "agent_trace/v1|opening|normal".to_string(),
+                "cheap".to_string(),
+            )]),
             default_tier: None,
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
@@ -1397,7 +1287,7 @@ mod tests {
         let router = PolicyTableRouter::new(table, Some(ledger.clone()));
         ledger
             .observe(
-                "after_read_file",
+                "agent_trace/v1|tool_followup|normal",
                 Outcome::StaticDowngrade {
                     cause: InadequacyCause::ProviderPermanent,
                 },
@@ -1420,8 +1310,12 @@ mod tests {
             trialed: false,
             cause: InadequacyCause::None,
         };
-        ledger.observe("after_grep", non_trial()).await;
-        ledger.observe("after_grep", non_trial()).await;
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", non_trial())
+            .await;
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", non_trial())
+            .await;
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
         p.messages = vec![user("start"), assistant_calls("grep")];
@@ -1457,7 +1351,7 @@ mod tests {
         let generic = router.decision_for(&p, &generic_headers);
         let terminus = router.decision_for(&p, &terminus_headers);
 
-        assert_eq!(terminus.workflow_identity.role, AgentRole::Unknown);
+        assert_eq!(terminus.trace_identity.role, AgentRole::Unknown);
         assert_eq!(terminus.request_key, generic.request_key);
         assert_eq!(terminus.selected_tier, generic.selected_tier);
         assert_eq!(terminus.selected_model, generic.selected_model);
@@ -1472,7 +1366,7 @@ mod tests {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
         ledger
             .observe(
-                "opening",
+                "agent_trace/v1|opening|normal",
                 Outcome::Exploration {
                     trialed: false,
                     cause: InadequacyCause::None,
@@ -1488,7 +1382,9 @@ mod tests {
     #[tokio::test]
     async fn decision_reason_exploration_locked() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
-        ledger.observe("after_grep", trial_ok()).await;
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", trial_ok())
+            .await;
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
         p.messages = vec![user("start"), assistant_calls("grep")];
@@ -1514,7 +1410,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        ledger.observe("after_grep", trial_ok()).await;
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", trial_ok())
+            .await;
         let table = PolicyTable::from_config(&cfg).expect("configured");
         let router = PolicyTableRouter::new(table, Some(ledger));
         let mut p = prompt("inbound");
@@ -1530,7 +1428,10 @@ mod tests {
         assert_eq!(gated.selected_tier.as_deref(), Some("cheap"));
 
         store
-            .record_semantic_success("after_grep", "terminal-bench/regex-log")
+            .record_semantic_success(
+                "agent_trace/v1|tool_followup|normal",
+                "terminal-bench/regex-log",
+            )
             .await
             .unwrap();
         let one_success = Arc::new(
@@ -1551,7 +1452,10 @@ mod tests {
         assert_eq!(still_gated.selected_tier.as_deref(), Some("cheap"));
 
         store
-            .record_semantic_success("after_grep", "terminal-bench/fix-git")
+            .record_semantic_success(
+                "agent_trace/v1|tool_followup|normal",
+                "terminal-bench/fix-git",
+            )
             .await
             .unwrap();
         let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await.unwrap());
@@ -1625,7 +1529,7 @@ mod tests {
         // One inadequate outcome pins the fingerprint (threshold 1).
         ledger
             .observe(
-                "after_read_file",
+                "agent_trace/v1|tool_followup|normal",
                 Outcome::StaticDowngrade {
                     cause: InadequacyCause::ProviderPermanent,
                 },
@@ -1641,9 +1545,9 @@ mod tests {
     }
 
     #[test]
-    fn session_budget_escalates_after_three_downgraded_requests() {
+    fn session_identity_does_not_change_a_static_downgrade() {
         let mut cfg = config_with_escalation();
-        cfg.adequacy.max_downgraded_requests_per_session = 3;
+        cfg.adequacy.max_downgraded_requests_per_session = 1;
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut session_a = smithers_headers("implement");
         session_a.insert(
@@ -1658,9 +1562,6 @@ mod tests {
             assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
             assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         }
-        let guarded = router.decision_for(&p, &session_a);
-        assert_eq!(guarded.selected_tier.as_deref(), Some("flagship"));
-        assert_eq!(guarded.reason, PolicyDecisionReason::SessionDowngradeBudget);
 
         let mut session_b = smithers_headers("implement");
         session_b.insert(
@@ -1680,7 +1581,7 @@ mod tests {
 
         ledger
             .observe(
-                "after_read_file",
+                "agent_trace/v1|tool_followup|normal",
                 Outcome::StaticDowngrade {
                     cause: InadequacyCause::ProviderPermanent,
                 },
@@ -1711,6 +1612,8 @@ mod tests {
     /// is an exploration candidate, trialed toward the cheap tier.
     fn config_with_exploration() -> PolicyTableConfig {
         let mut cfg = config_with_escalation();
+        cfg.fingerprints
+            .remove("agent_trace/v1|tool_followup|normal");
         cfg.adequacy.explore_enabled = true;
         cfg.adequacy.explore_tier = Some("cheap".to_string());
         cfg.adequacy.explore_interval = 2;
@@ -1806,8 +1709,12 @@ mod tests {
             trialed: false,
             cause: InadequacyCause::None,
         };
-        ledger.observe("opening", non_trial()).await;
-        ledger.observe("opening", non_trial()).await;
+        ledger
+            .observe("agent_trace/v1|opening|normal", non_trial())
+            .await;
+        ledger
+            .observe("agent_trace/v1|opening|normal", non_trial())
+            .await;
         let router = exploring_router(ledger);
         assert_eq!(
             route_with(&router, vec![user("start")]),
@@ -1853,31 +1760,8 @@ mod tests {
         assert_eq!(other.selected_tier.as_deref(), Some("cheap"));
     }
 
-    #[test]
-    fn first_eligible_target_defers_safety_to_the_workflow_state_gate() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-bitrouter-exploration-target",
-            "__first_eligible_workflow_state__"
-                .parse()
-                .expect("valid target"),
-        );
-        assert!(exploration_target_matches(
-            &headers,
-            "codex|responses|test|skill|-|exec_command"
-        ));
-        headers.insert(
-            "x-bitrouter-exploration-target",
-            "another-exact-key".parse().expect("valid target"),
-        );
-        assert!(!exploration_target_matches(
-            &headers,
-            "codex|responses|test|skill|-|exec_command"
-        ));
-    }
-
     #[tokio::test]
-    async fn mismatching_exploration_target_suppresses_a_learned_lock() {
+    async fn private_exploration_target_cannot_suppress_a_learned_lock() {
         let table = workflow_exploration_table();
         let mut prompt = prompt("inbound");
         prompt.messages = vec![user("start"), assistant_calls("read_file")];
@@ -1895,16 +1779,20 @@ mod tests {
         let decision = router.decision_for(&prompt, &headers);
 
         assert!(decision.locked);
-        assert!(!decision.exploration_allowed);
-        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
-        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert!(decision.exploration_allowed);
+        assert_eq!(decision.reason, PolicyDecisionReason::ExplorationLocked);
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
     #[tokio::test]
     async fn a_locked_opening_candidate_stays_on_the_strong_tier() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
-        ledger.observe("opening", trial_ok()).await; // 1 adequate trial
-        ledger.observe("opening", trial_ok()).await; // 2 → locked
+        ledger
+            .observe("agent_trace/v1|opening|normal", trial_ok())
+            .await; // 1 adequate trial
+        ledger
+            .observe("agent_trace/v1|opening|normal", trial_ok())
+            .await; // 2 → locked
         let router = exploring_router(ledger);
         assert_eq!(route_with(&router, vec![user("start")]), "vendor/flagship");
     }
@@ -1916,15 +1804,19 @@ mod tests {
             trialed: false,
             cause: InadequacyCause::None,
         };
-        ledger.observe("midstream", non_trial()).await;
-        ledger.observe("midstream", non_trial()).await;
+        ledger
+            .observe("agent_trace/v1|finalization|guarded", non_trial())
+            .await;
+        ledger
+            .observe("agent_trace/v1|finalization|guarded", non_trial())
+            .await;
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
         p.messages = terminus_finalization();
 
         let decision = router.decision_for(&p, &terminus_main_headers());
 
-        assert_eq!(decision.workflow_state_kind, "finalization");
+        assert_eq!(decision.trace_state, "finalization");
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert!(!decision.trialed);
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
@@ -1934,14 +1826,16 @@ mod tests {
     #[tokio::test]
     async fn finalization_ignores_a_learned_exploration_lock() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
-        ledger.observe("midstream", trial_ok()).await;
+        ledger
+            .observe("agent_trace/v1|finalization|guarded", trial_ok())
+            .await;
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
         p.messages = terminus_finalization();
 
         let decision = router.decision_for(&p, &terminus_main_headers());
 
-        assert_eq!(decision.workflow_state_kind, "finalization");
+        assert_eq!(decision.trace_state, "finalization");
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert!(decision.locked);
         assert!(!decision.trialed);
@@ -1952,15 +1846,17 @@ mod tests {
     #[test]
     fn finalization_preserves_an_operator_authored_static_cheap_route() {
         let mut cfg = config_with_opening_exploration();
-        cfg.fingerprints
-            .insert("midstream".to_string(), "cheap".to_string());
+        cfg.fingerprints.insert(
+            "agent_trace/v1|finalization|guarded".to_string(),
+            "cheap".to_string(),
+        );
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut p = prompt("inbound");
         p.messages = terminus_finalization();
 
         let decision = router.decision_for(&p, &terminus_main_headers());
 
-        assert_eq!(decision.workflow_state_kind, "finalization");
+        assert_eq!(decision.trace_state, "finalization");
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
@@ -1972,8 +1868,12 @@ mod tests {
         use crate::adequacy::reliability::{ReliabilityKey, ReliabilityObservation};
 
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
-        ledger.observe("after_read_file", trial_ok()).await;
-        ledger.observe("after_read_file", trial_ok()).await;
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", trial_ok())
+            .await;
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", trial_ok())
+            .await;
         let endpoint = ReliabilityKey {
             provider: "vendor".to_string(),
             model: "cheap".to_string(),
@@ -2020,7 +1920,7 @@ mod tests {
         // A failed trial pins the candidate (safety wins).
         ledger
             .observe(
-                "opening",
+                "agent_trace/v1|opening|normal",
                 Outcome::Exploration {
                     trialed: true,
                     cause: InadequacyCause::ProviderPermanent,
@@ -2041,7 +1941,9 @@ mod tests {
         // guardrail: a tool request is never downgraded below the tool-safe tier,
         // even when exploration has locked the cheap tier.
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
-        ledger.observe("after_read_file", trial_ok()).await; // locks (threshold 1)
+        ledger
+            .observe("agent_trace/v1|tool_followup|normal", trial_ok())
+            .await; // locks (threshold 1)
         let router = exploring_router(ledger);
         let mut p = prompt("inbound");
         p.messages = vec![user("start"), assistant_calls("read_file")];
