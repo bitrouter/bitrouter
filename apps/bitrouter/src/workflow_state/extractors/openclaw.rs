@@ -7,6 +7,22 @@ use crate::workflow_state::ir::{
 pub struct OpenClawExtractor;
 
 impl WorkflowStateExtractor for OpenClawExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        input
+            .raw_body
+            .get("agentRuntime")
+            .and_then(serde_json::Value::as_object)
+            .is_some()
+            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::OpenClaw,
+                confidence: 0.9,
+                evidence_kind: "agent_runtime",
+            })
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::OpenClaw),

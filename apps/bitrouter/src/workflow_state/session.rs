@@ -4,10 +4,10 @@ use std::sync::Mutex;
 use bitrouter_sdk::language_model::types::{Content, Message, Role};
 use sha2::{Digest, Sha256};
 
-use crate::workflow_state::extractors::ExtractorInput;
+use crate::workflow_state::extractors::{ExtractorInput, adapter_session_hints, terminus_2};
 use crate::workflow_state::ir::{
-    AgentRole, ContextTransition, Evidence, EvidenceLevel, HarnessId, SessionConfidence,
-    SessionSignal, WorkflowIdentity,
+    AgentRole, ContextTransition, Evidence, EvidenceLevel, SessionConfidence, SessionSignal,
+    WorkflowIdentity,
 };
 
 const WORKFLOW_SESSION_HEADER: &str = "x-bitrouter-workflow-session";
@@ -38,12 +38,6 @@ struct EpochState {
     compaction_active: bool,
 }
 
-struct TerminusSessionIdentity {
-    parent_session_id: String,
-    role: Option<AgentRole>,
-    context_epoch: Option<u32>,
-}
-
 /// Resolve structured workflow identity, applying explicit identity headers
 /// before Terminus 2 prompt inference and stateful epoch tracking.
 pub fn resolve_workflow_identity(
@@ -51,6 +45,7 @@ pub fn resolve_workflow_identity(
     tracker: &WorkflowIdentityTracker,
 ) -> WorkflowIdentity {
     let session = resolve_session_signal(input).signal;
+    let adapter_hints = adapter_session_hints(input);
     let benchmark_run_id = header_value(input, "x-bitrouter-benchmark-run-id");
     let trial_id = header_value(input, "x-bitrouter-trial-id");
     let explicit_parent = header_value(input, "x-bitrouter-parent-session-id");
@@ -62,17 +57,13 @@ pub fn resolve_workflow_identity(
     let explicit_transition =
         header_value(input, "x-bitrouter-context-transition").map(|value| parse_transition(&value));
     let explicit_fingerprint = header_value(input, "x-bitrouter-session-fingerprint");
-    let terminus_session = if matches!(input.harness_hint, Some(HarnessId::Terminus2)) {
-        session.key.as_deref().map(parse_terminus_session_id)
-    } else {
-        None
-    };
+    let terminus_session = adapter_hints.terminus_identity.as_ref();
 
     let role = explicit_role
         .or_else(|| terminus_session.as_ref().and_then(|identity| identity.role))
         .unwrap_or_else(|| {
-            if matches!(input.harness_hint, Some(HarnessId::Terminus2)) {
-                infer_terminus_role(input.prompt)
+            if adapter_hints.tracks_context_epoch {
+                terminus_2::infer_role(input.prompt)
             } else {
                 AgentRole::Unknown
             }
@@ -98,9 +89,7 @@ pub fn resolve_workflow_identity(
             (epoch, transition.unwrap_or(ContextTransition::None))
         }
         (Some(epoch), transition, None) => (epoch, transition.unwrap_or(ContextTransition::None)),
-        (None, transition, Some(key))
-            if matches!(input.harness_hint, Some(HarnessId::Terminus2)) =>
-        {
+        (None, transition, Some(key)) if adapter_hints.tracks_context_epoch => {
             let observed_epoch = terminus_session
                 .as_ref()
                 .and_then(|identity| identity.context_epoch);
@@ -232,71 +221,6 @@ fn tracked_epoch_state(states: &mut TrackerStates, key: String) -> &mut EpochSta
     states.epochs.entry(key).or_default()
 }
 
-fn parse_terminus_session_id(session_id: &str) -> TerminusSessionIdentity {
-    if let Some(marker) = session_id.rfind("-summarization-") {
-        let parent = &session_id[..marker];
-        let suffix = &session_id[marker + "-summarization-".len()..];
-        if !parent.is_empty()
-            && let Some((epoch, role)) = suffix.split_once('-')
-            && let Ok(context_epoch) = epoch.parse::<u32>()
-        {
-            let role = match role {
-                "summary" => Some(AgentRole::Summary),
-                "questions" => Some(AgentRole::Questions),
-                "answers" => Some(AgentRole::Answers),
-                _ => None,
-            };
-            if role.is_some() {
-                return TerminusSessionIdentity {
-                    parent_session_id: parent.to_string(),
-                    role,
-                    context_epoch: Some(context_epoch),
-                };
-            }
-        }
-    }
-    if let Some(marker) = session_id.rfind("-cont-") {
-        let parent = &session_id[..marker];
-        let epoch = &session_id[marker + "-cont-".len()..];
-        if !parent.is_empty()
-            && let Ok(context_epoch) = epoch.parse::<u32>()
-        {
-            return TerminusSessionIdentity {
-                parent_session_id: parent.to_string(),
-                role: Some(AgentRole::Main),
-                context_epoch: Some(context_epoch),
-            };
-        }
-    }
-    TerminusSessionIdentity {
-        parent_session_id: session_id.to_string(),
-        role: None,
-        context_epoch: None,
-    }
-}
-
-fn infer_terminus_role(prompt: &bitrouter_sdk::language_model::types::Prompt) -> AgentRole {
-    let latest_user = prompt
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == Role::User)
-        .map(message_text)
-        .unwrap_or_default();
-    let normalized = latest_user.to_ascii_lowercase();
-    if normalized.contains("you are about to hand off your work to another ai agent") {
-        AgentRole::Summary
-    } else if normalized.contains("you are picking up work from a previous ai agent on this task") {
-        AgentRole::Questions
-    } else if normalized.contains("the next agent has a few questions for you") {
-        AgentRole::Answers
-    } else if normalized.trim().is_empty() {
-        AgentRole::Unknown
-    } else {
-        AgentRole::Main
-    }
-}
-
 fn parse_role(value: &str) -> AgentRole {
     match value.trim().to_ascii_lowercase().as_str() {
         "main" => AgentRole::Main,
@@ -347,85 +271,16 @@ pub fn resolve_session_signal(input: &ExtractorInput<'_>) -> ResolvedSessionSign
         );
     }
 
-    // Harbor's Terminus 2 LiteLLM Chat Completions client sends its configured
-    // session id both in `X-Session-ID` and as `session_id` in the request body.
-    // Header precedence mirrors HTTP middleware behavior; the body remains a
-    // fallback for clients that cannot set custom headers.
-    // <https://github.com/harbor-framework/harbor/blob/main/src/harbor/llms/lite_llm.py>
-    if matches!(input.harness_hint, Some(HarnessId::Terminus2)) {
-        if let Some(session_id) = header_value(input, "x-session-id") {
-            return resolved(
-                session_id,
-                SessionConfidence::High,
-                "header.x-session-id",
-                EvidenceLevel::Observed,
-                0.99,
-            );
-        }
-        if let Some(session_id) = input
-            .raw_body
-            .get("session_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-        {
-            return resolved(
-                session_id,
-                SessionConfidence::High,
-                "raw_body.session_id",
-                EvidenceLevel::Observed,
-                0.98,
-            );
-        }
-    }
-
-    if matches!(input.harness_hint, Some(HarnessId::ClaudeCode)) {
-        if let Some(session_id) = claude_metadata_session_id(input.raw_body) {
-            return resolved(
-                session_id,
-                SessionConfidence::High,
-                "raw_body.metadata.user_id.session_id",
-                EvidenceLevel::Observed,
-                0.98,
-            );
-        }
-        if let Some(user_id) = metadata_str(input.raw_body, "user_id") {
-            return resolved(
-                user_id,
-                SessionConfidence::Low,
-                "raw_body.metadata.user_id",
-                EvidenceLevel::Observed,
-                0.55,
-            );
-        }
-    }
-
-    if matches!(input.harness_hint, Some(HarnessId::Hermes))
-        && let Some(job_id) = metadata_str(input.raw_body, "job_id")
+    let adapter_hints = adapter_session_hints(input);
+    if let (Some(session_key), Some(session_source)) =
+        (adapter_hints.session_key, adapter_hints.session_source)
     {
         return resolved(
-            job_id,
-            SessionConfidence::Medium,
-            "raw_body.metadata.job_id",
+            session_key,
+            adapter_hints.session_confidence,
+            session_source,
             EvidenceLevel::Observed,
             0.8,
-        );
-    }
-
-    if matches!(input.harness_hint, Some(HarnessId::Codex))
-        && let Some(previous_response_id) = input
-            .raw_body
-            .get("previous_response_id")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.trim().is_empty())
-    {
-        return resolved(
-            previous_response_id.to_string(),
-            SessionConfidence::Medium,
-            "raw_body.previous_response_id",
-            EvidenceLevel::Observed,
-            0.75,
         );
     }
 
@@ -450,30 +305,6 @@ fn header_value(input: &ExtractorInput<'_>, name: &str) -> Option<String> {
         .headers
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn claude_metadata_session_id(raw_body: &serde_json::Value) -> Option<String> {
-    let user_id = metadata_str(raw_body, "user_id")?;
-    serde_json::from_str::<serde_json::Value>(&user_id)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("session_id")
-                .and_then(|session_id| session_id.as_str())
-                .map(str::trim)
-                .filter(|session_id| !session_id.is_empty())
-                .map(ToString::to_string)
-        })
-}
-
-fn metadata_str(raw_body: &serde_json::Value, key: &str) -> Option<String> {
-    raw_body
-        .get("metadata")
-        .and_then(|metadata| metadata.get(key))
-        .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)

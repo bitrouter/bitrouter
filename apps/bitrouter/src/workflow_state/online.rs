@@ -1,8 +1,11 @@
 use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::language_model::types::{Content, Prompt};
+use bitrouter_sdk::language_model::types::Prompt;
 
 use crate::policy_table_router::PolicyTable;
-use crate::workflow_state::extractors::{ExtractorInput, extract_workflow_state};
+use crate::workflow_state::extractors::{
+    ExtractorInput, adapter_protocol_hint, detect_trace_adapter, extract_workflow_state,
+    parse_compatibility_harness,
+};
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, WorkflowStateIR};
 use crate::workflow_state::session::{WorkflowIdentityTracker, resolve_workflow_identity};
 
@@ -60,8 +63,16 @@ impl OnlineWorkflowState {
             raw_body: &raw_body,
             prompt,
         };
-        let mut ir = extract_workflow_state(&input);
-        ir.identity = resolve_workflow_identity(&input, tracker);
+        let adapter = detect_trace_adapter(&input);
+        let selected_input = ExtractorInput {
+            harness_hint: Some(adapter.source.clone()),
+            protocol_hint: adapter_protocol_hint(&input, &adapter),
+            headers,
+            raw_body: &raw_body,
+            prompt,
+        };
+        let mut ir = extract_workflow_state(&selected_input);
+        ir.identity = resolve_workflow_identity(&selected_input, tracker);
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
         let routing_key = ir.route_projection().key();
         let legacy_routing_key = ir.legacy_routing_key();
@@ -86,89 +97,21 @@ impl OnlineWorkflowState {
     }
 }
 
-fn infer_online_context(headers: &HeaderMap, prompt: &Prompt) -> (Option<HarnessId>, ProtocolKind) {
-    let explicit_harness = header_value(headers, "x-bitrouter-harness").and_then(parse_harness);
-    let explicit_protocol = header_value(headers, "x-bitrouter-protocol")
-        .or_else(|| header_value(headers, "x-bitrouter-inbound-protocol"))
+fn infer_online_context(
+    headers: &HeaderMap,
+    _prompt: &Prompt,
+) -> (Option<HarnessId>, ProtocolKind) {
+    let explicit_harness =
+        header_value(headers, "x-bitrouter-harness").and_then(parse_compatibility_harness);
+    let explicit_protocol = header_value(headers, "x-bitrouter-inbound-protocol")
+        .or_else(|| header_value(headers, "x-bitrouter-protocol"))
         .and_then(parse_protocol);
-    if let Some(harness) = explicit_harness {
-        let default_protocol = if harness == HarnessId::Terminus2 {
-            ProtocolKind::ChatCompletions
-        } else {
-            ProtocolKind::Unknown
-        };
-        return (Some(harness), explicit_protocol.unwrap_or(default_protocol));
-    }
-
-    if headers
-        .get_all("anthropic-beta")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|value| {
-            value
-                .split(',')
-                .any(|beta| beta.trim().starts_with("claude-code"))
-        })
-    {
-        return (Some(HarnessId::ClaudeCode), ProtocolKind::Messages);
-    }
-
-    if has_terminus_2_prompt_contract(prompt) {
-        return (
-            Some(HarnessId::Terminus2),
-            explicit_protocol.unwrap_or(ProtocolKind::ChatCompletions),
-        );
-    }
-
-    if let Some(protocol) = explicit_protocol {
-        return (None, protocol);
-    }
-
-    (None, ProtocolKind::Unknown)
-}
-
-fn has_terminus_2_prompt_contract(prompt: &Prompt) -> bool {
-    prompt
-        .system
-        .iter()
-        .map(String::as_str)
-        .chain(
-            prompt
-                .messages
-                .iter()
-                .flat_map(|message| message.content.iter())
-                .filter_map(|content| match content {
-                    Content::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                }),
-        )
-        .any(|text| {
-            let normalized = text.to_ascii_lowercase();
-            normalized.contains(
-                "you are an ai assistant tasked with solving command-line tasks in a linux environment",
-            ) && (normalized.contains("format your response as json")
-                || normalized.contains("format your response as xml"))
-                && normalized.contains("commands")
-                && normalized.contains("task_complete")
-        })
+    let protocol_hint = explicit_protocol.unwrap_or(ProtocolKind::Unknown);
+    (explicit_harness, protocol_hint)
 }
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())
-}
-
-fn parse_harness(value: &str) -> Option<HarnessId> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "generic" => Some(HarnessId::Generic),
-        "hermes" => Some(HarnessId::Hermes),
-        "claude" | "claude_code" | "claude-code" => Some(HarnessId::ClaudeCode),
-        "codex" => Some(HarnessId::Codex),
-        "smithers" => Some(HarnessId::Smithers),
-        "terminus_2" | "terminus-2" | "terminus2" => Some(HarnessId::Terminus2),
-        "openclaw" | "open_claw" | "open-claw" => Some(HarnessId::OpenClaw),
-        "unknown" => Some(HarnessId::Unknown),
-        _ => None,
-    }
 }
 
 fn parse_protocol(value: &str) -> Option<ProtocolKind> {

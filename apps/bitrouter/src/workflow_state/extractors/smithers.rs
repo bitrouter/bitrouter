@@ -5,6 +5,20 @@ use crate::workflow_state::ir::{HarnessId, WorkflowStateIR};
 pub struct SmithersExtractor;
 
 impl WorkflowStateExtractor for SmithersExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        let has_native_metadata = ["x-smithers-workflow-id", "x-smithers-node-id"]
+            .into_iter()
+            .any(|name| non_empty_header(input, name).is_some());
+        has_native_metadata.then_some(crate::workflow_state::extractors::TraceAdapterMatch {
+            source: HarnessId::Smithers,
+            confidence: 0.9,
+            evidence_kind: "smithers_metadata",
+        })
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(input);
         ir.harness_id = HarnessId::Smithers;

@@ -7,6 +7,35 @@ use crate::workflow_state::ir::{
 pub struct HermesExtractor;
 
 impl WorkflowStateExtractor for HermesExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        let has_native_metadata = input
+            .raw_body
+            .get("metadata")
+            .and_then(|metadata| metadata.get("job_id"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+        if has_native_metadata {
+            return Some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Hermes,
+                confidence: 0.9,
+                evidence_kind: "hermes_metadata",
+            });
+        }
+        input
+            .headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("hermes"))
+            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Hermes,
+                confidence: 0.9,
+                evidence_kind: "hermes_user_agent",
+            })
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::Hermes),
@@ -36,6 +65,16 @@ impl WorkflowStateExtractor for HermesExtractor {
         }
         ir
     }
+}
+
+pub(crate) fn metadata_job_id(raw_body: &serde_json::Value) -> Option<String> {
+    raw_body
+        .get("metadata")
+        .and_then(|metadata| metadata.get("job_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]

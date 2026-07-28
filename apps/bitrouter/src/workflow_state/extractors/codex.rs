@@ -7,6 +7,32 @@ use crate::workflow_state::ir::{
 pub struct CodexResponsesExtractor;
 
 impl WorkflowStateExtractor for CodexResponsesExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        if input.protocol_hint != ProtocolKind::Responses {
+            return None;
+        }
+        if header_contains(input.headers, "user-agent", "codex") {
+            return Some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Codex,
+                confidence: 0.95,
+                evidence_kind: "responses_codex_user_agent",
+            });
+        }
+        input
+            .raw_body
+            .get("previous_response_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Codex,
+                confidence: 0.9,
+                evidence_kind: "responses_previous_response_id",
+            })
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::Codex),
@@ -35,6 +61,22 @@ impl WorkflowStateExtractor for CodexResponsesExtractor {
         }
         ir
     }
+}
+
+fn header_contains(headers: &bitrouter_sdk::HeaderMap, name: &str, needle: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+}
+
+pub(crate) fn previous_response_id(raw_body: &serde_json::Value) -> Option<String> {
+    raw_body
+        .get("previous_response_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]
