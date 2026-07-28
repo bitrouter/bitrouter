@@ -32,10 +32,12 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::adequacy::AdequacyLedger;
+use crate::adequacy::reliability::RoutePermit;
 use crate::adequacy::settlement::{PendingAdequacyDecision, PendingAdequacyStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
-use crate::workflow_state::ir::WorkflowStateKind;
+use crate::workflow_state::ir::{AgentRole, HarnessId, WorkflowIdentity, WorkflowStateKind};
 use crate::workflow_state::online::OnlineWorkflowState;
+use crate::workflow_state::session::WorkflowIdentityTracker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionReason {
@@ -43,6 +45,8 @@ pub enum PolicyDecisionReason {
     ExplorationTrial,
     ExplorationLocked,
     AdequacyPin,
+    ReliabilityCircuitOpen,
+    ReliabilityHalfOpenProbe,
     ToolGuardrail,
     NoMatch,
 }
@@ -54,6 +58,8 @@ impl PolicyDecisionReason {
             Self::ExplorationTrial => "exploration_trial",
             Self::ExplorationLocked => "exploration_locked",
             Self::AdequacyPin => "adequacy_pin",
+            Self::ReliabilityCircuitOpen => "reliability_circuit_open",
+            Self::ReliabilityHalfOpenProbe => "reliability_half_open_probe",
             Self::ToolGuardrail => "tool_guardrail",
             Self::NoMatch => "no_match",
         }
@@ -72,6 +78,8 @@ pub struct PolicyDecision {
     pub request_key: String,
     pub legacy_fingerprint: String,
     pub workflow_state_kind: String,
+    pub harness_id: HarnessId,
+    pub workflow_identity: WorkflowIdentity,
     pub static_tier: Option<String>,
     pub static_model: Option<String>,
     pub selected_tier: Option<String>,
@@ -83,6 +91,7 @@ pub struct PolicyDecision {
     pub semantic_success_threshold: u32,
     pub locked: bool,
     pub trialed: bool,
+    exploration_allowed: bool,
 }
 
 /// The resolved, immutable policy spec — the fingerprint→tier→model table plus
@@ -185,7 +194,7 @@ impl PolicyTable {
     }
 
     /// The model id a tier routes to.
-    fn model_of_tier(&self, tier: &str) -> Option<&str> {
+    pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
         self.tiers.get(tier).map(String::as_str)
     }
 
@@ -277,12 +286,21 @@ impl PolicyTable {
         headers: &HeaderMap,
     ) -> bool {
         let online = OnlineWorkflowState::from_headers(headers, prompt);
-        if online.legacy_fingerprint() == "opening"
-            || online.ir.state_kind == WorkflowStateKind::Opening
+        self.exploration_allowed_for_online(&online)
+    }
+
+    fn exploration_allowed_for_online(&self, online: &OnlineWorkflowState) -> bool {
+        if online.ir.harness_id == HarnessId::Terminus2
+            && online.ir.identity.role == AgentRole::Unknown
         {
-            return self.can_explore_opening();
+            return false;
         }
-        true
+        match online.ir.state_kind {
+            WorkflowStateKind::Finalization => false,
+            WorkflowStateKind::Opening => self.can_explore_opening(),
+            _ if online.legacy_fingerprint() == "opening" => self.can_explore_opening(),
+            _ => true,
+        }
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -343,6 +361,7 @@ pub struct PolicyTableRouter {
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     pending_adequacy: Option<Arc<PendingAdequacyStore>>,
     state_namespace: Option<String>,
+    identity_tracker: WorkflowIdentityTracker,
 }
 
 impl PolicyTableRouter {
@@ -357,6 +376,7 @@ impl PolicyTableRouter {
             decision_recorder: None,
             pending_adequacy: None,
             state_namespace: None,
+            identity_tracker: WorkflowIdentityTracker::default(),
         })
     }
 
@@ -369,6 +389,7 @@ impl PolicyTableRouter {
             decision_recorder: None,
             pending_adequacy: None,
             state_namespace: None,
+            identity_tracker: WorkflowIdentityTracker::default(),
         }
     }
 
@@ -426,17 +447,21 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         respect_explicit_route: bool,
     ) -> PolicyDecision {
-        let online = OnlineWorkflowState::from_headers(headers, prompt);
+        let online =
+            OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker);
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let request_key = match self.table.key_strategy() {
             PolicyKeyStrategy::LegacyFingerprint => legacy_fingerprint.clone(),
             PolicyKeyStrategy::WorkflowState => online.routing_key().to_string(),
         };
+        let exploration_allowed = self.table.exploration_allowed_for_online(&online);
         let mut decision = PolicyDecision {
             key_strategy: self.table.key_strategy(),
             request_key,
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
+            harness_id: online.ir.harness_id.clone(),
+            workflow_identity: online.ir.identity.clone(),
             static_tier: None,
             static_model: None,
             selected_tier: None,
@@ -448,6 +473,7 @@ impl PolicyTableRouter {
             semantic_success_threshold: 0,
             locked: false,
             trialed: false,
+            exploration_allowed,
         };
 
         if (respect_explicit_route && is_explicitly_routed(&prompt.model))
@@ -507,6 +533,24 @@ impl PolicyTableRouter {
                     };
                 }
             }
+
+            if Some(selected_tier) != self.table.escalation_tier()
+                && let Some(route_key) = self.table.model_of_tier(selected_tier)
+            {
+                match ledger.reliability_permit(route_key) {
+                    RoutePermit::Closed => {}
+                    RoutePermit::HalfOpenProbe => {
+                        decision.reason = PolicyDecisionReason::ReliabilityHalfOpenProbe;
+                    }
+                    RoutePermit::Open => {
+                        if let Some(escalation) = self.table.escalation_tier() {
+                            (selected_tier, _) =
+                                self.table.guardrail_with_status(escalation, prompt);
+                            decision.reason = PolicyDecisionReason::ReliabilityCircuitOpen;
+                        }
+                    }
+                }
+            }
         }
 
         decision.selected_tier = Some(selected_tier.to_string());
@@ -521,10 +565,7 @@ impl PolicyTableRouter {
     }
 
     fn exploration_allowed_for(&self, decision: &PolicyDecision) -> bool {
-        if decision.legacy_fingerprint == "opening" || decision.workflow_state_kind == "opening" {
-            return self.table.can_explore_opening();
-        }
-        true
+        decision.exploration_allowed
     }
 
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
@@ -572,6 +613,10 @@ impl PolicyTableRouter {
             request_key = %decision.request_key,
             legacy_fingerprint = %decision.legacy_fingerprint,
             workflow_state = %decision.workflow_state_kind,
+            workflow_parent_session = ?decision.workflow_identity.parent_session_id,
+            workflow_agent_role = decision.workflow_identity.role.as_str(),
+            workflow_context_epoch = decision.workflow_identity.context_epoch,
+            workflow_session_fingerprint = %decision.workflow_identity.fingerprint,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
@@ -598,6 +643,7 @@ impl PolicyTableRouter {
                     .map(|_| self.ledger_key(&decision.request_key)),
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
+                workflow_identity: decision.workflow_identity.clone(),
                 static_tier: decision.static_tier.clone(),
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
@@ -624,6 +670,10 @@ impl PolicyTableRouter {
                 ledger_key: self.ledger_key(&decision.request_key),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),
+                half_open_probe: matches!(
+                    decision.reason,
+                    PolicyDecisionReason::ReliabilityHalfOpenProbe
+                ),
                 exploration_allowed: self.exploration_allowed_for(&decision),
                 table: self.table.clone(),
                 ledger: ledger.clone(),
@@ -684,7 +734,7 @@ mod tests {
     use super::*;
     use crate::adequacy::{InadequacyCause, Outcome};
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind};
+    use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
     use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::config::PolicyKeyStrategy;
@@ -722,6 +772,16 @@ mod tests {
             "anthropic-beta",
             HeaderValue::from_static("claude-code-20250219,tools-2024-05-16"),
         );
+        headers
+    }
+
+    fn terminus_main_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-harness",
+            HeaderValue::from_static("terminus_2"),
+        );
+        headers.insert("x-bitrouter-agent-role", HeaderValue::from_static("main"));
         headers
     }
 
@@ -771,6 +831,13 @@ mod tests {
     /// completed model turn.
     fn assistant_text(text: &str) -> Message {
         Message::text(Role::Assistant, text)
+    }
+
+    fn terminus_finalization() -> Vec<Message> {
+        vec![
+            user("finish the task"),
+            assistant_text(r#"{"commands":[],"task_complete":true}"#),
+        ]
     }
 
     /// An assistant message that calls several tools in one turn, in order.
@@ -951,6 +1018,16 @@ mod tests {
             "x-bitrouter-request-id",
             HeaderValue::from_static("req-001"),
         );
+        headers.insert(
+            "x-bitrouter-harness",
+            HeaderValue::from_static("terminus_2"),
+        );
+        headers.insert("x-session-id", HeaderValue::from_static("parent-001"));
+        headers.insert(
+            "x-bitrouter-benchmark-run-id",
+            HeaderValue::from_static("short13-run"),
+        );
+        headers.insert("x-bitrouter-trial-id", HeaderValue::from_static("trial-01"));
         let mut p = prompt("inbound");
         p.messages = vec![user("fix the bug"), assistant_calls("read_file")];
 
@@ -969,6 +1046,25 @@ mod tests {
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].reason, "static_table");
+        assert_eq!(records[0].workflow_identity.role, AgentRole::Main);
+        assert_eq!(
+            records[0].workflow_identity.parent_session_id.as_deref(),
+            Some("parent-001")
+        );
+        assert_eq!(
+            records[0].workflow_identity.benchmark_run_id.as_deref(),
+            Some("short13-run")
+        );
+        assert_eq!(
+            records[0].workflow_identity.trial_id.as_deref(),
+            Some("trial-01")
+        );
+        assert!(
+            records[0]
+                .workflow_identity
+                .fingerprint
+                .starts_with("sha256:")
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -1224,6 +1320,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminus_unknown_role_stays_on_strong_tier_when_exploration_is_due() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            cause: InadequacyCause::None,
+        };
+        ledger.observe("opening", non_trial()).await;
+        ledger.observe("opening", non_trial()).await;
+        let router = exploring_router(ledger);
+        let p = prompt("inbound");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-harness",
+            HeaderValue::from_static("terminus_2"),
+        );
+        headers.insert("x-session-id", HeaderValue::from_static("parent-unknown"));
+
+        let decision = router.decision_for(&p, &headers);
+
+        assert_eq!(decision.workflow_identity.role, AgentRole::Unknown);
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert!(!decision.trialed);
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+    }
+
+    #[tokio::test]
     async fn opening_is_not_explored_without_explicit_opt_in() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
         ledger
@@ -1265,7 +1388,11 @@ mod tests {
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
         let store = crate::adequacy::store::AdequacyStore::new(db);
-        let ledger = Arc::new(AdequacyLedger::load(&cfg.adequacy, store.clone()).await);
+        let ledger = Arc::new(
+            AdequacyLedger::load(&cfg.adequacy, store.clone())
+                .await
+                .unwrap(),
+        );
         ledger.observe("opening", trial_ok()).await;
         let table = PolicyTable::from_config(&cfg).expect("configured");
         let router = PolicyTableRouter::new(table, Some(ledger));
@@ -1283,7 +1410,11 @@ mod tests {
             .record_semantic_success("opening", "terminal-bench/regex-log")
             .await
             .unwrap();
-        let one_success = Arc::new(AdequacyLedger::load(&cfg.adequacy, store.clone()).await);
+        let one_success = Arc::new(
+            AdequacyLedger::load(&cfg.adequacy, store.clone())
+                .await
+                .unwrap(),
+        );
         let router = PolicyTableRouter::new(
             PolicyTable::from_config(&cfg).expect("configured"),
             Some(one_success),
@@ -1297,7 +1428,7 @@ mod tests {
             .record_semantic_success("opening", "terminal-bench/fix-git")
             .await
             .unwrap();
-        let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await);
+        let reloaded = Arc::new(AdequacyLedger::load(&cfg.adequacy, store).await.unwrap());
         let router = PolicyTableRouter::new(
             PolicyTable::from_config(&cfg).expect("configured"),
             Some(reloaded),
@@ -1481,6 +1612,111 @@ mod tests {
         ledger.observe("opening", trial_ok()).await; // 2 → locked
         let router = exploring_router(ledger);
         assert_eq!(route_with(&router, vec![user("start")]), "vendor/cheap");
+    }
+
+    #[tokio::test]
+    async fn finalization_due_for_a_trial_stays_on_the_static_capable_tier() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        let non_trial = || Outcome::Exploration {
+            trialed: false,
+            cause: InadequacyCause::None,
+        };
+        ledger.observe("midstream", non_trial()).await;
+        ledger.observe("midstream", non_trial()).await;
+        let router = exploring_router(ledger);
+        let mut p = prompt("inbound");
+        p.messages = terminus_finalization();
+
+        let decision = router.decision_for(&p, &terminus_main_headers());
+
+        assert_eq!(decision.workflow_state_kind, "finalization");
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert!(!decision.trialed);
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+    }
+
+    #[tokio::test]
+    async fn finalization_ignores_a_learned_exploration_lock() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 1));
+        ledger.observe("midstream", trial_ok()).await;
+        let router = exploring_router(ledger);
+        let mut p = prompt("inbound");
+        p.messages = terminus_finalization();
+
+        let decision = router.decision_for(&p, &terminus_main_headers());
+
+        assert_eq!(decision.workflow_state_kind, "finalization");
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert!(decision.locked);
+        assert!(!decision.trialed);
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+    }
+
+    #[test]
+    fn finalization_preserves_an_operator_authored_static_cheap_route() {
+        let mut cfg = config_with_opening_exploration();
+        cfg.fingerprints
+            .insert("midstream".to_string(), "cheap".to_string());
+        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let mut p = prompt("inbound");
+        p.messages = terminus_finalization();
+
+        let decision = router.decision_for(&p, &terminus_main_headers());
+
+        assert_eq!(decision.workflow_state_kind, "finalization");
+        assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
+        assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
+        assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/cheap"));
+    }
+
+    #[tokio::test]
+    async fn open_provider_circuit_escalates_a_locked_cheap_route() {
+        use crate::adequacy::reliability::{ReliabilityKey, ReliabilityObservation};
+
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
+        ledger.observe("opening", trial_ok()).await;
+        ledger.observe("opening", trial_ok()).await;
+        let endpoint = ReliabilityKey {
+            provider: "vendor".to_string(),
+            model: "cheap".to_string(),
+            credential_class: "default".to_string(),
+            endpoint_scope: "us-east-2".to_string(),
+            protocol: "responses".to_string(),
+        };
+        ledger
+            .observe_provider_reliability(
+                "request-1",
+                "vendor/cheap",
+                endpoint.clone(),
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
+        ledger
+            .observe_provider_reliability(
+                "request-2",
+                "vendor/cheap",
+                endpoint,
+                ReliabilityObservation::TransientFailure,
+                false,
+            )
+            .await
+            .unwrap();
+        let router = exploring_router(ledger);
+        let mut prompt = prompt("inbound");
+        prompt.messages = vec![user("start")];
+
+        let decision = router.decision_for(&prompt, &HeaderMap::new());
+
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
+        assert_eq!(
+            decision.reason,
+            PolicyDecisionReason::ReliabilityCircuitOpen
+        );
     }
 
     #[tokio::test]

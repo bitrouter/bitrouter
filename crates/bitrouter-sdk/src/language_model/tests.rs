@@ -509,6 +509,27 @@ async fn full_pipeline_runs_all_four_stages() {
 }
 
 #[tokio::test]
+async fn failed_non_streaming_request_settles_the_attempted_target() {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["bitrouter"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Error(
+            BitrouterError::UpstreamTimeout,
+        )])),
+        |builder| {
+            builder.settlement_recorder(ProviderCapturingRecorder(captured.clone()));
+        },
+    );
+
+    let result = pipeline.execute(request()).await;
+    assert!(result.is_err());
+    assert_eq!(
+        captured.lock().unwrap().as_slice(),
+        &[("bitrouter".to_string(), "test-model".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
     let selected = Arc::new(AtomicUsize::new(0));
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -545,17 +566,20 @@ async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
 #[tokio::test]
 async fn streaming_preflight_error_runs_settlement_and_observe_end() {
     let settlements = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let providers = Arc::new(std::sync::Mutex::new(Vec::new()));
     let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
         Arc::new(MockExecutor::new(vec![MockResponse::Error(
             BitrouterError::UpstreamRateLimited {
                 retry_after: Some(3),
+                detail: None,
             },
         )])),
         |builder| {
             builder
                 .settlement_recorder(SettlementSnapshotRecorder(settlements.clone()))
+                .settlement_recorder(ProviderCapturingRecorder(providers.clone()))
                 .observe_hook(OutcomeRecordingObserveHook(outcomes.clone()));
         },
     );
@@ -572,6 +596,10 @@ async fn streaming_preflight_error_runs_settlement_and_observe_end() {
             completion_tokens: 0,
             has_error: true,
         }]
+    );
+    assert_eq!(
+        providers.lock().unwrap().as_slice(),
+        &[("openai".to_string(), "test-model".to_string())]
     );
     assert_eq!(outcomes.lock().unwrap().as_slice(), &["failed"]);
 }
@@ -718,6 +746,7 @@ async fn fallback_tries_next_on_upstream_429_then_succeeds() {
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(30),
+                detail: None,
             }),
             MockResponse::Generate(GenerateResult {
                 content: vec![Content::Text {
@@ -751,10 +780,15 @@ async fn exhausted_upstream_429s_use_the_earliest_retry_after() {
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(30),
+                detail: None,
             }),
-            MockResponse::Error(BitrouterError::UpstreamRateLimited { retry_after: None }),
+            MockResponse::Error(BitrouterError::UpstreamRateLimited {
+                retry_after: None,
+                detail: None,
+            }),
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             }),
         ])),
         |_b| {},
@@ -763,7 +797,8 @@ async fn exhausted_upstream_429s_use_the_earliest_retry_after() {
     assert!(matches!(
         pipeline.execute(request()).await.unwrap_err(),
         BitrouterError::UpstreamRateLimited {
-            retry_after: Some(12)
+            retry_after: Some(12),
+            ..
         }
     ));
 }
@@ -903,6 +938,7 @@ async fn mixed_retryable_upstream_failures_become_service_unavailable() {
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(10),
+                detail: None,
             }),
             MockResponse::Error(BitrouterError::Upstream {
                 status: 503,
@@ -2473,9 +2509,11 @@ async fn server_tool_streaming_preflight_aggregates_rate_limits() {
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             }),
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(30),
+                detail: None,
             }),
         ])),
         |builder| {
@@ -2487,7 +2525,8 @@ async fn server_tool_streaming_preflight_aggregates_rate_limits() {
     assert!(matches!(
         result,
         Err(BitrouterError::UpstreamRateLimited {
-            retry_after: Some(12)
+            retry_after: Some(12),
+            ..
         })
     ));
 }
@@ -2499,6 +2538,7 @@ async fn server_tool_streaming_preflight_aggregates_mixed_availability_failures(
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             }),
             MockResponse::Error(BitrouterError::Upstream {
                 status: 503,
@@ -2523,6 +2563,7 @@ async fn server_tool_streaming_fallback_settles_the_winning_target()
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             }),
             MockResponse::Stream(vec![StreamPart::Finish {
                 reason: FinishReason::Stop,
@@ -2559,6 +2600,7 @@ async fn server_tool_streaming_fallback_preserves_request_context()
         Arc::new(MockExecutor::new(vec![
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             }),
             MockResponse::Stream(vec![StreamPart::Finish {
                 reason: FinishReason::Stop,
@@ -2611,6 +2653,7 @@ async fn server_tool_streaming_settles_the_final_turn_winner()
             ]),
             MockResponse::Error(BitrouterError::UpstreamRateLimited {
                 retry_after: Some(12),
+                detail: None,
             }),
             MockResponse::Stream(vec![StreamPart::Finish {
                 reason: FinishReason::Stop,

@@ -393,11 +393,11 @@ fn resolve_clean_route_chain(
         // login) are explicit-route-only: a `provider:model` route (Strategy 1)
         // or an explicit `only` preference reaches them, but they never join the
         // canonical auto-cascade — so a plain canonical request never silently
-        // bills a personal subscription. In particular the Claude Code
-        // subscription serves only genuine Claude Code traffic, which the ingress
-        // transform routes explicitly to `claude-code:<model>`; a non-Claude-Code
-        // request for the same canonical model must fall to the pay-as-you-go
-        // provider (or 404), never the subscription.
+        // bills a personal subscription. In particular, a Claude Code
+        // subscription is reachable only through an explicit provider-qualified
+        // route (including the ingress transform for genuine Claude Code traffic).
+        // A bare Claude request therefore reaches the pay-as-you-go provider (or
+        // 404), never the subscription.
         if matches!(
             provider.class,
             Some(

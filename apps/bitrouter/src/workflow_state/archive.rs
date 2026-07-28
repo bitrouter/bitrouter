@@ -3,22 +3,28 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
+use bitrouter_cloud_sdk::settlement::{SettlementReceipt, SettlementState};
+use bitrouter_sdk::language_model::UsageOrigin;
 use bitrouter_sdk::{BitrouterError, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::metering::pricing::calculate_normalized_charge_micro_usd;
+use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
 use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
+use crate::workflow_state::ir::{AgentRole, ContextTransition, HarnessId};
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
 use crate::workflow_state::reward::{
     BenchmarkOutcomeRecord, RewardJoin, RewardJoinSummary, SemanticInadequacyCandidate,
     SemanticOutcomeCandidate,
 };
+use crate::workflow_state::session::identity_fingerprint;
 use crate::workflow_state::shadow_policy::{ShadowPolicyEvaluator, ShadowPolicySummary};
 
 pub struct TraceArchive;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CloudUsageRecord {
     pub id: Option<String>,
     pub request_id: Option<String>,
@@ -28,7 +34,31 @@ pub struct CloudUsageRecord {
     pub prompt_tokens: u64,
     #[serde(default)]
     pub completion_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub uncached_input_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub usage_origin: UsageOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_usage: Option<serde_json::Value>,
     pub final_charge_micro_usd: Option<u64>,
+    #[serde(default)]
+    pub charge_status: ChargeStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charge_evidence: Option<ChargeEvidence>,
+    #[serde(default)]
+    pub reconciliation_status: ReconciliationStatus,
+    #[serde(default)]
+    pub reconciliation_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoritative_receipt: Option<serde_json::Value>,
     pub status: Option<String>,
 }
 
@@ -38,6 +68,12 @@ pub struct CloudUsageSummary {
     pub settled_request_count: usize,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub uncached_input_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub output_tokens: u64,
+    pub unknown_charge_count: usize,
     pub final_charge_micro_usd: u64,
     pub final_charge_usd: f64,
     pub by_model_provider: BTreeMap<String, CloudUsageModelSummary>,
@@ -49,6 +85,12 @@ pub struct CloudUsageModelSummary {
     pub settled_request_count: usize,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub uncached_input_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub output_tokens: u64,
+    pub unknown_charge_count: usize,
     pub final_charge_micro_usd: u64,
     pub final_charge_usd: f64,
 }
@@ -83,6 +125,10 @@ pub struct SemanticPolicyTransitionCandidate {
     pub task_id: String,
     pub reward: f64,
     pub failed_reason: Option<String>,
+    #[serde(default)]
+    pub request_transport_outcome: RequestTransportOutcome,
+    #[serde(default)]
+    pub settlement_outcome: SemanticSettlementOutcome,
     pub request_key: String,
     #[serde(default)]
     pub ledger_key: Option<String>,
@@ -94,6 +140,26 @@ pub struct SemanticPolicyTransitionCandidate {
     pub selected_model: Option<String>,
     pub model_transition: Option<String>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestTransportOutcome {
+    Completed,
+    Failed,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticSettlementOutcome {
+    AuthoritativeComputed,
+    ProviderReportedComputed,
+    AuthoritativeNotCharged,
+    Pending,
+    #[default]
+    Unknown,
 }
 
 impl TraceArchive {
@@ -168,6 +234,13 @@ impl TraceArchive {
     ) -> RewardJoin {
         RewardJoin::from_traces_and_outcomes(traces, outcomes)
     }
+
+    pub fn join_outcomes_strict(
+        traces: &[CapturedIngressTrace],
+        outcomes: &[BenchmarkOutcomeRecord],
+    ) -> RewardJoin {
+        RewardJoin::from_traces_and_outcomes_strict(traces, outcomes)
+    }
 }
 
 impl CloudUsageRecord {
@@ -210,26 +283,56 @@ impl CloudUsageSummary {
         for record in records {
             summary.prompt_tokens += record.prompt_tokens;
             summary.completion_tokens += record.completion_tokens;
-            if let Some(charge) = record.final_charge_micro_usd {
-                summary.settled_request_count += 1;
-                summary.final_charge_micro_usd += charge;
-            }
+            summary.reasoning_tokens += record.reasoning_tokens;
+            summary.uncached_input_tokens += record.uncached_input_tokens;
+            summary.cache_read_tokens += record.cache_read_tokens;
+            summary.cache_write_tokens += record.cache_write_tokens;
+            summary.output_tokens += record.output_tokens;
+            accumulate_charge(
+                record,
+                &mut summary.settled_request_count,
+                &mut summary.unknown_charge_count,
+                &mut summary.final_charge_micro_usd,
+            );
 
             let key = format!("{}/{}", record.provider_id, record.model_id);
             let model = summary.by_model_provider.entry(key).or_default();
             model.request_count += 1;
             model.prompt_tokens += record.prompt_tokens;
             model.completion_tokens += record.completion_tokens;
-            if let Some(charge) = record.final_charge_micro_usd {
-                model.settled_request_count += 1;
-                model.final_charge_micro_usd += charge;
-            }
+            model.reasoning_tokens += record.reasoning_tokens;
+            model.uncached_input_tokens += record.uncached_input_tokens;
+            model.cache_read_tokens += record.cache_read_tokens;
+            model.cache_write_tokens += record.cache_write_tokens;
+            model.output_tokens += record.output_tokens;
+            accumulate_charge(
+                record,
+                &mut model.settled_request_count,
+                &mut model.unknown_charge_count,
+                &mut model.final_charge_micro_usd,
+            );
         }
         summary.final_charge_usd = micro_usd_to_usd(summary.final_charge_micro_usd);
         for model in summary.by_model_provider.values_mut() {
             model.final_charge_usd = micro_usd_to_usd(model.final_charge_micro_usd);
         }
         summary
+    }
+}
+
+fn accumulate_charge(
+    record: &CloudUsageRecord,
+    settled: &mut usize,
+    unknown: &mut usize,
+    total: &mut u64,
+) {
+    match record.final_charge_micro_usd {
+        Some(charge) => {
+            *settled += 1;
+            *total += charge;
+        }
+        None if record.charge_status == ChargeStatus::NotCharged => *settled += 1,
+        None => *unknown += 1,
     }
 }
 
@@ -273,6 +376,178 @@ impl CostJoinSummary {
 }
 
 impl WorkflowRunArtifact {
+    /// Validate the usage side of a benchmark bundle before any artifact files
+    /// are written. A non-empty trace set always requires complete, auditable
+    /// settlement evidence; analysis without usage must use the in-memory
+    /// `build*` APIs rather than a benchmark-grade bundle.
+    pub fn validate_benchmark_integrity(
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+    ) -> Result<()> {
+        if traces.is_empty() && usage.is_empty() {
+            return Ok(());
+        }
+        if usage.is_empty() {
+            return Err(BitrouterError::bad_request(
+                "benchmark integrity: usage snapshot is empty for non-empty traces",
+            ));
+        }
+
+        let mut trace_ids = BTreeSet::new();
+        for trace in traces {
+            let request_id = trace_request_id(trace).ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "benchmark integrity: trace {} has no request id",
+                    trace.id
+                ))
+            })?;
+            if !trace_ids.insert(request_id.clone()) {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: duplicate trace request id {request_id}"
+                )));
+            }
+        }
+
+        let mut usage_ids = BTreeSet::new();
+        for record in usage {
+            let request_id = record.request_id.as_deref().ok_or_else(|| {
+                BitrouterError::bad_request("benchmark integrity: usage row has no request id")
+            })?;
+            if !usage_ids.insert(request_id.to_string()) {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: duplicate usage request id {request_id}"
+                )));
+            }
+            validate_usage_evidence(record, request_id)?;
+        }
+
+        if trace_ids != usage_ids {
+            let missing_usage = trace_ids
+                .difference(&usage_ids)
+                .cloned()
+                .collect::<Vec<_>>();
+            let unmatched_usage = usage_ids
+                .difference(&trace_ids)
+                .cloned()
+                .collect::<Vec<_>>();
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: trace/usage request ids differ; missing_usage={missing_usage:?}, unmatched_usage={unmatched_usage:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validate trace, settlement, and policy-decision joins for a benchmark
+    /// bundle. Decision capture is optional, but when present it must cover the
+    /// trace set exactly and Terminus 2 identity must be explicit and complete.
+    pub fn validate_benchmark_integrity_with_decisions(
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+        decisions: &[PolicyDecisionRecord],
+    ) -> Result<()> {
+        Self::validate_benchmark_integrity(traces, usage)?;
+        if decisions.is_empty() {
+            return Ok(());
+        }
+
+        let mut traces_by_request_id = BTreeMap::new();
+        for trace in traces {
+            let request_id = trace_request_id(trace).ok_or_else(|| {
+                BitrouterError::bad_request(format!(
+                    "benchmark integrity: trace {} has no request id for decision join",
+                    trace.id
+                ))
+            })?;
+            if traces_by_request_id
+                .insert(request_id.clone(), trace)
+                .is_some()
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: duplicate trace request id {request_id}"
+                )));
+            }
+        }
+
+        let mut decisions_by_request_id = BTreeMap::new();
+        for decision in decisions {
+            let request_id = decision.request_id.as_deref().ok_or_else(|| {
+                BitrouterError::bad_request(
+                    "benchmark integrity: policy decision has no request id",
+                )
+            })?;
+            if decisions_by_request_id
+                .insert(request_id.to_string(), decision)
+                .is_some()
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: duplicate policy decision request id {request_id}"
+                )));
+            }
+        }
+
+        let trace_ids = traces_by_request_id
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let decision_ids = decisions_by_request_id
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if trace_ids != decision_ids {
+            let missing_decisions = trace_ids
+                .difference(&decision_ids)
+                .cloned()
+                .collect::<Vec<_>>();
+            let unmatched_decisions = decision_ids
+                .difference(&trace_ids)
+                .cloned()
+                .collect::<Vec<_>>();
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: trace/decision request ids differ; missing_decisions={missing_decisions:?}, unmatched_decisions={unmatched_decisions:?}"
+            )));
+        }
+
+        for (request_id, trace) in traces_by_request_id {
+            if trace.harness == HarnessId::Terminus2 {
+                let decision = decisions_by_request_id.get(&request_id).ok_or_else(|| {
+                    BitrouterError::bad_request(format!(
+                        "benchmark integrity: trace {request_id} has no policy decision"
+                    ))
+                })?;
+                validate_terminus_identity(trace, decision, &request_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate every benchmark-grade join before an artifact directory is
+    /// accepted. Outcomes are optional for analytical bundles; when supplied,
+    /// every trace and outcome must join through an explicit session/trial key.
+    pub fn validate_complete_benchmark_integrity(
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+        outcomes: &[BenchmarkOutcomeRecord],
+        decisions: &[PolicyDecisionRecord],
+    ) -> Result<()> {
+        Self::validate_benchmark_integrity_with_decisions(traces, usage, decisions)?;
+        if outcomes.is_empty() {
+            return Ok(());
+        }
+        let reward_join = TraceArchive::join_outcomes_strict(traces, outcomes);
+        if reward_join.summary.unmatched_trace_count != 0
+            || reward_join.summary.unmatched_outcome_count != 0
+            || reward_join.summary.matched_trace_count != traces.len()
+        {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: outcome join incomplete; matched_traces={}, unmatched_traces={}, unmatched_outcomes={}",
+                reward_join.summary.matched_trace_count,
+                reward_join.summary.unmatched_trace_count,
+                reward_join.summary.unmatched_outcome_count
+            )));
+        }
+        Ok(())
+    }
+
     pub fn build(
         run_label: impl Into<String>,
         traces: &[CapturedIngressTrace],
@@ -308,6 +583,7 @@ impl WorkflowRunArtifact {
             &reward_join.semantic_outcome_candidates,
             traces,
             decisions,
+            usage,
         );
         let route_counts = cost
             .by_model_provider
@@ -367,6 +643,7 @@ impl WorkflowRunArtifact {
         decisions: &[PolicyDecisionRecord],
         sanitizer: &TraceSanitizer,
     ) -> Result<Self> {
+        Self::validate_complete_benchmark_integrity(traces, usage, outcomes, decisions)?;
         let output_dir = output_dir.as_ref();
         fs::create_dir_all(output_dir).map_err(|e| {
             BitrouterError::internal(format!(
@@ -398,6 +675,249 @@ impl WorkflowRunArtifact {
     pub fn write_json(&self, path: impl AsRef<Path>) -> Result<()> {
         write_pretty_json(path, self, "workflow run artifact")
     }
+}
+
+fn validate_usage_evidence(record: &CloudUsageRecord, request_id: &str) -> Result<()> {
+    match record.reconciliation_status {
+        ReconciliationStatus::Pending => {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} reconciliation is pending"
+            )));
+        }
+        ReconciliationStatus::Unknown => {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} reconciliation is unknown"
+            )));
+        }
+        ReconciliationStatus::NotCharged => {
+            validate_authoritative_receipt(record, request_id, SettlementState::NotCharged)?;
+            if record.usage_origin != UsageOrigin::AuthoritativeReceipt
+                || record.charge_status != ChargeStatus::NotCharged
+                || record.final_charge_micro_usd.is_some()
+                || record.prompt_tokens != 0
+                || record.completion_tokens != 0
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: usage {request_id} has invalid not-charged evidence"
+                )));
+            }
+            return Ok(());
+        }
+        ReconciliationStatus::Computed => {
+            validate_authoritative_receipt(record, request_id, SettlementState::Computed)?;
+            if record.usage_origin != UsageOrigin::AuthoritativeReceipt {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: usage {request_id} is not from its authoritative receipt"
+                )));
+            }
+        }
+        ReconciliationStatus::NotApplicable => {
+            if record.usage_origin != UsageOrigin::ProviderReported {
+                return Err(BitrouterError::bad_request(format!(
+                    "benchmark integrity: usage {request_id} is not provider reported"
+                )));
+            }
+        }
+    }
+    if record.raw_usage.is_none() {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has no raw usage evidence"
+        )));
+    }
+    if record.charge_status != ChargeStatus::Computed {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} charge is not computed"
+        )));
+    }
+    let charge = record.final_charge_micro_usd.ok_or_else(|| {
+        BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has no final charge"
+        ))
+    })?;
+    let evidence = record.charge_evidence.as_ref().ok_or_else(|| {
+        BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has no charge evidence"
+        ))
+    })?;
+    if evidence.status != ChargeStatus::Computed
+        || evidence.charge_micro_usd != Some(charge as i64)
+        || evidence.pricing_source == PricingSource::Unknown
+        || !valid_pricing_version(&evidence.pricing_version)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has invalid pricing evidence"
+        )));
+    }
+    let recomputed_charge = recompute_evidence_charge(evidence).ok_or_else(|| {
+        BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has invalid effective rates"
+        ))
+    })?;
+    if recomputed_charge != charge as i64 {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} charge does not match effective rates"
+        )));
+    }
+    let normalized = &evidence.normalized_usage;
+    if normalized.uncached_input_tokens != record.uncached_input_tokens
+        || normalized.cache_read_tokens != record.cache_read_tokens
+        || normalized.cache_write_tokens != record.cache_write_tokens
+        || normalized.output_tokens != record.output_tokens
+        || normalized.reasoning_tokens != record.reasoning_tokens
+        || normalized
+            .uncached_input_tokens
+            .checked_add(normalized.cache_read_tokens)
+            .and_then(|tokens| tokens.checked_add(normalized.cache_write_tokens))
+            != Some(record.prompt_tokens)
+        || normalized
+            .output_tokens
+            .checked_add(normalized.reasoning_tokens)
+            != Some(record.completion_tokens)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has inconsistent normalized buckets"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_authoritative_receipt(
+    record: &CloudUsageRecord,
+    request_id: &str,
+    expected_state: SettlementState,
+) -> Result<()> {
+    let receipt: SettlementReceipt = serde_json::from_value(
+        record.authoritative_receipt.clone().ok_or_else(|| {
+            BitrouterError::bad_request(format!(
+                "benchmark integrity: usage {request_id} has no authoritative receipt"
+            ))
+        })?,
+    )
+    .map_err(|error| {
+        BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} has malformed authoritative receipt: {error}"
+        ))
+    })?;
+    if receipt.request_id != request_id || receipt.state != expected_state {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} authoritative receipt identity/state mismatch"
+        )));
+    }
+    let expected_charge = record.final_charge_micro_usd.map(|charge| charge as i64);
+    if receipt.final_charge_micro_usd != expected_charge
+        || receipt
+            .provider_id
+            .as_deref()
+            .is_some_and(|provider| provider != record.provider_id)
+        || receipt
+            .model_id
+            .as_deref()
+            .is_some_and(|model| model != record.model_id)
+        || u64::try_from(receipt.usage.uncached_input_tokens).ok()
+            != Some(record.uncached_input_tokens)
+        || u64::try_from(receipt.usage.cache_read_tokens).ok() != Some(record.cache_read_tokens)
+        || u64::try_from(receipt.usage.cache_write_tokens).ok() != Some(record.cache_write_tokens)
+        || u64::try_from(receipt.usage.output_tokens).ok() != Some(record.output_tokens)
+        || u64::try_from(receipt.usage.reasoning_tokens).ok() != Some(record.reasoning_tokens)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: usage {request_id} does not match authoritative receipt"
+        )));
+    }
+    Ok(())
+}
+
+fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
+    calculate_normalized_charge_micro_usd(&evidence.normalized_usage, &evidence.effective_rates)
+        .ok()
+}
+
+fn validate_terminus_identity(
+    trace: &CapturedIngressTrace,
+    decision: &PolicyDecisionRecord,
+    request_id: &str,
+) -> Result<()> {
+    let identity = &decision.workflow_identity;
+    if identity.role == AgentRole::Unknown
+        || identity.parent_session_id.is_none()
+        || identity.agent_session_id.is_none()
+        || identity.benchmark_run_id.is_none()
+        || identity.trial_id.is_none()
+        || identity.source != "explicit_headers"
+        || !valid_pricing_version(&identity.fingerprint)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: Terminus 2 decision {request_id} has incomplete workflow identity"
+        )));
+    }
+    let expected_fingerprint = identity_fingerprint(
+        identity.benchmark_run_id.as_deref(),
+        identity.trial_id.as_deref(),
+        identity.parent_session_id.as_deref(),
+        identity.context_epoch,
+    );
+    if identity.fingerprint != expected_fingerprint {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: Terminus 2 decision {request_id} has invalid session fingerprint"
+        )));
+    }
+
+    let expected = [
+        (
+            "x-bitrouter-benchmark-run-id",
+            identity.benchmark_run_id.as_deref().unwrap_or_default(),
+        ),
+        (
+            "x-bitrouter-trial-id",
+            identity.trial_id.as_deref().unwrap_or_default(),
+        ),
+        (
+            "x-bitrouter-parent-session-id",
+            identity.parent_session_id.as_deref().unwrap_or_default(),
+        ),
+        (
+            "x-bitrouter-agent-session-id",
+            identity.agent_session_id.as_deref().unwrap_or_default(),
+        ),
+        ("x-bitrouter-agent-role", identity.role.as_str()),
+        (
+            "x-bitrouter-session-fingerprint",
+            identity.fingerprint.as_str(),
+        ),
+    ];
+    for (header, expected_value) in expected {
+        if header_value(&trace.headers, header).as_deref() != Some(expected_value) {
+            return Err(BitrouterError::bad_request(format!(
+                "benchmark integrity: Terminus 2 trace/decision identity mismatch for {request_id} header {header}"
+            )));
+        }
+    }
+    if header_value(&trace.headers, "x-bitrouter-context-epoch")
+        .and_then(|value| value.parse::<u32>().ok())
+        != Some(identity.context_epoch)
+        || header_value(&trace.headers, "x-bitrouter-context-transition").as_deref()
+            != Some(context_transition_value(identity.transition))
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "benchmark integrity: Terminus 2 trace/decision context mismatch for {request_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn context_transition_value(transition: ContextTransition) -> &'static str {
+    match transition {
+        ContextTransition::None => "none",
+        ContextTransition::CompactionStart => "compaction_start",
+        ContextTransition::CompactionContinuation => "compaction_continuation",
+        ContextTransition::MainResume => "main_resume",
+    }
+}
+
+fn valid_pricing_version(version: &str) -> bool {
+    version.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
 }
 
 fn write_jsonl_records<T: Serialize>(path: impl AsRef<Path>, records: &[T]) -> Result<()> {
@@ -482,6 +1002,7 @@ fn semantic_policy_transition_candidates(
     semantic_candidates: &[SemanticOutcomeCandidate],
     traces: &[CapturedIngressTrace],
     decisions: &[PolicyDecisionRecord],
+    usage: &[CloudUsageRecord],
 ) -> Vec<SemanticPolicyTransitionCandidate> {
     let request_id_by_trace_id = traces
         .iter()
@@ -498,12 +1019,22 @@ fn semantic_policy_transition_candidates(
                 .map(|request_id| (request_id.clone(), decision))
         })
         .collect::<BTreeMap<_, _>>();
+    let usage_by_request_id = usage
+        .iter()
+        .filter_map(|record| {
+            record
+                .request_id
+                .as_ref()
+                .map(|request_id| (request_id.clone(), record))
+        })
+        .collect::<BTreeMap<_, _>>();
 
     semantic_candidates
         .iter()
         .filter_map(|candidate| {
             let request_id = request_id_by_trace_id.get(&candidate.trace_id)?;
             let decision = decisions_by_request_id.get(request_id)?;
+            let usage = usage_by_request_id.get(request_id).copied();
             let tier_changed = changed(&decision.static_tier, &decision.selected_tier);
             let model_changed = changed(&decision.static_model, &decision.selected_model);
             if !tier_changed && !model_changed {
@@ -516,6 +1047,8 @@ fn semantic_policy_transition_candidates(
                 task_id: candidate.task_id.clone(),
                 reward: candidate.reward,
                 failed_reason: candidate.failed_reason.clone(),
+                request_transport_outcome: request_transport_outcome(usage),
+                settlement_outcome: semantic_settlement_outcome(usage),
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
                 workflow_state: decision.workflow_state.clone(),
@@ -532,6 +1065,43 @@ fn semantic_policy_transition_candidates(
             })
         })
         .collect()
+}
+
+fn request_transport_outcome(usage: Option<&CloudUsageRecord>) -> RequestTransportOutcome {
+    match usage.and_then(|record| record.status.as_deref()) {
+        Some("completed") => RequestTransportOutcome::Completed,
+        Some("failed") => RequestTransportOutcome::Failed,
+        _ => RequestTransportOutcome::Unknown,
+    }
+}
+
+fn semantic_settlement_outcome(usage: Option<&CloudUsageRecord>) -> SemanticSettlementOutcome {
+    let Some(usage) = usage else {
+        return SemanticSettlementOutcome::Unknown;
+    };
+    match (
+        usage.reconciliation_status,
+        usage.usage_origin,
+        usage.charge_status,
+    ) {
+        (
+            ReconciliationStatus::Computed,
+            UsageOrigin::AuthoritativeReceipt,
+            ChargeStatus::Computed,
+        ) => SemanticSettlementOutcome::AuthoritativeComputed,
+        (
+            ReconciliationStatus::NotApplicable,
+            UsageOrigin::ProviderReported,
+            ChargeStatus::Computed,
+        ) => SemanticSettlementOutcome::ProviderReportedComputed,
+        (
+            ReconciliationStatus::NotCharged,
+            UsageOrigin::AuthoritativeReceipt,
+            ChargeStatus::NotCharged,
+        ) => SemanticSettlementOutcome::AuthoritativeNotCharged,
+        (ReconciliationStatus::Pending, _, _) => SemanticSettlementOutcome::Pending,
+        _ => SemanticSettlementOutcome::Unknown,
+    }
 }
 
 fn changed(left: &Option<String>, right: &Option<String>) -> bool {

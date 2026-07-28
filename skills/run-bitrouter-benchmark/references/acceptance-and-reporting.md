@@ -25,7 +25,7 @@ An independently reviewable group contains:
 - task/trial manifest and hash;
 - BitRouter, Harbor, Terminus 2, config, patch, and binary provenance;
 - append-only controller events and process records;
-- Harbor config, logs, and one result per case/trial;
+- Harbor config, logs, and one real result per accepted case/trial, plus immutable evidence for any validated security-policy skip;
 - daemon logs, request traces, policy decisions, metering rows, provider receipts, outcomes, and workflow-session evidence;
 - reconciliation record and strict bundle result;
 - cleanup monitor and authenticated AWS residue query;
@@ -41,9 +41,9 @@ Accept a group only when every row below is true.
 | Gate | Required evidence |
 | --- | --- |
 | Manifest | Frozen input hash matches the launched configuration |
-| Attempts | Expected case/trial identities equal controller identities; no duplicate `started` event |
-| TrialResult | Exactly one complete TrialResult per expected identity, verifier reward present, no unexplained exception |
-| Runtime | All started cases are `terminal_valid`; runtime-invalid count is zero |
+| Attempts | Accepted task coverage plus validated security-policy skips equals the frozen manifest; no duplicate `started` event |
+| TrialResult | Exactly one complete real TrialResult per accepted task; skipped tasks have none and are never synthesized |
+| Runtime | All non-skipped started cases are `terminal_valid`; every skip has exactly the validated original plus `replacement-01` terminal-invalid pair |
 | Requests | Stable request IDs are unique and equal across expected trace/settlement membership |
 | Decisions | One policy decision per policy request where the pinned schema requires it |
 | Settlement | Every request is authoritative `computed` or authoritative `not_charged` |
@@ -63,6 +63,10 @@ Record the terminal status as one of:
 - `rejected_cleanup`;
 - `rejected_manifest`;
 - `rejected_safety_limit`.
+
+An accepted group with one or more validated case-level exceptions also records
+`skipped_security_policy` per affected task. That status is not available for a
+group-wide provider gate or for transient failures.
 
 A rejected group may still produce a diagnostic report. It must not drive policy feedback, a cost claim, or the next round.
 
@@ -164,6 +168,23 @@ $$
 \text{score} = \frac{1}{N}\sum_{i=1}^{N} q_i
 $$
 
+For the Terminal-Bench 2.1 full set, the official denominator remains 89 even
+when a validated security-policy skip has no TrialResult. Treat each skipped
+task as zero in the official score. If $A$ is the set of accepted tasks, report
+the secondary runnable-only score separately:
+
+$$
+\text{official quality} = \frac{\sum_{i \in A} q_i}{89}
+$$
+
+$$
+\text{runnable-only quality} = \frac{\sum_{i \in A} q_i}{|A|}
+$$
+
+Always publish $|A|$, the skip count/identities/classes, both evidence hashes,
+and the real costs of both failed attempts. Never compare runnable-only quality
+to an official 89-task score without the label and denominator beside it.
+
 For accepted comparable policy and control totals:
 
 $$
@@ -240,7 +261,7 @@ Never publish only the best round. Never delete a failed attempt from denominato
 
 ### Internal short13 walkthrough
 
-Freeze 13 tasks, one trial per case, an existing verified central host, one BitRouter/Harbor/Terminus source tuple, and fixed concurrency. Resolve a matching accepted control and launch zero control cases. Create a fresh policy database, run r1-r3 in sequence, strictly accept every round before feedback, and report all 39 TrialResults plus exact joins and cleanup. Describe the result as mechanism evidence.
+Freeze 13 tasks, one trial per case, an existing verified central host, one BitRouter/Harbor/Terminus source tuple, fixed concurrency, and the target groups. Resolve a matching accepted control and launch zero control cases. Create a fresh policy database, execute exactly `control+r1+r2` or `control+r1+r2+r3` as declared, strictly accept every round before feedback, and report every targeted TrialResult plus exact joins and cleanup. Describe the result as mechanism evidence.
 
 ### Teammate 20-case walkthrough
 

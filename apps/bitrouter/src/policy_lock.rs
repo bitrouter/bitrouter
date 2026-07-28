@@ -934,7 +934,7 @@ impl PolicyRuntime {
                             &table_config.adequacy,
                             AdequacyStore::new(self.db.clone()),
                         )
-                        .await,
+                        .await?,
                     ))
                 } else {
                     None

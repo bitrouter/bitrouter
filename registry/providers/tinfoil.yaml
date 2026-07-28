@@ -24,17 +24,6 @@ models:
       - reasoning
       - structured_outputs
       - tools
-  - id: z-ai/glm-5.1
-    provider_model_id: glm-5-1
-    pricing:
-      input_tokens:
-        no_cache: 1.5
-      output_tokens:
-        text: 5.25
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
   - id: moonshotai/kimi-k2.6
     provider_model_id: kimi-k2-6
     pricing:

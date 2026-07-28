@@ -16,6 +16,10 @@ reorder + observability join (§10, v1.5); MCP spawn tools (§11). All 1454
 workspace tests + 6 ACP integration tests pass; clippy + fmt clean.
 Supersedes the CLI framing of #672; builds on #613 (per-session ACP substrate).
 
+**Superseded by #745:** durable transcripts, warm reattach, `session/load`, and
+`acp attach` were removed from the substrate. The live connected-client paths
+described here remain.
+
 ## 1. Motivation
 
 BitRouter has two agent-launching surfaces that grew independently:
@@ -26,7 +30,7 @@ BitRouter has two agent-launching surfaces that grew independently:
   `ANTHROPIC_AUTH_TOKEN`, Codex `-c` provider overrides), daemon auto-start,
   install-on-missing, auth precedence, exit cost summary.
 - `bitrouter acp serve|prompt` — launches a **headless ACP session** via the
-  substrate (records, worktrees, transcripts, OTel spans, warm reattach), but
+  substrate (records, worktrees, OTel spans), but
   its LLM traffic goes wherever the harness's own config points — **not**
   through the daemon (#672).
 
@@ -284,8 +288,7 @@ rust-v0.137.0, gemini-cli ≥ v0.50, pi-acp + earendil-works/pi), 2026-07.
 Cleanest of the four — identical knobs to interactive Claude Code, so the
 catalog entry shares its routing spec with the `launch` facet's. The adapter
 also honors `ANTHROPIC_CUSTOM_HEADERS` (newline-separated `Name: value`),
-which §10 uses. Resume caveat: on `session/load`, the transcript's model
-wins over `ANTHROPIC_MODEL`.
+which §10 uses.
 
 ### 6.2 codex-acp notes
 
@@ -396,7 +399,7 @@ Exit non-zero on any fail, same reporting shape as `SpawnCheckReport`.
   (`ensure_local_daemon`, unchanged). If the daemon is still definitively
   unreachable — auto-start failed, `--no-start`, or a remote `--base-url`
   nobody can start — spawn **fails fast, before any side effect** (no
-  worktree, no record, no transcript, no npx fetch):
+  worktree, no record, no npx fetch):
   - `-p` mode: the only stdout line is
     `{"type":"error","code":"daemon_unreachable","via":"http://127.0.0.1:4356","hint":"bitrouter start, or pass --direct"}`,
     exit non-zero.
@@ -515,8 +518,8 @@ Per CLAUDE.md rules, in the same change:
   structured `error` line shape for `daemon_unreachable` / `auth_required`.
 - **Integration (fail-fast ordering)**: daemon definitively down +
   `--no-start` → spawn exits non-zero with the single `error` NDJSON line
-  and **no** worktree/record/transcript is created (assert `.bitrouter/`
-  untouched); `--direct` under the same conditions launches.
+  and **no** worktree or record is created (assert `.bitrouter/` untouched);
+  `--direct` under the same conditions launches.
 - **Integration** (`apps/bitrouter/tests/acp.rs` pattern): stub ACP agent
   script that echoes its env → assert injected vars present and overriding
   a poisoned inherited `ANTHROPIC_BASE_URL`; `--direct` asserts absence.

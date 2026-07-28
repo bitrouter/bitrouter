@@ -56,7 +56,7 @@ use crate::paths::ConfigSource;
 // ── routing (spawn --via-daemon by default) ─────────────────────────────────────
 
 /// Per-invocation routing decision for a spawned sub-agent. Routing is on by
-/// default; `direct` opts out. See `internal/SPAWN_SPEC.md` §5.
+/// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
 #[derive(Debug, Clone, Default)]
 pub struct RoutingOptions {
     /// Skip daemon routing entirely — the harness talks to its own provider.
@@ -88,7 +88,7 @@ pub struct SpawnContext<'a> {
 }
 
 /// A fail-fast routing failure, surfaced BEFORE any session side effect
-/// (`internal/SPAWN_SPEC.md` §8). Rendered as a structured NDJSON `error` line in
+/// (`docs/SPAWN_SPEC.md` §8). Rendered as a structured NDJSON `error` line in
 /// `prompt` mode, or to stderr in `serve` mode.
 #[derive(Debug)]
 pub enum RoutingError {

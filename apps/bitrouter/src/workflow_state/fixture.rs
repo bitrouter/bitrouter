@@ -140,7 +140,7 @@ fn parse_headers(raw: std::collections::BTreeMap<String, String>) -> Result<Head
     Ok(headers)
 }
 
-fn parse_prompt(
+pub(crate) fn parse_prompt(
     protocol: &ProtocolKind,
     body: serde_json::Value,
     canonical_prompt: Option<serde_json::Value>,

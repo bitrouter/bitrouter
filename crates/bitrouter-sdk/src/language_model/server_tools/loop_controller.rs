@@ -15,7 +15,7 @@ use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{
     Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
-    ServerToolCall, ServerToolKind, ServerToolStatus, Tool, ToolResultOutput, Usage,
+    ServerToolCall, ServerToolKind, ServerToolStatus, Tool, ToolResultOutput, Usage, UsageOrigin,
 };
 
 /// One upstream turn for a working prompt — the loop's callback into the
@@ -272,11 +272,61 @@ fn append_turn(working: &mut Prompt, assistant_content: Vec<Content>, tool_resul
 
 /// Sum the per-iteration usage into the running total.
 pub(crate) fn add_usage(total: &mut Usage, add: &Usage) {
-    total.prompt_tokens += add.prompt_tokens;
-    total.completion_tokens += add.completion_tokens;
-    total.reasoning_tokens += add.reasoning_tokens;
-    total.cache_read_tokens += add.cache_read_tokens;
-    total.cache_write_tokens += add.cache_write_tokens;
+    let total_was_empty = total.prompt_tokens == 0
+        && total.completion_tokens == 0
+        && total.reasoning_tokens == 0
+        && total.cache_read_tokens == 0
+        && total.cache_write_tokens == 0
+        && total.web_search_count == 0
+        && total.origin == UsageOrigin::Unknown
+        && total.raw.is_none();
+    total.prompt_tokens = total.prompt_tokens.saturating_add(add.prompt_tokens);
+    total.completion_tokens = total
+        .completion_tokens
+        .saturating_add(add.completion_tokens);
+    total.reasoning_tokens = total.reasoning_tokens.saturating_add(add.reasoning_tokens);
+    total.cache_read_tokens = total
+        .cache_read_tokens
+        .saturating_add(add.cache_read_tokens);
+    total.cache_write_tokens = total
+        .cache_write_tokens
+        .saturating_add(add.cache_write_tokens);
+    total.web_search_count = total.web_search_count.saturating_add(add.web_search_count);
+    total.origin = if total_was_empty {
+        add.origin
+    } else {
+        combined_usage_origin(total.origin, add.origin)
+    };
+    if total_was_empty {
+        total.raw = add.raw.clone();
+    } else if let Some(raw) = add.raw.as_deref() {
+        let mut fragments = match total.raw.take() {
+            Some(existing) => existing
+                .get("provider_usage_fragments")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_else(|| vec![*existing]),
+            None => Vec::new(),
+        };
+        fragments.push(raw.clone());
+        total.raw = Some(Box::new(serde_json::json!({
+            "provider_usage_fragments": fragments
+        })));
+    }
+}
+
+fn combined_usage_origin(left: UsageOrigin, right: UsageOrigin) -> UsageOrigin {
+    match (left, right) {
+        (UsageOrigin::Unknown, _) | (_, UsageOrigin::Unknown) => UsageOrigin::Unknown,
+        (UsageOrigin::Estimated, _) | (_, UsageOrigin::Estimated) => UsageOrigin::Estimated,
+        (UsageOrigin::ProviderReported, UsageOrigin::ProviderReported) => {
+            UsageOrigin::ProviderReported
+        }
+        (UsageOrigin::AuthoritativeReceipt, UsageOrigin::AuthoritativeReceipt) => {
+            UsageOrigin::AuthoritativeReceipt
+        }
+        _ => UsageOrigin::Unknown,
+    }
 }
 
 /// Record provider-executed tool calls found in a turn's content.
@@ -326,6 +376,77 @@ mod tests {
     use crate::language_model::types::{GenerateResult, Tool};
     use std::collections::VecDeque;
     use std::sync::Mutex;
+
+    #[test]
+    fn aggregated_usage_retains_provenance_and_every_raw_fragment() {
+        let first_raw = serde_json::json!({"input_tokens": 10, "output_tokens": 2});
+        let second_raw = serde_json::json!({"input_tokens": 20, "output_tokens": 3});
+        let mut total = Usage::default();
+
+        add_usage(
+            &mut total,
+            &Usage {
+                prompt_tokens: 10,
+                completion_tokens: 2,
+                web_search_count: 1,
+                origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                raw: Some(Box::new(first_raw.clone())),
+                ..Default::default()
+            },
+        );
+        add_usage(
+            &mut total,
+            &Usage {
+                prompt_tokens: 20,
+                completion_tokens: 3,
+                cache_read_tokens: 5,
+                web_search_count: 2,
+                origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                raw: Some(Box::new(second_raw.clone())),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(total.prompt_tokens, 30);
+        assert_eq!(total.completion_tokens, 5);
+        assert_eq!(total.cache_read_tokens, 5);
+        assert_eq!(total.web_search_count, 3);
+        assert_eq!(
+            total.origin,
+            crate::language_model::types::UsageOrigin::ProviderReported
+        );
+        assert_eq!(
+            total.raw.as_deref(),
+            Some(&serde_json::json!({"provider_usage_fragments": [first_raw, second_raw]}))
+        );
+    }
+
+    #[test]
+    fn estimated_fragment_conservatively_marks_aggregate_estimated() {
+        let mut total = Usage::default();
+        add_usage(
+            &mut total,
+            &Usage {
+                prompt_tokens: 1,
+                origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                raw: Some(Box::new(serde_json::json!({"input_tokens": 1}))),
+                ..Default::default()
+            },
+        );
+        add_usage(
+            &mut total,
+            &Usage {
+                completion_tokens: 1,
+                origin: crate::language_model::types::UsageOrigin::Estimated,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            total.origin,
+            crate::language_model::types::UsageOrigin::Estimated
+        );
+    }
 
     struct MockToolset {
         names: Vec<String>,
@@ -436,6 +557,7 @@ mod tests {
                     cache_read_tokens: 0,
                     cache_write_tokens: 0,
                     web_search_count: 0,
+                    ..Default::default()
                 }),
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,

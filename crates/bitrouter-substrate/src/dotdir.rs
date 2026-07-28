@@ -1,11 +1,11 @@
 //! The per-repo `.bitrouter/` state directory — created **self-ignoring**.
 //!
-//! Session records, transcripts, worktrees, and fleet state all live under
+//! Session records, worktrees, and other runtime files live under
 //! `<base_repo>/.bitrouter/`. None of it belongs in version control (records
-//! carry pids and absolute paths; transcripts carry whole conversations), so
-//! the directory is created with a `.gitignore` containing `*` — the same
-//! trick cargo uses for `target/` — instead of trusting every repo to ignore
-//! it. An existing `.gitignore` is never overwritten.
+//! carry pids and absolute paths), so the directory is created with a
+//! `.gitignore` containing `*` — the same trick cargo uses for `target/` —
+//! instead of trusting every repo to ignore it. An existing `.gitignore` is
+//! never overwritten.
 
 use std::path::Path;
 

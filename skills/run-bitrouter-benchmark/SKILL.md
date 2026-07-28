@@ -51,7 +51,7 @@ Configure AWS identity, account, region, network, instance shapes, source revisi
 4. **Prepare the central host.** Provision or reuse it under the same source, health, isolation, credential, and network gates.
 5. **Canary.** Run a predeclared non-evaluation trial through the real Terminus 2 and EC2 path. Require complete attribution and zero resource residue.
 6. **Resolve control.** Reuse a matching accepted immutable control. Launch absent control identities once only; a started identity is consumed even if it terminates unsuccessfully.
-7. **Run policy.** Start a fresh policy database, keep it across r1-r3, freeze concurrency for the lineage, and run the rounds in order. Apply feedback only after the preceding round is strictly accepted.
+7. **Run policy.** Freeze the exact target groups for every model combination before launch, start a fresh policy database, keep it across the targeted policy rounds, and run only those rounds in order. Apply feedback only after the preceding round is strictly accepted; a lineage targeted as `control+r1+r2` still records accepted r2 feedback before completion and must not invent r3.
 8. **Settle and assemble.** Reconcile by stable request ID, wait for authoritative terminal charges, build the evidence bundle, and reject missing or ambiguous rows.
 9. **Clean up.** Audit instances, volumes, and network interfaces by exact run tags after every group. Preserve cleanup evidence even for rejected groups.
 10. **Report.** Publish every predeclared round, failure, raw usage bucket, price source, actual/notional distinction, checksum, and limitation. Never select only the best round.
@@ -62,7 +62,7 @@ Stop the current lineage, preserve partial evidence, and clean up when any of th
 
 - the AWS identity, source revision, binary checksum, task manifest, or price snapshot differs from the frozen manifest;
 - quota, daemon health, provider sentinel, sandbox bootstrap, or session canary fails before a batch;
-- a group has a missing TrialResult, runtime exception, duplicate request ID, incomplete settlement, weak session attribution, or unmatched join;
+- a group has a missing TrialResult not covered by the narrowly validated security-policy skip contract, a runtime exception, duplicate request ID, incomplete settlement, weak session attribution, or unmatched join;
 - exact-tag resource cleanup does not reach zero;
 - a predeclared spend or severe quality stop limit is crossed.
 

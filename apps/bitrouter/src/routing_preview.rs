@@ -319,10 +319,14 @@ mod tests {
         let tiered = ModelPricing {
             input_micro_usd_per_token: Some(1.0),
             output_micro_usd_per_token: Some(2.0),
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
             context_tiers: vec![ContextTier {
                 above_input_tokens: 200_000,
                 input_micro_usd_per_token: Some(2.0),
                 output_micro_usd_per_token: Some(4.0),
+                cache_read_micro_usd_per_token: None,
+                cache_write_micro_usd_per_token: None,
             }],
         };
         let out = pricing_json(&tiered);

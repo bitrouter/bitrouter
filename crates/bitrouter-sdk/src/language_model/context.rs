@@ -76,6 +76,11 @@ pub struct PipelineContext {
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
     pub route_chain: Option<Vec<RoutingTarget>>,
+    /// Most recent upstream target whose execution was started. A failed
+    /// request has no [`ExecutionResult`], but settlement still needs the
+    /// attempted provider/model identity for reliability and authoritative
+    /// receipt reconciliation.
+    last_attempted_target: Mutex<Option<RoutingTarget>>,
     /// The execution result (Stage 3). Stored here rather than moved out so
     /// Settlement can borrow it without an ownership fight.
     pub execution_result: Option<ExecutionResult>,
@@ -119,6 +124,7 @@ impl PipelineContext {
             inbound_protocol: req.inbound_protocol,
             request_started_at: Instant::now(),
             route_chain: None,
+            last_attempted_target: Mutex::new(None),
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
@@ -145,6 +151,7 @@ impl PipelineContext {
             inbound_protocol: self.inbound_protocol.clone(),
             request_started_at: self.request_started_at,
             route_chain: self.route_chain.clone(),
+            last_attempted_target: Mutex::new(None),
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
@@ -159,17 +166,31 @@ impl PipelineContext {
 
     fn serving_target(&self) -> Option<RoutingTarget> {
         let chain = self.route_chain.as_ref()?;
-        self.execution_result
-            .as_ref()
-            .and_then(|execution| {
-                chain.iter().find(|target| {
-                    target.provider_name == execution.provider_id
-                        && target.service_id == execution.model_id
-                        && target.account_label == execution.account_label
-                })
+        if let Some(target) = self.execution_result.as_ref().and_then(|execution| {
+            chain.iter().find(|target| {
+                target.provider_name == execution.provider_id
+                    && target.service_id == execution.model_id
+                    && target.account_label == execution.account_label
             })
-            .or_else(|| chain.first())
-            .cloned()
+        }) {
+            return Some(target.clone());
+        }
+        self.last_attempted_target()
+            .or_else(|| chain.first().cloned())
+    }
+
+    pub(crate) fn set_last_attempted_target(&self, target: RoutingTarget) {
+        match self.last_attempted_target.lock() {
+            Ok(mut current) => *current = Some(target),
+            Err(poisoned) => *poisoned.into_inner() = Some(target),
+        }
+    }
+
+    fn last_attempted_target(&self) -> Option<RoutingTarget> {
+        match self.last_attempted_target.lock() {
+            Ok(current) => current.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     pub(crate) fn set_stream_provider_started_at(&mut self, started_at: Instant) {
@@ -474,19 +495,38 @@ impl PipelineContext {
     pub fn settlement_context(&mut self) -> SettlementContext {
         let target = self.serving_target();
         let exec = self.execution_result.as_ref();
-        let usage = exec.and_then(|e| e.result.usage).unwrap_or_default();
+        let model_id = exec
+            .map(|execution| execution.model_id.clone())
+            .or_else(|| target.as_ref().map(|target| target.service_id.clone()))
+            .unwrap_or_default();
+        let provider_id = exec
+            .map(|execution| execution.provider_id.clone())
+            .or_else(|| target.as_ref().map(|target| target.provider_name.clone()))
+            .unwrap_or_default();
+        let account_label = exec
+            .and_then(|execution| execution.account_label.clone())
+            .or_else(|| {
+                target
+                    .as_ref()
+                    .and_then(|target| target.account_label.clone())
+            });
+        let usage = exec
+            .and_then(|e| e.result.usage.clone())
+            .unwrap_or_default();
         SettlementContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
             target,
-            model_id: exec.map(|e| e.model_id.clone()).unwrap_or_default(),
-            provider_id: exec.map(|e| e.provider_id.clone()).unwrap_or_default(),
-            account_label: exec.and_then(|e| e.account_label.clone()),
+            model_id,
+            provider_id,
+            account_label,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,
             cache_read_tokens: usage.cache_read_tokens,
             cache_write_tokens: usage.cache_write_tokens,
+            usage_origin: usage.origin,
+            raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
             media_input_count: count_media(self.prompt.messages.iter().flat_map(|m| &m.content)),
             // Note: for streamed requests both fields below are 0 / empty.
@@ -930,9 +970,14 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("disconnect with a non-empty prompt must still bill input tokens");
         assert_eq!(usage.prompt_tokens, expected_prompt);
         assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(
+            usage.origin,
+            crate::language_model::types::UsageOrigin::Estimated
+        );
     }
 
     #[tokio::test]
@@ -948,7 +993,11 @@ mod tests {
             .expect("text delta passes through with no hooks");
         proc.finish(StreamOutcome::ClientDisconnected).await;
 
-        let usage = proc.context().final_usage.expect("billed on disconnect");
+        let usage = proc
+            .context()
+            .final_usage
+            .clone()
+            .expect("billed on disconnect");
         assert_eq!(
             usage.prompt_tokens,
             (user.chars().count() as u64).div_ceil(CHARS_PER_TOKEN),
@@ -975,9 +1024,54 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("completed stream without upstream usage should fall back to estimates");
         assert_eq!(usage.prompt_tokens, 2);
         assert_eq!(usage.completion_tokens, 2);
+        assert_eq!(
+            usage.origin,
+            crate::language_model::types::UsageOrigin::Estimated
+        );
+    }
+
+    #[test]
+    fn settlement_context_preserves_usage_provenance_and_raw_payload() {
+        let raw = serde_json::json!({
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "cache_read_input_tokens": 5
+        });
+        let mut ctx = ctx_from_prompt(prompt_with_text(None, "hello"));
+        ctx.execution_result = Some(ExecutionResult {
+            provider_id: "anthropic".into(),
+            model_id: "claude".into(),
+            account_label: None,
+            result: crate::language_model::types::GenerateResult {
+                content: Vec::new(),
+                usage: Some(Usage {
+                    prompt_tokens: 12,
+                    completion_tokens: 4,
+                    cache_read_tokens: 5,
+                    origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                    raw: Some(Box::new(raw.clone())),
+                    ..Default::default()
+                }),
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            request_duration_ms: 1,
+            upstream_duration_ms: Some(1),
+            server_tool_calls: Vec::new(),
+        });
+
+        let settlement = ctx.settlement_context();
+        assert_eq!(
+            settlement.usage_origin,
+            crate::language_model::types::UsageOrigin::ProviderReported
+        );
+        assert_eq!(settlement.raw_usage.as_ref(), Some(&raw));
     }
 
     #[tokio::test]
@@ -1001,6 +1095,7 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("completed stream should have usage");
         assert_eq!(usage.prompt_tokens, 2);
         assert_eq!(usage.completion_tokens, 2);
@@ -1027,6 +1122,7 @@ mod tests {
         let usage = proc
             .context()
             .final_usage
+            .clone()
             .expect("authoritative usage billed");
         assert_eq!(
             usage.prompt_tokens, 11,

@@ -25,7 +25,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` and `acp attach` are stdio JSON-RPC bridges, `acp prompt` streams NDJSON, `cloud api` streams the remote response body, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol, raw response, or the child's terminal—not a JSON result envelope.
+> Non-CLI commands are exempt: `serve` and `mcp serve` are long-running servers, `acp serve` is a stdio JSON-RPC bridge, `acp prompt` streams NDJSON, `cloud api` streams the remote response body, and `spawn` hands its streams to the child agent. Their stdout is a wire protocol, raw response, or the child's terminal—not a JSON result envelope.
 
 Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
 
@@ -235,13 +235,12 @@ Prints a YAML stub for the named catalog agent. Paste the output under `agents:`
 ### `bitrouter acp`
 
 ```
-bitrouter acp serve --agent <id> [--worktree <name>] [--warm] [-c <path>]
+bitrouter acp serve --agent <id> [--worktree <name>] [-c <path>]
 bitrouter acp prompt --agent <id> [--worktree <name>] [-c <path>] <text>
 bitrouter acp sessions
-bitrouter acp attach <record>
 ```
 
-Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects; with `--warm`, the session can be reattached with `acp attach`. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, route the agent's model calls through the daemon by default (`--direct` opts out).
+Runs one configured ACP agent session. `serve` exposes a vanilla ACP Agent over stdio until the manager disconnects. `prompt` launches one session, sends one prompt, and streams self-describing NDJSON updates to stdout. Session records live under `.bitrouter/sessions/`. `acp serve|prompt` are stable aliases of `bitrouter spawn <agent> --serve|-p` (below) and, like it, route the agent's model calls through the daemon by default (`--direct` opts out).
 
 ### `bitrouter launch`
 
@@ -271,19 +270,19 @@ Launches the **composite multi-agent TUI** (TUI_SPEC_V3 — a pure control tower
 
 **Status bar.** A gauge, not a cheat-sheet: the left zone follows the focused pane (`ctx N%` context occupancy · model · `$cost`; transient notices claim it and decay), plus the `⌃space menu` affordance; the right zone is global fleet (attention badges `⚠◆●◉` · summed `$` cost · `serve ●/✗`).
 
-Subagents spawned from the picker get worktree isolation + a `PORT` by default (retained on close); a configured `worktrees.bootstrap` hook is human-approved on first use per session. Durable fleet memory lives at `.bitrouter/fleet-state.json`; the TUI's stderr (and its agent children's) goes to `.bitrouter/tui.log` on Unix.
+Subagents spawned from the picker get worktree isolation + a `PORT` by default (retained on close); a configured `worktrees.bootstrap` hook is human-approved on first use per session. The TUI's stderr (and its agent children's) goes to `.bitrouter/tui.log` on Unix.
 
 ### `bitrouter spawn`
 
 ```
 bitrouter spawn <agent> -p "<text>" [--no-wait] [--result-schema JSON|@PATH] [routing/session flags]   # one prompt → NDJSON
-bitrouter spawn <agent> --serve [--warm] [--idle-timeout SECS] [flags]        # ACP over stdio
+bitrouter spawn <agent> --serve [flags]                                      # ACP over stdio
 bitrouter spawn <agent> --check [routing flags]                              # preflight only
 ```
 
 Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent, a GUI, or `bitrouter tui`). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
 
-**Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--worktree`/`--rm-worktree`/`--no-transcript`/`--turn-timeout`).
+**Routes the sub-agent's LLM traffic through the daemon by default** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--worktree`/`--rm-worktree`/`--turn-timeout`).
 
 Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter tui` orchestrator facet, not headless spawn yet) and non-catalog agents warn and run direct.
 
@@ -352,6 +351,34 @@ bitrouter cloud whoami
 | `--api-key` | *(none)* | Store a `brk_<token_id>.<secret>` credential without browser login or network discovery. Conflicts with `--client-id` and `--scope`; intended for CI. |
 
 Credentials are persisted at `<data-dir>/account-credentials.json` (mode `0600` on Unix). Existing untagged OAuth files remain compatible. `whoami` answers from the local file with no network call and reports `authentication: oauth|api_key` without printing a bearer. OAuth logout attempts RFC 7009 revocation before deleting the file; API-key logout is local-only.
+
+---
+
+## Workflow-state benchmark evidence
+
+These commands export and validate the request-scoped evidence used by policy
+benchmarks:
+
+```text
+bitrouter workflow-state harbor-outcomes --harbor-run-dir <DIR> --output <JSONL>
+bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
+bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
+bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
+bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> [--policy-decisions <JSONL>] --output-dir <DIR>
+bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
+```
+
+`reconcile-metering` accepts either the API-key environment named by
+`--api-key-env` (default `BITROUTER_API_KEY`) or an owner-only BitRouter Cloud
+credential file. The latter resolves static keys and refreshable OAuth without
+putting a bearer in the environment. Price specs use
+`provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
+
+`bundle` is fail-closed: every non-empty trace set needs an exact usage join and
+computed auditable charge, policy decisions must cover the exact request-id set
+when supplied, and outcomes must join through an explicit session/trial key.
+Timestamp-only reward attribution is available to analytical in-memory reports,
+not accepted benchmark bundles.
 
 ---
 

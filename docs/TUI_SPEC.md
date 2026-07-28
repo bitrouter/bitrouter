@@ -93,7 +93,7 @@ hosts**; the **MCP bridge** lets the orchestrator drive.
 └─────────┼──────────────────────────────────────────────────┼──────────────────────────┘
           │                                                   │
    ┌──────┴───────────────── bitrouter fleet daemon (per-repo) ─┴──────────────────────┐
-   │  ACP substrate: owns warm subagent sessions, worktrees, permissions, transcript │
+   │  ACP substrate: owns live subagent sessions, worktrees, permissions, records    │
    │  fleet registry ── record_id ↔ session ↔ worktree ↔ MCP task                    │
    │                                                                                  │
    │   ├─ ACP subagent: codex   (worktree, routed via serve)                          │
@@ -106,8 +106,8 @@ hosts**; the **MCP bridge** lets the orchestrator drive.
 **Ownership rule (the decision that settled wezterm-term over rmux):** there is exactly
 **one session owner — the substrate/daemon.** The TUI is a *renderer + PTY host*, not a
 session owner; wezterm-term is a *rendering core* fed by the TUI, not a competing
-multiplexer. This keeps the substrate (with its warm-session + `acp attach` machinery,
-already built) as the single source of truth for the fleet.
+multiplexer. This keeps the substrate's live session as the single source of truth for
+each running subagent.
 
 **Data flow.**
 - The orchestrator calls an MCP tool (`spawn`, `send`, `status`, `diff`, `merge`).
@@ -127,7 +127,7 @@ already built) as the single source of truth for the fleet.
 (`bitrouter fleet serve`, auto-started like `serve`, control socket at
 `<repo>/.bitrouter/fleet.sock`). `bitrouter serve` stays purely the LLM proxy: it is a
 global singleton that restarts routinely (`update --restart`, config reload) and holds
-provider keys, none of which should touch — or be able to kill — N warm agent children.
+provider keys, none of which should touch — or be able to kill — N agent children.
 
 > **Shipped deviation (2026-07-14, fleet-socket round): the daemon does not exist
 > yet.** The fleet is split across the TUI's in-process registry and the MCP bridge
@@ -143,7 +143,7 @@ provider keys, none of which should touch — or be able to kill — N warm agen
 
 **This reversal is real substrate work, not "assembling primitives."** The substrate is
 per-process today: one session per process, a hardcoded `pid: std::process::id()` in the
-record, and warm-session/`acp attach` serving exactly one session per socket. A fleet host
+record, and one live stdio manager connection per session. A fleet host
 needs new machinery — a session **registry**, a **multiplexed fleet event stream** for the
 TUI, record-schema changes (daemon pid vs. child pid), and **orphan/crash recovery** (stale
 `Running` records). Size it as substrate work in §7, not as glue.
@@ -513,8 +513,7 @@ available if cross-terminal fidelity proves decisive.
 committing, a spike must A/B a live `claude-code` + `codex` pane on our target terminal
 matrix (`{Ghostty, iTerm2, kitty, Terminal.app, WezTerm, tmux, Windows Terminal}`) — the
 Shift-Enter-under-kitty class of bug is the thing to probe. **Windows caveat:** PTY-composite
-via ConPTY is in scope for B3, but warm-session/`acp attach` are Unix-only today, so
-*TUI-detach* on Windows is deferred with the rest of detach.
+via ConPTY is in scope for B3; *TUI-detach* is deferred on every platform.
 
 ---
 
@@ -579,20 +578,10 @@ Sequenced **A0 → B → polish**, remapped to this architecture. **Target scale
   DCS-passthrough-wrapped — and the terminal title doubles as a badge
   (`bitrouter ⚠1 ◆1 ◉2`; original title pushed/popped via XTWINOPS). Notifications never
   fire while focused: in-terminal signals (bell, glyphs, radar) own that case.
-- **Durable fleet memory (shipped).** The manager persists its state across
-  stops and crashes — memory, **not** auto-resume. Split by ownership:
-  session-scoped facts (`branch`, `base_ref`) moved into the substrate's
-  `SessionRecord` (captured at worktree provisioning, where `HEAD` is
-  authoritative); manager judgments live in `.bitrouter/fleet-state.json`
-  (substrate `FleetStore`: versioned, atomic temp+rename, per-agent
-  autonomy/review/port/pending/drafts keyed by `record_id`, orchestrator
-  identity, `clean_shutdown` flag). Written at most once a second on change
-  and once at orderly teardown; startup shows a one-line previous-fleet
-  notice. The schema is deliberately the seed of the §2 fleet daemon's
-  registry — the daemon later takes over as writer, no format migration.
-  `.bitrouter/` is now created **self-ignoring** (cargo-style `.gitignore`),
-  and `RecordStore` writes became atomic (a crash can no longer truncate a
-  record).
+- **Durable fleet memory (removed by #745).** The TUI no longer persists
+  manager judgments across restarts. Session-scoped facts (`branch`,
+  `base_ref`) remain in the substrate's atomic `SessionRecord`; `.bitrouter/`
+  remains **self-ignoring** (cargo-style `.gitignore`).
 - **Done-unseen + time-in-state (shipped, herdr-inspired).** A turn that finishes unseen
   is `◉` done — an inbox-unread state distinct from `●` trouble — decaying to idle when
   the pane is viewed *while the terminal has focus*; new work or integration clears it.

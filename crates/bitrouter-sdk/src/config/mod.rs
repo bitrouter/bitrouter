@@ -338,6 +338,19 @@ pub struct AdequacyConfig {
     /// `0` means the pin never decays (until the process restarts or the row is
     /// cleared). Default `1800` (30 minutes).
     pub pin_cooldown_secs: u64,
+    /// Number of recent endpoint outcomes retained for provider reliability.
+    /// Default `23`, a prime-sized window that avoids aligning with short
+    /// benchmark batch cadences.
+    pub reliability_window_size: u32,
+    /// Consecutive transient provider failures that immediately open the
+    /// endpoint circuit. Default `2`.
+    pub reliability_consecutive_failures: u32,
+    /// Rolling transient-failure percentage that opens the circuit once the
+    /// reliability window is full. Default `35`.
+    pub reliability_error_rate_percent: u32,
+    /// Seconds an open provider circuit waits before admitting exactly one
+    /// half-open probe. Default `300`.
+    pub reliability_cooldown_secs: u64,
     /// Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)
     /// is on, the daemon periodically trials [`explore_tier`](Self::explore_tier)
     /// on fingerprints the static table routes to the escalation tier (i.e. ones
@@ -380,6 +393,10 @@ impl Default for AdequacyConfig {
             escalation_tier: None,
             escalation_threshold: 1,
             pin_cooldown_secs: 1800,
+            reliability_window_size: 23,
+            reliability_consecutive_failures: 2,
+            reliability_error_rate_percent: 35,
+            reliability_cooldown_secs: 300,
             explore_enabled: false,
             explore_tier: None,
             explore_interval: 5,
@@ -618,12 +635,19 @@ pub struct RateLimit {
 /// [`context_tiers`]: PricingConfig::context_tiers
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct PricingConfig {
-    /// Micro-USD per prompt (input) token (base bracket).
+    /// Micro-USD per uncached prompt token (base bracket). `None` means the
+    /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
-    pub input_micro_usd_per_token: f64,
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read prompt token (base bracket).
+    #[serde(default)]
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write prompt token (base bracket).
+    #[serde(default)]
+    pub cache_write_micro_usd_per_token: Option<f64>,
     /// Micro-USD per completion (output) token (base bracket).
     #[serde(default)]
-    pub output_micro_usd_per_token: f64,
+    pub output_micro_usd_per_token: Option<f64>,
     /// Optional higher context brackets, applied by total input-token count.
     /// The selected bracket's rates apply to the whole request (a step
     /// function); the consumer's bracket pick is order-independent.
@@ -639,12 +663,22 @@ pub struct PricingTierConfig {
     /// size is strictly greater than this enters the bracket (a base bracket
     /// documented as "≤ 128k" is written as `above_input_tokens: 128000`).
     pub above_input_tokens: u64,
-    /// Micro-USD per prompt (input) token for this bracket.
+    /// Micro-USD per uncached prompt token for this bracket. `None` inherits
+    /// the base rate.
     #[serde(default)]
-    pub input_micro_usd_per_token: f64,
-    /// Micro-USD per completion (output) token for this bracket.
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read prompt token for this bracket. `None` inherits
+    /// the base rate.
     #[serde(default)]
-    pub output_micro_usd_per_token: f64,
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write prompt token for this bracket. `None` inherits
+    /// the base rate.
+    #[serde(default)]
+    pub cache_write_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per completion (output) token for this bracket. `None`
+    /// inherits the base rate.
+    #[serde(default)]
+    pub output_micro_usd_per_token: Option<f64>,
 }
 
 /// One upstream provider entry — registry-style.
@@ -1283,6 +1317,22 @@ pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     // (or the default tier), so that target must exist and resolve to a defined
     // tier when learning is enabled.
     let adequacy = &policy.adequacy;
+    if adequacy.reliability_window_size == 0 {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_window_size must be positive".to_string(),
+        ));
+    }
+    if adequacy.reliability_consecutive_failures == 0 {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_consecutive_failures must be positive".to_string(),
+        ));
+    }
+    if !(1..=100).contains(&adequacy.reliability_error_rate_percent) {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_error_rate_percent must be between 1 and 100"
+                .to_string(),
+        ));
+    }
     if let Some(tier) = &adequacy.escalation_tier {
         check("adequacy.escalation_tier", tier)?;
     }

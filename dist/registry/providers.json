@@ -749,6 +749,42 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "cache_write": 0.0,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "xiaomi/mimo-v2.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.08,
+              "cache_write": 0.0,
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 2.0
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "ambient",
@@ -2289,11 +2325,11 @@
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1296,
-              "no_cache": 0.612
+              "cache_read": 0.1425,
+              "no_cache": 0.7125
             },
             "output_tokens": {
-              "text": 3.069
+              "text": 3.0
             }
           },
           "provider_model_id": "moonshotai/kimi-k2.7-code"
@@ -4300,6 +4336,34 @@
             }
           },
           "provider_model_id": "openai/gpt-oss-120b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.7-code",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.19,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k2.7-code"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k3"
         }
       ],
       "name": "novita",
@@ -4780,6 +4844,11 @@
           "api_protocol": "openai",
           "id": "moonshotai/kimi-k3",
           "provider_model_id": "kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "tencent/hy3",
+          "provider_model_id": "hy3"
         }
       ],
       "name": "opencode-go",
@@ -5243,6 +5312,20 @@
             }
           },
           "provider_model_id": "gpt-5.6-terra"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "kimi-k3"
         }
       ],
       "name": "opencode-zen",
@@ -6204,6 +6287,24 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "meituan/longcat-2.0",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "meituan/longcat-2.0"
         }
       ],
       "name": "openrouter",
@@ -8217,27 +8318,6 @@
             }
           },
           "provider_model_id": "deepseek-v4-pro",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "id": "z-ai/glm-5.1",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 5.25
-            }
-          },
-          "provider_model_id": "glm-5-1",
           "rate_limits": {
             "requests_per_minute": 60
           }

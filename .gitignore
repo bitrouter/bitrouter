@@ -30,5 +30,5 @@ skills/bitrouter-e2e-test/
 # Local working docs (design specs, plans, submissions) — not tracked
 /docs/superpowers/
 
-# Per-repo BitRouter state (session records, transcripts, worktrees)
+# Per-repo BitRouter state (session records, worktrees, runtime files)
 .bitrouter/

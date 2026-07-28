@@ -114,6 +114,10 @@
           "escalation_tier": null,
           "escalation_threshold": 1,
           "pin_cooldown_secs": 1800,
+          "reliability_window_size": 23,
+          "reliability_consecutive_failures": 2,
+          "reliability_error_rate_percent": 35,
+          "reliability_cooldown_secs": 300,
           "explore_enabled": false,
           "explore_tier": null,
           "explore_interval": 5,
@@ -470,16 +474,40 @@
       "type": "object",
       "properties": {
         "input_micro_usd_per_token": {
-          "description": "Micro-USD per prompt (input) token (base bracket).",
-          "type": "number",
+          "description": "Micro-USD per uncached prompt token (base bracket). `None` means the\nprovider did not publish a rate; explicit `0` remains free.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
+        },
+        "cache_read_micro_usd_per_token": {
+          "description": "Micro-USD per cache-read prompt token (base bracket).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "cache_write_micro_usd_per_token": {
+          "description": "Micro-USD per cache-write prompt token (base bracket).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
         },
         "output_micro_usd_per_token": {
           "description": "Micro-USD per completion (output) token (base bracket).",
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
         },
         "context_tiers": {
           "description": "Optional higher context brackets, applied by total input-token count.\nThe selected bracket's rates apply to the whole request (a step\nfunction); the consumer's bracket pick is order-independent.",
@@ -501,16 +529,40 @@
           "minimum": 0
         },
         "input_micro_usd_per_token": {
-          "description": "Micro-USD per prompt (input) token for this bracket.",
-          "type": "number",
+          "description": "Micro-USD per uncached prompt token for this bracket. `None` inherits\nthe base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
+        },
+        "cache_read_micro_usd_per_token": {
+          "description": "Micro-USD per cache-read prompt token for this bracket. `None` inherits\nthe base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "cache_write_micro_usd_per_token": {
+          "description": "Micro-USD per cache-write prompt token for this bracket. `None` inherits\nthe base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
         },
         "output_micro_usd_per_token": {
-          "description": "Micro-USD per completion (output) token for this bracket.",
-          "type": "number",
+          "description": "Micro-USD per completion (output) token for this bracket. `None`\ninherits the base rate.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double",
-          "default": 0.0
+          "default": null
         }
       },
       "required": [
@@ -1636,6 +1688,10 @@
             "escalation_tier": null,
             "escalation_threshold": 1,
             "pin_cooldown_secs": 1800,
+            "reliability_window_size": 23,
+            "reliability_consecutive_failures": 2,
+            "reliability_error_rate_percent": 35,
+            "reliability_cooldown_secs": 300,
             "explore_enabled": false,
             "explore_tier": null,
             "explore_interval": 5,
@@ -1692,6 +1748,34 @@
           "format": "uint64",
           "minimum": 0,
           "default": 1800
+        },
+        "reliability_window_size": {
+          "description": "Number of recent endpoint outcomes retained for provider reliability.\nDefault `23`, a prime-sized window that avoids aligning with short\nbenchmark batch cadences.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 23
+        },
+        "reliability_consecutive_failures": {
+          "description": "Consecutive transient provider failures that immediately open the\nendpoint circuit. Default `2`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 2
+        },
+        "reliability_error_rate_percent": {
+          "description": "Rolling transient-failure percentage that opens the circuit once the\nreliability window is full. Default `35`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 35
+        },
+        "reliability_cooldown_secs": {
+          "description": "Seconds an open provider circuit waits before admitting exactly one\nhalf-open probe. Default `300`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 300
         },
         "explore_enabled": {
           "description": "Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)\nis on, the daemon periodically trials [`explore_tier`](Self::explore_tier)\non fingerprints the static table routes to the escalation tier (i.e. ones\nthe operator did *not* downgrade), and locks a fingerprint to the cheap\ntier once it survives [`explore_threshold`](Self::explore_threshold)\ntrials — so safe downgrades are found automatically rather than only\nhand-configured. A trial that fails escalates and stops (the same pin as\nthe safety path). Off by default; requires `enabled`. This is the\n*aggressive* half — it routes traffic the operator left at the capable\ntier to a cheaper one on a fraction of requests.",

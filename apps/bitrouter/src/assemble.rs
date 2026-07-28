@@ -424,10 +424,10 @@ pub async fn build_app_with_path(
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
             .executor(executor.clone())
-            .settlement_recorder(MeteringRecorder::new(
-                metering_store.clone(),
-                pricing.clone(),
-            ));
+            .settlement_recorder(
+                MeteringRecorder::new(metering_store.clone(), pricing.clone())
+                    .with_reconciliation_provider("bitrouter"),
+            );
         let sub_pipeline = Arc::new(
             sub.build()
                 .context("building the server-tool sub-completion pipeline")?,
@@ -463,7 +463,7 @@ pub async fn build_app_with_path(
         Some(_) if config.policy_table.adequacy.enabled => {
             let store = crate::adequacy::store::AdequacyStore::new(db.clone());
             Some(Arc::new(
-                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await,
+                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await?,
             ))
         }
         _ => None,
@@ -535,10 +535,10 @@ pub async fn build_app_with_path(
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
-            lm.settlement_recorder(MeteringRecorder::new(
-                metering_store_for_recorder,
-                pricing_for_recorder,
-            ));
+            lm.settlement_recorder(
+                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_reconciliation_provider("bitrouter"),
+            );
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
@@ -971,21 +971,23 @@ pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
     for (provider_id, provider) in &config.providers {
         for model in &provider.models {
             if let Some(pricing) = &model.pricing {
-                let mut model_pricing = ModelPricing::new(
+                let mut model_pricing = ModelPricing::cache_aware(
                     pricing.input_micro_usd_per_token,
+                    pricing.cache_read_micro_usd_per_token,
+                    pricing.cache_write_micro_usd_per_token,
                     pricing.output_micro_usd_per_token,
                 );
-                // Carry any context ("staged") brackets through to the
-                // metering table; config rates are concrete f64s, so an
-                // omitted per-bracket rate defaults to 0 (free), matching the
-                // base-rate mapping above.
+                // Carry context brackets through with absent rates intact;
+                // resolution inherits each omitted bucket from the base tier.
                 model_pricing.context_tiers = pricing
                     .context_tiers
                     .iter()
                     .map(|t| ContextTier {
                         above_input_tokens: t.above_input_tokens,
-                        input_micro_usd_per_token: Some(t.input_micro_usd_per_token),
-                        output_micro_usd_per_token: Some(t.output_micro_usd_per_token),
+                        input_micro_usd_per_token: t.input_micro_usd_per_token,
+                        cache_read_micro_usd_per_token: t.cache_read_micro_usd_per_token,
+                        cache_write_micro_usd_per_token: t.cache_write_micro_usd_per_token,
+                        output_micro_usd_per_token: t.output_micro_usd_per_token,
                     })
                     .collect();
                 table.insert(provider_id.clone(), model.id.clone(), model_pricing);

@@ -2,7 +2,7 @@
 
 ## Documents
 
-See `README.md` and `DEVELOPMENT.md` for full project introduction and architecture.
+See `README.md` and `docs/DEVELOPMENT.md` for full project introduction and architecture.
 
 ## Guidelines
 
@@ -39,8 +39,9 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
 Product docs live in the **`bitrouter-docs`** repo (`content/docs/`), where they
 are authored, reviewed, translated, and published. The authoring contract,
 English/Chinese lockstep, and `sourceHash` tracking live there now — not here.
-`docs/` in this repo holds only internal design notes (`superpowers/`); see
-`docs/README.md`.
+`docs/` in this repo now holds internal **development** docs — the CLI reference
+(`docs/CLI.md`), the workspace architecture guide (`docs/DEVELOPMENT.md`), and
+design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
 
 1. **The docs site generates the model/provider tables** from this repo's
    committed `dist/registry/{models,providers}.json`. When you add, remove, or

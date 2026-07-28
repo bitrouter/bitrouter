@@ -8,6 +8,8 @@ pub enum HarnessId {
     Hermes,
     ClaudeCode,
     Codex,
+    #[serde(rename = "terminus_2", alias = "terminus-2", alias = "terminus2")]
+    Terminus2,
     #[serde(alias = "openclaw")]
     OpenClaw,
     Unknown,
@@ -104,9 +106,10 @@ impl Default for CapabilityConstraints {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionConfidence {
+    #[default]
     None,
     Low,
     Medium,
@@ -118,6 +121,79 @@ pub struct SessionSignal {
     pub key: Option<String>,
     pub confidence: SessionConfidence,
     pub source: Option<String>,
+}
+
+/// Terminus 2 agent role within one context-compaction workflow.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRole {
+    /// Primary task-solving agent.
+    Main,
+    /// First compaction subagent, producing a summary.
+    Summary,
+    /// Second compaction subagent, asking clarification questions.
+    Questions,
+    /// Third compaction subagent, answering those questions.
+    Answers,
+    /// Role could not be identified safely.
+    #[default]
+    Unknown,
+}
+
+impl AgentRole {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Summary => "summary",
+            Self::Questions => "questions",
+            Self::Answers => "answers",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Transition represented by the current request in a context epoch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextTransition {
+    /// No context transition on this request.
+    #[default]
+    None,
+    /// A summary subagent opened a new compacted context epoch.
+    CompactionStart,
+    /// A question/answer subagent continued the active compaction.
+    CompactionContinuation,
+    /// The main agent resumed inside the compacted context.
+    MainResume,
+}
+
+/// Structured workflow/session identity used for attribution and joins.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowIdentity {
+    /// Immutable benchmark run identifier, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benchmark_run_id: Option<String>,
+    /// Immutable benchmark trial identifier, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trial_id: Option<String>,
+    /// Agent invocation identity, explicit or deterministically derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    /// Parent task session shared across compaction subagents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Agent role within the parent workflow.
+    pub role: AgentRole,
+    /// Monotonic context-compaction epoch within the parent workflow.
+    pub context_epoch: u32,
+    /// Transition represented by this request.
+    pub transition: ContextTransition,
+    /// Stable digest of run, trial, parent session, and context epoch.
+    pub fingerprint: String,
+    /// Identity source (`explicit_headers` or `inferred`).
+    pub source: String,
+    /// Confidence inherited from the parent session signal.
+    pub confidence: SessionConfidence,
 }
 
 impl Default for SessionSignal {
@@ -160,6 +236,8 @@ pub struct WorkflowStateIR {
     pub recovery_signal: RecoverySignal,
     pub capability_constraints: CapabilityConstraints,
     pub session: SessionSignal,
+    #[serde(default)]
+    pub identity: WorkflowIdentity,
     pub confidence: f32,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
@@ -231,6 +309,7 @@ mod tests {
                 confidence: SessionConfidence::Medium,
                 source: Some("fixture.job_id".to_string()),
             },
+            identity: WorkflowIdentity::default(),
             confidence: 0.86,
             evidence: vec![
                 Evidence {
@@ -272,5 +351,19 @@ mod tests {
         let value = serde_json::to_string(&sample_ir().capability_constraints).unwrap();
         assert!(!value.contains("model"));
         assert!(!value.contains("tier"));
+    }
+
+    #[test]
+    fn workflow_identity_does_not_change_routing_key() {
+        let first = sample_ir();
+        let mut second = first.clone();
+        second.identity = WorkflowIdentity {
+            parent_session_id: Some("parent".to_string()),
+            role: AgentRole::Summary,
+            context_epoch: 7,
+            fingerprint: "sha256:test".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(first.routing_key(), second.routing_key());
     }
 }
