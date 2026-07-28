@@ -77,9 +77,9 @@ pub struct PolicyDecision {
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
     pub legacy_fingerprint: String,
-    pub trace_state: String,
+    pub workflow_state_kind: String,
     pub harness_id: HarnessId,
-    pub trace_identity: WorkflowIdentity,
+    pub workflow_identity: WorkflowIdentity,
     pub static_tier: Option<String>,
     pub static_model: Option<String>,
     pub selected_tier: Option<String>,
@@ -92,6 +92,20 @@ pub struct PolicyDecision {
     pub locked: bool,
     pub trialed: bool,
     exploration_allowed: bool,
+}
+
+impl PolicyDecision {
+    /// Canonical decision records call this value `trace_state`; retain the
+    /// established Rust field while exposing the canonical terminology.
+    pub fn trace_state(&self) -> &str {
+        &self.workflow_state_kind
+    }
+
+    /// Canonical decision records call this value `trace_identity`; retain the
+    /// established Rust field while exposing the canonical terminology.
+    pub fn trace_identity(&self) -> &WorkflowIdentity {
+        &self.workflow_identity
+    }
 }
 
 /// The resolved, immutable policy spec — the fingerprint→tier→model table plus
@@ -121,6 +135,8 @@ pub struct PolicyTable {
     exploration_enabled: bool,
     /// Future task-reward guardrail for opening downgrades.
     min_semantic_successes_for_opening: u32,
+    /// Whether source-neutral opening requests are eligible for exploration.
+    explore_opening: bool,
     /// Reverse index model id → tier name, for mapping a served model back to
     /// its tier at observe time.
     model_to_tier: HashMap<String, String>,
@@ -158,6 +174,7 @@ impl PolicyTable {
             explore_tier: config.adequacy.explore_tier.clone(),
             exploration_enabled,
             min_semantic_successes_for_opening: config.adequacy.min_semantic_successes_for_opening,
+            explore_opening: config.adequacy.explore_opening,
             model_to_tier,
         }))
     }
@@ -256,7 +273,7 @@ impl PolicyTable {
     }
 
     fn minimum_semantic_successes_for(&self, decision: &PolicyDecision) -> u32 {
-        if decision.trace_state == "opening" {
+        if decision.workflow_state_kind == "opening" {
             self.min_semantic_successes_for_opening
         } else {
             0
@@ -273,13 +290,14 @@ impl PolicyTable {
     }
 
     fn exploration_allowed_for_online(&self, online: &OnlineWorkflowState) -> bool {
-        matches!(
-            online.ir.state_kind,
-            WorkflowStateKind::ToolFollowup
-                | WorkflowStateKind::Edit
-                | WorkflowStateKind::Test
-                | WorkflowStateKind::Debug
-        )
+        (self.explore_opening && online.ir.state_kind == WorkflowStateKind::Opening)
+            || matches!(
+                online.ir.state_kind,
+                WorkflowStateKind::ToolFollowup
+                    | WorkflowStateKind::Edit
+                    | WorkflowStateKind::Test
+                    | WorkflowStateKind::Debug
+            )
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the
@@ -435,9 +453,9 @@ impl PolicyTableRouter {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             request_key,
             legacy_fingerprint,
-            trace_state: online.ir.state_kind.to_string(),
+            workflow_state_kind: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
-            trace_identity: online.ir.identity.clone(),
+            workflow_identity: online.ir.identity.clone(),
             static_tier: None,
             static_model: None,
             selected_tier: None,
@@ -589,11 +607,11 @@ impl PolicyTableRouter {
             key_strategy = ?decision.key_strategy,
             request_key = %decision.request_key,
             legacy_fingerprint = %decision.legacy_fingerprint,
-            trace_state = %decision.trace_state,
-            trace_parent_session = ?decision.trace_identity.parent_session_id,
-            trace_agent_role = decision.trace_identity.role.as_str(),
-            trace_context_epoch = decision.trace_identity.context_epoch,
-            trace_session_fingerprint = %decision.trace_identity.fingerprint,
+            trace_state = %decision.workflow_state_kind,
+            trace_parent_session = ?decision.workflow_identity.parent_session_id,
+            trace_agent_role = decision.workflow_identity.role.as_str(),
+            trace_context_epoch = decision.workflow_identity.context_epoch,
+            trace_session_fingerprint = %decision.workflow_identity.fingerprint,
             static_tier = ?decision.static_tier,
             static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
@@ -619,8 +637,8 @@ impl PolicyTableRouter {
                     .as_ref()
                     .map(|_| self.ledger_key(&decision.request_key)),
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
-                trace_state: decision.trace_state.clone(),
-                trace_identity: decision.trace_identity.clone(),
+                workflow_state: decision.workflow_state_kind.clone(),
+                workflow_identity: decision.workflow_identity.clone(),
                 static_tier: decision.static_tier.clone(),
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
@@ -1046,20 +1064,25 @@ mod tests {
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].reason, "static_table");
-        assert_eq!(records[0].trace_identity.role, AgentRole::Main);
+        assert_eq!(records[0].workflow_identity.role, AgentRole::Main);
         assert_eq!(
-            records[0].trace_identity.parent_session_id.as_deref(),
+            records[0].workflow_identity.parent_session_id.as_deref(),
             Some("parent-001")
         );
         assert_eq!(
-            records[0].trace_identity.benchmark_run_id.as_deref(),
+            records[0].workflow_identity.benchmark_run_id.as_deref(),
             Some("short13-run")
         );
         assert_eq!(
-            records[0].trace_identity.trial_id.as_deref(),
+            records[0].workflow_identity.trial_id.as_deref(),
             Some("trial-01")
         );
-        assert!(records[0].trace_identity.fingerprint.starts_with("sha256:"));
+        assert!(
+            records[0]
+                .workflow_identity
+                .fingerprint
+                .starts_with("sha256:")
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -1351,7 +1374,7 @@ mod tests {
         let generic = router.decision_for(&p, &generic_headers);
         let terminus = router.decision_for(&p, &terminus_headers);
 
-        assert_eq!(terminus.trace_identity.role, AgentRole::Unknown);
+        assert_eq!(terminus.workflow_identity.role, AgentRole::Unknown);
         assert_eq!(terminus.request_key, generic.request_key);
         assert_eq!(terminus.selected_tier, generic.selected_tier);
         assert_eq!(terminus.selected_model, generic.selected_model);
@@ -1377,6 +1400,25 @@ mod tests {
         let router = PolicyTableRouter::new(table, Some(ledger));
 
         assert_eq!(route_with(&router, vec![user("start")]), "vendor/flagship");
+    }
+
+    #[tokio::test]
+    async fn opening_is_explored_when_explicitly_enabled() {
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 1, 1));
+        ledger
+            .observe(
+                "agent_trace/v1|opening|normal",
+                Outcome::Exploration {
+                    trialed: false,
+                    cause: InadequacyCause::None,
+                },
+            )
+            .await;
+        let table =
+            PolicyTable::from_config(&config_with_opening_exploration()).expect("configured");
+        let router = PolicyTableRouter::new(table, Some(ledger));
+
+        assert_eq!(route_with(&router, vec![user("start")]), "vendor/cheap");
     }
 
     #[tokio::test]
@@ -1546,9 +1588,7 @@ mod tests {
 
     #[test]
     fn session_identity_does_not_change_a_static_downgrade() {
-        let mut cfg = config_with_escalation();
-        cfg.adequacy.max_downgraded_requests_per_session = 1;
-        let router = PolicyTableRouter::from_config(&cfg).expect("configured");
+        let router = PolicyTableRouter::from_config(&config_with_escalation()).expect("configured");
         let mut session_a = smithers_headers("implement");
         session_a.insert(
             "x-bitrouter-agent-session-id",
@@ -1702,7 +1742,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_remains_strong_even_when_a_trial_is_due() {
+    async fn opening_uses_a_due_trial_when_explicitly_enabled() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         // Two non-trial observations advance the cadence so a trial is due.
         let non_trial = || Outcome::Exploration {
@@ -1718,8 +1758,8 @@ mod tests {
         let router = exploring_router(ledger);
         assert_eq!(
             route_with(&router, vec![user("start")]),
-            "vendor/flagship",
-            "opening is never eligible for a weak-model trial"
+            "vendor/cheap",
+            "explicit opening exploration admits a due weak-model trial"
         );
     }
 
@@ -1785,7 +1825,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_locked_opening_candidate_stays_on_the_strong_tier() {
+    async fn a_locked_opening_candidate_uses_the_explore_tier_when_enabled() {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 0, 2, 2));
         ledger
             .observe("agent_trace/v1|opening|normal", trial_ok())
@@ -1794,7 +1834,7 @@ mod tests {
             .observe("agent_trace/v1|opening|normal", trial_ok())
             .await; // 2 → locked
         let router = exploring_router(ledger);
-        assert_eq!(route_with(&router, vec![user("start")]), "vendor/flagship");
+        assert_eq!(route_with(&router, vec![user("start")]), "vendor/cheap");
     }
 
     #[tokio::test]
@@ -1816,7 +1856,7 @@ mod tests {
 
         let decision = router.decision_for(&p, &terminus_main_headers());
 
-        assert_eq!(decision.trace_state, "finalization");
+        assert_eq!(decision.workflow_state_kind, "finalization");
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert!(!decision.trialed);
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
@@ -1835,7 +1875,7 @@ mod tests {
 
         let decision = router.decision_for(&p, &terminus_main_headers());
 
-        assert_eq!(decision.trace_state, "finalization");
+        assert_eq!(decision.workflow_state_kind, "finalization");
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert!(decision.locked);
         assert!(!decision.trialed);
@@ -1856,7 +1896,7 @@ mod tests {
 
         let decision = router.decision_for(&p, &terminus_main_headers());
 
-        assert_eq!(decision.trace_state, "finalization");
+        assert_eq!(decision.workflow_state_kind, "finalization");
         assert_eq!(decision.reason, PolicyDecisionReason::StaticTable);
         assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));

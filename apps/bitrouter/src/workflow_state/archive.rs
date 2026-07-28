@@ -1013,7 +1013,7 @@ fn semantic_policy_transition_candidates(
                 settlement_outcome: semantic_settlement_outcome(usage),
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
-                trace_state: decision.trace_state.clone(),
+                trace_state: decision.workflow_state.clone(),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 tier_transition: transition_option(&decision.static_tier, &decision.selected_tier),

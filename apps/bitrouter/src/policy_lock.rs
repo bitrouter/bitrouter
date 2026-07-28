@@ -25,6 +25,7 @@ use crate::adequacy::settlement::PendingAdequacyStore;
 use crate::adequacy::store::{AdequacyStore, PersistedExplorationState};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
+use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const POLICY_LOCKFILE_VERSION: u32 = 1;
@@ -297,6 +298,9 @@ pub fn evolve_document(
         let Some((policy_name, request_key)) = row.fingerprint.split_once('\0') else {
             continue;
         };
+        let Some(projection) = RouteProjection::parse_key(request_key) else {
+            continue;
+        };
         let Some(policy) = document.policies.get_mut(policy_name) else {
             continue;
         };
@@ -306,7 +310,7 @@ pub fn evolve_document(
         let Some(explore_tier) = policy.adequacy.explore_tier.clone() else {
             continue;
         };
-        let opening_minimum = if is_opening_key(request_key) {
+        let opening_minimum = if projection.state_kind == WorkflowStateKind::Opening {
             policy.adequacy.min_semantic_successes_for_opening
         } else {
             0
@@ -399,10 +403,6 @@ fn resolved_file_location(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(resolved)
-}
-
-fn is_opening_key(request_key: &str) -> bool {
-    request_key == "opening" || request_key.split('|').nth(2) == Some("opening")
 }
 
 /// Bind an existing preset to a routing policy and set the optimizer's
@@ -1107,12 +1107,11 @@ mod tests {
     }
 
     #[test]
-    fn freezing_disables_all_learning_but_preserves_the_session_cap() {
+    fn freezing_disables_all_learning() {
         let mut policy = definition();
         policy.adequacy.enabled = true;
         policy.adequacy.explore_enabled = true;
         policy.adequacy.explore_tier = Some("economy".into());
-        policy.adequacy.max_downgraded_requests_per_session = 3;
         let lock = PolicyLock {
             lockfile_version: 1,
             policies: BTreeMap::from([("coding".into(), policy)]),
@@ -1125,12 +1124,6 @@ mod tests {
         assert_eq!(
             frozen.policies["coding"].adequacy.explore_tier.as_deref(),
             Some("economy")
-        );
-        assert_eq!(
-            frozen.policies["coding"]
-                .adequacy
-                .max_downgraded_requests_per_session,
-            3
         );
     }
 
@@ -1376,7 +1369,7 @@ presets:
     }
 
     #[test]
-    fn evolution_only_materializes_qualified_namespaced_locks() {
+    fn evolution_only_materializes_qualified_canonical_projection_locks() {
         use crate::adequacy::store::PersistedExplorationState;
 
         let mut policy = definition();
@@ -1396,7 +1389,7 @@ presets:
                 locked: true,
             },
             PersistedExplorationState {
-                fingerprint: "coding\0opening".into(),
+                fingerprint: "coding\0agent_trace/v1|tool_followup|normal".into(),
                 observed: 8,
                 adequate_trials: 4,
                 locked: true,
@@ -1408,13 +1401,7 @@ presets:
                 locked: true,
             },
         ];
-        let semantic = BTreeMap::from([
-            (
-                "coding\0codex|responses|tool_followup|-|-|exec_command".into(),
-                2,
-            ),
-            ("coding\0opening".into(), 1),
-        ]);
+        let semantic = BTreeMap::from([("coding\0agent_trace/v1|tool_followup|normal".into(), 2)]);
 
         let evolved = evolve_document(&lock, &rows, &semantic).unwrap();
 
@@ -1422,13 +1409,15 @@ presets:
         assert_eq!(evolved.changes[0].policy, "coding");
         assert_eq!(evolved.changes[0].tier, "economy");
         assert_eq!(
-            evolved.document.policies["coding"].routes["codex|responses|tool_followup|-|-|exec_command"],
+            evolved.document.policies["coding"].routes["agent_trace/v1|tool_followup|normal"],
             "economy"
         );
-        assert_eq!(
-            evolved.document.policies["coding"].routes["opening"],
-            "strong"
+        assert!(
+            !evolved.document.policies["coding"]
+                .routes
+                .contains_key("codex|responses|tool_followup|-|-|exec_command")
         );
+        assert!(evolved.document.policies["coding"].routes["opening"] == "strong");
         assert!(
             !evolved.document.policies["coding"]
                 .routes
@@ -1437,8 +1426,55 @@ presets:
     }
 
     #[test]
+    fn evolution_requires_the_opening_semantic_threshold_for_canonical_keys() {
+        use crate::adequacy::store::PersistedExplorationState;
+
+        let mut policy = definition();
+        policy.adequacy.enabled = true;
+        policy.adequacy.explore_enabled = true;
+        policy.adequacy.explore_tier = Some("economy".into());
+        policy.adequacy.min_semantic_successes_for_lock = 1;
+        policy.adequacy.min_semantic_successes_for_opening = 3;
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), policy)]),
+        };
+        let row = PersistedExplorationState {
+            fingerprint: "coding\0agent_trace/v1|opening|normal".into(),
+            observed: 8,
+            adequate_trials: 4,
+            locked: true,
+        };
+
+        let below_threshold = evolve_document(
+            &lock,
+            std::slice::from_ref(&row),
+            &BTreeMap::from([(row.fingerprint.clone(), 2)]),
+        )
+        .unwrap();
+        assert!(below_threshold.changes.is_empty());
+        assert!(
+            !below_threshold.document.policies["coding"]
+                .routes
+                .contains_key("agent_trace/v1|opening|normal")
+        );
+
+        let qualified = evolve_document(
+            &lock,
+            std::slice::from_ref(&row),
+            &BTreeMap::from([(row.fingerprint.clone(), 3)]),
+        )
+        .unwrap();
+        assert_eq!(qualified.changes.len(), 1);
+        assert_eq!(
+            qualified.document.policies["coding"].routes["agent_trace/v1|opening|normal"],
+            "economy"
+        );
+    }
+
+    #[test]
     fn evolution_never_removes_an_existing_operator_route() {
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = "agent_trace/v1|tool_followup|normal";
         let mut policy = definition();
         policy.adequacy.enabled = true;
         policy.adequacy.explore_enabled = true;
@@ -1713,7 +1749,7 @@ presets:
             .unwrap();
         crate::db::run_migrations(&db).await.unwrap();
         let store = AdequacyStore::new(db);
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = "agent_trace/v1|tool_followup|normal";
         let ledger_key = format!("coding\0{request_key}");
         store
             .upsert_exploration(&ledger_key, 4, 3, true)

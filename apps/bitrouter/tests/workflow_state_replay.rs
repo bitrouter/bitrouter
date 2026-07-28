@@ -336,8 +336,8 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         request_key: "agent_trace/v1|opening|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "opening".to_string(),
-        trace_state: "opening".to_string(),
-        trace_identity: Default::default(),
+        workflow_state: "opening".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("strong".to_string()),
         static_model: Some("vendor/strong".to_string()),
         selected_tier: Some("strong".to_string()),
@@ -1852,8 +1852,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
-        trace_state: "tool_followup".to_string(),
-        trace_identity: Default::default(),
+        workflow_state: "tool_followup".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -1944,7 +1944,7 @@ fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decision
     assert_eq!(legacy.len(), 1);
     assert_eq!(legacy[0].key_strategy, "workflow_state");
     assert_eq!(legacy[0].request_key, "codex|responses|tool_followup");
-    assert_eq!(legacy[0].trace_state, "tool_followup");
+    assert_eq!(legacy[0].workflow_state, "tool_followup");
 
     let new_path = temp_path("canonical-agent-trace-policy-decision.jsonl");
     let mut canonical = benchmark_decision("agent-trace-001");
@@ -2120,8 +2120,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
-        trace_state: "tool_followup".to_string(),
-        trace_identity: Default::default(),
+        workflow_state: "tool_followup".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),
@@ -2225,8 +2225,8 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
-        trace_state: "tool_followup".to_string(),
-        trace_identity: Default::default(),
+        workflow_state: "tool_followup".to_string(),
+        workflow_identity: Default::default(),
         static_tier: Some("capable".to_string()),
         static_model: Some("openai-codex:gpt-5.5".to_string()),
         selected_tier: Some("cheap".to_string()),

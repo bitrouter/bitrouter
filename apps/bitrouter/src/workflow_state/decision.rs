@@ -26,10 +26,10 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub ledger_key: Option<String>,
     pub legacy_fingerprint: String,
-    #[serde(alias = "workflow_state")]
-    pub trace_state: String,
-    #[serde(default, alias = "workflow_identity")]
-    pub trace_identity: WorkflowIdentity,
+    #[serde(rename = "trace_state", alias = "workflow_state")]
+    pub workflow_state: String,
+    #[serde(rename = "trace_identity", default, alias = "workflow_identity")]
+    pub workflow_identity: WorkflowIdentity,
     #[serde(default)]
     pub static_tier: Option<String>,
     #[serde(default)]
@@ -65,8 +65,8 @@ pub struct PolicyDecisionSummary {
     pub by_model_transition: BTreeMap<String, usize>,
     pub replacement_by_reason: BTreeMap<String, usize>,
     pub by_reason: BTreeMap<String, usize>,
-    #[serde(alias = "by_workflow_state")]
-    pub by_trace_state: BTreeMap<String, usize>,
+    #[serde(rename = "by_trace_state", alias = "by_workflow_state")]
+    pub by_workflow_state: BTreeMap<String, usize>,
     pub by_agent_role: BTreeMap<String, usize>,
     pub by_context_epoch: BTreeMap<u32, usize>,
 }
@@ -77,6 +77,19 @@ pub struct PolicyDecisionJsonlRecorder {
 }
 
 impl PolicyDecisionRecord {
+    /// Canonical JSON calls this field `trace_state`; this accessor lets newer
+    /// Rust callers use the canonical terminology without breaking older field
+    /// access or struct literals.
+    pub fn trace_state(&self) -> &str {
+        &self.workflow_state
+    }
+
+    /// Canonical JSON calls this field `trace_identity`; this accessor lets
+    /// newer Rust callers use that terminology without breaking older callers.
+    pub fn trace_identity(&self) -> &WorkflowIdentity {
+        &self.workflow_identity
+    }
+
     pub fn captured_now(mut self) -> Self {
         self.captured_at = Some(Utc::now().to_rfc3339());
         self
@@ -206,16 +219,16 @@ impl PolicyDecisionSummary {
             }
             *summary.by_reason.entry(record.reason.clone()).or_insert(0) += 1;
             *summary
-                .by_trace_state
-                .entry(record.trace_state.clone())
+                .by_workflow_state
+                .entry(record.workflow_state.clone())
                 .or_insert(0) += 1;
             *summary
                 .by_agent_role
-                .entry(record.trace_identity.role.as_str().to_string())
+                .entry(record.workflow_identity.role.as_str().to_string())
                 .or_insert(0) += 1;
             *summary
                 .by_context_epoch
-                .entry(record.trace_identity.context_epoch)
+                .entry(record.workflow_identity.context_epoch)
                 .or_insert(0) += 1;
         }
         summary
@@ -289,8 +302,8 @@ mod tests {
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
             ledger_key: Some("agent_trace/v1|tool_followup|normal".to_string()),
             legacy_fingerprint: "after_read_file".to_string(),
-            trace_state: "tool_followup".to_string(),
-            trace_identity: WorkflowIdentity::default(),
+            workflow_state: "tool_followup".to_string(),
+            workflow_identity: WorkflowIdentity::default(),
             static_tier: Some("capable".to_string()),
             static_model: Some("vendor/capable".to_string()),
             selected_tier: Some("cheap".to_string()),
@@ -320,14 +333,14 @@ mod tests {
         object.insert("workflow_state".to_string(), state);
         object.insert("workflow_identity".to_string(), identity);
         let parsed: PolicyDecisionRecord = serde_json::from_value(legacy).unwrap();
-        assert_eq!(parsed.trace_state, "tool_followup");
-        assert_eq!(parsed.trace_identity, WorkflowIdentity::default());
+        assert_eq!(parsed.workflow_state, "tool_followup");
+        assert_eq!(parsed.workflow_identity, WorkflowIdentity::default());
     }
 
     #[test]
     fn summary_emits_by_trace_state_and_reads_legacy_workflow_summary() {
         let summary = PolicyDecisionSummary::from_records(&[record()]);
-        assert_eq!(summary.by_trace_state["tool_followup"], 1);
+        assert_eq!(summary.by_workflow_state["tool_followup"], 1);
         let value = serde_json::to_value(&summary).unwrap();
         assert!(value.get("by_trace_state").is_some());
         assert!(value.get("by_workflow_state").is_none());
@@ -337,6 +350,6 @@ mod tests {
         let states = object.remove("by_trace_state").unwrap();
         object.insert("by_workflow_state".to_string(), states);
         let parsed: PolicyDecisionSummary = serde_json::from_value(legacy).unwrap();
-        assert_eq!(parsed.by_trace_state["tool_followup"], 1);
+        assert_eq!(parsed.by_workflow_state["tool_followup"], 1);
     }
 }
