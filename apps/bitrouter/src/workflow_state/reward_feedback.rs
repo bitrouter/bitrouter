@@ -8,6 +8,7 @@ use crate::adequacy::store::AdequacyStore;
 use crate::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
+use crate::workflow_state::ir::RouteProjection;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RewardFeedbackSummary {
@@ -50,6 +51,16 @@ pub async fn apply_semantic_reward_feedback(
                 None,
                 "skipped",
                 "empty_ledger_key",
+            ));
+            continue;
+        }
+        if !RouteProjection::is_canonical_learning_key(key) {
+            record_skip(&mut skipped_reasons, "non_canonical_agent_trace_key");
+            decisions.push(feedback_decision(
+                candidate,
+                Some(key),
+                "skipped",
+                "non_canonical_agent_trace_key",
             ));
             continue;
         }
@@ -184,6 +195,8 @@ mod tests {
     use super::*;
     use crate::db;
 
+    const TOOL_FOLLOWUP_KEY: &str = "agent_trace/v1|tool_followup|normal";
+
     async fn store() -> AdequacyStore {
         let db = db::connect("sqlite::memory:").await.unwrap();
         db::run_migrations(&db).await.unwrap();
@@ -222,7 +235,7 @@ mod tests {
     #[tokio::test]
     async fn semantic_failure_feedback_pins_and_unlocks_request_keys() {
         let store = store().await;
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = TOOL_FOLLOWUP_KEY;
         store
             .upsert_exploration(request_key, 8, 4, true)
             .await
@@ -255,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn semantic_success_feedback_counts_distinct_tasks_once() {
         let store = store().await;
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = TOOL_FOLLOWUP_KEY;
 
         let summary = apply_semantic_reward_feedback(
             &store,
@@ -291,7 +304,7 @@ mod tests {
     #[tokio::test]
     async fn semantic_feedback_uses_the_named_policy_ledger_key() {
         let store = store().await;
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = TOOL_FOLLOWUP_KEY;
         let ledger_key = format!("coding\0{request_key}");
         let mut named = candidate(request_key, "terminal-bench/regex-log", 1.0);
         named.ledger_key = Some(ledger_key.clone());
@@ -309,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn semantic_failure_wins_over_success_for_the_same_request_key() {
         let store = store().await;
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = TOOL_FOLLOWUP_KEY;
 
         let summary = apply_semantic_reward_feedback(
             &store,
@@ -335,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn transport_failure_cannot_hitchhike_on_a_successful_task_reward() {
         let store = store().await;
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = TOOL_FOLLOWUP_KEY;
         let mut timed_out = candidate(request_key, "terminal-bench/regex-log", 1.0);
         timed_out.request_transport_outcome = RequestTransportOutcome::Failed;
         timed_out.settlement_outcome = SemanticSettlementOutcome::AuthoritativeComputed;
@@ -363,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn unsettled_request_cannot_write_semantic_evidence() {
         let store = store().await;
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = TOOL_FOLLOWUP_KEY;
         let mut pending = candidate(request_key, "terminal-bench/regex-log", 1.0);
         pending.settlement_outcome = SemanticSettlementOutcome::Pending;
 
@@ -385,5 +398,34 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn non_canonical_projection_keys_are_skipped_without_learning() {
+        let store = store().await;
+        let keys = [
+            "codex|responses|tool_followup|-|-|exec_command",
+            "agent_trace/v1|not_a_state|normal",
+            "agent_trace/v1|tool_followup|not_a_risk",
+            "agent_trace/v1|tool_followup|normal|extra",
+            "coding\0codex|responses|tool_followup|-|-|exec_command",
+            "coding\0agent_trace/v1|tool_followup|normal|extra",
+        ];
+        let candidates = keys
+            .iter()
+            .map(|key| candidate(key, "terminal-bench/regex-log", 0.0))
+            .collect::<Vec<_>>();
+
+        let summary = apply_semantic_reward_feedback(&store, &candidates)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.pinned_count, 0);
+        assert_eq!(summary.skipped_candidate_count, keys.len());
+        assert_eq!(
+            summary.skipped_reasons["non_canonical_agent_trace_key"],
+            keys.len()
+        );
+        assert!(store.load_all().await.unwrap().is_empty());
     }
 }

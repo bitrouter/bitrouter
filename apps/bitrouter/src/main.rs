@@ -1666,10 +1666,10 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
             let decisions = PolicyDecisionRecord::load_jsonl(&policy_decisions)
                 .with_context(|| format!("read policy decisions {}", policy_decisions.display()))?;
-            WorkflowRunArtifact::validate_complete_benchmark_integrity(
+            WorkflowRunArtifact::validate_reward_feedback_integrity(
                 &traces, &usage, &outcomes, &decisions,
             )
-            .context("validate benchmark integrity before reward feedback")?;
+            .context("validate reward feedback admission")?;
             let artifact = WorkflowRunArtifact::build_with_decisions(
                 "reward-feedback",
                 &traces,

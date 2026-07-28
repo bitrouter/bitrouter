@@ -134,6 +134,67 @@ impl RouteProjection {
             self.schema_version, self.state_kind, self.risk
         )
     }
+
+    /// Parse a canonical policy/ledger key without recovering information from
+    /// legacy source-specific keys.
+    pub fn parse_key(value: &str) -> Option<Self> {
+        let mut segments = value.split('|');
+        let (Some(namespace_version), Some(state), Some(risk), None) = (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ) else {
+            return None;
+        };
+        if namespace_version != "agent_trace/v1" {
+            return None;
+        }
+        Some(Self {
+            schema_version: 1,
+            state_kind: parse_workflow_state_kind(state)?,
+            risk: parse_route_risk(risk)?,
+        })
+    }
+
+    /// Whether `value` is a persistence-safe learning key. A policy namespace
+    /// may prefix the canonical projection with one NUL separator; the suffix
+    /// is always validated and never inferred from legacy routing data.
+    pub fn is_canonical_learning_key(value: &str) -> bool {
+        match value.rsplit_once('\0') {
+            Some((namespace, projection)) => {
+                !namespace.is_empty()
+                    && !namespace.contains('\0')
+                    && Self::parse_key(projection).is_some()
+            }
+            None => Self::parse_key(value).is_some(),
+        }
+    }
+}
+
+fn parse_workflow_state_kind(value: &str) -> Option<WorkflowStateKind> {
+    match value {
+        "unknown" => Some(WorkflowStateKind::Unknown),
+        "opening" => Some(WorkflowStateKind::Opening),
+        "planning" => Some(WorkflowStateKind::Planning),
+        "tool_followup" => Some(WorkflowStateKind::ToolFollowup),
+        "edit" => Some(WorkflowStateKind::Edit),
+        "test" => Some(WorkflowStateKind::Test),
+        "debug" => Some(WorkflowStateKind::Debug),
+        "review" => Some(WorkflowStateKind::Review),
+        "recovery" => Some(WorkflowStateKind::Recovery),
+        "subagent_dispatch" => Some(WorkflowStateKind::SubagentDispatch),
+        "finalization" => Some(WorkflowStateKind::Finalization),
+        _ => None,
+    }
+}
+
+fn parse_route_risk(value: &str) -> Option<RouteRisk> {
+    match value {
+        "normal" => Some(RouteRisk::Normal),
+        "guarded" => Some(RouteRisk::Guarded),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -454,6 +515,28 @@ mod tests {
             ir.capability_constraints = CapabilityConstraints::default();
 
             assert_eq!(ir.route_projection().key(), "agent_trace/v1|edit|normal");
+        }
+    }
+
+    #[test]
+    fn route_projection_parser_accepts_only_canonical_v1_keys() {
+        let projection = RouteProjection::parse_key("agent_trace/v1|tool_followup|normal")
+            .expect("canonical agent trace projection");
+        assert_eq!(projection.key(), "agent_trace/v1|tool_followup|normal");
+        assert!(RouteProjection::is_canonical_learning_key(
+            "coding\0agent_trace/v1|tool_followup|normal"
+        ));
+
+        for key in [
+            "codex|responses|tool_followup|-|-|exec_command",
+            "agent_trace/v2|tool_followup|normal",
+            "agent_trace/v1|not_a_state|normal",
+            "agent_trace/v1|tool_followup|not_a_risk",
+            "agent_trace/v1|tool_followup|normal|extra",
+            "coding\0agent_trace/v1|tool_followup|normal|extra",
+            "coding\0codex|responses|tool_followup|-|-|exec_command",
+        ] {
+            assert!(RouteProjection::parse_key(key).is_none(), "{key}");
         }
     }
 

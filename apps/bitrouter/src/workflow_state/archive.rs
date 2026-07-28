@@ -549,6 +549,66 @@ impl WorkflowRunArtifact {
         Ok(())
     }
 
+    /// Validate reward-feedback admission using only stable request joins and
+    /// authoritative outcome evidence. Benchmark-specific identity diagnostics
+    /// are intentionally excluded from this learning path.
+    pub fn validate_reward_feedback_integrity(
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+        outcomes: &[BenchmarkOutcomeRecord],
+        decisions: &[PolicyDecisionRecord],
+    ) -> Result<()> {
+        Self::validate_benchmark_integrity(traces, usage)?;
+
+        let trace_ids = traces
+            .iter()
+            .map(|trace| {
+                trace_request_id(trace).ok_or_else(|| {
+                    BitrouterError::bad_request(format!(
+                        "reward feedback integrity: trace {} has no request id",
+                        trace.id
+                    ))
+                })
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        let decision_ids = decisions
+            .iter()
+            .map(|decision| {
+                decision.request_id.clone().ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "reward feedback integrity: policy decision has no request id",
+                    )
+                })
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        if trace_ids.len() != traces.len() || decision_ids.len() != decisions.len() {
+            return Err(BitrouterError::bad_request(
+                "reward feedback integrity: duplicate request id".to_string(),
+            ));
+        }
+        if trace_ids != decision_ids {
+            return Err(BitrouterError::bad_request(
+                "reward feedback integrity: trace/decision request ids differ".to_string(),
+            ));
+        }
+        if outcomes.is_empty() {
+            return Ok(());
+        }
+        let reward_join = TraceArchive::join_outcomes_strict(traces, outcomes);
+        if reward_join.summary.unmatched_trace_count != 0
+            || reward_join.summary.unmatched_outcome_count != 0
+            || reward_join.summary.matched_trace_count != traces.len()
+        {
+            return Err(BitrouterError::bad_request(format!(
+                "reward feedback integrity: outcome join incomplete; matched_traces={}, unmatched_traces={}, unmatched_outcomes={}",
+                reward_join.summary.matched_trace_count,
+                reward_join.summary.unmatched_trace_count,
+                reward_join.summary.unmatched_outcome_count
+            )));
+        }
+        Ok(())
+    }
+
     pub fn build(
         run_label: impl Into<String>,
         traces: &[CapturedIngressTrace],

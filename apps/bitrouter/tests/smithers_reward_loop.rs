@@ -86,8 +86,8 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
     let request_id = "req-smithers-1";
     let run_id = "run-smithers-1";
     let task_id = "case-release-review";
-    let target_key = "smithers|chat_completions|opening|release-review|analyze-risk|-|none|small|none|low|low|low|low|medium|-";
-    let other_key = "smithers|chat_completions|opening|release-review|summarize|-|none|small|none|low|low|low|low|medium|-";
+    let target_key = "agent_trace/v1|opening|normal";
+    let other_key = "agent_trace/v1|tool_followup|normal";
     let ledger_key = format!("smithers\0{target_key}");
     let trace = CapturedIngressTrace {
         id: "trace-smithers-1".to_string(),
@@ -133,7 +133,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
         captured_at: None,
         request_id: Some(request_id.to_string()),
         input_model: "@smithers".to_string(),
-        key_strategy: "workflow_state".to_string(),
+        key_strategy: "agent_trace".to_string(),
         request_key: target_key.to_string(),
         ledger_key: Some(ledger_key.clone()),
         legacy_fingerprint: "opening".to_string(),

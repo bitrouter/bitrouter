@@ -10,6 +10,7 @@ use crate::adequacy::observer::classify_failure;
 use crate::adequacy::reliability::{ReliabilityKey, ReliabilityObservation};
 use crate::adequacy::{AdequacyLedger, InadequacyCause, Outcome};
 use crate::policy_table_router::PolicyTable;
+use crate::workflow_state::ir::RouteProjection;
 
 #[derive(Clone)]
 pub(crate) struct PendingAdequacyDecision {
@@ -102,6 +103,14 @@ impl SettlementRecorder for AdequacySettlementRecorder {
         let Some(pending) = self.pending.take(&ctx.request_id) else {
             return Ok(());
         };
+        if !RouteProjection::is_canonical_learning_key(&pending.ledger_key) {
+            tracing::warn!(
+                request_id = %ctx.request_id,
+                ledger_key = %pending.ledger_key,
+                "adequacy settlement skipped: non-canonical agent trace ledger key"
+            );
+            return Ok(());
+        }
         let Some(served_tier) = Self::served_tier(&pending, ctx) else {
             tracing::debug!(
                 request_id = %ctx.request_id,
@@ -294,7 +303,7 @@ mod tests {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(2, 900, 2, 3));
         let pending = Arc::new(PendingAdequacyStore::default());
         let recorder = AdequacySettlementRecorder::new(pending.clone());
-        let request_key = "codex|responses|tool_followup|-|-|exec_command|high|medium|none|high|low|medium|low|medium|medium|requires_structured_tools";
+        let request_key = "agent_trace/v1|tool_followup|normal";
 
         pending.insert(PendingAdequacyDecision {
             request_id: "req-1".to_string(),
@@ -340,7 +349,7 @@ mod tests {
         let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 900, 1, 3));
         let pending = Arc::new(PendingAdequacyStore::default());
         let recorder = AdequacySettlementRecorder::new(pending.clone());
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = "agent_trace/v1|tool_followup|normal";
         let route_key = "bitrouter:moonshotai/kimi-k2.7-code";
 
         for index in 1..=2 {
@@ -369,5 +378,33 @@ mod tests {
 
         assert!(!ledger.is_pinned(request_key));
         assert_eq!(ledger.reliability_permit(route_key), RoutePermit::Open);
+    }
+
+    #[tokio::test]
+    async fn settlement_skips_legacy_ledger_keys_without_learning() {
+        let table = policy_table();
+        let ledger = Arc::new(AdequacyLedger::in_memory_explore(1, 900, 1, 3));
+        let pending = Arc::new(PendingAdequacyStore::default());
+        let recorder = AdequacySettlementRecorder::new(pending.clone());
+        let legacy_key = "codex|responses|tool_followup|-|-|exec_command";
+
+        pending.insert(PendingAdequacyDecision {
+            request_id: "legacy-req".to_string(),
+            request_key: legacy_key.to_string(),
+            ledger_key: legacy_key.to_string(),
+            static_tier: Some("capable".to_string()),
+            selected_tier: Some("capable".to_string()),
+            half_open_probe: false,
+            exploration_allowed: true,
+            table,
+            ledger: ledger.clone(),
+        });
+        recorder
+            .record(&mut settlement("legacy-req", "openai-codex", "gpt-5.5"))
+            .await
+            .expect("invalid key is skipped rather than failing settlement");
+
+        assert!(!ledger.should_trial(legacy_key));
+        assert!(!ledger.is_pinned(legacy_key));
     }
 }

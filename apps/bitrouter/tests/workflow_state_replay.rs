@@ -25,6 +25,7 @@ use bitrouter::workflow_state::real_trace::{
 };
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
+use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
 use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
@@ -342,7 +343,7 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         request_id: Some(request_id.to_string()),
         input_model: "inbound".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "terminus_2|chat_completions|opening".to_string(),
+        request_key: "agent_trace/v1|opening|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "opening".to_string(),
         trace_state: "opening".to_string(),
@@ -372,6 +373,108 @@ fn benchmark_integrity_rejects_unknown_charge_evidence() {
         .expect_err("unknown charge must fail benchmark integrity");
 
     assert!(error.to_string().contains("charge is not computed"));
+}
+
+#[test]
+fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers() {
+    let mut terminus = benchmark_trace("req-reward-terminus");
+    terminus.harness = HarnessId::Terminus2;
+    let generic = benchmark_trace("req-reward-generic");
+    let terminus_usage = computed_usage("req-reward-terminus", "openai", "gpt-test", 10, 2, 30);
+    let generic_usage = computed_usage("req-reward-generic", "openai", "gpt-test", 10, 2, 30);
+    let terminus_decision = benchmark_decision("req-reward-terminus");
+    let generic_decision = benchmark_decision("req-reward-generic");
+
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[terminus, generic],
+        &[terminus_usage, generic_usage],
+        &[],
+        &[terminus_decision, generic_decision],
+    )
+    .expect("reward admission must not require Terminus diagnostic identity headers");
+}
+
+#[tokio::test]
+async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger() {
+    let canonical_key = "agent_trace/v1|tool_followup|normal";
+    let ledger_key = format!("coding\0{canonical_key}");
+    let mut generic = benchmark_trace("req-reward-generic-merge");
+    generic.headers.insert(
+        "x-bitrouter-workflow-session".to_string(),
+        "episode-generic".to_string(),
+    );
+    let mut terminus = benchmark_trace("req-reward-terminus-merge");
+    terminus.harness = HarnessId::Terminus2;
+    terminus.headers.insert(
+        "x-bitrouter-workflow-session".to_string(),
+        "episode-terminus".to_string(),
+    );
+
+    let mut generic_decision = benchmark_decision("req-reward-generic-merge");
+    generic_decision.key_strategy = "agent_trace".to_string();
+    generic_decision.request_key = canonical_key.to_string();
+    generic_decision.ledger_key = Some(ledger_key.clone());
+    generic_decision.selected_tier = Some("cheap".to_string());
+    generic_decision.selected_model = Some("vendor/cheap".to_string());
+    let mut terminus_decision = generic_decision.clone();
+    terminus_decision.request_id = Some("req-reward-terminus-merge".to_string());
+
+    let outcomes = vec![
+        BenchmarkOutcomeRecord {
+            session_key: "episode-generic".to_string(),
+            task_id: "terminal-bench/regex-log".to_string(),
+            reward: 1.0,
+            failed_reason: None,
+            finished_at: None,
+            trial_name: Some("episode-generic".to_string()),
+            agent_started_at: None,
+            agent_finished_at: None,
+        },
+        BenchmarkOutcomeRecord {
+            session_key: "episode-terminus".to_string(),
+            task_id: "terminal-bench/regex-log".to_string(),
+            reward: 1.0,
+            failed_reason: None,
+            finished_at: None,
+            trial_name: Some("episode-terminus".to_string()),
+            agent_started_at: None,
+            agent_finished_at: None,
+        },
+    ];
+    let mut generic_usage =
+        computed_usage("req-reward-generic-merge", "openai", "gpt-test", 10, 2, 30);
+    generic_usage.status = Some("completed".to_string());
+    let mut terminus_usage =
+        computed_usage("req-reward-terminus-merge", "openai", "gpt-test", 10, 2, 30);
+    terminus_usage.status = Some("completed".to_string());
+    let artifact = WorkflowRunArtifact::build_with_decisions(
+        "equivalent-adapters",
+        &[generic, terminus],
+        &[generic_usage, terminus_usage],
+        &outcomes,
+        &[generic_decision, terminus_decision],
+    )
+    .expect("source-neutral reward candidate construction");
+
+    assert_eq!(artifact.semantic_policy_transition_candidates.len(), 2);
+    assert!(
+        artifact
+            .semantic_policy_transition_candidates
+            .iter()
+            .all(|candidate| candidate.ledger_key.as_deref() == Some(ledger_key.as_str()))
+    );
+
+    let db = bitrouter::db::connect("sqlite::memory:").await.unwrap();
+    bitrouter::db::run_migrations(&db).await.unwrap();
+    let store = AdequacyStore::new(db);
+    let summary =
+        apply_semantic_reward_feedback(&store, &artifact.semantic_policy_transition_candidates)
+            .await
+            .expect("canonical candidates update the shared ledger");
+    assert_eq!(summary.semantic_success_evidence_count, 1);
+    let counts = store.load_semantic_success_counts().await.unwrap();
+    assert_eq!(counts.len(), 1);
+    assert_eq!(counts.get(&ledger_key), Some(&1));
 }
 
 #[test]
@@ -1494,7 +1597,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         request_id: Some("req-001".to_string()),
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "codex|responses|tool_followup|-|-|bash|low|small|none|high|low|low|low|medium|medium|requires_structured_tools".to_string(),
+        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         trace_state: "tool_followup".to_string(),
@@ -1620,7 +1723,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         request_id: Some("req-001".to_string()),
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "codex|responses|tool_followup".to_string(),
+        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         trace_state: "tool_followup".to_string(),
@@ -1724,8 +1827,8 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         request_id: Some("req-success-001".to_string()),
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "codex|responses|tool_followup".to_string(),
-        ledger_key: Some("coding\0codex|responses|tool_followup".to_string()),
+        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
+        ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
         trace_state: "tool_followup".to_string(),
         trace_identity: Default::default(),
@@ -1772,10 +1875,10 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         candidate.settlement_outcome,
         SemanticSettlementOutcome::ProviderReportedComputed
     );
-    assert_eq!(candidate.request_key, "codex|responses|tool_followup");
+    assert_eq!(candidate.request_key, "agent_trace/v1|tool_followup|normal");
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0codex|responses|tool_followup")
+        Some("coding\0agent_trace/v1|tool_followup|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),
