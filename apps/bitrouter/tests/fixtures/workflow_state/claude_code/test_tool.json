@@ -1,0 +1,22 @@
+{
+  "id": "claude-code-test-tool-001",
+  "harness": "claude_code",
+  "protocol": "messages",
+  "headers": {
+    "anthropic-beta": "claude-code-20250219"
+  },
+  "raw_body": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 512,
+    "messages": [
+      {"role": "user", "content": "run the tests"},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "tool_test_1", "name": "bash", "input": {"cmd": "cargo test -p bitrouter"}}]}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "test",
+    "baseline_fingerprint": "after_bash",
+    "confidence_min": 0.7
+  }
+}

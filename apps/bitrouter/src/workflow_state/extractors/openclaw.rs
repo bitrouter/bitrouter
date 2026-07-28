@@ -1,7 +1,7 @@
 use crate::workflow_state::extractors::generic::GenericPromptExtractor;
 use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
 use crate::workflow_state::ir::{
-    Evidence, EvidenceLevel, HarnessId, ProtocolKind, WorkflowStateIR, WorkflowStateKind,
+    Evidence, EvidenceLevel, HarnessId, ProtocolKind, WorkflowStateIR,
 };
 
 pub struct OpenClawExtractor;
@@ -53,24 +53,8 @@ impl WorkflowStateExtractor for OpenClawExtractor {
                 level: EvidenceLevel::DocumentedStub,
             });
         }
-        if let Some(state_kind) = runtime_plan_action(input.raw_body) {
-            ir.state_kind = state_kind;
-        }
         ir.confidence = ir.confidence.min(0.55);
         ir
-    }
-}
-
-fn runtime_plan_action(raw_body: &serde_json::Value) -> Option<WorkflowStateKind> {
-    match raw_body
-        .get("runtimePlan")
-        .and_then(|plan| plan.get("action"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-    {
-        Some("edit") => Some(WorkflowStateKind::Edit),
-        Some("test") => Some(WorkflowStateKind::Test),
-        _ => None,
     }
 }
 
@@ -122,13 +106,10 @@ mod tests {
     }
 
     #[test]
-    fn openclaw_runtime_plan_action_maps_to_generic_edit_and_test_states() {
+    fn openclaw_runtime_plan_action_is_diagnostic_only() {
         let prompt = prompt();
         let headers = HeaderMap::new();
-        for (action, expected) in [
-            ("edit", crate::workflow_state::ir::WorkflowStateKind::Edit),
-            ("test", crate::workflow_state::ir::WorkflowStateKind::Test),
-        ] {
+        for action in ["edit", "test", "caller-supplied-economy"] {
             let raw_body = serde_json::json!({
                 "agentRuntime": {"id": "openclaw.default"},
                 "runtimePlan": {"action": action}
@@ -140,7 +121,11 @@ mod tests {
                 raw_body: &raw_body,
                 prompt: &prompt,
             });
-            assert_eq!(ir.state_kind, expected, "{action} action");
+            assert_eq!(
+                ir.state_kind,
+                crate::workflow_state::ir::WorkflowStateKind::Opening,
+                "unverified {action} action must not change routing projection"
+            );
         }
     }
 }

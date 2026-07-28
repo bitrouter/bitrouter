@@ -101,9 +101,9 @@ fn classify_state(prompt: &Prompt) -> (WorkflowStateKind, Option<String>, Eviden
         if message.role != Role::Assistant {
             continue;
         }
-        if let Some(name) = message.content.iter().rev().find_map(tool_call_name) {
+        if let Some((state_kind, name)) = message.content.iter().rev().find_map(tool_call_state) {
             return (
-                WorkflowStateKind::ToolFollowup,
+                state_kind,
                 Some(name.to_string()),
                 Evidence {
                     kind: "last_assistant_tool_call".to_string(),
@@ -136,11 +136,46 @@ fn classify_state(prompt: &Prompt) -> (WorkflowStateKind, Option<String>, Eviden
     )
 }
 
-fn tool_call_name(content: &Content) -> Option<&str> {
+fn tool_call_state(content: &Content) -> Option<(WorkflowStateKind, &str)> {
     match content {
-        Content::ToolCall { name, .. } => Some(name.as_str()),
+        Content::ToolCall {
+            name, arguments, ..
+        } => Some((tool_call_intent(name, arguments), name.as_str())),
         _ => None,
     }
+}
+
+fn tool_call_intent(name: &str, arguments: &str) -> WorkflowStateKind {
+    let normalized_name = name.trim().to_ascii_lowercase();
+    if matches!(normalized_name.as_str(), "apply_patch" | "edit") {
+        return WorkflowStateKind::Edit;
+    }
+    if matches!(
+        normalized_name.as_str(),
+        "bash" | "shell" | "terminal" | "exec_command"
+    ) && canonical_test_command(arguments)
+    {
+        return WorkflowStateKind::Test;
+    }
+    WorkflowStateKind::ToolFollowup
+}
+
+fn canonical_test_command(arguments: &str) -> bool {
+    let normalized = arguments.to_ascii_lowercase();
+    [
+        "cargo test",
+        "pytest",
+        "python -m pytest",
+        "python3 -m pytest",
+        "go test",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "ctest",
+        "make test",
+    ]
+    .iter()
+    .any(|command| normalized.contains(command))
 }
 
 fn tool_density(prompt: &Prompt) -> ToolDensity {
@@ -281,12 +316,16 @@ mod tests {
     }
 
     fn assistant_calls(tool: &str) -> Message {
+        assistant_call(tool, "{}")
+    }
+
+    fn assistant_call(tool: &str, arguments: &str) -> Message {
         Message {
             role: Role::Assistant,
             content: vec![Content::ToolCall {
                 id: format!("call_{tool}"),
                 name: tool.to_string(),
-                arguments: "{}".to_string(),
+                arguments: arguments.to_string(),
                 provider_executed: false,
                 dynamic: false,
                 provider_metadata: ProviderMetadata::new(),
@@ -335,6 +374,24 @@ mod tests {
         let ir = extract(&prompt);
         assert_eq!(ir.state_kind, WorkflowStateKind::ToolFollowup);
         assert_eq!(ir.last_tool_name.as_deref(), Some("bash"));
+    }
+
+    #[test]
+    fn generic_tool_intent_maps_verified_edit_and_test_calls_without_source_data() {
+        let edit = extract(&prompt(
+            vec![user("continue"), assistant_call("apply_patch", "{}")],
+            Vec::new(),
+        ));
+        assert_eq!(edit.state_kind, WorkflowStateKind::Edit);
+
+        let test = extract(&prompt(
+            vec![
+                user("continue"),
+                assistant_call("bash", r#"{"cmd":"cargo test -p bitrouter"}"#),
+            ],
+            Vec::new(),
+        ));
+        assert_eq!(test.state_kind, WorkflowStateKind::Test);
     }
 
     #[test]

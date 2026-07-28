@@ -124,7 +124,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
                     {"role": "user", "content": "continue"},
                     {"role": "assistant", "tool_calls": [{
                         "id": "call_test", "type": "function",
-                        "function": {"name": "cargo_test", "arguments": "{}"}
+                        "function": {"name": "bash", "arguments": "{\"cmd\":\"cargo test -p bitrouter\"}"}
                     }]}
                 ]
             }),
@@ -165,8 +165,12 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("HTTP traffic emits readable policy decisions");
     assert_eq!(decisions.len(), 4);
-    for decision in &decisions[..3] {
-        assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+    for (decision, key) in decisions[..3].iter().zip([
+        "agent_trace/v1|edit|normal",
+        "agent_trace/v1|test|normal",
+        "agent_trace/v1|tool_followup|normal",
+    ]) {
+        assert_eq!(decision.request_key, key);
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
     }
     assert_eq!(decisions[3].request_key, "agent_trace/v1|recovery|guarded");
@@ -191,7 +195,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             "edit",
             "agent_trace/v1|edit|normal",
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
-            openclaw_action_case("@auto:cost", "edit"),
+            claude_tool_case("@auto:cost", "apply_patch", json!({}), None),
             "economy",
             "bitrouter:deepseek/deepseek-v4-pro",
         ),
@@ -199,23 +203,33 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             "test",
             "agent_trace/v1|test|normal",
             terminus_action_case("@auto", "cargo test -p bitrouter"),
-            openclaw_action_case("@auto:cost", "test"),
+            claude_tool_case(
+                "@auto:cost",
+                "bash",
+                json!({"cmd": "cargo test -p bitrouter"}),
+                None,
+            ),
             "economy",
             "bitrouter:deepseek/deepseek-v4-pro",
         ),
         (
             "tool followup",
             "agent_trace/v1|tool_followup|normal",
-            native_tool_followup_case("@auto", HarnessId::Terminus2),
-            native_tool_followup_case("@auto:cost", HarnessId::OpenClaw),
+            terminus_tool_case("@auto", None),
+            claude_tool_case("@auto:cost", "bash", json!({}), None),
             "economy",
             "bitrouter:deepseek/deepseek-v4-pro",
         ),
         (
             "recovery",
             "agent_trace/v1|recovery|guarded",
-            native_recovery_case("@auto", HarnessId::Terminus2),
-            native_recovery_case("@auto:cost", HarnessId::OpenClaw),
+            terminus_tool_case("@auto", Some("error: cargo test failed")),
+            claude_tool_case(
+                "@auto:cost",
+                "bash",
+                json!({}),
+                Some("error: cargo test failed"),
+            ),
             "strong",
             "openai-codex:gpt-5.6-sol",
         ),
@@ -230,7 +244,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     assert_eq!(traces.len(), 8);
     for pair in traces.chunks_exact(2) {
         assert_eq!(pair[0].harness, HarnessId::Terminus2);
-        assert_eq!(pair[1].harness, HarnessId::OpenClaw);
+        assert_eq!(pair[1].harness, HarnessId::ClaudeCode);
         assert!(pair.iter().all(|trace| {
             trace
                 .headers
@@ -277,30 +291,7 @@ fn terminus_action_case(model: &str, command: &str) -> NativeCase {
     }
 }
 
-fn openclaw_action_case(model: &str, action: &str) -> NativeCase {
-    NativeCase {
-        name: "OpenClaw",
-        source: HarnessId::OpenClaw,
-        path: "/v1/chat/completions",
-        headers: &[],
-        body: json!({
-            "model": model,
-            "agentRuntime": {"id": "openclaw.default"},
-            "runtimePlan": {"action": action},
-            "messages": [{"role": "user", "content": "continue"}]
-        }),
-    }
-}
-
-fn native_tool_followup_case(model: &str, source: HarnessId) -> NativeCase {
-    native_tool_case(model, source, None)
-}
-
-fn native_recovery_case(model: &str, source: HarnessId) -> NativeCase {
-    native_tool_case(model, source, Some("error: cargo test failed"))
-}
-
-fn native_tool_case(model: &str, source: HarnessId, tool_result: Option<&str>) -> NativeCase {
+fn terminus_tool_case(model: &str, tool_result: Option<&str>) -> NativeCase {
     let mut messages = vec![
         json!({"role": "user", "content": "continue"}),
         json!({"role": "assistant", "tool_calls": [{
@@ -313,29 +304,39 @@ fn native_tool_case(model: &str, source: HarnessId, tool_result: Option<&str>) -
             "role": "tool", "tool_call_id": "call_native", "content": result
         }));
     }
-    match source {
-        HarnessId::Terminus2 => {
-            messages.insert(0, json!({"role": "system", "content": terminus_contract()}));
-            NativeCase {
-                name: "Terminus 2",
-                source,
-                path: "/v1/chat/completions",
-                headers: &[],
-                body: json!({"model": model, "messages": messages}),
-            }
-        }
-        HarnessId::OpenClaw => NativeCase {
-            name: "OpenClaw",
-            source,
-            path: "/v1/chat/completions",
-            headers: &[],
-            body: json!({
-                "model": model,
-                "agentRuntime": {"id": "openclaw.default"},
-                "messages": messages
-            }),
-        },
-        _ => unreachable!("only native matrix sources are supported"),
+    messages.insert(0, json!({"role": "system", "content": terminus_contract()}));
+    NativeCase {
+        name: "Terminus 2",
+        source: HarnessId::Terminus2,
+        path: "/v1/chat/completions",
+        headers: &[],
+        body: json!({"model": model, "messages": messages}),
+    }
+}
+
+fn claude_tool_case(
+    model: &str,
+    tool_name: &str,
+    input: Value,
+    tool_result: Option<&str>,
+) -> NativeCase {
+    let mut messages = vec![
+        json!({"role": "user", "content": "continue"}),
+        json!({"role": "assistant", "content": [{
+            "type": "tool_use", "id": "tool_native", "name": tool_name, "input": input
+        }]}),
+    ];
+    if let Some(result) = tool_result {
+        messages.push(json!({"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "tool_native", "content": result
+        }]}));
+    }
+    NativeCase {
+        name: "Claude Code",
+        source: HarnessId::ClaudeCode,
+        path: "/v1/messages",
+        headers: &[("anthropic-beta", "claude-code-20250219")],
+        body: json!({"model": model, "max_tokens": 64, "messages": messages}),
     }
 }
 

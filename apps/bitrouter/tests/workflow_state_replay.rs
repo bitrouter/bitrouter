@@ -939,18 +939,18 @@ fn workflow_constraints_report_model_ladder_compatibility() {
 fn replay_summary_matches_current_experiment_fixture_set() {
     let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
     let summary = ReplayEvaluator.run(&fixtures);
-    assert_eq!(summary.total, 7, "{summary:#?}");
-    assert_eq!(summary.covered, 7, "{summary:#?}");
+    assert_eq!(summary.total, 9, "{summary:#?}");
+    assert_eq!(summary.covered, 9, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
-    assert_eq!(summary.baseline_bucket_count, 3, "{summary:#?}");
-    assert_eq!(summary.ir_bucket_count, 7, "{summary:#?}");
+    assert_eq!(summary.baseline_bucket_count, 4, "{summary:#?}");
+    assert_eq!(summary.ir_bucket_count, 9, "{summary:#?}");
     assert_eq!(summary.collision_count, 0, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 1, "{summary:#?}");
     assert_eq!(summary.baseline_midstream_count, 1, "{summary:#?}");
     assert_eq!(summary.ir_unknown_count, 0, "{summary:#?}");
-    assert_eq!(summary.model_ladder.flagship, 7, "{summary:#?}");
-    assert_eq!(summary.model_ladder.standard, 7, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_tool_safe, 7, "{summary:#?}");
+    assert_eq!(summary.model_ladder.flagship, 9, "{summary:#?}");
+    assert_eq!(summary.model_ladder.standard, 9, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_tool_safe, 9, "{summary:#?}");
     assert_eq!(summary.model_ladder.cheap_fast, 6, "{summary:#?}");
 }
 
@@ -2387,6 +2387,6 @@ fn shadow_policy_compares_baseline_fingerprints_to_ir_model_ladder() {
         .find(|decision| decision.fixture_id == "hermes-tool-followup-001")
         .expect("tool follow-up fixture has a shadow decision");
     assert_eq!(tool_followup.baseline_key, "after_bash");
-    assert_eq!(tool_followup.ir_state_kind.to_string(), "tool_followup");
+    assert_eq!(tool_followup.ir_state_kind.to_string(), "test");
     assert_eq!(tool_followup.ir_tier, TierName::CheapToolSafe);
 }
