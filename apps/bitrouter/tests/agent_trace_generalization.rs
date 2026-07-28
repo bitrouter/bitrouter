@@ -195,7 +195,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             "edit",
             "agent_trace/v1|edit|normal",
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
-            claude_tool_case("@auto:cost", "apply_patch", json!({}), None),
+            claude_fixture_case("@auto:cost", ClaudeFixture::Edit, None),
             "economy",
             "bitrouter:deepseek/deepseek-v4-pro",
         ),
@@ -203,12 +203,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             "test",
             "agent_trace/v1|test|normal",
             terminus_action_case("@auto", "cargo test -p bitrouter"),
-            claude_tool_case(
-                "@auto:cost",
-                "bash",
-                json!({"cmd": "cargo test -p bitrouter"}),
-                None,
-            ),
+            claude_fixture_case("@auto:cost", ClaudeFixture::Test, None),
             "economy",
             "bitrouter:deepseek/deepseek-v4-pro",
         ),
@@ -216,7 +211,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             "tool followup",
             "agent_trace/v1|tool_followup|normal",
             terminus_tool_case("@auto", None),
-            claude_tool_case("@auto:cost", "bash", json!({}), None),
+            claude_fixture_case("@auto:cost", ClaudeFixture::ToolFollowup, None),
             "economy",
             "bitrouter:deepseek/deepseek-v4-pro",
         ),
@@ -224,10 +219,9 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             "recovery",
             "agent_trace/v1|recovery|guarded",
             terminus_tool_case("@auto", Some("error: cargo test failed")),
-            claude_tool_case(
+            claude_fixture_case(
                 "@auto:cost",
-                "bash",
-                json!({}),
+                ClaudeFixture::ToolFollowup,
                 Some("error: cargo test failed"),
             ),
             "strong",
@@ -314,29 +308,52 @@ fn terminus_tool_case(model: &str, tool_result: Option<&str>) -> NativeCase {
     }
 }
 
-fn claude_tool_case(
+#[derive(Clone, Copy)]
+enum ClaudeFixture {
+    Edit,
+    Test,
+    ToolFollowup,
+}
+
+fn claude_fixture_case(
     model: &str,
-    tool_name: &str,
-    input: Value,
+    fixture: ClaudeFixture,
     tool_result: Option<&str>,
 ) -> NativeCase {
-    let mut messages = vec![
-        json!({"role": "user", "content": "continue"}),
-        json!({"role": "assistant", "content": [{
-            "type": "tool_use", "id": "tool_native", "name": tool_name, "input": input
-        }]}),
-    ];
+    let text = match fixture {
+        ClaudeFixture::Edit => include_str!("fixtures/workflow_state/claude_code/edit_tool.json"),
+        ClaudeFixture::Test => include_str!("fixtures/workflow_state/claude_code/test_tool.json"),
+        ClaudeFixture::ToolFollowup => {
+            include_str!("fixtures/workflow_state/claude_code/tool_followup.json")
+        }
+    };
+    let mut fixture: Value = serde_json::from_str(text).expect("Claude continuation fixture JSON");
+    let body = fixture
+        .get_mut("raw_body")
+        .expect("fixture raw body")
+        .as_object_mut()
+        .expect("fixture raw body object");
+    body.insert("model".to_string(), Value::String(model.to_string()));
     if let Some(result) = tool_result {
-        messages.push(json!({"role": "user", "content": [{
-            "type": "tool_result", "tool_use_id": "tool_native", "content": result
-        }]}));
+        let messages = body
+            .get_mut("messages")
+            .and_then(Value::as_array_mut)
+            .expect("fixture continuation messages");
+        let result_content = messages
+            .last_mut()
+            .and_then(|message| message.get_mut("content"))
+            .and_then(Value::as_array_mut)
+            .and_then(|parts| parts.first_mut())
+            .and_then(|part| part.get_mut("content"))
+            .expect("fixture immediate tool result");
+        *result_content = Value::String(result.to_string());
     }
     NativeCase {
         name: "Claude Code",
         source: HarnessId::ClaudeCode,
         path: "/v1/messages",
         headers: &[("anthropic-beta", "claude-code-20250219")],
-        body: json!({"model": model, "max_tokens": 64, "messages": messages}),
+        body: Value::Object(body.clone()),
     }
 }
 

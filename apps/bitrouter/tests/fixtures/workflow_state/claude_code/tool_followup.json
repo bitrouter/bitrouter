@@ -1,5 +1,5 @@
 {
-  "id": "claude-code-test-tool-001",
+  "id": "claude-code-tool-followup-001",
   "harness": "claude_code",
   "protocol": "messages",
   "headers": {
@@ -9,9 +9,9 @@
     "model": "claude-sonnet-4-6",
     "max_tokens": 512,
     "messages": [
-      {"role": "user", "content": "run the tests"},
-      {"role": "assistant", "content": [{"type": "tool_use", "id": "tool_test_1", "name": "Bash", "input": {"command": "cargo test -p bitrouter"}}]},
-      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_test_1", "content": "All tests passed."}]}
+      {"role": "user", "content": "inspect the repository"},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "tool_bash_1", "name": "Bash", "input": {"command": "pwd"}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_bash_1", "content": "/workspace"}]}
     ],
     "tools": [{
       "name": "Bash",
@@ -27,8 +27,8 @@
     }]
   },
   "expected": {
-    "state_kind": "test",
-    "baseline_fingerprint": "after_bash",
+    "state_kind": "tool_followup",
+    "baseline_fingerprint": "after_Bash",
     "confidence_min": 0.7
   }
 }

@@ -939,18 +939,18 @@ fn workflow_constraints_report_model_ladder_compatibility() {
 fn replay_summary_matches_current_experiment_fixture_set() {
     let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
     let summary = ReplayEvaluator.run(&fixtures);
-    assert_eq!(summary.total, 9, "{summary:#?}");
-    assert_eq!(summary.covered, 9, "{summary:#?}");
+    assert_eq!(summary.total, 10, "{summary:#?}");
+    assert_eq!(summary.covered, 10, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
-    assert_eq!(summary.baseline_bucket_count, 4, "{summary:#?}");
-    assert_eq!(summary.ir_bucket_count, 9, "{summary:#?}");
+    assert_eq!(summary.baseline_bucket_count, 5, "{summary:#?}");
+    assert_eq!(summary.ir_bucket_count, 10, "{summary:#?}");
     assert_eq!(summary.collision_count, 0, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 1, "{summary:#?}");
     assert_eq!(summary.baseline_midstream_count, 1, "{summary:#?}");
     assert_eq!(summary.ir_unknown_count, 0, "{summary:#?}");
-    assert_eq!(summary.model_ladder.flagship, 9, "{summary:#?}");
-    assert_eq!(summary.model_ladder.standard, 9, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_tool_safe, 9, "{summary:#?}");
+    assert_eq!(summary.model_ladder.flagship, 10, "{summary:#?}");
+    assert_eq!(summary.model_ladder.standard, 10, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_tool_safe, 10, "{summary:#?}");
     assert_eq!(summary.model_ladder.cheap_fast, 6, "{summary:#?}");
 }
 

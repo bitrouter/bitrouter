@@ -146,36 +146,57 @@ fn tool_call_state(content: &Content) -> Option<(WorkflowStateKind, &str)> {
 }
 
 fn tool_call_intent(name: &str, arguments: &str) -> WorkflowStateKind {
-    let normalized_name = name.trim().to_ascii_lowercase();
-    if matches!(normalized_name.as_str(), "apply_patch" | "edit") {
-        return WorkflowStateKind::Edit;
-    }
-    if matches!(
-        normalized_name.as_str(),
+    match name {
+        "apply_patch" | "Edit" => WorkflowStateKind::Edit,
+        "Bash" if canonical_test_command(arguments, "command") => WorkflowStateKind::Test,
         "bash" | "shell" | "terminal" | "exec_command"
-    ) && canonical_test_command(arguments)
-    {
-        return WorkflowStateKind::Test;
+            if canonical_test_command(arguments, "cmd") =>
+        {
+            WorkflowStateKind::Test
+        }
+        _ => WorkflowStateKind::ToolFollowup,
     }
-    WorkflowStateKind::ToolFollowup
 }
 
-fn canonical_test_command(arguments: &str) -> bool {
-    let normalized = arguments.to_ascii_lowercase();
-    [
-        "cargo test",
-        "pytest",
-        "python -m pytest",
-        "python3 -m pytest",
-        "go test",
-        "npm test",
-        "pnpm test",
-        "yarn test",
-        "ctest",
-        "make test",
-    ]
-    .iter()
-    .any(|command| normalized.contains(command))
+fn canonical_test_command(arguments: &str, expected_field: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let command_fields = ["command", "cmd"]
+        .into_iter()
+        .filter(|field| object.contains_key(*field))
+        .collect::<Vec<_>>();
+    if command_fields != [expected_field] {
+        return false;
+    }
+    let Some(command) = object
+        .get(expected_field)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    command
+        .split(['\n', ';'])
+        .flat_map(|line| line.split("&&"))
+        .flat_map(|segment| segment.split("||"))
+        .any(is_canonical_test_command_segment)
+}
+
+fn is_canonical_test_command_segment(segment: &str) -> bool {
+    let mut tokens = segment.split_whitespace();
+    match tokens.next() {
+        Some("cargo") | Some("go") | Some("npm") | Some("pnpm") | Some("yarn") | Some("make") => {
+            matches!(tokens.next(), Some("test"))
+        }
+        Some("python") | Some("python3") => {
+            matches!(tokens.next(), Some("-m")) && matches!(tokens.next(), Some("pytest"))
+        }
+        Some("pytest") | Some("ctest") => true,
+        _ => false,
+    }
 }
 
 fn tool_density(prompt: &Prompt) -> ToolDensity {
@@ -392,6 +413,41 @@ mod tests {
             Vec::new(),
         ));
         assert_eq!(test.state_kind, WorkflowStateKind::Test);
+    }
+
+    #[test]
+    fn generic_test_intent_requires_a_documented_command_argument_at_command_position() {
+        let claude_bash = extract(&prompt(
+            vec![
+                user("continue"),
+                assistant_call("Bash", r#"{"command":"cargo test -p bitrouter"}"#),
+            ],
+            Vec::new(),
+        ));
+        assert_eq!(claude_bash.state_kind, WorkflowStateKind::Test);
+
+        for (tool, arguments) in [
+            ("bash", r#"{"cmd":"echo hello","description":"cargo test"}"#),
+            ("Bash", r#"{"command":"echo cargo test"}"#),
+            ("Bash", r##"{"command":"# cargo test"}"##),
+            ("Bash", r#"{"command":"\"cargo test\""}"#),
+            ("Bash", r#"{"command":"cargo test","cmd":"rm -rf scratch"}"#),
+            ("Bash", r#"{"metadata":"cargo test"}"#),
+            ("Bash", "{not-json"),
+            ("Bash", "[]"),
+            ("bash", r#"{"cmd":"pwd","metadata":{"tool_name":"Edit"}}"#),
+            ("not_a_shell", r#"{"command":"cargo test"}"#),
+        ] {
+            let ir = extract(&prompt(
+                vec![user("continue"), assistant_call(tool, arguments)],
+                Vec::new(),
+            ));
+            assert_eq!(
+                ir.state_kind,
+                WorkflowStateKind::ToolFollowup,
+                "{tool} {arguments} must not select the economy test route"
+            );
+        }
     }
 
     #[test]

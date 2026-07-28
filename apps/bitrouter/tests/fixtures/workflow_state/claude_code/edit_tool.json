@@ -10,9 +10,23 @@
     "max_tokens": 512,
     "messages": [
       {"role": "user", "content": "update the file"},
-      {"role": "assistant", "content": [{"type": "tool_use", "id": "tool_edit_1", "name": "apply_patch", "input": {"patch": "*** Begin Patch\n*** End Patch"}}]}
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "tool_edit_1", "name": "Edit", "input": {"file_path": "src/main.rs", "old_string": "fn main() {}", "new_string": "fn main() { println!(\"ok\"); }", "replace_all": false}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_edit_1", "content": "File updated successfully."}]}
     ],
-    "tools": []
+    "tools": [{
+      "name": "Edit",
+      "description": "Performs exact string replacement in a file.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {"type": "string"},
+          "old_string": {"type": "string"},
+          "new_string": {"type": "string"},
+          "replace_all": {"type": "boolean"}
+        },
+        "required": ["file_path", "old_string", "new_string"]
+      }
+    }]
   },
   "expected": {
     "state_kind": "edit",
