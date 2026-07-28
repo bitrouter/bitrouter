@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use axum_test::TestServer;
+use bitrouter::policy_lock::PolicyLock;
 use bitrouter::workflow_state::decision::{POLICY_DECISION_JSONL_ENV, PolicyDecisionRecord};
 use bitrouter::workflow_state::ir::HarnessId;
 use bitrouter::workflow_state::real_trace::{RealTraceCapture, TraceCaptureOptions};
@@ -21,6 +22,9 @@ const PRIVATE_IDENTITY_HEADERS: &[&str] = &[
 
 static DECISION_RECORDER_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
+const MOCK_STRONG_MODEL: &str = "mock-strong:gpt-5.6-sol";
+const MOCK_ECONOMY_MODEL: &str = "mock-economy:deepseek/deepseek-v4-pro";
+
 struct NativeCase {
     name: &'static str,
     source: HarnessId,
@@ -36,7 +40,7 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     let temp = TempDir::new().expect("temporary decision directory");
     let decisions_path = temp.path().join("decisions.jsonl");
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
-    let (server, capture) = generalization_server(&upstream.uri()).await;
+    let (server, capture, _config_dir) = generalization_server(&upstream.uri()).await;
 
     for case in native_cases() {
         let mut request = server.post(case.path);
@@ -73,10 +77,7 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
             Some("strong"),
             "unmatched opening traces use the template's strong default: {decision:?}"
         );
-        assert_eq!(
-            decision.selected_model.as_deref(),
-            Some("openai-codex:gpt-5.6-sol")
-        );
+        assert_eq!(decision.selected_model.as_deref(), Some(MOCK_STRONG_MODEL));
         let serialized = serde_json::to_value(decision).expect("decision serializes");
         assert!(
             serialized.get("harness_id").is_none() && serialized.get("source").is_none(),
@@ -100,7 +101,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let temp = TempDir::new().expect("temporary decision directory");
     let decisions_path = temp.path().join("decisions.jsonl");
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
-    let (server, _) = generalization_server(&upstream.uri()).await;
+    let (server, _, _config_dir) = generalization_server(&upstream.uri()).await;
 
     for (path, body) in [
         (
@@ -205,7 +206,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     assert_eq!(decisions[5].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
         decisions[5].selected_model.as_deref(),
-        Some("openai-codex:gpt-5.6-sol")
+        Some(MOCK_STRONG_MODEL)
     );
 }
 
@@ -216,7 +217,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     let temp = TempDir::new().expect("temporary decision directory");
     let decisions_path = temp.path().join("decisions.jsonl");
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
-    let (server, capture) = generalization_server(&upstream.uri()).await;
+    let (server, capture, _config_dir) = generalization_server(&upstream.uri()).await;
 
     let scenarios = [
         (
@@ -225,7 +226,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Edit, None),
             "economy",
-            "bitrouter:deepseek/deepseek-v4-pro",
+            MOCK_ECONOMY_MODEL,
         ),
         (
             "test",
@@ -233,7 +234,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             terminus_action_case("@auto", "cargo test -p bitrouter"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Test, None),
             "economy",
-            "bitrouter:deepseek/deepseek-v4-pro",
+            MOCK_ECONOMY_MODEL,
         ),
         (
             "tool followup",
@@ -241,7 +242,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
             terminus_tool_case("@auto", None),
             claude_fixture_case("@auto:cost", ClaudeFixture::ToolFollowup, None),
             "economy",
-            "bitrouter:deepseek/deepseek-v4-pro",
+            MOCK_ECONOMY_MODEL,
         ),
         (
             "recovery",
@@ -253,7 +254,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
                 Some("error: cargo test failed"),
             ),
             "strong",
-            "openai-codex:gpt-5.6-sol",
+            MOCK_STRONG_MODEL,
         ),
     ];
 
@@ -464,8 +465,8 @@ fn native_cases() -> Vec<NativeCase> {
     ]
 }
 
-async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture) {
-    let (cfg, config_path) = template_config_with_mock(upstream);
+async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture, TempDir) {
+    let (cfg, config_path, config_dir) = template_config_with_mock(upstream);
     let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path))
         .await
         .expect("app assembles");
@@ -485,7 +486,7 @@ async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture)
         state,
         RouterOptions::default().with_router_wrapper(capture.router_wrapper()),
     );
-    (TestServer::new(router), capture)
+    (TestServer::new(router), capture, config_dir)
 }
 
 fn template_config() -> config::Config {
@@ -494,20 +495,59 @@ fn template_config() -> config::Config {
     config::parse_with(&yaml, |_| None).expect("auto template config parses")
 }
 
-fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf) {
+fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf, TempDir) {
     let config_path = template_root().join("bitrouter.yaml");
     let mut config = template_config();
     config.server.skip_auth = true;
     config.database.url = "sqlite::memory:".to_string();
-    for provider_id in ["openai-codex", "bitrouter"] {
-        let provider = config
-            .providers
-            .get_mut(provider_id)
-            .expect("template provider exists");
+
+    // Production provider ids can install provider-specific authentication
+    // (notably openai-codex OAuth). Keep the template assertions above tied to
+    // the real ids, but give the HTTP test credential-independent mock ids.
+    let mut strong_provider = config
+        .providers
+        .remove("openai-codex")
+        .expect("template strong provider exists");
+    let mut economy_provider = config
+        .providers
+        .remove("bitrouter")
+        .expect("template economy provider exists");
+    for provider in [&mut strong_provider, &mut economy_provider] {
         provider.api_base = upstream.to_string();
         provider.api_key = "test-key".to_string();
     }
-    (config, config_path)
+    config
+        .providers
+        .insert("mock-strong".to_string(), strong_provider);
+    config
+        .providers
+        .insert("mock-economy".to_string(), economy_provider);
+    config.inherit_defaults = false;
+    config
+        .presets
+        .get_mut("auto")
+        .expect("template auto preset exists")
+        .model = Some(MOCK_STRONG_MODEL.to_string());
+
+    let config_dir = TempDir::new().expect("temporary mock policy directory");
+    let lock_path = template_root().join("policy-lock.yaml");
+    let lock_yaml = std::fs::read_to_string(&lock_path).expect("read auto template policy lock");
+    let mut lock: PolicyLock =
+        serde_saphyr::from_str(&lock_yaml).expect("parse auto template policy lock");
+    let auto = lock
+        .policies
+        .get_mut("auto")
+        .expect("template auto policy exists");
+    auto.tiers
+        .insert("strong".to_string(), MOCK_STRONG_MODEL.to_string());
+    auto.tiers
+        .insert("economy".to_string(), MOCK_ECONOMY_MODEL.to_string());
+    let mock_lock_path = config_dir.path().join("policy-lock.yaml");
+    let mock_lock_yaml = serde_saphyr::to_string(&lock).expect("serialize mock policy lock");
+    std::fs::write(&mock_lock_path, mock_lock_yaml).expect("write mock policy lock");
+    config.policy.path = Some(mock_lock_path);
+
+    (config, config_path, config_dir)
 }
 
 fn template_root() -> PathBuf {
