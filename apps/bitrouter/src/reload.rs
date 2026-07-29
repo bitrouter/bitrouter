@@ -350,7 +350,7 @@ providers:
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
         use crate::adequacy::settlement::PendingAdequacyStore;
         use crate::policy_lock::PolicyRuntime;
-        use bitrouter_sdk::config::PolicyWriteback;
+        use bitrouter_sdk::config::PolicyRuntimeMode;
 
         let (path, dir) = temp_config_path();
         let config_yaml = |model: &str| {
@@ -394,7 +394,7 @@ policies:
         .await
         .expect("build policy runtime");
         let initial_digest = runtime
-            .status(PolicyWriteback::Locked)
+            .status(PolicyRuntimeMode::Frozen)
             .digest
             .expect("initial digest");
         let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default()).expect("executor"));
@@ -418,7 +418,7 @@ policies:
             Some("vendor:old")
         );
         assert_eq!(
-            runtime.status(PolicyWriteback::Locked).digest.as_deref(),
+            runtime.status(PolicyRuntimeMode::Frozen).digest.as_deref(),
             Some(initial_digest.as_str())
         );
         std::fs::remove_dir_all(dir).ok();

@@ -320,6 +320,27 @@ Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local p
 
 In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"type":"session","record_id":"…","agent":"…","via":"http://127.0.0.1:4356"}` (`via` is `null` when `--direct`) — followed by the normal update stream and a terminal `result` line.
 
+### `bitrouter policy`
+
+```text
+bitrouter policy init NAME --preset PRESET --economy MODEL [--strong MODEL]
+bitrouter policy check|status|show [--config PATH]
+bitrouter policy evolve [--config PATH] [--apply | --output FILE]
+bitrouter policy reload [--config PATH] [--socket PATH]
+```
+
+The BitRouter process, not the policy lock, owns adaptive behavior:
+
+```yaml
+policy:
+  path: ./policy-lock.yaml
+  mode: frozen # or adaptive
+```
+
+`frozen` is the safe default. Live routes use the static lock while BitRouter continues to record observations and rewards; database-learned routes cannot affect requests or replace the lock. Dry-run evolution and candidate export remain available. `adaptive` enables configured exploration and learned pins, and permits validated `policy evolve --apply` publication.
+
+The lock contains deterministic routes, tiers, and learning thresholds, but no activation or freeze switch. Older `policy.writeback: locked|evolve` input remains readable as `frozen|adaptive`; newly written configuration uses `policy.mode`. The old `policy lock`, `policy unlock`, and `policy evolve --freeze` surfaces have been removed.
+
 ### `bitrouter key sign`
 
 ```

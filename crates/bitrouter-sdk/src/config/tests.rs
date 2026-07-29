@@ -527,6 +527,76 @@ fn auto_router_template_resolves_auto_and_cost_variant() {
 }
 
 #[test]
+fn policy_runtime_mode_defaults_to_frozen() -> crate::Result<()> {
+    let config = parse("")?;
+    let policy = serde_json::to_value(&config.policy)
+        .map_err(|error| crate::BitrouterError::internal(error.to_string()))?;
+
+    assert_eq!(policy["mode"], "frozen");
+    assert!(policy.get("writeback").is_none());
+    Ok(())
+}
+
+#[test]
+fn policy_runtime_mode_accepts_adaptive_and_legacy_writeback_values() -> crate::Result<()> {
+    for (yaml, expected) in [
+        ("policy:\n  mode: adaptive\n", "adaptive"),
+        ("policy:\n  writeback: locked\n", "frozen"),
+        ("policy:\n  writeback: evolve\n", "adaptive"),
+    ] {
+        let config = parse(yaml)?;
+        let policy = serde_json::to_value(&config.policy)
+            .map_err(|error| crate::BitrouterError::internal(error.to_string()))?;
+        assert_eq!(policy["mode"], expected, "yaml: {yaml}");
+        assert!(policy.get("writeback").is_none(), "yaml: {yaml}");
+    }
+    Ok(())
+}
+
+#[test]
+fn policy_runtime_mode_controls_effective_adequacy_flags() -> crate::Result<()> {
+    let config = AdequacyConfig {
+        enabled: false,
+        explore_enabled: false,
+        explore_tier: Some("economy".to_string()),
+        ..AdequacyConfig::default()
+    };
+
+    let frozen = PolicyRuntimeMode::Frozen.apply_to_adequacy(&config);
+    assert!(!frozen.enabled);
+    assert!(!frozen.explore_enabled);
+
+    let adaptive = PolicyRuntimeMode::Adaptive.apply_to_adequacy(&config);
+    assert!(adaptive.enabled);
+    assert!(adaptive.explore_enabled);
+
+    let without_explore_tier =
+        PolicyRuntimeMode::Adaptive.apply_to_adequacy(&AdequacyConfig::default());
+    assert!(without_explore_tier.enabled);
+    assert!(!without_explore_tier.explore_enabled);
+    Ok(())
+}
+
+#[test]
+fn adaptive_runtime_mode_validates_effective_legacy_policy_table() {
+    let error = parse(
+        r#"
+policy:
+  mode: adaptive
+policy_table:
+  tiers:
+    economy: vendor:economy
+  default_tier: null
+  adequacy:
+    enabled: false
+"#,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("no escalation target"));
+}
+
+#[test]
 fn parses_multi_account_provider() {
     let yaml = r#"
 providers:

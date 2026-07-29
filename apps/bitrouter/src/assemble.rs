@@ -458,12 +458,22 @@ pub async fn build_app_with_path(
     // table is read by the ingress router (below) and, when online adequacy
     // learning is enabled, by the adequacy observe hook. The ledger persists its
     // escalation pins in the local db and warms its in-memory cache from it.
-    let policy_table = crate::policy_table_router::PolicyTable::from_config(&config.policy_table);
+    let mut effective_policy_table_config = config.policy_table.clone();
+    effective_policy_table_config.adequacy = config
+        .policy
+        .mode
+        .apply_to_adequacy(&config.policy_table.adequacy);
+    let policy_table =
+        crate::policy_table_router::PolicyTable::from_config(&effective_policy_table_config);
     let adequacy_ledger = match &policy_table {
-        Some(_) if config.policy_table.adequacy.enabled => {
+        Some(_) if effective_policy_table_config.adequacy.enabled => {
             let store = crate::adequacy::store::AdequacyStore::new(db.clone());
             Some(Arc::new(
-                crate::adequacy::AdequacyLedger::load(&config.policy_table.adequacy, store).await?,
+                crate::adequacy::AdequacyLedger::load(
+                    &effective_policy_table_config.adequacy,
+                    store,
+                )
+                .await?,
             ))
         }
         _ => None,

@@ -33,6 +33,8 @@ BitRouter wraps your agentic loop in a second loop. Each loop gets its own **pol
 
 ```yaml
 # bitrouter.yaml — context-aware routing as code, keyed on the loop's step
+policy:
+  mode: adaptive                  # the running process may learn and publish
 policy_table:
   tiers:                         # a tier name → the model it routes to
     cheap:    moonshotai/kimi-k2.6
@@ -45,7 +47,6 @@ policy_table:
   tool_use_tier:   flagship      # guardrail: a tool call is never
   tool_safe_tiers: [flagship]    #   stranded on a tool-blind model
   adequacy:
-    enabled: true                # a downgrade that starts failing…
     escalation_tier: flagship    #   …escalates itself back up
 ```
 

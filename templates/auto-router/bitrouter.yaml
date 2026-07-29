@@ -14,7 +14,7 @@ providers:
 inherit_defaults: true
 policy:
   path: "./policy-lock.yaml"
-  writeback: locked
+  mode: frozen
 presets:
   auto:
     model: "openai-codex:gpt-5.6-sol"

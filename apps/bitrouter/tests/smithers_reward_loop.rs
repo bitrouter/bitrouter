@@ -5,8 +5,7 @@ use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
 use bitrouter::policy_lock::{
-    PolicyDefinition, PolicyLock, deterministic_yaml, evolve_document, freeze_document,
-    semantic_digest,
+    PolicyDefinition, PolicyLock, deterministic_yaml, evolve_document, semantic_digest,
 };
 use bitrouter::workflow_state::archive::{CloudUsageRecord, WorkflowRunArtifact};
 use bitrouter::workflow_state::decision::PolicyDecisionRecord;
@@ -179,29 +178,23 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
     };
     let exploration = store.load_exploration_all().await.unwrap();
     let semantic = store.load_semantic_success_counts().await.unwrap();
-    let frozen = freeze_document(
-        evolve_document(&lock, &exploration, &semantic)
-            .unwrap()
-            .document,
-    );
-    assert_eq!(frozen.policies["smithers"].routes[target_key], "economy");
-    assert!(!frozen.policies["smithers"].routes.contains_key(other_key));
-    assert!(!frozen.policies["smithers"].adequacy.enabled);
-    assert!(!frozen.policies["smithers"].adequacy.explore_enabled);
+    let evolved = evolve_document(&lock, &exploration, &semantic)
+        .unwrap()
+        .document;
+    assert_eq!(evolved.policies["smithers"].routes[target_key], "economy");
+    assert!(!evolved.policies["smithers"].routes.contains_key(other_key));
 
-    let independently_frozen = freeze_document(
-        evolve_document(&lock, &exploration, &semantic)
-            .unwrap()
-            .document,
-    );
+    let independently_evolved = evolve_document(&lock, &exploration, &semantic)
+        .unwrap()
+        .document;
     assert_eq!(
-        deterministic_yaml(&frozen).unwrap().as_bytes(),
-        deterministic_yaml(&independently_frozen)
+        deterministic_yaml(&evolved).unwrap().as_bytes(),
+        deterministic_yaml(&independently_evolved)
             .unwrap()
             .as_bytes()
     );
     assert_eq!(
-        semantic_digest(&frozen).unwrap(),
-        semantic_digest(&independently_frozen).unwrap()
+        semantic_digest(&evolved).unwrap(),
+        semantic_digest(&independently_evolved).unwrap()
     );
 }

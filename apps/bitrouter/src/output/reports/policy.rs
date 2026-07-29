@@ -15,7 +15,7 @@ pub struct PolicyReport {
     pub candidate_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-    pub writeback: String,
+    pub mode: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policies: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -39,7 +39,7 @@ impl CliReport for PolicyReport {
         if let Some(digest) = &self.digest {
             h.line(&format!("  digest: {digest}"))?;
         }
-        h.line(&format!("  writeback: {}", self.writeback))?;
+        h.line(&format!("  mode: {}", self.mode))?;
         if !self.policies.is_empty() {
             h.line(&format!("  policies: {}", self.policies.join(", ")))?;
         }
