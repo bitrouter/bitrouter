@@ -15,11 +15,9 @@ policies:
       - strong
       - economy
     adequacy:
-      enabled: false
       escalation_tier: strong
       escalation_threshold: 1
       pin_cooldown_secs: 0
-      explore_enabled: false
       explore_tier: economy
       explore_interval: 1
       explore_threshold: 1

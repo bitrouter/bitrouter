@@ -2013,7 +2013,9 @@ policies:
         .expect("legacy bound lock loads");
     let definition = loaded.document.policies.get("legacy").unwrap();
     assert_eq!(
-        definition.as_table_config().key_strategy,
+        definition
+            .as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen)
+            .key_strategy,
         bitrouter_sdk::config::PolicyKeyStrategy::AgentTrace
     );
     assert!(

@@ -17,6 +17,12 @@ bitrouter config validate --config bitrouter.yaml
 bitrouter serve --config bitrouter.yaml
 ```
 
+The starter runs with `policy.mode: frozen`. That process mode keeps routing
+deterministic and forbids active lock replacement while telemetry and reward
+evidence continue to accumulate. Change the main config to
+`policy.mode: adaptive` for an evolution run. The lock itself never selects the
+runtime mode.
+
 ## Route inputs and safety
 
 The lock uses `key_strategy: agent_trace`. It routes the generic normal
@@ -38,9 +44,9 @@ diagnostic-only and the parser rejects that setting.
 ## Evaluation and publication
 
 Treat the starter as a baseline. Evaluate it against representative traffic,
-then review generated candidates before publication. A frozen lock is
-deterministic and can be checked or reloaded without permitting programmatic
-replacement:
+then review generated candidates before publication. A process running in
+frozen mode is deterministic and can check, export, or reload a lock without
+permitting programmatic replacement:
 
 ```bash
 bitrouter policy check --config bitrouter.yaml

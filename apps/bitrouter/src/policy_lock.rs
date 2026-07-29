@@ -12,7 +12,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 
 use anyhow::{Context, Result};
 use bitrouter_sdk::config::{
-    AdequacyConfig, Config, PolicyKeyStrategy, PolicyTableConfig, PolicyWriteback,
+    AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
     validate_policy_table_config,
 };
 use bitrouter_sdk::language_model::{ModelSelector, PipelineContext};
@@ -82,7 +82,7 @@ impl Default for PolicyDefinition {
 }
 
 impl PolicyDefinition {
-    pub fn as_table_config(&self) -> PolicyTableConfig {
+    pub fn as_table_config(&self, mode: PolicyRuntimeMode) -> PolicyTableConfig {
         PolicyTableConfig {
             key_strategy: self.key_strategy,
             tiers: self
@@ -98,7 +98,7 @@ impl PolicyDefinition {
             default_tier: self.default_tier.clone(),
             tool_use_tier: self.tool_use_tier.clone(),
             tool_safe_tiers: self.tool_safe_tiers.clone(),
-            adequacy: self.adequacy.clone(),
+            adequacy: mode.apply_to_adequacy(&self.adequacy),
         }
     }
 }
@@ -186,7 +186,7 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
     }
     for (name, policy) in &document.policies {
         validate_name(name)?;
-        let config = policy.as_table_config();
+        let config = policy.as_table_config(PolicyRuntimeMode::Frozen);
         validate_policy_table_config(&config)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("validating policy '{name}'"))?;
@@ -215,6 +215,16 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
 
 pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()> {
     validate_document(document)?;
+    for (name, policy) in &document.policies {
+        validate_policy_table_config(&policy.as_table_config(config.policy.mode))
+            .map_err(anyhow::Error::from)
+            .with_context(|| {
+                format!(
+                    "validating policy '{name}' for {:?} mode",
+                    config.policy.mode
+                )
+            })?;
+    }
     for (preset_name, preset) in &config.presets {
         let Some(policy_name) = &preset.policy else {
             continue;
@@ -304,9 +314,6 @@ pub fn evolve_document(
         let Some(policy) = document.policies.get_mut(policy_name) else {
             continue;
         };
-        if !policy.adequacy.enabled || !policy.adequacy.explore_enabled {
-            continue;
-        }
         let Some(explore_tier) = policy.adequacy.explore_tier.clone() else {
             continue;
         };
@@ -341,17 +348,6 @@ pub fn evolve_document(
 
     validate_document(&document)?;
     Ok(EvolutionResult { document, changes })
-}
-
-/// Turn an evolved candidate into a deployment artifact. Learned routes and
-/// routing-only session budgets remain active, while the adequacy learner and
-/// future exploration are disabled so holdout routing cannot mutate itself.
-pub fn freeze_document(mut document: PolicyLock) -> PolicyLock {
-    for policy in document.policies.values_mut() {
-        policy.adequacy.enabled = false;
-        policy.adequacy.explore_enabled = false;
-    }
-    document
 }
 
 /// Atomically publish a candidate without permitting it to replace the lock
@@ -405,23 +401,23 @@ fn resolved_file_location(path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-/// Bind an existing preset to a routing policy and set the optimizer's
-/// publication permission without reserializing the rest of `bitrouter.yaml`.
+/// Bind an existing preset to a routing policy and set the process mode
+/// without reserializing the rest of `bitrouter.yaml`.
 /// This keeps comments and operator formatting intact.
 pub fn edit_config_policy(
     raw: &str,
     preset: &str,
     policy: &str,
-    writeback: PolicyWriteback,
+    mode: PolicyRuntimeMode,
 ) -> Result<String> {
-    edit_config_policy_with_model(raw, preset, policy, None, writeback)
+    edit_config_policy_with_model(raw, preset, policy, None, mode)
 }
 
-/// Change only the optimizer publication mode in `bitrouter.yaml`.
-pub fn edit_config_writeback(raw: &str, writeback: PolicyWriteback) -> Result<String> {
+/// Change only the policy runtime mode in `bitrouter.yaml`.
+pub fn edit_config_mode(raw: &str, mode: PolicyRuntimeMode) -> Result<String> {
     bitrouter_sdk::config::parse(raw).context("parsing bitrouter.yaml")?;
     let mut lines = source_lines(raw);
-    set_policy_writeback(&mut lines, writeback)?;
+    set_policy_mode(&mut lines, mode)?;
     let edited = render_source_lines(lines, raw.ends_with('\n'));
     bitrouter_sdk::config::parse(&edited).context("validating edited bitrouter.yaml")?;
     Ok(edited)
@@ -434,7 +430,7 @@ pub fn edit_config_policy_with_model(
     preset: &str,
     policy: &str,
     model: Option<&str>,
-    writeback: PolicyWriteback,
+    mode: PolicyRuntimeMode,
 ) -> Result<String> {
     validate_name(preset).context("validating preset name")?;
     validate_name(policy)?;
@@ -452,7 +448,7 @@ pub fn edit_config_policy_with_model(
     }
 
     let mut lines = source_lines(raw);
-    set_policy_writeback(&mut lines, writeback)?;
+    set_policy_mode(&mut lines, mode)?;
     bind_preset(&mut lines, preset, policy, model)?;
     let edited = render_source_lines(lines, raw.ends_with('\n'));
     let checked =
@@ -480,24 +476,26 @@ fn render_source_lines(lines: Vec<String>, had_trailing_newline: bool) -> String
     rendered
 }
 
-fn set_policy_writeback(lines: &mut Vec<String>, writeback: PolicyWriteback) -> Result<()> {
-    let value = match writeback {
-        PolicyWriteback::Locked => "locked",
-        PolicyWriteback::Evolve => "evolve",
+fn set_policy_mode(lines: &mut Vec<String>, mode: PolicyRuntimeMode) -> Result<()> {
+    let value = match mode {
+        PolicyRuntimeMode::Frozen => "frozen",
+        PolicyRuntimeMode::Adaptive => "adaptive",
     };
     if let Some((start, end)) = block_range(lines, "policy", 0) {
         require_block_header(&lines[start], "policy")?;
-        if let Some(index) = child_key(lines, start + 1, end, "writeback", 2) {
-            lines[index] = format!("  writeback: {value}");
+        if let Some(index) = child_key(lines, start + 1, end, "mode", 2)
+            .or_else(|| child_key(lines, start + 1, end, "writeback", 2))
+        {
+            lines[index] = format!("  mode: {value}");
         } else {
-            lines.insert(end, format!("  writeback: {value}"));
+            lines.insert(end, format!("  mode: {value}"));
         }
     } else {
         if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
             lines.push(String::new());
         }
         lines.push("policy:".into());
-        lines.push(format!("  writeback: {value}"));
+        lines.push(format!("  mode: {value}"));
     }
     Ok(())
 }
@@ -605,7 +603,7 @@ pub struct PolicyFileUpdate {
 
 /// Create one named adaptive policy and bind it to a preset. The candidate
 /// main config and lock are fully cross-validated before either file is
-/// published. Optimizer writeback starts locked.
+/// published. The BitRouter process starts in frozen mode.
 pub async fn initialize_files(
     config_path: &Path,
     policy_name: &str,
@@ -657,9 +655,7 @@ pub async fn initialize_files(
     }
 
     let adequacy = AdequacyConfig {
-        enabled: true,
         escalation_tier: Some("strong".into()),
-        explore_enabled: true,
         explore_tier: Some("economy".into()),
         min_semantic_successes_for_lock: 1,
         ..AdequacyConfig::default()
@@ -684,7 +680,7 @@ pub async fn initialize_files(
         preset_name,
         policy_name,
         preset_model,
-        PolicyWriteback::Locked,
+        PolicyRuntimeMode::Frozen,
     )?;
     let candidate_config =
         bitrouter_sdk::config::parse(&edited_config).context("validating candidate config")?;
@@ -704,15 +700,15 @@ pub async fn initialize_files(
 }
 
 /// Read adequacy evidence and project it into a candidate policy lock. Dry-run
-/// is the default. Applying is permitted only while `policy.writeback: evolve`.
+/// is the default. Applying is permitted only in adaptive process mode.
 pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileUpdate> {
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
     let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    if apply && config.policy.writeback == PolicyWriteback::Locked {
+    if apply && config.policy.mode == PolicyRuntimeMode::Frozen {
         anyhow::bail!(
-            "policy writeback is locked; run `bitrouter policy unlock` before `policy evolve --apply`"
+            "policy runtime mode is frozen; set `policy.mode: adaptive` before `policy evolve --apply`"
         );
     }
     let loaded = load_for_config(&config, Some(config_path))
@@ -754,13 +750,12 @@ pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileU
     })
 }
 
-/// Explicit operator command for changing optimizer publication permission.
-/// `locked` governs programmatic writes to the lock, not this main-config edit.
-pub async fn set_writeback_file(config_path: &Path, writeback: PolicyWriteback) -> Result<()> {
+/// Explicit helper for changing process-owned policy mode in the main config.
+pub async fn set_mode_file(config_path: &Path, mode: PolicyRuntimeMode) -> Result<()> {
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let edited = edit_config_writeback(&raw, writeback)?;
+    let edited = edit_config_mode(&raw, mode)?;
     write_text_atomic(config_path, &raw, &edited)
 }
 
@@ -987,7 +982,7 @@ impl PolicyRuntime {
         let mut routers = BTreeMap::new();
         if let Some(loaded) = &loaded {
             for (name, definition) in &loaded.document.policies {
-                let table_config = definition.as_table_config();
+                let table_config = definition.as_table_config(config.policy.mode);
                 let table = PolicyTable::from_config(&table_config)
                     .ok_or_else(|| anyhow::anyhow!("policy '{name}' is inert"))?;
                 let ledger = if table_config.adequacy.enabled {
@@ -1026,7 +1021,7 @@ impl PolicyRuntime {
             .unwrap_or_else(PoisonError::into_inner) = prepared.0;
     }
 
-    pub fn status(&self, writeback: PolicyWriteback) -> PolicyRuntimeStatus {
+    pub fn status(&self, mode: PolicyRuntimeMode) -> PolicyRuntimeStatus {
         let snapshot = self
             .snapshot
             .read()
@@ -1036,7 +1031,7 @@ impl PolicyRuntime {
             path: snapshot.path.clone(),
             digest: snapshot.digest.clone(),
             policies: snapshot.routers.keys().cloned().collect(),
-            writeback,
+            mode,
         }
     }
 }
@@ -1067,7 +1062,7 @@ pub struct PolicyRuntimeStatus {
     pub path: Option<PathBuf>,
     pub digest: Option<String>,
     pub policies: Vec<String>,
-    pub writeback: PolicyWriteback,
+    pub mode: PolicyRuntimeMode,
 }
 
 #[cfg(test)]
@@ -1107,28 +1102,107 @@ mod tests {
     }
 
     #[test]
-    fn freezing_disables_all_learning() {
+    fn process_mode_is_authoritative_for_learning_activation() {
         let mut policy = definition();
-        policy.adequacy.enabled = true;
-        policy.adequacy.explore_enabled = true;
+        policy.adequacy.enabled = false;
+        policy.adequacy.explore_enabled = false;
         policy.adequacy.explore_tier = Some("economy".into());
+
+        let frozen = policy.as_table_config(PolicyRuntimeMode::Frozen);
+        assert!(!frozen.adequacy.enabled);
+        assert!(!frozen.adequacy.explore_enabled);
+
+        let adaptive = policy.as_table_config(PolicyRuntimeMode::Adaptive);
+        assert!(adaptive.adequacy.enabled);
+        assert!(adaptive.adequacy.explore_enabled);
+        assert_eq!(adaptive.adequacy.explore_tier.as_deref(), Some("economy"));
+    }
+
+    #[tokio::test]
+    async fn frozen_runtime_ignores_learned_db_routes_until_reloaded_as_adaptive()
+    -> anyhow::Result<()> {
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::language_model::{
+            GenerationParams, Message, PipelineRequest, Prompt, Role,
+        };
+
+        fn context() -> PipelineContext {
+            let prompt = Prompt {
+                model: "vendor:strong".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages: vec![Message::text(Role::User, "solve this")],
+                tools: Vec::new(),
+                params: GenerationParams::default(),
+                response_format: None,
+                tool_choice: None,
+                stream: false,
+            };
+            PipelineContext::new(PipelineRequest::new(
+                "vendor:strong",
+                CallerContext::local(),
+                prompt,
+            ))
+        }
+
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"policy:
+  mode: frozen
+presets:
+  coding:
+    model: vendor:strong
+    policy: coding
+"#,
+        )
+        .await?;
+        let mut policy = definition();
+        policy.adequacy.escalation_tier = Some("strong".into());
+        policy.adequacy.explore_tier = Some("economy".into());
+        policy.adequacy.explore_opening = true;
+        policy.adequacy.min_semantic_successes_for_lock = 1;
         let lock = PolicyLock {
             lockfile_version: 1,
             policies: BTreeMap::from([("coding".into(), policy)]),
         };
+        write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
 
-        let frozen = freeze_document(lock);
+        let mut config = bitrouter_sdk::config::load(&config_path).await?;
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = AdequacyStore::new(db.clone());
+        let ledger_key = "coding\0agent_trace/v1|opening|normal";
+        store.upsert_exploration(ledger_key, 3, 3, true).await?;
+        store
+            .record_semantic_success(ledger_key, "terminal-bench/task-a")
+            .await?;
 
-        assert!(!frozen.policies["coding"].adequacy.enabled);
-        assert!(!frozen.policies["coding"].adequacy.explore_enabled);
-        assert_eq!(
-            frozen.policies["coding"].adequacy.explore_tier.as_deref(),
-            Some("economy")
-        );
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            Arc::new(PendingAdequacyStore::default()),
+            None,
+        )
+        .await?;
+        let mut frozen = context();
+        runtime.select("coding", &mut frozen)?;
+        assert_eq!(frozen.model(), "vendor:strong");
+
+        config.policy.mode = PolicyRuntimeMode::Adaptive;
+        runtime
+            .reload_for_config(&config, Some(&config_path))
+            .await?;
+        let mut adaptive = context();
+        runtime.select("coding", &mut adaptive)?;
+        assert_eq!(adaptive.model(), "vendor:economy");
+        Ok(())
     }
 
     #[test]
-    fn legacy_workflow_state_locks_deserialize_as_agent_trace_and_freeze_canonically() {
+    fn legacy_workflow_state_locks_deserialize_as_agent_trace_canonically() {
         let lock: PolicyLock = serde_saphyr::from_str(
             r#"
 lockfileVersion: 1
@@ -1147,8 +1221,7 @@ policies:
             PolicyKeyStrategy::AgentTrace
         );
 
-        let frozen = freeze_document(lock);
-        let rendered = deterministic_yaml(&frozen).unwrap();
+        let rendered = deterministic_yaml(&lock).unwrap();
         assert!(rendered.contains("key_strategy: agent_trace"));
         assert!(!rendered.contains("key_strategy: workflow_state"));
     }
@@ -1158,16 +1231,16 @@ policies:
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
-        let config = bitrouter_sdk::config::parse(
-            &std::fs::read_to_string(template_dir.join("bitrouter.yaml")).unwrap(),
-        )
-        .unwrap();
-        let lock: PolicyLock = serde_saphyr::from_str(
-            &std::fs::read_to_string(template_dir.join("policy-lock.yaml")).unwrap(),
-        )
-        .unwrap();
+        let config_raw = std::fs::read_to_string(template_dir.join("bitrouter.yaml")).unwrap();
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml")).unwrap();
+        let config = bitrouter_sdk::config::parse(&config_raw).unwrap();
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw).unwrap();
 
         validate_for_config(&config, &lock).unwrap();
+        assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
+        assert!(!config_raw.contains("writeback:"));
+        assert!(!lock_raw.contains("enabled:"));
+        assert!(!lock_raw.contains("explore_enabled:"));
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
         assert_eq!(policy.routes["agent_trace/v1|edit|normal"], "economy");
@@ -1336,18 +1409,18 @@ presets:
 "#;
 
         let edited =
-            edit_config_policy(raw, "coding", "terminal-bench", PolicyWriteback::Locked).unwrap();
+            edit_config_policy(raw, "coding", "terminal-bench", PolicyRuntimeMode::Frozen).unwrap();
 
         assert!(edited.contains("# team routing"));
         assert!(edited.contains("# keep this operator note"));
         assert!(edited.contains("    policy: terminal-bench"));
-        assert!(edited.contains("policy:\n  writeback: locked"));
+        assert!(edited.contains("policy:\n  mode: frozen"));
         let parsed = bitrouter_sdk::config::parse(&edited).unwrap();
         assert_eq!(
             parsed.presets["coding"].policy.as_deref(),
             Some("terminal-bench")
         );
-        assert_eq!(parsed.policy.writeback, PolicyWriteback::Locked);
+        assert_eq!(parsed.policy.mode, PolicyRuntimeMode::Frozen);
     }
 
     #[test]
@@ -1359,7 +1432,7 @@ presets:
 "#;
 
         let error =
-            edit_config_policy(raw, "coding", "experiment", PolicyWriteback::Locked).unwrap_err();
+            edit_config_policy(raw, "coding", "experiment", PolicyRuntimeMode::Frozen).unwrap_err();
 
         assert!(
             error
@@ -1373,8 +1446,10 @@ presets:
         use crate::adequacy::store::PersistedExplorationState;
 
         let mut policy = definition();
-        policy.adequacy.enabled = true;
-        policy.adequacy.explore_enabled = true;
+        // Artifact booleans are legacy input only. Candidate generation uses
+        // accumulated evidence and configured tier/threshold parameters.
+        policy.adequacy.enabled = false;
+        policy.adequacy.explore_enabled = false;
         policy.adequacy.explore_tier = Some("economy".into());
         policy.adequacy.min_semantic_successes_for_lock = 2;
         let lock = PolicyLock {
@@ -1501,7 +1576,7 @@ presets:
     }
 
     #[tokio::test]
-    async fn initialize_writes_a_locked_policy_and_preserves_the_config() {
+    async fn initialize_writes_a_frozen_policy_and_preserves_the_config() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -1529,7 +1604,7 @@ presets:
         let config_raw = tokio::fs::read_to_string(&config_path).await.unwrap();
         assert!(config_raw.contains("# owned by the routing team"));
         let config = bitrouter_sdk::config::parse(&config_raw).unwrap();
-        assert_eq!(config.policy.writeback, PolicyWriteback::Locked);
+        assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
         assert_eq!(
             config.presets["coding"].policy.as_deref(),
             Some("terminal-bench")
@@ -1543,7 +1618,7 @@ presets:
     }
 
     #[tokio::test]
-    async fn locked_config_refuses_evolution_apply() {
+    async fn frozen_config_refuses_evolution_apply() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -1569,12 +1644,12 @@ presets:
 
         let error = evolve_files(&config_path, true).await.unwrap_err();
 
-        assert!(error.to_string().contains("writeback is locked"));
+        assert!(error.to_string().contains("runtime mode is frozen"));
         assert!(!dir.path().join("bitrouter.db").exists());
     }
 
     #[tokio::test]
-    async fn locked_config_can_export_without_mutating_active_files() {
+    async fn frozen_config_can_export_without_mutating_active_files() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -1608,8 +1683,7 @@ presets:
         let candidate_path = dir.path().join("candidate.yaml");
 
         let update = evolve_files(&config_path, false).await.unwrap();
-        let frozen = freeze_document(update.document);
-        export_candidate_file(&update.path, &candidate_path, &frozen).unwrap();
+        export_candidate_file(&update.path, &candidate_path, &update.document).unwrap();
 
         assert_eq!(tokio::fs::read(&config_path).await.unwrap(), before_config);
         assert_eq!(
@@ -1617,16 +1691,7 @@ presets:
             before_lock
         );
         let candidate = load(&candidate_path).await.unwrap();
-        assert!(
-            !candidate.document.policies["terminal-bench"]
-                .adequacy
-                .enabled
-        );
-        assert!(
-            !candidate.document.policies["terminal-bench"]
-                .adequacy
-                .explore_enabled
-        );
+        assert_eq!(candidate.document, update.document);
     }
 
     #[tokio::test]
@@ -1740,7 +1805,7 @@ presets:
         )
         .await
         .unwrap();
-        set_writeback_file(&config_path, PolicyWriteback::Evolve)
+        set_mode_file(&config_path, PolicyRuntimeMode::Adaptive)
             .await
             .unwrap();
         let db_path = dir.path().join("bitrouter.db");

@@ -96,7 +96,7 @@
       "$ref": "#/$defs/PolicyConfig",
       "default": {
         "path": null,
-        "writeback": "locked"
+        "mode": "frozen"
       }
     },
     "policy_table": {
@@ -110,7 +110,6 @@
         "tool_use_tier": null,
         "tool_safe_tiers": [],
         "adequacy": {
-          "enabled": false,
           "escalation_tier": null,
           "escalation_threshold": 1,
           "pin_cooldown_secs": 1800,
@@ -118,7 +117,6 @@
           "reliability_consecutive_failures": 2,
           "reliability_error_rate_percent": 35,
           "reliability_cooldown_secs": 300,
-          "explore_enabled": false,
           "explore_tier": null,
           "explore_interval": 5,
           "explore_threshold": 3,
@@ -1609,25 +1607,25 @@
           ],
           "default": null
         },
-        "writeback": {
-          "description": "Whether the optimizer may publish an evolved policy lock. Loading an\noperator or Git-authored update is allowed in both modes.",
-          "$ref": "#/$defs/PolicyWriteback",
-          "default": "locked"
+        "mode": {
+          "description": "Runtime authority for adaptive routing and active policy publication.\n`writeback` is accepted as a migration alias for older configuration.",
+          "$ref": "#/$defs/PolicyRuntimeMode",
+          "default": "frozen"
         }
       }
     },
-    "PolicyWriteback": {
-      "description": "Permission for programmatic policy-lock publication.",
+    "PolicyRuntimeMode": {
+      "description": "Process-owned routing-policy behavior.",
       "oneOf": [
         {
-          "description": "Observe and propose, but never write `policy-lock.yaml`.",
+          "description": "Route from the static lock while continuing to record evidence. Learned\ndatabase state cannot affect live routing or replace the active lock.",
           "type": "string",
-          "const": "locked"
+          "const": "frozen"
         },
         {
-          "description": "Permit validated evolution output to atomically replace the lock file.",
+          "description": "Permit adequacy state to affect routing and validated evolution output\nto atomically replace the active lock.",
           "type": "string",
-          "const": "evolve"
+          "const": "adaptive"
         }
       ]
     },
@@ -1684,7 +1682,6 @@
           "description": "Online adequacy learning. When enabled, the daemon observes each\ndowngraded request's outcome and, after repeated failures, escalates the\noffending fingerprint to a more capable tier — so an operator's downgrade\nthat proves inadequate is self-correcting. Off by default.",
           "$ref": "#/$defs/AdequacyConfig",
           "default": {
-            "enabled": false,
             "escalation_tier": null,
             "escalation_threshold": 1,
             "pin_cooldown_secs": 1800,
@@ -1692,7 +1689,6 @@
             "reliability_consecutive_failures": 2,
             "reliability_error_rate_percent": 35,
             "reliability_cooldown_secs": 300,
-            "explore_enabled": false,
             "explore_tier": null,
             "explore_interval": 5,
             "explore_threshold": 3,
@@ -1711,14 +1707,9 @@
       ]
     },
     "AdequacyConfig": {
-      "description": "Online adequacy-learning settings — the `policy_table.adequacy` block.\n\nWhen [`enabled`](Self::enabled), the daemon watches every request a downgrade\nproduced and counts the ones that hard-fail (an upstream error or a stream\nerror). Once a fingerprint accumulates\n[`escalation_threshold`](Self::escalation_threshold) such failures it is\n*pinned*: subsequent requests with that fingerprint route to\n[`escalation_tier`](Self::escalation_tier) instead of the cheap tier the\nstatic table would pick. A pin decays after\n[`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried\nlater. This is a safety net layered on the static table — it never downgrades\non its own, only escalates a downgrade that is failing.",
+      "description": "Online adequacy-learning settings — the `policy_table.adequacy` block.\n\nIn adaptive process mode, the daemon watches every request a downgrade\nproduced and counts the ones that hard-fail (an upstream error or a stream\nerror). Once a fingerprint accumulates\n[`escalation_threshold`](Self::escalation_threshold) such failures it is\n*pinned*: subsequent requests with that fingerprint route to\n[`escalation_tier`](Self::escalation_tier) instead of the cheap tier the\nstatic table would pick. A pin decays after\n[`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried\nlater. This is a safety net layered on the static table — it never downgrades\non its own, only escalates a downgrade that is failing.",
       "type": "object",
       "properties": {
-        "enabled": {
-          "description": "Whether online adequacy learning is active. Off by default, so a\n`policy_table:` with no `adequacy:` block behaves exactly as the static\ntable.",
-          "type": "boolean",
-          "default": false
-        },
         "escalation_tier": {
           "description": "Tier a pinned fingerprint escalates to. When unset, falls back to\n[`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when\n[`enabled`](Self::enabled).",
           "type": [
@@ -1768,11 +1759,6 @@
           "format": "uint64",
           "minimum": 0,
           "default": 300
-        },
-        "explore_enabled": {
-          "description": "Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)\nis on, the daemon periodically trials [`explore_tier`](Self::explore_tier)\non fingerprints the static table routes to the escalation tier (i.e. ones\nthe operator did *not* downgrade), and locks a fingerprint to the cheap\ntier once it survives [`explore_threshold`](Self::explore_threshold)\ntrials — so safe downgrades are found automatically rather than only\nhand-configured. A trial that fails escalates and stops (the same pin as\nthe safety path). Off by default; requires `enabled`. This is the\n*aggressive* half — it routes traffic the operator left at the capable\ntier to a cheaper one on a fraction of requests.",
-          "type": "boolean",
-          "default": false
         },
         "explore_tier": {
           "description": "The cheap tier exploration trials toward. Must resolve to a defined tier\nwhen [`explore_enabled`](Self::explore_enabled). Required to explore.",

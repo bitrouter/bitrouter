@@ -185,22 +185,38 @@ pub struct PolicyConfig {
     /// directory containing the parsed `bitrouter.yaml`. `None` means the
     /// sibling `policy-lock.yaml` default.
     pub path: Option<PathBuf>,
-    /// Whether the optimizer may publish an evolved policy lock. Loading an
-    /// operator or Git-authored update is allowed in both modes.
-    pub writeback: PolicyWriteback,
+    /// Runtime authority for adaptive routing and active policy publication.
+    /// `writeback` is accepted as a migration alias for older configuration.
+    #[serde(alias = "writeback")]
+    pub mode: PolicyRuntimeMode,
 }
 
-/// Permission for programmatic policy-lock publication.
+/// Process-owned routing-policy behavior.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
-pub enum PolicyWriteback {
-    /// Observe and propose, but never write `policy-lock.yaml`.
+pub enum PolicyRuntimeMode {
+    /// Route from the static lock while continuing to record evidence. Learned
+    /// database state cannot affect live routing or replace the active lock.
     #[default]
-    Locked,
-    /// Permit validated evolution output to atomically replace the lock file.
-    Evolve,
+    #[serde(alias = "locked")]
+    Frozen,
+    /// Permit adequacy state to affect routing and validated evolution output
+    /// to atomically replace the active lock.
+    #[serde(alias = "evolve")]
+    Adaptive,
+}
+
+impl PolicyRuntimeMode {
+    /// Derive the effective learner switches from process mode. The lock keeps
+    /// thresholds and tier names, but cannot activate or freeze the learner.
+    pub fn apply_to_adequacy(self, configured: &AdequacyConfig) -> AdequacyConfig {
+        let mut effective = configured.clone();
+        effective.enabled = self == Self::Adaptive;
+        effective.explore_enabled = effective.enabled && effective.explore_tier.is_some();
+        effective
+    }
 }
 
 /// Default base URL for the public registry distribution artifacts — the raw
@@ -344,7 +360,7 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.
 ///
-/// When [`enabled`](Self::enabled), the daemon watches every request a downgrade
+/// In adaptive process mode, the daemon watches every request a downgrade
 /// produced and counts the ones that hard-fail (an upstream error or a stream
 /// error). Once a fingerprint accumulates
 /// [`escalation_threshold`](Self::escalation_threshold) such failures it is
@@ -357,9 +373,10 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AdequacyConfig {
-    /// Whether online adequacy learning is active. Off by default, so a
-    /// `policy_table:` with no `adequacy:` block behaves exactly as the static
-    /// table.
+    /// Legacy input compatibility only. Effective activation is derived from
+    /// [`PolicyConfig::mode`] and this field is omitted from new output.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub enabled: bool,
     /// Tier a pinned fingerprint escalates to. When unset, falls back to
     /// [`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when
@@ -386,16 +403,19 @@ pub struct AdequacyConfig {
     /// Seconds an open provider circuit waits before admitting exactly one
     /// half-open probe. Default `300`.
     pub reliability_cooldown_secs: u64,
-    /// Aggressive downgrade *discovery*: when [`explore_enabled`](Self::explore_enabled)
-    /// is on, the daemon periodically trials [`explore_tier`](Self::explore_tier)
+    /// Aggressive downgrade *discovery*: in adaptive process mode, the daemon
+    /// periodically trials [`explore_tier`](Self::explore_tier)
     /// on fingerprints the static table routes to the escalation tier (i.e. ones
     /// the operator did *not* downgrade), and locks a fingerprint to the cheap
     /// tier once it survives [`explore_threshold`](Self::explore_threshold)
     /// trials — so safe downgrades are found automatically rather than only
     /// hand-configured. A trial that fails escalates and stops (the same pin as
-    /// the safety path). Off by default; requires `enabled`. This is the
-    /// *aggressive* half — it routes traffic the operator left at the capable
-    /// tier to a cheaper one on a fraction of requests.
+    /// the safety path). This is the *aggressive* half — it routes traffic the
+    /// operator left at the capable tier to a cheaper one on a fraction of
+    /// requests. Legacy input is accepted, but process mode is authoritative
+    /// and this field is omitted from new output.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
     pub explore_enabled: bool,
     /// The cheap tier exploration trials toward. Must resolve to a defined tier
     /// when [`explore_enabled`](Self::explore_enabled). Required to explore.
@@ -1330,7 +1350,13 @@ where
 /// a configuration error rather than a silent fall-through to the caller's
 /// model. A section with no tiers is inert and validates trivially.
 fn validate_policy_table(config: &Config) -> Result<()> {
-    validate_policy_table_config(&config.policy_table)
+    // Legacy activation fields remain accepted as input during migration, so
+    // reject contradictory declarations before process mode overrides them.
+    // Then validate the configuration BitRouter will actually run.
+    validate_policy_table_config(&config.policy_table)?;
+    let mut effective = config.policy_table.clone();
+    effective.adequacy = config.policy.mode.apply_to_adequacy(&effective.adequacy);
+    validate_policy_table_config(&effective)
 }
 
 /// Validate one policy-table definition independently of the top-level config.

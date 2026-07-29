@@ -857,7 +857,7 @@ enum PolicyAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Show policy path, digest, writeback mode, and preset bindings.
+    /// Show policy path, digest, runtime mode, and preset bindings.
     Status {
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -883,19 +883,6 @@ enum PolicyAction {
         /// Export the candidate without changing the active policy lock.
         #[arg(long, value_name = "FILE", conflicts_with = "apply")]
         output: Option<PathBuf>,
-        /// Disable future exploration in the exported candidate.
-        #[arg(long, requires = "output")]
-        freeze: bool,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Forbid optimizer writes to `policy-lock.yaml`.
-    Lock {
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Permit `policy evolve --apply` to publish `policy-lock.yaml`.
-    Unlock {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -2930,7 +2917,6 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         PolicyAction::Evolve {
             apply,
             output: candidate_output,
-            freeze,
             config,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -2947,44 +2933,16 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let mut report =
                 routing_policy_report(config_path, action, published, update.changes, None).await?;
             if let Some(candidate_path) = candidate_output {
-                let document = if freeze {
-                    bitrouter::policy_lock::freeze_document(update.document)
-                } else {
-                    update.document
-                };
                 report.digest = Some(bitrouter::policy_lock::export_candidate_file(
                     &update.path,
                     &candidate_path,
-                    &document,
+                    &update.document,
                 )?);
                 report.candidate_path = Some(candidate_path.display().to_string());
             } else {
                 report.digest = Some(update.digest);
             }
             output.emit(&report)?;
-        }
-        PolicyAction::Lock { config } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            bitrouter::policy_lock::set_writeback_file(
-                config_path,
-                config::PolicyWriteback::Locked,
-            )
-            .await?;
-            output
-                .emit(&routing_policy_report(config_path, "lock", true, Vec::new(), None).await?)?;
-        }
-        PolicyAction::Unlock { config } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            bitrouter::policy_lock::set_writeback_file(
-                config_path,
-                config::PolicyWriteback::Evolve,
-            )
-            .await?;
-            output.emit(
-                &routing_policy_report(config_path, "unlock", true, Vec::new(), None).await?,
-            )?;
         }
     }
     Ok(())
@@ -3048,9 +3006,9 @@ async fn routing_policy_report(
         path: path.map(|path| path.display().to_string()),
         candidate_path: None,
         digest: loaded.as_ref().map(|lock| lock.digest.clone()),
-        writeback: match cfg.policy.writeback {
-            config::PolicyWriteback::Locked => "locked",
-            config::PolicyWriteback::Evolve => "evolve",
+        mode: match cfg.policy.mode {
+            config::PolicyRuntimeMode::Frozen => "frozen",
+            config::PolicyRuntimeMode::Adaptive => "adaptive",
         }
         .to_string(),
         policies,
@@ -3856,22 +3814,22 @@ mod tests {
             "evolve",
             "--output",
             "candidate.yaml",
-            "--freeze",
         ])
-        .expect("parse frozen export");
+        .expect("parse candidate export");
         assert!(matches!(
             export.command,
             Some(Command::Policy {
                 action: PolicyAction::Evolve {
                     apply: false,
                     output: Some(path),
-                    freeze: true,
                     ..
                 }
             }) if path == Path::new("candidate.yaml")
         ));
 
         assert!(Cli::try_parse_from(["bitrouter", "policy", "evolve", "--freeze"]).is_err());
+        assert!(Cli::try_parse_from(["bitrouter", "policy", "lock"]).is_err());
+        assert!(Cli::try_parse_from(["bitrouter", "policy", "unlock"]).is_err());
         assert!(
             Cli::try_parse_from([
                 "bitrouter",
