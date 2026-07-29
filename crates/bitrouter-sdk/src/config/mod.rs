@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HttpTimeouts;
@@ -243,12 +243,11 @@ impl Default for RegistryConfig {
 /// Config-driven per-request model routing — the top-level `policy_table:` block
 /// in `bitrouter.yaml`.
 ///
-/// An ingress transform fingerprints each request by its agent-loop step (the
-/// most recent tool the model called, or the opening turn) and looks the
-/// fingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;
-/// [`tiers`](Self::tiers) then maps that tier to the model id the request is
-/// rewritten to. A hard tool-use guardrail keeps tool-carrying requests on a
-/// tier known to handle tools.
+/// An ingress transform projects each request into a source-independent agent
+/// trace key and looks that key up in [`fingerprints`](Self::fingerprints) to
+/// choose a *tier*; [`tiers`](Self::tiers) then maps that tier to the model id
+/// the request is rewritten to. A hard tool-use guardrail keeps tool-carrying
+/// requests on a tier known to handle tools.
 ///
 /// The section is active only when [`tiers`](Self::tiers) is non-empty — an
 /// absent or tier-less block leaves routing untouched. The whole spec is static
@@ -257,10 +256,8 @@ impl Default for RegistryConfig {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PolicyTableConfig {
-    /// Which request key the policy table uses for `fingerprints`. The default
-    /// preserves the original coarse key (`opening`, `after_<tool>`,
-    /// `midstream`). `workflow_state` switches lookup and adequacy learning to
-    /// the cross-harness Workflow State IR routing key.
+    /// The request-key family used for `fingerprints`. Active policy routing
+    /// uses only the canonical source-independent `agent_trace` projection.
     pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
@@ -268,10 +265,8 @@ pub struct PolicyTableConfig {
     /// `provider:model` id (a Strategy-1 direct route). The section is inert
     /// while this map is empty.
     pub tiers: HashMap<String, String>,
-    /// Request fingerprint → tier name. A fingerprint is the agent-loop step:
-    /// `opening` (no model turn yet), `after_<tool>` (the model last called
-    /// `<tool>`), or `midstream` (a model turn with no tool call). A fingerprint
-    /// absent from this map falls back to [`default_tier`](Self::default_tier).
+    /// Canonical agent trace projection key → tier name. A key absent from this
+    /// map falls back to [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
     /// Tier applied to any fingerprint not listed in
     /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint
@@ -294,17 +289,57 @@ pub struct PolicyTableConfig {
 }
 
 /// Request-key family used by `policy_table.fingerprints`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PolicyKeyStrategy {
-    /// The original coarse prompt fingerprint: `opening`, `midstream`, or
-    /// `after_<tool>`.
+    /// The canonical source-independent agent trace projection key.
     #[default]
+    AgentTrace,
+    /// Deprecated compatibility variant. Config parsing rejects this strategy;
+    /// use [`AgentTrace`](Self::AgentTrace) and canonical projection routes.
     LegacyFingerprint,
-    /// The cross-harness Workflow State IR routing key.
+    /// Deprecated Rust API spelling retained for downstream source compatibility.
+    /// It serializes as the canonical `agent_trace` strategy.
     WorkflowState,
+}
+
+impl Serialize for PolicyKeyStrategy {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str("agent_trace")
+    }
+}
+
+impl<'de> Deserialize<'de> for PolicyKeyStrategy {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "agent_trace" | "workflow_state" => Ok(Self::AgentTrace),
+            "legacy_fingerprint" => Ok(Self::LegacyFingerprint),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["agent_trace", "workflow_state", "legacy_fingerprint"],
+            )),
+        }
+    }
+}
+
+impl schemars::JsonSchema for PolicyKeyStrategy {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("PolicyKeyStrategy")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Active policy routing uses the canonical source-independent agent trace projection key.",
+            "enum": ["agent_trace"],
+        })
+    }
 }
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.
@@ -371,6 +406,15 @@ pub struct AdequacyConfig {
     /// Consecutive adequate trials before a fingerprint is locked to the cheap
     /// tier (the learned downgrade). Default `3`.
     pub explore_threshold: u32,
+    /// Deprecated compatibility field. Session identity is diagnostic-only and
+    /// cannot participate in policy routing; explicit YAML configuration is
+    /// rejected rather than accepted as a no-op.
+    #[serde(
+        skip_serializing_if = "session_downgrade_budget_is_zero",
+        deserialize_with = "reject_session_downgrade_budget"
+    )]
+    #[schemars(skip)]
+    pub max_downgraded_requests_per_session: u32,
     /// Distinct benchmark tasks that must finish successfully after using a
     /// cheap replacement before a request-level lock becomes active. `0` keeps
     /// the legacy request-only behavior. Default `0`.
@@ -384,6 +428,19 @@ pub struct AdequacyConfig {
     /// [`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)
     /// by taking the stricter threshold. Default `1`.
     pub min_semantic_successes_for_opening: u32,
+}
+
+fn reject_session_downgrade_budget<'de, D>(_: D) -> std::result::Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Err(serde::de::Error::custom(
+        "policy_table.adequacy.max_downgraded_requests_per_session is no longer supported: session identity is diagnostic-only; remove this setting",
+    ))
+}
+
+fn session_downgrade_budget_is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl Default for AdequacyConfig {
@@ -401,6 +458,7 @@ impl Default for AdequacyConfig {
             explore_tier: None,
             explore_interval: 5,
             explore_threshold: 3,
+            max_downgraded_requests_per_session: 0,
             min_semantic_successes_for_lock: 0,
             explore_opening: false,
             min_semantic_successes_for_opening: 1,
@@ -1279,6 +1337,12 @@ fn validate_policy_table(config: &Config) -> Result<()> {
 /// Policy lock loading reuses this so inline legacy tables and named lock
 /// policies enforce identical tier/guardrail/adequacy invariants.
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
+    if policy.key_strategy == PolicyKeyStrategy::LegacyFingerprint {
+        return Err(BitrouterError::bad_request(
+            "policy_table.key_strategy: 'legacy_fingerprint' is no longer supported; use 'agent_trace' with agent_trace/v1 projection routes"
+                .to_string(),
+        ));
+    }
     if policy.tiers.is_empty() {
         return Ok(());
     }

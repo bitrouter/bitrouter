@@ -11,32 +11,23 @@ use bitrouter::adequacy::store::AdequacyStore;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
+use bitrouter::policy_lock;
 use bitrouter::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
 };
 use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::{
-    AgentRole, ContextTransition, HarnessId, ProtocolKind, SessionConfidence, WorkflowIdentity,
-};
+use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter_sdk::config;
 use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
-use sha2::{Digest, Sha256};
-
-fn workflow_fingerprint(run: &str, trial: &str, parent: &str, epoch: u32) -> String {
-    let material = format!("terminus_2|{run}|{trial}|{parent}|{epoch}");
-    format!(
-        "sha256:{}",
-        hex::encode(Sha256::digest(material.as_bytes()))
-    )
-}
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -319,7 +310,7 @@ fn benchmark_integrity_rounds_all_equal_rate_buckets_after_combining_tokens() {
 
 fn benchmark_trace(request_id: &str) -> CapturedIngressTrace {
     CapturedIngressTrace {
-        id: format!("trace-{request_id}"),
+        id: request_id.to_string(),
         captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
@@ -342,7 +333,7 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         request_id: Some(request_id.to_string()),
         input_model: "inbound".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "terminus_2|chat_completions|opening".to_string(),
+        request_key: "agent_trace/v1|opening|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "opening".to_string(),
         workflow_state: "opening".to_string(),
@@ -372,6 +363,329 @@ fn benchmark_integrity_rejects_unknown_charge_evidence() {
         .expect_err("unknown charge must fail benchmark integrity");
 
     assert!(error.to_string().contains("charge is not computed"));
+}
+
+#[test]
+fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers() {
+    let mut terminus = benchmark_trace("req-reward-terminus");
+    terminus.harness = HarnessId::Terminus2;
+    let generic = benchmark_trace("req-reward-generic");
+    let terminus_usage = computed_usage("req-reward-terminus", "openai", "gpt-test", 10, 2, 30);
+    let generic_usage = computed_usage("req-reward-generic", "openai", "gpt-test", 10, 2, 30);
+    let terminus_decision = benchmark_decision("req-reward-terminus");
+    let generic_decision = benchmark_decision("req-reward-generic");
+
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[terminus, generic],
+        &[terminus_usage, generic_usage],
+        &[],
+        &[terminus_decision, generic_decision],
+    )
+    .expect("reward admission must not require Terminus diagnostic identity headers");
+}
+
+#[tokio::test]
+async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger_without_private_headers()
+ {
+    let canonical_key = "agent_trace/v1|tool_followup|normal";
+    let ledger_key = format!("coding\0{canonical_key}");
+    let mut generic = benchmark_trace("req-reward-generic-merge");
+    generic.headers.insert(
+        "x-request-id".to_string(),
+        "generic-public-header-b".to_string(),
+    );
+    generic.headers.insert(
+        "x-bitrouter-request-id".to_string(),
+        "generic-private-header-c".to_string(),
+    );
+    let mut terminus = benchmark_trace("req-reward-terminus-merge");
+    terminus.harness = HarnessId::Terminus2;
+    terminus.headers.insert(
+        "x-request-id".to_string(),
+        "terminus-public-header-b".to_string(),
+    );
+    terminus.headers.insert(
+        "x-bitrouter-request-id".to_string(),
+        "terminus-private-header-c".to_string(),
+    );
+
+    let mut generic_decision = benchmark_decision("req-reward-generic-merge");
+    generic_decision.key_strategy = "agent_trace".to_string();
+    generic_decision.request_key = canonical_key.to_string();
+    generic_decision.ledger_key = Some(ledger_key.clone());
+    generic_decision.selected_tier = Some("cheap".to_string());
+    generic_decision.selected_model = Some("vendor/cheap".to_string());
+    let mut terminus_decision = generic_decision.clone();
+    terminus_decision.request_id = Some("req-reward-terminus-merge".to_string());
+
+    let outcomes = vec![
+        BenchmarkOutcomeRecord::new("episode-generic", "terminal-bench/regex-log", 1.0)
+            .with_request_id("req-reward-generic-merge")
+            .with_trial_name("episode-generic"),
+        BenchmarkOutcomeRecord::new("episode-terminus", "terminal-bench/regex-log", 1.0)
+            .with_request_id("req-reward-terminus-merge")
+            .with_trial_name("episode-terminus"),
+    ];
+    let mut generic_usage =
+        computed_usage("req-reward-generic-merge", "openai", "gpt-test", 10, 2, 30);
+    generic_usage.status = Some("completed".to_string());
+    let mut terminus_usage =
+        computed_usage("req-reward-terminus-merge", "openai", "gpt-test", 10, 2, 30);
+    terminus_usage.status = Some("completed".to_string());
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[generic.clone(), terminus.clone()],
+        &[generic_usage.clone(), terminus_usage.clone()],
+        &outcomes,
+        &[generic_decision.clone(), terminus_decision.clone()],
+    )
+    .expect("source-neutral reward admission without private workflow headers");
+    let artifact = WorkflowRunArtifact::build_with_decisions(
+        "equivalent-adapters",
+        &[generic.clone(), terminus.clone()],
+        &[generic_usage.clone(), terminus_usage.clone()],
+        &outcomes,
+        &[generic_decision.clone(), terminus_decision.clone()],
+    )
+    .expect("source-neutral reward candidate construction");
+
+    assert_eq!(artifact.semantic_policy_transition_candidates.len(), 2);
+    assert!(
+        artifact
+            .semantic_policy_transition_candidates
+            .iter()
+            .all(|candidate| candidate.ledger_key.as_deref() == Some(ledger_key.as_str()))
+    );
+
+    assert!(
+        generic
+            .headers
+            .keys()
+            .chain(terminus.headers.keys())
+            .all(|header| !header.starts_with("x-bitrouter-workflow-")
+                && !header.starts_with("x-bitrouter-parent-session")
+                && !header.starts_with("x-bitrouter-agent-")),
+        "feedback fixtures must not smuggle private workflow/session/identity headers"
+    );
+
+    let root = temp_path("source-neutral-reward-feedback-command");
+    std::fs::create_dir_all(&root).unwrap();
+    let traces_path = root.join("traces.jsonl");
+    let usage_path = root.join("usage.jsonl");
+    let outcomes_path = root.join("outcomes.jsonl");
+    let decisions_path = root.join("decisions.jsonl");
+    let database_url = format!("sqlite://{}", root.join("adequacy.db").display());
+    let setup_db = bitrouter::db::connect(&database_url).await.unwrap();
+    bitrouter::db::run_migrations(&setup_db).await.unwrap();
+    setup_db.close().await.unwrap();
+    std::fs::write(
+        &traces_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&generic).unwrap(),
+            serde_json::to_string(&terminus).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &usage_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&generic_usage).unwrap(),
+            serde_json::to_string(&terminus_usage).unwrap()
+        ),
+    )
+    .unwrap();
+    BenchmarkOutcomeRecord::write_jsonl(&outcomes_path, &outcomes).unwrap();
+    PolicyDecisionRecord::write_jsonl(&decisions_path, &[generic_decision, terminus_decision])
+        .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+        .args([
+            "workflow-state",
+            "apply-reward-feedback",
+            "--database-url",
+            &database_url,
+            "--traces",
+            traces_path.to_str().unwrap(),
+            "--cloud-usage",
+            usage_path.to_str().unwrap(),
+            "--outcomes",
+            outcomes_path.to_str().unwrap(),
+            "--policy-decisions",
+            decisions_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "reward feedback command failed (status={}): stdout={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("2 candidates"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let db = bitrouter::db::connect(&database_url).await.unwrap();
+    let counts = AdequacyStore::new(db.clone())
+        .load_semantic_success_counts()
+        .await
+        .unwrap();
+    assert_eq!(counts.len(), 1);
+    assert_eq!(counts.get(&ledger_key), Some(&1));
+    db.close().await.unwrap();
+
+    let mut conflicting_trace = benchmark_trace("header-public-b");
+    conflicting_trace.id = "artifact-trace-a".to_string();
+    conflicting_trace.headers.insert(
+        "x-bitrouter-request-id".to_string(),
+        "private-header-c".to_string(),
+    );
+    let mut conflicting_usage = computed_usage("private-header-c", "openai", "gpt-test", 10, 2, 30);
+    conflicting_usage.status = Some("completed".to_string());
+    let mut conflicting_decision = benchmark_decision("private-header-c");
+    conflicting_decision.key_strategy = "agent_trace".to_string();
+    conflicting_decision.request_key = canonical_key.to_string();
+    conflicting_decision.ledger_key = Some(ledger_key.clone());
+    conflicting_decision.selected_tier = Some("cheap".to_string());
+    conflicting_decision.selected_model = Some("vendor/cheap".to_string());
+    let conflicting_outcome =
+        BenchmarkOutcomeRecord::new("episode-conflict", "terminal-bench/header-conflict", 1.0)
+            .with_request_id("header-public-b");
+    let conflicting_traces_path = root.join("conflicting-traces.jsonl");
+    let conflicting_usage_path = root.join("conflicting-usage.jsonl");
+    let conflicting_outcomes_path = root.join("conflicting-outcomes.jsonl");
+    let conflicting_decisions_path = root.join("conflicting-decisions.jsonl");
+    std::fs::write(
+        &conflicting_traces_path,
+        format!("{}\n", serde_json::to_string(&conflicting_trace).unwrap()),
+    )
+    .unwrap();
+    std::fs::write(
+        &conflicting_usage_path,
+        format!("{}\n", serde_json::to_string(&conflicting_usage).unwrap()),
+    )
+    .unwrap();
+    BenchmarkOutcomeRecord::write_jsonl(&conflicting_outcomes_path, &[conflicting_outcome])
+        .unwrap();
+    PolicyDecisionRecord::write_jsonl(&conflicting_decisions_path, &[conflicting_decision])
+        .unwrap();
+    let conflicting_output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+        .args([
+            "workflow-state",
+            "apply-reward-feedback",
+            "--database-url",
+            &database_url,
+            "--traces",
+            conflicting_traces_path.to_str().unwrap(),
+            "--cloud-usage",
+            conflicting_usage_path.to_str().unwrap(),
+            "--outcomes",
+            conflicting_outcomes_path.to_str().unwrap(),
+            "--policy-decisions",
+            conflicting_decisions_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !conflicting_output.status.success(),
+        "conflicting headers must fail before learning: stdout={} stderr={}",
+        String::from_utf8_lossy(&conflicting_output.stdout),
+        String::from_utf8_lossy(&conflicting_output.stderr)
+    );
+    let db = bitrouter::db::connect(&database_url).await.unwrap();
+    let counts = AdequacyStore::new(db.clone())
+        .load_semantic_success_counts()
+        .await
+        .unwrap();
+    assert_eq!(
+        counts.len(),
+        1,
+        "failed feedback must not mutate the ledger"
+    );
+    assert_eq!(counts.get(&ledger_key), Some(&1));
+    db.close().await.unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reward_feedback_identity_join_fails_closed_for_duplicate_ambiguous_missing_and_mismatched_ids() {
+    let trace = benchmark_trace("req-reward-identity");
+    let usage = computed_usage("req-reward-identity", "openai", "gpt-test", 10, 2, 30);
+    let decision = benchmark_decision("req-reward-identity");
+    let outcome = |request_id: Option<&str>| {
+        let outcome = BenchmarkOutcomeRecord::new(
+            "legacy-session-is-not-an-admission-key",
+            "terminal-bench/regex-log",
+            1.0,
+        );
+        match request_id {
+            Some(request_id) => outcome.with_request_id(request_id),
+            None => outcome,
+        }
+    };
+
+    let cases = [
+        (
+            "ambiguous duplicate outcome",
+            vec![
+                outcome(Some("req-reward-identity")),
+                outcome(Some("req-reward-identity")),
+            ],
+        ),
+        ("missing outcome identity", vec![outcome(None)]),
+        (
+            "mismatched outcome identity",
+            vec![outcome(Some("another-request"))],
+        ),
+    ];
+    for (case, outcomes) in cases {
+        let error = WorkflowRunArtifact::validate_reward_feedback_integrity(
+            std::slice::from_ref(&trace),
+            std::slice::from_ref(&usage),
+            &outcomes,
+            std::slice::from_ref(&decision),
+        )
+        .expect_err(case);
+        assert!(
+            error.to_string().contains("outcome join incomplete"),
+            "{case}: {error}"
+        );
+    }
+
+    let error = WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[trace.clone(), trace],
+        &[usage.clone(), usage],
+        &[outcome(Some("req-reward-identity"))],
+        &[decision.clone(), decision],
+    )
+    .expect_err("duplicate trace/request identity must fail closed");
+    assert!(error.to_string().contains("duplicate"), "{error}");
+}
+
+#[test]
+fn strict_reward_identity_rejects_conflicting_trace_headers_before_learning() {
+    let mut trace = benchmark_trace("header-public-b");
+    trace.id = "artifact-trace-a".to_string();
+    trace.headers.insert(
+        "x-bitrouter-request-id".to_string(),
+        "private-header-c".to_string(),
+    );
+    let usage = computed_usage("private-header-c", "openai", "gpt-test", 10, 2, 30);
+    let decision = benchmark_decision("private-header-c");
+    let outcome = BenchmarkOutcomeRecord::new("episode-a", "terminal-bench/regex-log", 1.0)
+        .with_request_id("header-public-b");
+
+    WorkflowRunArtifact::validate_reward_feedback_integrity(
+        &[trace],
+        &[usage],
+        &[outcome],
+        &[decision],
+    )
+    .expect_err("strict reward identity must not reconcile conflicting trace headers");
 }
 
 #[test]
@@ -475,90 +789,62 @@ fn benchmark_integrity_rejects_nonempty_traces_without_usage() {
 }
 
 #[test]
-fn benchmark_integrity_requires_unambiguous_terminus_identity_join() {
-    let fingerprint = workflow_fingerprint("short13-run", "trial-01", "parent-01", 0);
-    let mut trace = benchmark_trace("req-1");
-    trace.harness = HarnessId::Terminus2;
-    trace.headers.extend([
-        (
-            "x-bitrouter-benchmark-run-id".to_string(),
-            "short13-run".to_string(),
-        ),
-        ("x-bitrouter-trial-id".to_string(), "trial-01".to_string()),
-        (
-            "x-bitrouter-parent-session-id".to_string(),
-            "parent-01".to_string(),
-        ),
-        (
-            "x-bitrouter-agent-session-id".to_string(),
-            "parent-01:main:0".to_string(),
-        ),
-        ("x-bitrouter-agent-role".to_string(), "main".to_string()),
-        ("x-bitrouter-context-epoch".to_string(), "0".to_string()),
-        (
-            "x-bitrouter-context-transition".to_string(),
-            "none".to_string(),
-        ),
-        (
-            "x-bitrouter-session-fingerprint".to_string(),
-            fingerprint.clone(),
-        ),
-    ]);
-    let mut decision = benchmark_decision("req-1");
-    decision.workflow_identity = WorkflowIdentity {
-        benchmark_run_id: Some("short13-run".to_string()),
-        trial_id: Some("trial-01".to_string()),
-        agent_session_id: Some("parent-01:main:0".to_string()),
-        parent_session_id: Some("parent-01".to_string()),
-        role: AgentRole::Main,
-        context_epoch: 0,
-        transition: ContextTransition::None,
-        fingerprint,
-        source: "explicit_headers".to_string(),
-        confidence: SessionConfidence::High,
-    };
+fn benchmark_bundle_accepts_equivalent_native_and_generic_request_id_joins() {
+    let generic_trace = benchmark_trace("generic-request");
+    let mut terminus_trace = benchmark_trace("terminus-request");
+    terminus_trace.harness = HarnessId::Terminus2;
+
+    let generic_usage = computed_usage("generic-request", "openai", "gpt-test", 10, 2, 30);
+    let terminus_usage = computed_usage("terminus-request", "openai", "gpt-test", 10, 2, 30);
+    let generic_decision = benchmark_decision("generic-request");
+    let terminus_decision = benchmark_decision("terminus-request");
+    let generic_outcome =
+        BenchmarkOutcomeRecord::new("generic-episode", "terminal-bench/task", 1.0)
+            .with_request_id("generic-request");
+    let terminus_outcome =
+        BenchmarkOutcomeRecord::new("terminus-episode", "terminal-bench/task", 1.0)
+            .with_request_id("terminus-request");
+
+    WorkflowRunArtifact::validate_complete_benchmark_integrity(
+        &[generic_trace],
+        &[generic_usage],
+        &[generic_outcome],
+        &[generic_decision],
+    )
+    .expect("a generic bundle with stable request-id joins should be accepted");
+    WorkflowRunArtifact::validate_complete_benchmark_integrity(
+        &[terminus_trace],
+        &[terminus_usage],
+        &[terminus_outcome],
+        &[terminus_decision],
+    )
+    .expect("a native Terminus bundle must not require private identity headers");
+}
+
+#[test]
+fn benchmark_bundle_rejects_mismatched_or_duplicate_decision_request_ids() {
+    let trace = benchmark_trace("req-1");
     let usage = computed_usage("req-1", "openai", "gpt-test", 10, 2, 30);
+    let decision = benchmark_decision("req-1");
 
-    WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
-        &[trace.clone()],
+    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
+        std::slice::from_ref(&trace),
         std::slice::from_ref(&usage),
-        &[decision.clone()],
+        &[benchmark_decision("req-2")],
     )
-    .expect("complete Terminus identity should join");
-
-    let mut forged = decision.clone();
-    forged.workflow_identity.fingerprint = format!("sha256:{}", "1".repeat(64));
-    let mut forged_trace = trace.clone();
-    forged_trace.headers.insert(
-        "x-bitrouter-session-fingerprint".to_string(),
-        forged.workflow_identity.fingerprint.clone(),
+    .expect_err("a decision for another request must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("trace/decision request ids differ")
     );
-    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
-        &[forged_trace],
-        std::slice::from_ref(&usage),
-        &[forged],
-    )
-    .expect_err("well-formed but forged session fingerprint must fail");
-    assert!(error.to_string().contains("fingerprint"));
-
-    let mut mismatched = decision.clone();
-    mismatched.workflow_identity.parent_session_id = Some("other-parent".to_string());
-    mismatched.workflow_identity.fingerprint =
-        workflow_fingerprint("short13-run", "trial-01", "other-parent", 0);
-    let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
-        &[trace.clone()],
-        std::slice::from_ref(&usage),
-        &[mismatched],
-    )
-    .expect_err("ambiguous session identity must fail");
-    assert!(error.to_string().contains("identity mismatch"));
 
     let error = WorkflowRunArtifact::validate_benchmark_integrity_with_decisions(
         &[trace],
         &[usage],
         &[decision.clone(), decision],
     )
-    .expect_err("duplicate decisions must fail");
+    .expect_err("duplicate decisions must fail closed");
     assert!(
         error
             .to_string()
@@ -572,6 +858,63 @@ fn replay_reports_coverage() {
     let summary = ReplayEvaluator.run(&fixtures);
     assert!(summary.total >= 6);
     assert!(summary.coverage >= 0.80, "{summary:#?}");
+}
+
+#[test]
+fn evaluators_merge_equivalent_generic_and_native_terminus_projections() {
+    let generic = WorkflowTraceFixture::from_value(json!({
+        "id": "generic-opening",
+        "harness": "generic",
+        "protocol": "chat_completions",
+        "headers": {},
+        "raw_body": {
+            "model": "test",
+            "messages": [{"role": "user", "content": "inspect this repository"}]
+        },
+        "expected": {
+            "state_kind": "opening",
+            "baseline_fingerprint": "opening",
+            "confidence_min": 0.0
+        }
+    }))
+    .unwrap();
+    let terminus = WorkflowTraceFixture::from_value(json!({
+        "id": "terminus-opening",
+        "harness": "terminus_2",
+        "protocol": "chat_completions",
+        "headers": {},
+        "raw_body": {
+            "model": "test",
+            "messages": [{
+                "role": "user",
+                "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with analysis, plan, commands, and task_complete."
+            }]
+        },
+        "expected": {
+            "state_kind": "opening",
+            "baseline_fingerprint": "opening",
+            "confidence_min": 0.0
+        }
+    }))
+    .unwrap();
+    let fixtures = vec![generic, terminus];
+
+    let replay = ReplayEvaluator.run(&fixtures);
+    let shadow = ShadowPolicyEvaluator.run(&fixtures);
+
+    assert_eq!(replay.ir_bucket_count, 1, "{replay:#?}");
+    assert_eq!(
+        shadow
+            .decisions
+            .iter()
+            .map(|decision| decision.ir_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agent_trace/v1|opening|normal"; 2]
+    );
+    assert_ne!(
+        shadow.decisions[0].legacy_evidence_key, shadow.decisions[1].legacy_evidence_key,
+        "detailed source evidence remains diagnostic instead of becoming a bucket"
+    );
 }
 
 #[test]
@@ -615,19 +958,27 @@ fn workflow_constraints_report_model_ladder_compatibility() {
 #[test]
 fn replay_summary_matches_current_experiment_fixture_set() {
     let fixtures = WorkflowTraceFixture::load_tree(fixture_root()).unwrap();
+    for fixture in &fixtures {
+        assert_eq!(
+            fixture.expected.baseline_fingerprint,
+            fixture.baseline_fingerprint(),
+            "fixture {} has a stale baseline fingerprint",
+            fixture.id
+        );
+    }
     let summary = ReplayEvaluator.run(&fixtures);
-    assert_eq!(summary.total, 7, "{summary:#?}");
-    assert_eq!(summary.covered, 7, "{summary:#?}");
+    assert_eq!(summary.total, 10, "{summary:#?}");
+    assert_eq!(summary.covered, 10, "{summary:#?}");
     assert_eq!(summary.coverage, 1.0, "{summary:#?}");
-    assert_eq!(summary.baseline_bucket_count, 3, "{summary:#?}");
-    assert_eq!(summary.ir_bucket_count, 6, "{summary:#?}");
+    assert_eq!(summary.baseline_bucket_count, 5, "{summary:#?}");
+    assert_eq!(summary.ir_bucket_count, 5, "{summary:#?}");
     assert_eq!(summary.collision_count, 0, "{summary:#?}");
     assert_eq!(summary.visibility_gap_count, 1, "{summary:#?}");
     assert_eq!(summary.baseline_midstream_count, 1, "{summary:#?}");
     assert_eq!(summary.ir_unknown_count, 0, "{summary:#?}");
-    assert_eq!(summary.model_ladder.flagship, 7, "{summary:#?}");
-    assert_eq!(summary.model_ladder.standard, 7, "{summary:#?}");
-    assert_eq!(summary.model_ladder.cheap_tool_safe, 7, "{summary:#?}");
+    assert_eq!(summary.model_ladder.flagship, 10, "{summary:#?}");
+    assert_eq!(summary.model_ladder.standard, 10, "{summary:#?}");
+    assert_eq!(summary.model_ladder.cheap_tool_safe, 10, "{summary:#?}");
     assert_eq!(summary.model_ladder.cheap_fast, 6, "{summary:#?}");
 }
 
@@ -750,7 +1101,6 @@ async fn real_trace_capture_writes_sanitized_trace_jsonl_to_archive_path() {
     let path = temp_path("daemon-traces.jsonl");
     let capture = RealTraceCapture::new(TraceCaptureOptions {
         harness: HarnessId::Hermes,
-        session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: Some(path.clone()),
     });
     let router = axum::Router::new().route(
@@ -794,7 +1144,6 @@ async fn real_trace_capture_finishes_downstream_after_client_cancellation() {
     let path = temp_path("cancelled-daemon-traces.jsonl");
     let capture = RealTraceCapture::new(TraceCaptureOptions {
         harness: HarnessId::Terminus2,
-        session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: Some(path.clone()),
     });
     let downstream_completed = Arc::new(AtomicBool::new(false));
@@ -895,7 +1244,7 @@ fn cloud_usage_snapshot_jsonl_deduplicates_request_records() {
 fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
     let traces = vec![
         CapturedIngressTrace {
-            id: "trace-001".to_string(),
+            id: "cloud-req-001".to_string(),
             captured_at: None,
             harness: HarnessId::Hermes,
             protocol: ProtocolKind::ChatCompletions,
@@ -924,7 +1273,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
             },
         },
         CapturedIngressTrace {
-            id: "trace-002".to_string(),
+            id: "cloud-req-002".to_string(),
             captured_at: None,
             harness: HarnessId::Hermes,
             protocol: ProtocolKind::ChatCompletions,
@@ -990,7 +1339,7 @@ fn run_artifact_joins_trace_archive_with_cloud_usage_costs() {
 #[test]
 fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "cloud-req-001".to_string(),
         captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
@@ -1013,6 +1362,7 @@ fn run_artifact_joins_trace_sessions_with_benchmark_outcomes() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "session-a".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1054,6 +1404,7 @@ fn terminus_subagent_reward_joins_by_explicit_trial_not_agent_session() {
         ),
     ]);
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "regex-log__trial-a".to_string(),
         task_id: "regex-log".to_string(),
         reward: 1.0,
@@ -1075,7 +1426,7 @@ fn terminus_subagent_reward_joins_by_explicit_trial_not_agent_session() {
 #[test]
 fn run_artifact_joins_trace_to_benchmark_outcome_by_agent_time_window() {
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "req-001".to_string(),
         captured_at: Some("2026-07-09T08:01:30Z".to_string()),
         harness: HarnessId::Codex,
         protocol: ProtocolKind::Responses,
@@ -1098,6 +1449,7 @@ fn run_artifact_joins_trace_to_benchmark_outcome_by_agent_time_window() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "regex-log__abc123".to_string(),
         task_id: "terminal-bench/regex-log".to_string(),
         reward: 0.0,
@@ -1127,6 +1479,7 @@ fn complete_benchmark_integrity_rejects_time_only_reward_join() {
     trace.captured_at = Some("2026-07-09T08:01:30Z".to_string());
     let usage = computed_usage("req-time-only", "openai", "gpt-test", 10, 2, 30);
     let outcome = BenchmarkOutcomeRecord {
+        request_id: None,
         session_key: "regex-log__abc123".to_string(),
         task_id: "terminal-bench/regex-log".to_string(),
         reward: 1.0,
@@ -1151,7 +1504,7 @@ fn complete_benchmark_integrity_rejects_time_only_reward_join() {
 #[test]
 fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "req-001".to_string(),
         captured_at: Some("2026-07-09T08:01:30Z".to_string()),
         harness: HarnessId::Codex,
         protocol: ProtocolKind::Responses,
@@ -1175,6 +1528,7 @@ fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
     }];
     let outcomes = vec![
         BenchmarkOutcomeRecord {
+            request_id: None,
             session_key: "regex-log__abc123".to_string(),
             task_id: "terminal-bench/regex-log".to_string(),
             reward: 0.0,
@@ -1185,6 +1539,7 @@ fn reward_join_does_not_time_window_match_ambiguous_parallel_trials() {
             agent_finished_at: Some("2026-07-09T08:04:00Z".to_string()),
         },
         BenchmarkOutcomeRecord {
+            request_id: None,
             session_key: "fix-git__def456".to_string(),
             task_id: "terminal-bench/fix-git".to_string(),
             reward: 1.0,
@@ -1390,7 +1745,7 @@ fn run_artifact_embeds_offline_shadow_policy_summary() {
 fn run_artifact_bundle_writes_fixed_benchmark_layout() {
     let output_dir = temp_path("workflow-run-bundle");
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "cloud-req-001".to_string(),
         captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
@@ -1464,7 +1819,7 @@ fn run_artifact_bundle_writes_fixed_benchmark_layout() {
 fn run_artifact_bundle_includes_policy_decision_summary() {
     let output_dir = temp_path("workflow-run-bundle-decisions");
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "req-001".to_string(),
         captured_at: None,
         harness: HarnessId::Codex,
         protocol: ProtocolKind::Responses,
@@ -1496,7 +1851,7 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         request_id: Some("req-001".to_string()),
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "codex|responses|tool_followup|-|-|bash|low|small|none|high|low|low|low|medium|medium|requires_structured_tools".to_string(),
+        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
@@ -1579,10 +1934,151 @@ fn policy_decision_summary_counts_static_to_selected_replacements() {
 }
 
 #[test]
+fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decisions_are_canonical() {
+    let old_path = temp_path("legacy-source-specific-policy-decision.jsonl");
+    std::fs::write(
+        &old_path,
+        r#"{"captured_at":null,"request_id":"legacy-001","input_model":"gpt-5.5","key_strategy":"workflow_state","request_key":"codex|responses|tool_followup","legacy_fingerprint":"after_bash","workflow_state":"tool_followup","static_tier":"strong","static_model":"openai-codex:gpt-5.5","selected_tier":"economy","selected_model":"bitrouter:deepseek/deepseek-v4-pro","reason":"static_table","pinned":false,"locked":false,"trialed":false}
+"#,
+    )
+    .unwrap();
+    let legacy = PolicyDecisionRecord::load_jsonl(&old_path).unwrap();
+    assert_eq!(legacy.len(), 1);
+    assert_eq!(legacy[0].key_strategy, "workflow_state");
+    assert_eq!(legacy[0].request_key, "codex|responses|tool_followup");
+    assert_eq!(legacy[0].workflow_state, "tool_followup");
+
+    let new_path = temp_path("canonical-agent-trace-policy-decision.jsonl");
+    let mut canonical = benchmark_decision("agent-trace-001");
+    canonical.key_strategy = "agent_trace".to_string();
+    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
+    PolicyDecisionRecord::write_jsonl(&new_path, &[canonical]).unwrap();
+    let rendered = std::fs::read_to_string(&new_path).unwrap();
+    let new_value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(new_value["key_strategy"], "agent_trace");
+    assert_eq!(
+        new_value["request_key"],
+        "agent_trace/v1|tool_followup|normal"
+    );
+    assert_eq!(new_value["trace_state"], "opening");
+    assert!(new_value.get("workflow_state").is_none());
+
+    let _ = std::fs::remove_file(old_path);
+    let _ = std::fs::remove_file(new_path);
+}
+
+#[tokio::test]
+async fn legacy_workflow_state_lock_and_artifact_replay_without_projection_migration() {
+    let root = temp_path("legacy-workflow-state-replay");
+    std::fs::create_dir_all(&root).unwrap();
+    let config_path = root.join("bitrouter.yaml");
+    let lock_path = root.join("policy-lock.yaml");
+    std::fs::write(
+        &config_path,
+        r#"
+policy:
+  path: "./policy-lock.yaml"
+presets:
+  legacy:
+    model: "vendor/strong"
+    policy: legacy
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &lock_path,
+        r#"
+lockfileVersion: 1
+policies:
+  legacy:
+    key_strategy: workflow_state
+    tiers:
+      economy: "vendor/economy"
+      strong: "vendor/strong"
+    routes:
+      "codex|responses|tool_followup": economy
+    default_tier: strong
+    tool_use_tier: strong
+    tool_safe_tiers:
+      - strong
+      - economy
+"#,
+    )
+    .unwrap();
+    let config =
+        config::parse_with(&std::fs::read_to_string(&config_path).unwrap(), |_| None).unwrap();
+    let loaded = policy_lock::load_for_config(&config, Some(&config_path))
+        .await
+        .unwrap()
+        .expect("legacy bound lock loads");
+    let definition = loaded.document.policies.get("legacy").unwrap();
+    assert_eq!(
+        definition.as_table_config().key_strategy,
+        bitrouter_sdk::config::PolicyKeyStrategy::AgentTrace
+    );
+    assert!(
+        definition
+            .routes
+            .contains_key("codex|responses|tool_followup"),
+        "legacy source-specific route remains legacy evidence"
+    );
+
+    let trace_path = root.join("traces.jsonl");
+    let legacy_trace = CapturedIngressTrace {
+        id: "legacy-request".to_string(),
+        captured_at: None,
+        harness: HarnessId::Codex,
+        protocol: ProtocolKind::Responses,
+        method: "POST".to_string(),
+        path: "/v1/responses".to_string(),
+        headers: Default::default(),
+        raw_body: json!({
+            "model": "vendor/strong",
+            "previous_response_id": "resp_legacy",
+            "input": "continue"
+        }),
+        outcome: RealTraceOutcome {
+            http_status: 200,
+            status: "completed".to_string(),
+        },
+    };
+    TraceArchive::write_jsonl(&trace_path, &[legacy_trace], &TraceSanitizer::default()).unwrap();
+    let fixtures = TraceArchive::read_replay_fixtures(&trace_path).unwrap();
+    let replay = ReplayEvaluator.run(&fixtures);
+    assert_eq!(replay.total, 1);
+    assert_eq!(replay.covered, 1);
+
+    let decision_path = root.join("legacy-decisions.jsonl");
+    let mut legacy_decision = benchmark_decision("legacy-request");
+    legacy_decision.key_strategy = "workflow_state".to_string();
+    legacy_decision.request_key = "codex|responses|tool_followup".to_string();
+    PolicyDecisionRecord::write_jsonl(&decision_path, &[legacy_decision]).unwrap();
+    let legacy_records = PolicyDecisionRecord::load_jsonl(&decision_path).unwrap();
+    assert_eq!(
+        legacy_records[0].request_key,
+        "codex|responses|tool_followup"
+    );
+    assert!(!legacy_records[0].request_key.starts_with("agent_trace/"));
+
+    let canonical_path = root.join("agent-trace-decisions.jsonl");
+    let mut canonical = benchmark_decision("agent-trace-request");
+    canonical.key_strategy = "agent_trace".to_string();
+    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
+    PolicyDecisionRecord::write_jsonl(&canonical_path, &[canonical]).unwrap();
+    let canonical_records = PolicyDecisionRecord::load_jsonl(&canonical_path).unwrap();
+    assert_eq!(
+        canonical_records[0].request_key,
+        "agent_trace/v1|tool_followup|normal"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn run_artifact_attributes_failed_task_to_policy_transition() {
     let output_dir = temp_path("workflow-run-bundle-semantic-policy-transition");
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "req-001".to_string(),
         captured_at: None,
         harness: HarnessId::Codex,
         protocol: ProtocolKind::Responses,
@@ -1608,6 +2104,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-001".to_string()),
         session_key: "trial-a".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1622,7 +2119,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         request_id: Some("req-001".to_string()),
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "codex|responses|tool_followup".to_string(),
+        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
@@ -1683,7 +2180,7 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
 #[test]
 fn run_artifact_attributes_successful_task_to_policy_transition() {
     let traces = vec![CapturedIngressTrace {
-        id: "trace-success-001".to_string(),
+        id: "req-success-001".to_string(),
         captured_at: None,
         harness: HarnessId::Codex,
         protocol: ProtocolKind::Responses,
@@ -1712,6 +2209,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-success-001".to_string()),
         session_key: "trial-success-a".to_string(),
         task_id: "terminal-bench/regex-log".to_string(),
         reward: 1.0,
@@ -1726,8 +2224,8 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         request_id: Some("req-success-001".to_string()),
         input_model: "gpt-5.5".to_string(),
         key_strategy: "workflow_state".to_string(),
-        request_key: "codex|responses|tool_followup".to_string(),
-        ledger_key: Some("coding\0codex|responses|tool_followup".to_string()),
+        request_key: "agent_trace/v1|tool_followup|normal".to_string(),
+        ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
@@ -1774,10 +2272,10 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         candidate.settlement_outcome,
         SemanticSettlementOutcome::ProviderReportedComputed
     );
-    assert_eq!(candidate.request_key, "codex|responses|tool_followup");
+    assert_eq!(candidate.request_key, "agent_trace/v1|tool_followup|normal");
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0codex|responses|tool_followup")
+        Some("coding\0agent_trace/v1|tool_followup|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),
@@ -1789,7 +2287,7 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
 fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
     let output_dir = temp_path("workflow-run-bundle-outcomes");
     let traces = vec![CapturedIngressTrace {
-        id: "trace-001".to_string(),
+        id: "req-outcome-a".to_string(),
         captured_at: None,
         harness: HarnessId::Hermes,
         protocol: ProtocolKind::ChatCompletions,
@@ -1818,6 +2316,7 @@ fn run_artifact_bundle_writes_benchmark_outcomes_and_reward_join() {
         },
     }];
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-outcome-a".to_string()),
         session_key: "session-a".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1868,6 +2367,7 @@ fn benchmark_bundle_rejects_unmatched_outcomes_before_writing() {
         .headers
         .insert("x-bitrouter-trial-id".to_string(), "trial-a".to_string());
     let outcomes = vec![BenchmarkOutcomeRecord {
+        request_id: Some("req-2".to_string()),
         session_key: "trial-b".to_string(),
         task_id: "filter-js-from-html".to_string(),
         reward: 0.0,
@@ -1915,6 +2415,6 @@ fn shadow_policy_compares_baseline_fingerprints_to_ir_model_ladder() {
         .find(|decision| decision.fixture_id == "hermes-tool-followup-001")
         .expect("tool follow-up fixture has a shadow decision");
     assert_eq!(tool_followup.baseline_key, "after_bash");
-    assert_eq!(tool_followup.ir_state_kind.to_string(), "tool_followup");
+    assert_eq!(tool_followup.ir_state_kind.to_string(), "test");
     assert_eq!(tool_followup.ir_tier, TierName::CheapToolSafe);
 }

@@ -103,7 +103,7 @@
       "description": "Config-driven per-request model routing: a fingerprint → tier → model\npolicy table an ingress transform applies, with a hard tool-use\nguardrail. Empty by default — when no tiers are defined the transform is\nnot registered and traffic routes exactly as it would without it.",
       "$ref": "#/$defs/PolicyTableConfig",
       "default": {
-        "key_strategy": "legacy_fingerprint",
+        "key_strategy": "agent_trace",
         "tiers": {},
         "fingerprints": {},
         "default_tier": null,
@@ -1632,13 +1632,13 @@
       ]
     },
     "PolicyTableConfig": {
-      "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform fingerprints each request by its agent-loop step (the\nmost recent tool the model called, or the opening turn) and looks the\nfingerprint up in [`fingerprints`](Self::fingerprints) to choose a *tier*;\n[`tiers`](Self::tiers) then maps that tier to the model id the request is\nrewritten to. A hard tool-use guardrail keeps tool-carrying requests on a\ntier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
+      "description": "Config-driven per-request model routing — the top-level `policy_table:` block\nin `bitrouter.yaml`.\n\nAn ingress transform projects each request into a source-independent agent\ntrace key and looks that key up in [`fingerprints`](Self::fingerprints) to\nchoose a *tier*; [`tiers`](Self::tiers) then maps that tier to the model id\nthe request is rewritten to. A hard tool-use guardrail keeps tool-carrying\nrequests on a tier known to handle tools.\n\nThe section is active only when [`tiers`](Self::tiers) is non-empty — an\nabsent or tier-less block leaves routing untouched. The whole spec is static\nand operator-owned: it is versionable in `bitrouter.yaml` and never mutated\nat runtime.",
       "type": "object",
       "properties": {
         "key_strategy": {
-          "description": "Which request key the policy table uses for `fingerprints`. The default\npreserves the original coarse key (`opening`, `after_<tool>`,\n`midstream`). `workflow_state` switches lookup and adequacy learning to\nthe cross-harness Workflow State IR routing key.",
+          "description": "The request-key family used for `fingerprints`. Active policy routing\nuses only the canonical source-independent `agent_trace` projection.",
           "$ref": "#/$defs/PolicyKeyStrategy",
-          "default": "legacy_fingerprint"
+          "default": "agent_trace"
         },
         "tiers": {
           "description": "Tier name → the model id every request on that tier is routed to. The\nvalue is fed straight into the routing table, so it may be a bare\ncanonical id (resolved via the cascade/registry) or an explicit\n`provider:model` id (a Strategy-1 direct route). The section is inert\nwhile this map is empty.",
@@ -1649,7 +1649,7 @@
           "default": {}
         },
         "fingerprints": {
-          "description": "Request fingerprint → tier name. A fingerprint is the agent-loop step:\n`opening` (no model turn yet), `after_<tool>` (the model last called\n`<tool>`), or `midstream` (a model turn with no tool call). A fingerprint\nabsent from this map falls back to [`default_tier`](Self::default_tier).",
+          "description": "Canonical agent trace projection key → tier name. A key absent from this\nmap falls back to [`default_tier`](Self::default_tier).",
           "type": "object",
           "additionalProperties": {
             "type": "string"
@@ -1704,18 +1704,10 @@
       }
     },
     "PolicyKeyStrategy": {
-      "description": "Request-key family used by `policy_table.fingerprints`.",
-      "oneOf": [
-        {
-          "description": "The original coarse prompt fingerprint: `opening`, `midstream`, or\n`after_<tool>`.",
-          "type": "string",
-          "const": "legacy_fingerprint"
-        },
-        {
-          "description": "The cross-harness Workflow State IR routing key.",
-          "type": "string",
-          "const": "workflow_state"
-        }
+      "description": "Active policy routing uses the canonical source-independent agent trace projection key.",
+      "type": "string",
+      "enum": [
+        "agent_trace"
       ]
     },
     "AdequacyConfig": {

@@ -11,6 +11,11 @@ use crate::workflow_state::real_trace::CapturedIngressTrace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkOutcomeRecord {
+    /// Stable source-neutral request identity for strict reward attribution.
+    /// Older analytical artifacts did not persist it and remain readable, but
+    /// cannot be admitted to the learning path without an exact join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub session_key: String,
     pub task_id: String,
     pub reward: f64,
@@ -60,6 +65,38 @@ pub struct RewardJoin {
 }
 
 impl BenchmarkOutcomeRecord {
+    /// Construct an outcome artifact without a strict-feedback identity.
+    ///
+    /// Analytical callers may omit it; feedback import requires
+    /// [`Self::with_request_id`] for every outcome.
+    pub fn new(session_key: impl Into<String>, task_id: impl Into<String>, reward: f64) -> Self {
+        Self {
+            request_id: None,
+            session_key: session_key.into(),
+            task_id: task_id.into(),
+            reward,
+            failed_reason: None,
+            finished_at: None,
+            trial_name: None,
+            agent_started_at: None,
+            agent_finished_at: None,
+        }
+    }
+
+    /// Attach the canonical persisted trace identity used by strict feedback.
+    pub fn with_request_id(mut self, request_id: impl AsRef<str>) -> Self {
+        let request_id = request_id.as_ref().trim();
+        self.request_id = (!request_id.is_empty()).then(|| request_id.to_string());
+        self
+    }
+
+    /// Attach an optional analytical trial label without affecting strict
+    /// request-identity attribution.
+    pub fn with_trial_name(mut self, trial_name: impl Into<String>) -> Self {
+        self.trial_name = Some(trial_name.into());
+        self
+    }
+
     pub fn load_jsonl(path: impl AsRef<Path>) -> Result<Vec<Self>> {
         let file = File::open(path.as_ref()).map_err(|e| {
             BitrouterError::internal(format!(
@@ -168,16 +205,14 @@ impl BenchmarkOutcomeRecord {
             harbor_exception_reason(&value).or_else(|| Some("verifier_failed".to_string()))
         };
 
-        Ok(Self {
-            session_key: trial_name.clone(),
-            task_id,
-            reward,
-            failed_reason,
-            finished_at,
-            trial_name: Some(trial_name),
-            agent_started_at,
-            agent_finished_at,
-        })
+        let mut outcome = Self::new(trial_name.clone(), task_id, reward);
+        outcome.request_id = json_str(&value, &["request_id"]);
+        outcome.failed_reason = failed_reason;
+        outcome.finished_at = finished_at;
+        outcome.trial_name = Some(trial_name);
+        outcome.agent_started_at = agent_started_at;
+        outcome.agent_finished_at = agent_finished_at;
+        Ok(outcome)
     }
 }
 
@@ -230,14 +265,15 @@ impl RewardJoin {
         Self::join(traces, outcomes, true)
     }
 
-    /// Benchmark-grade join that requires an explicit session or trial key.
-    /// Timestamp attribution remains available only through the analytical
-    /// [`from_traces_and_outcomes`](Self::from_traces_and_outcomes) path.
+    /// Benchmark-grade join that requires a canonical request ID on both
+    /// artifacts and rejects every non-one-to-one match.
+    /// Strict feedback attribution uses canonical request IDs only. Timestamp
+    /// and legacy workflow/session attribution remain analytical-only.
     pub fn from_traces_and_outcomes_strict(
         traces: &[CapturedIngressTrace],
         outcomes: &[BenchmarkOutcomeRecord],
     ) -> Self {
-        Self::join(traces, outcomes, false)
+        Self::join_by_request_id(traces, outcomes)
     }
 
     fn join(
@@ -245,6 +281,17 @@ impl RewardJoin {
         outcomes: &[BenchmarkOutcomeRecord],
         allow_time_fallback: bool,
     ) -> Self {
+        let outcomes_by_request_id = outcomes.iter().enumerate().fold(
+            BTreeMap::<String, Vec<usize>>::new(),
+            |mut acc, (index, outcome)| {
+                if let Some(request_id) = outcome.request_id.as_deref().map(str::trim)
+                    && !request_id.is_empty()
+                {
+                    acc.entry(request_id.to_string()).or_default().push(index);
+                }
+                acc
+            },
+        );
         let outcomes_by_session = outcomes.iter().enumerate().fold(
             BTreeMap::<String, Vec<usize>>::new(),
             |mut acc, (index, outcome)| {
@@ -264,7 +311,16 @@ impl RewardJoin {
         let mut outcome_candidates = Vec::new();
         for trace in traces {
             let mut matched = Vec::new();
-            if let Some(session_key) = trace_session_key(trace)
+            if let Some(request_id) = trace.artifact_request_id()
+                && let Some(request_outcome_indices) = outcomes_by_request_id.get(request_id)
+            {
+                for index in request_outcome_indices {
+                    matched_outcome_indices.insert(*index);
+                    matched.push(&outcomes[*index]);
+                }
+            }
+            if matched.is_empty()
+                && let Some(session_key) = legacy_trace_session_key(trace)
                 && let Some(session_outcome_indices) = outcomes_by_session.get(&session_key)
             {
                 for index in session_outcome_indices {
@@ -317,6 +373,75 @@ impl RewardJoin {
             semantic_outcome_candidates: outcome_candidates,
         }
     }
+
+    fn join_by_request_id(
+        traces: &[CapturedIngressTrace],
+        outcomes: &[BenchmarkOutcomeRecord],
+    ) -> Self {
+        let outcomes_by_request_id = outcomes.iter().enumerate().fold(
+            BTreeMap::<String, Vec<usize>>::new(),
+            |mut acc, (index, outcome)| {
+                if let Some(request_id) = outcome.request_id.as_deref().map(str::trim)
+                    && !request_id.is_empty()
+                {
+                    acc.entry(request_id.to_string()).or_default().push(index);
+                }
+                acc
+            },
+        );
+        let mut matched_outcome_indices = BTreeSet::new();
+        let mut summary = RewardJoinSummary {
+            outcome_count: outcomes.len(),
+            ..RewardJoinSummary::default()
+        };
+        let mut inadequacy_candidates = Vec::new();
+        let mut outcome_candidates = Vec::new();
+
+        for trace in traces {
+            let Some(request_id) = trace.artifact_request_id() else {
+                summary.unmatched_trace_count += 1;
+                continue;
+            };
+            let Some(indices) = outcomes_by_request_id.get(request_id) else {
+                summary.unmatched_trace_count += 1;
+                continue;
+            };
+            let [index] = indices.as_slice() else {
+                summary.unmatched_trace_count += 1;
+                continue;
+            };
+            if !matched_outcome_indices.insert(*index) {
+                summary.unmatched_trace_count += 1;
+                continue;
+            }
+
+            let outcome = &outcomes[*index];
+            summary.matched_trace_count += 1;
+            outcome_candidates.push(SemanticOutcomeCandidate {
+                trace_id: trace.id.clone(),
+                session_key: outcome.session_key.clone(),
+                task_id: outcome.task_id.clone(),
+                reward: outcome.reward,
+                failed_reason: outcome.failed_reason.clone(),
+            });
+            if outcome.reward < 1.0 {
+                inadequacy_candidates.push(SemanticInadequacyCandidate {
+                    trace_id: trace.id.clone(),
+                    session_key: outcome.session_key.clone(),
+                    task_id: outcome.task_id.clone(),
+                    reward: outcome.reward,
+                    failed_reason: outcome.failed_reason.clone(),
+                });
+            }
+        }
+        summary.unmatched_outcome_count =
+            outcomes.len().saturating_sub(matched_outcome_indices.len());
+        Self {
+            summary,
+            semantic_inadequacy_candidates: inadequacy_candidates,
+            semantic_outcome_candidates: outcome_candidates,
+        }
+    }
 }
 
 fn trace_captured_during_outcome(
@@ -354,22 +479,24 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
         })
 }
 
-fn trace_session_key(trace: &CapturedIngressTrace) -> Option<String> {
+fn legacy_trace_session_key(trace: &CapturedIngressTrace) -> Option<String> {
     [
         "x-bitrouter-trial-id",
         "x-bitrouter-parent-session-id",
         "x-bitrouter-workflow-session",
     ]
     .into_iter()
-    .find_map(|name| {
-        trace
-            .headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-    })
+    .find_map(|name| header_value(trace, name))
+}
+
+fn header_value(trace: &CapturedIngressTrace, name: &str) -> Option<String> {
+    trace
+        .headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 fn json_str(value: &serde_json::Value, path: &[&str]) -> Option<String> {

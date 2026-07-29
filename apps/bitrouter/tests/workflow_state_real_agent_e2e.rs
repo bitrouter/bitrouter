@@ -678,7 +678,6 @@ async fn serve_real_agent_router(
     let assembled = bitrouter::build_app(cfg).await.expect("app assembles");
     let capture = RealTraceCapture::new(TraceCaptureOptions {
         harness,
-        session_header: Some("x-bitrouter-workflow-session".to_string()),
         archive_path: None,
     });
 

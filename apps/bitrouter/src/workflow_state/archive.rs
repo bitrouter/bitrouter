@@ -12,14 +12,12 @@ use crate::metering::pricing::calculate_normalized_charge_micro_usd;
 use crate::metering::{ChargeEvidence, ChargeStatus, PricingSource, ReconciliationStatus};
 use crate::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use crate::workflow_state::fixture::WorkflowTraceFixture;
-use crate::workflow_state::ir::{AgentRole, ContextTransition, HarnessId};
 use crate::workflow_state::real_trace::{CapturedIngressTrace, TraceSanitizer};
 use crate::workflow_state::replay::{ReplayEvaluator, ReplaySummary};
 use crate::workflow_state::reward::{
     BenchmarkOutcomeRecord, RewardJoin, RewardJoinSummary, SemanticInadequacyCandidate,
     SemanticOutcomeCandidate,
 };
-use crate::workflow_state::session::identity_fingerprint;
 use crate::workflow_state::shadow_policy::{ShadowPolicyEvaluator, ShadowPolicySummary};
 
 pub struct TraceArchive;
@@ -132,7 +130,8 @@ pub struct SemanticPolicyTransitionCandidate {
     pub request_key: String,
     #[serde(default)]
     pub ledger_key: Option<String>,
-    pub workflow_state: String,
+    #[serde(alias = "workflow_state")]
+    pub trace_state: String,
     pub static_tier: Option<String>,
     pub selected_tier: Option<String>,
     pub tier_transition: Option<String>,
@@ -348,12 +347,12 @@ impl CostJoinSummary {
             .collect::<BTreeSet<_>>();
         let trace_request_ids = traces
             .iter()
-            .filter_map(trace_request_id)
+            .filter_map(|trace| trace.artifact_request_id().map(ToString::to_string))
             .collect::<BTreeSet<_>>();
 
         let matched_trace_count = traces
             .iter()
-            .filter_map(trace_request_id)
+            .filter_map(|trace| trace.artifact_request_id().map(ToString::to_string))
             .filter(|request_id| usage_request_ids.contains(request_id))
             .count();
         let unmatched_trace_count = traces.len().saturating_sub(matched_trace_count);
@@ -395,13 +394,13 @@ impl WorkflowRunArtifact {
 
         let mut trace_ids = BTreeSet::new();
         for trace in traces {
-            let request_id = trace_request_id(trace).ok_or_else(|| {
+            let request_id = trace.artifact_request_id().ok_or_else(|| {
                 BitrouterError::bad_request(format!(
                     "benchmark integrity: trace {} has no request id",
                     trace.id
                 ))
             })?;
-            if !trace_ids.insert(request_id.clone()) {
+            if !trace_ids.insert(request_id.to_string()) {
                 return Err(BitrouterError::bad_request(format!(
                     "benchmark integrity: duplicate trace request id {request_id}"
                 )));
@@ -439,7 +438,7 @@ impl WorkflowRunArtifact {
 
     /// Validate trace, settlement, and policy-decision joins for a benchmark
     /// bundle. Decision capture is optional, but when present it must cover the
-    /// trace set exactly and Terminus 2 identity must be explicit and complete.
+    /// trace set exactly through persisted request IDs.
     pub fn validate_benchmark_integrity_with_decisions(
         traces: &[CapturedIngressTrace],
         usage: &[CloudUsageRecord],
@@ -452,14 +451,14 @@ impl WorkflowRunArtifact {
 
         let mut traces_by_request_id = BTreeMap::new();
         for trace in traces {
-            let request_id = trace_request_id(trace).ok_or_else(|| {
+            let request_id = trace.artifact_request_id().ok_or_else(|| {
                 BitrouterError::bad_request(format!(
                     "benchmark integrity: trace {} has no request id for decision join",
                     trace.id
                 ))
             })?;
             if traces_by_request_id
-                .insert(request_id.clone(), trace)
+                .insert(request_id.to_string(), trace)
                 .is_some()
             {
                 return Err(BitrouterError::bad_request(format!(
@@ -507,22 +506,12 @@ impl WorkflowRunArtifact {
             )));
         }
 
-        for (request_id, trace) in traces_by_request_id {
-            if trace.harness == HarnessId::Terminus2 {
-                let decision = decisions_by_request_id.get(&request_id).ok_or_else(|| {
-                    BitrouterError::bad_request(format!(
-                        "benchmark integrity: trace {request_id} has no policy decision"
-                    ))
-                })?;
-                validate_terminus_identity(trace, decision, &request_id)?;
-            }
-        }
         Ok(())
     }
 
     /// Validate every benchmark-grade join before an artifact directory is
     /// accepted. Outcomes are optional for analytical bundles; when supplied,
-    /// every trace and outcome must join through an explicit session/trial key.
+    /// every trace and outcome must join through persisted request IDs.
     pub fn validate_complete_benchmark_integrity(
         traces: &[CapturedIngressTrace],
         usage: &[CloudUsageRecord],
@@ -540,6 +529,69 @@ impl WorkflowRunArtifact {
         {
             return Err(BitrouterError::bad_request(format!(
                 "benchmark integrity: outcome join incomplete; matched_traces={}, unmatched_traces={}, unmatched_outcomes={}",
+                reward_join.summary.matched_trace_count,
+                reward_join.summary.unmatched_trace_count,
+                reward_join.summary.unmatched_outcome_count
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validate reward-feedback admission using only stable request joins and
+    /// authoritative outcome evidence. Benchmark-specific identity diagnostics
+    /// are intentionally excluded from this learning path.
+    pub fn validate_reward_feedback_integrity(
+        traces: &[CapturedIngressTrace],
+        usage: &[CloudUsageRecord],
+        outcomes: &[BenchmarkOutcomeRecord],
+        decisions: &[PolicyDecisionRecord],
+    ) -> Result<()> {
+        Self::validate_benchmark_integrity(traces, usage)?;
+
+        let trace_ids = traces
+            .iter()
+            .map(|trace| {
+                trace
+                    .artifact_request_id()
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        BitrouterError::bad_request(format!(
+                            "reward feedback integrity: trace {} has no request id",
+                            trace.id
+                        ))
+                    })
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        let decision_ids = decisions
+            .iter()
+            .map(|decision| {
+                decision.request_id.clone().ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "reward feedback integrity: policy decision has no request id",
+                    )
+                })
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        if trace_ids.len() != traces.len() || decision_ids.len() != decisions.len() {
+            return Err(BitrouterError::bad_request(
+                "reward feedback integrity: duplicate request id".to_string(),
+            ));
+        }
+        if trace_ids != decision_ids {
+            return Err(BitrouterError::bad_request(
+                "reward feedback integrity: trace/decision request ids differ".to_string(),
+            ));
+        }
+        if outcomes.is_empty() {
+            return Ok(());
+        }
+        let reward_join = TraceArchive::join_outcomes_strict(traces, outcomes);
+        if reward_join.summary.unmatched_trace_count != 0
+            || reward_join.summary.unmatched_outcome_count != 0
+            || reward_join.summary.matched_trace_count != traces.len()
+        {
+            return Err(BitrouterError::bad_request(format!(
+                "reward feedback integrity: outcome join incomplete; matched_traces={}, unmatched_traces={}, unmatched_outcomes={}",
                 reward_join.summary.matched_trace_count,
                 reward_join.summary.unmatched_trace_count,
                 reward_join.summary.unmatched_outcome_count
@@ -832,88 +884,6 @@ fn recompute_evidence_charge(evidence: &ChargeEvidence) -> Option<i64> {
         .ok()
 }
 
-fn validate_terminus_identity(
-    trace: &CapturedIngressTrace,
-    decision: &PolicyDecisionRecord,
-    request_id: &str,
-) -> Result<()> {
-    let identity = &decision.workflow_identity;
-    if identity.role == AgentRole::Unknown
-        || identity.parent_session_id.is_none()
-        || identity.agent_session_id.is_none()
-        || identity.benchmark_run_id.is_none()
-        || identity.trial_id.is_none()
-        || identity.source != "explicit_headers"
-        || !valid_pricing_version(&identity.fingerprint)
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: Terminus 2 decision {request_id} has incomplete workflow identity"
-        )));
-    }
-    let expected_fingerprint = identity_fingerprint(
-        identity.benchmark_run_id.as_deref(),
-        identity.trial_id.as_deref(),
-        identity.parent_session_id.as_deref(),
-        identity.context_epoch,
-    );
-    if identity.fingerprint != expected_fingerprint {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: Terminus 2 decision {request_id} has invalid session fingerprint"
-        )));
-    }
-
-    let expected = [
-        (
-            "x-bitrouter-benchmark-run-id",
-            identity.benchmark_run_id.as_deref().unwrap_or_default(),
-        ),
-        (
-            "x-bitrouter-trial-id",
-            identity.trial_id.as_deref().unwrap_or_default(),
-        ),
-        (
-            "x-bitrouter-parent-session-id",
-            identity.parent_session_id.as_deref().unwrap_or_default(),
-        ),
-        (
-            "x-bitrouter-agent-session-id",
-            identity.agent_session_id.as_deref().unwrap_or_default(),
-        ),
-        ("x-bitrouter-agent-role", identity.role.as_str()),
-        (
-            "x-bitrouter-session-fingerprint",
-            identity.fingerprint.as_str(),
-        ),
-    ];
-    for (header, expected_value) in expected {
-        if header_value(&trace.headers, header).as_deref() != Some(expected_value) {
-            return Err(BitrouterError::bad_request(format!(
-                "benchmark integrity: Terminus 2 trace/decision identity mismatch for {request_id} header {header}"
-            )));
-        }
-    }
-    if header_value(&trace.headers, "x-bitrouter-context-epoch")
-        .and_then(|value| value.parse::<u32>().ok())
-        != Some(identity.context_epoch)
-        || header_value(&trace.headers, "x-bitrouter-context-transition").as_deref()
-            != Some(context_transition_value(identity.transition))
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "benchmark integrity: Terminus 2 trace/decision context mismatch for {request_id}"
-        )));
-    }
-    Ok(())
-}
-
-fn context_transition_value(transition: ContextTransition) -> &'static str {
-    match transition {
-        ContextTransition::None => "none",
-        ContextTransition::CompactionStart => "compaction_start",
-        ContextTransition::CompactionContinuation => "compaction_continuation",
-        ContextTransition::MainResume => "main_resume",
-    }
-}
-
 fn valid_pricing_version(version: &str) -> bool {
     version.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -988,16 +958,6 @@ fn read_jsonl_values(path: &Path) -> Result<Vec<serde_json::Value>> {
     Ok(values)
 }
 
-fn trace_request_id(trace: &CapturedIngressTrace) -> Option<String> {
-    [
-        "x-bitrouter-cloud-request-id",
-        "x-bitrouter-request-id",
-        "x-request-id",
-    ]
-    .into_iter()
-    .find_map(|name| header_value(&trace.headers, name))
-}
-
 fn semantic_policy_transition_candidates(
     semantic_candidates: &[SemanticOutcomeCandidate],
     traces: &[CapturedIngressTrace],
@@ -1007,7 +967,9 @@ fn semantic_policy_transition_candidates(
     let request_id_by_trace_id = traces
         .iter()
         .filter_map(|trace| {
-            trace_request_id(trace).map(|request_id| (trace.id.clone(), request_id))
+            trace
+                .artifact_request_id()
+                .map(|request_id| (trace.id.clone(), request_id.to_string()))
         })
         .collect::<BTreeMap<_, _>>();
     let decisions_by_request_id = decisions
@@ -1051,7 +1013,7 @@ fn semantic_policy_transition_candidates(
                 settlement_outcome: semantic_settlement_outcome(usage),
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
-                workflow_state: decision.workflow_state.clone(),
+                trace_state: decision.workflow_state.clone(),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 tier_transition: transition_option(&decision.static_tier, &decision.selected_tier),
@@ -1113,15 +1075,6 @@ fn transition_option(left: &Option<String>, right: &Option<String>) -> Option<St
         (Some(left), Some(right)) => Some(format!("{left} -> {right}")),
         _ => None,
     }
-}
-
-fn header_value(headers: &BTreeMap<String, String>, name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 fn micro_usd_to_usd(value: u64) -> f64 {

@@ -7,6 +7,20 @@ use crate::workflow_state::ir::{
 pub struct ClaudeCodeExtractor;
 
 impl WorkflowStateExtractor for ClaudeCodeExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        headers_indicate_claude_code(input.headers).then_some(
+            crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::ClaudeCode,
+                confidence: 0.95,
+                evidence_kind: "anthropic_beta",
+                native: true,
+            },
+        )
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::ClaudeCode),
@@ -38,7 +52,7 @@ impl WorkflowStateExtractor for ClaudeCodeExtractor {
     }
 }
 
-fn headers_indicate_claude_code(headers: &bitrouter_sdk::HeaderMap) -> bool {
+pub(crate) fn headers_indicate_claude_code(headers: &bitrouter_sdk::HeaderMap) -> bool {
     headers
         .get_all("anthropic-beta")
         .iter()
@@ -48,6 +62,30 @@ fn headers_indicate_claude_code(headers: &bitrouter_sdk::HeaderMap) -> bool {
                 .split(',')
                 .any(|beta| beta.trim().starts_with("claude-code"))
         })
+}
+
+pub(crate) fn metadata_session_id(raw_body: &serde_json::Value) -> Option<String> {
+    let user_id = metadata_user_id(raw_body)?;
+    serde_json::from_str::<serde_json::Value>(&user_id)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+pub(crate) fn metadata_user_id(raw_body: &serde_json::Value) -> Option<String> {
+    raw_body
+        .get("metadata")
+        .and_then(|metadata| metadata.get("user_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]

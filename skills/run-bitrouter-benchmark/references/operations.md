@@ -180,9 +180,6 @@ agent:
     session_id: "$EXACT_TRIAL_SESSION"
     llm_kwargs:
       api_key: bitrouter-local
-    llm_call_kwargs:
-      extra_headers:
-        x-bitrouter-workflow-session: "$EXACT_TRIAL_SESSION"
 ```
 
 Render variables before Pydantic validation. `api_base` belongs in `agent.kwargs` for the pinned Harbor implementation. Keep the non-secret local key in `agent.kwargs.llm_kwargs.api_key`; `agent.env.OPENAI_API_KEY` alone is insufficient in affected Harbor versions.
@@ -192,16 +189,20 @@ For a Claude subscription route, replace the entry model with
 local value under `ANTHROPIC_API_KEY`. This makes Terminus 2's complete
 downstream hop use Anthropic Messages. Remove the `/v1` suffix from
 `api_base` because LiteLLM's Anthropic handler appends `/v1/messages`; retain
-`llm_kwargs.api_key` and the immutable workflow headers. The fixed daemon tier
-resolves the request to `claude-code:<claude-model>`.
+`llm_kwargs.api_key`. The fixed daemon tier resolves the request to
+`claude-code:<claude-model>`.
 
 Terminus 2 supplies its session to LiteLLM, which may serialize it as
 `extra_body.session_id` on Anthropic requests. Pin a bridge-capable BitRouter
-that unwraps `extra_body` and drops this upstream-invalid field after the trace
-headers have already captured the exact session. Do not remove the explicit
-workflow headers to work around the body error.
+that unwraps `extra_body` and drops this upstream-invalid field while retaining
+native session evidence for diagnostics.
 
-Set `x-bitrouter-workflow-session` to the exact value later emitted as the Harbor outcome `session_key`. Confirm the header on a captured canary request. Do not use prompt hashes, body metadata, response IDs, or overlapping time windows as the primary parallel attribution key.
+Keep `session_id` when Harbor needs it for its own lifecycle and diagnostics,
+but do not add a BitRouter-private workflow header. Before enabling parallelism,
+capture a canary and verify every trace, usage record, policy decision, and
+outcome has the same persisted `request_id`. Do not use prompt hashes, body
+metadata, session/trial IDs, response IDs, or overlapping time windows as the
+strict attribution key.
 
 Set the EC2 environment to ephemeral deletion and include exact run, role, case, and trial tags. Explicitly choose public-IP/NAT bootstrap behavior. Keep the daemon host in `extra_allowed_hosts` and do not broaden network policy unnecessarily.
 
@@ -382,6 +383,6 @@ Archive accepted and rejected groups. Include manifests, sanitized configs, cont
 
 Do not archive live credentials, prompt/provider secrets, SSH keys, credential-store databases, or shell history. Keep request IDs, session IDs, timestamps, raw usage, decisions, and rewards needed for reproducibility unless a public privacy policy requires a documented transformation.
 
-Raise concurrency with new non-evaluation canaries, not inside a scored lineage. A cautious sequence is 1 for session validation, then separately frozen 3, 4, 6, and 8 candidates. At each step require complete TrialResults, authoritative settlement, strict joins, acceptable provider latency/error behavior, observed peak equal to the declared value, and zero AWS residue. A successful canary authorizes only a future new lineage at that fixed value.
+Raise concurrency with new non-evaluation canaries, not inside a scored lineage. A cautious sequence is 1 for request-ID join validation, then separately frozen 3, 4, 6, and 8 candidates. At each step require complete TrialResults, authoritative settlement, strict request-ID joins, acceptable provider latency/error behavior, observed peak equal to the declared value, and zero AWS residue. A successful canary authorizes only a future new lineage at that fixed value.
 
 Once an operator freezes a value for a new lineage (for example 4 after a successful staged decision), write it into every manifest and controller-capacity field before launch and keep it unchanged across control and every targeted policy round. A one-case preflight may observe a peak of one even when its controller capacity is four; multi-case capacity validation must use enough predeclared non-evaluation cases to exercise the declared peak.

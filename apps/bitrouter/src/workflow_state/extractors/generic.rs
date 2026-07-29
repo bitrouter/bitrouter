@@ -101,9 +101,9 @@ fn classify_state(prompt: &Prompt) -> (WorkflowStateKind, Option<String>, Eviden
         if message.role != Role::Assistant {
             continue;
         }
-        if let Some(name) = message.content.iter().rev().find_map(tool_call_name) {
+        if let Some((state_kind, name)) = message.content.iter().rev().find_map(tool_call_state) {
             return (
-                WorkflowStateKind::ToolFollowup,
+                state_kind,
                 Some(name.to_string()),
                 Evidence {
                     kind: "last_assistant_tool_call".to_string(),
@@ -136,10 +136,106 @@ fn classify_state(prompt: &Prompt) -> (WorkflowStateKind, Option<String>, Eviden
     )
 }
 
-fn tool_call_name(content: &Content) -> Option<&str> {
+fn tool_call_state(content: &Content) -> Option<(WorkflowStateKind, &str)> {
     match content {
-        Content::ToolCall { name, .. } => Some(name.as_str()),
+        Content::ToolCall {
+            name, arguments, ..
+        } => Some((tool_call_intent(name, arguments), name.as_str())),
         _ => None,
+    }
+}
+
+fn tool_call_intent(name: &str, arguments: &str) -> WorkflowStateKind {
+    match name {
+        "apply_patch" | "Edit" => WorkflowStateKind::Edit,
+        "Bash" if canonical_test_command(arguments, "command") => WorkflowStateKind::Test,
+        "bash" | "shell" | "terminal" | "exec_command"
+            if canonical_test_command(arguments, "cmd") =>
+        {
+            WorkflowStateKind::Test
+        }
+        _ => WorkflowStateKind::ToolFollowup,
+    }
+}
+
+fn canonical_test_command(arguments: &str, expected_field: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let command_fields = ["command", "cmd"]
+        .into_iter()
+        .filter(|field| object.contains_key(*field))
+        .collect::<Vec<_>>();
+    if command_fields != [expected_field] {
+        return false;
+    }
+    let Some(command) = object
+        .get(expected_field)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    if !is_ascii_shell_input(command) {
+        return false;
+    }
+    let command = command.trim_matches([' ', '\t']);
+    if command.is_empty() || contains_shell_syntax(command) {
+        return false;
+    }
+    is_canonical_test_command(command)
+}
+
+fn is_ascii_shell_input(command: &str) -> bool {
+    command.is_ascii()
+        && !command
+            .bytes()
+            .any(|byte| byte.is_ascii_control() && byte != b'\t')
+}
+
+fn contains_shell_syntax(command: &str) -> bool {
+    command.chars().any(|character| {
+        matches!(
+            character,
+            '\n' | '\r'
+                | ';'
+                | '&'
+                | '|'
+                | '#'
+                | '\''
+                | '"'
+                | '`'
+                | '$'
+                | '<'
+                | '>'
+                | '\\'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '*'
+                | '?'
+                | '!'
+                | '~'
+        )
+    })
+}
+
+fn is_canonical_test_command(command: &str) -> bool {
+    let mut tokens = command.split([' ', '\t']).filter(|token| !token.is_empty());
+    match tokens.next() {
+        Some("cargo") | Some("go") | Some("npm") | Some("pnpm") | Some("yarn") | Some("make") => {
+            matches!(tokens.next(), Some("test"))
+        }
+        Some("python") | Some("python3") => {
+            matches!(tokens.next(), Some("-m")) && matches!(tokens.next(), Some("pytest"))
+        }
+        Some("pytest") | Some("ctest") => true,
+        _ => false,
     }
 }
 
@@ -281,12 +377,16 @@ mod tests {
     }
 
     fn assistant_calls(tool: &str) -> Message {
+        assistant_call(tool, "{}")
+    }
+
+    fn assistant_call(tool: &str, arguments: &str) -> Message {
         Message {
             role: Role::Assistant,
             content: vec![Content::ToolCall {
                 id: format!("call_{tool}"),
                 name: tool.to_string(),
-                arguments: "{}".to_string(),
+                arguments: arguments.to_string(),
                 provider_executed: false,
                 dynamic: false,
                 provider_metadata: ProviderMetadata::new(),
@@ -335,6 +435,81 @@ mod tests {
         let ir = extract(&prompt);
         assert_eq!(ir.state_kind, WorkflowStateKind::ToolFollowup);
         assert_eq!(ir.last_tool_name.as_deref(), Some("bash"));
+    }
+
+    #[test]
+    fn generic_tool_intent_maps_verified_edit_and_test_calls_without_source_data() {
+        let edit = extract(&prompt(
+            vec![user("continue"), assistant_call("apply_patch", "{}")],
+            Vec::new(),
+        ));
+        assert_eq!(edit.state_kind, WorkflowStateKind::Edit);
+
+        let test = extract(&prompt(
+            vec![
+                user("continue"),
+                assistant_call("bash", r#"{"cmd":"cargo test -p bitrouter"}"#),
+            ],
+            Vec::new(),
+        ));
+        assert_eq!(test.state_kind, WorkflowStateKind::Test);
+    }
+
+    #[test]
+    fn generic_test_intent_requires_a_documented_command_argument_at_command_position() {
+        let claude_bash = extract(&prompt(
+            vec![
+                user("continue"),
+                assistant_call("Bash", r#"{"command":"cargo test -p bitrouter"}"#),
+            ],
+            Vec::new(),
+        ));
+        assert_eq!(claude_bash.state_kind, WorkflowStateKind::Test);
+
+        let pytest = extract(&prompt(
+            vec![
+                user("continue"),
+                assistant_call("Bash", r#"{"command":"pytest -q"}"#),
+            ],
+            Vec::new(),
+        ));
+        assert_eq!(pytest.state_kind, WorkflowStateKind::Test);
+
+        for (tool, arguments) in [
+            ("bash", r#"{"cmd":"echo hello","description":"cargo test"}"#),
+            ("Bash", r#"{"command":"echo cargo test"}"#),
+            ("Bash", r##"{"command":"# cargo test"}"##),
+            ("Bash", r#"{"command":"\"cargo test\""}"#),
+            ("Bash", r#"{"command":"cargo test","cmd":"rm -rf scratch"}"#),
+            ("Bash", r#"{"metadata":"cargo test"}"#),
+            ("Bash", "{not-json"),
+            ("Bash", "[]"),
+            ("bash", r#"{"cmd":"pwd","metadata":{"tool_name":"Edit"}}"#),
+            ("not_a_shell", r#"{"command":"cargo test"}"#),
+            ("Bash", r##"{"command":"# ignored; cargo test"}"##),
+            ("Bash", r##"{"command":"# ignored && cargo test"}"##),
+            ("Bash", r#"{"command":"echo hello && cargo test"}"#),
+            ("Bash", r#"{"command":"cargo test \"quoted; data\""}"#),
+            ("Bash", "{\"command\":\"cat <<'EOF'\\ncargo test\\nEOF\"}"),
+            ("Bash", r#"{"command":"cargo test | cat"}"#),
+            ("Bash", r#"{"command":"cargo test > results.txt"}"#),
+            ("Bash", r#"{"command":"cargo test $(date)"}"#),
+            ("Bash", r#"{"command":"cargo test `date`"}"#),
+            ("Bash", r#"{"command":"cargo test\r"}"#),
+            ("Bash", "{\"command\":\"cargo\\u00a0test\"}"),
+            ("Bash", r#"{"command":"cargo test\u000b"}"#),
+            ("Bash", r#"{"command":"cargo test\u000c"}"#),
+        ] {
+            let ir = extract(&prompt(
+                vec![user("continue"), assistant_call(tool, arguments)],
+                Vec::new(),
+            ));
+            assert_eq!(
+                ir.state_kind,
+                WorkflowStateKind::ToolFollowup,
+                "{tool} {arguments} must not select the economy test route"
+            );
+        }
     }
 
     #[test]

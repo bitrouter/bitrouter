@@ -7,6 +7,23 @@ use crate::workflow_state::ir::{
 pub struct OpenClawExtractor;
 
 impl WorkflowStateExtractor for OpenClawExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        input
+            .raw_body
+            .get("agentRuntime")
+            .and_then(serde_json::Value::as_object)
+            .is_some()
+            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::OpenClaw,
+                confidence: 0.9,
+                evidence_kind: "agent_runtime",
+                native: true,
+            })
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::OpenClaw),
@@ -86,5 +103,29 @@ mod tests {
         assert!(ir.evidence.iter().any(|e| {
             e.kind == "openclaw_runtime_metadata" && e.level == EvidenceLevel::DocumentedStub
         }));
+    }
+
+    #[test]
+    fn openclaw_runtime_plan_action_is_diagnostic_only() {
+        let prompt = prompt();
+        let headers = HeaderMap::new();
+        for action in ["edit", "test", "caller-supplied-economy"] {
+            let raw_body = serde_json::json!({
+                "agentRuntime": {"id": "openclaw.default"},
+                "runtimePlan": {"action": action}
+            });
+            let ir = OpenClawExtractor.extract(&ExtractorInput {
+                harness_hint: None,
+                protocol_hint: ProtocolKind::OpenClawRuntime,
+                headers: &headers,
+                raw_body: &raw_body,
+                prompt: &prompt,
+            });
+            assert_eq!(
+                ir.state_kind,
+                crate::workflow_state::ir::WorkflowStateKind::Opening,
+                "unverified {action} action must not change routing projection"
+            );
+        }
     }
 }

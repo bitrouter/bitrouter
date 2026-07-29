@@ -500,6 +500,33 @@ variants:
 }
 
 #[test]
+fn auto_router_template_resolves_auto_and_cost_variant() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("templates/auto-router/bitrouter.yaml");
+    let yaml = std::fs::read_to_string(path).unwrap();
+    let config = parse(&yaml).unwrap();
+
+    let auto = resolve_presets("@auto", &config.presets, &config.variants).unwrap();
+    assert_eq!(auto.clean_model, "openai-codex:gpt-5.6-sol");
+    assert_eq!(auto.policy.as_deref(), Some("auto"));
+
+    let cost = resolve_presets("@auto:cost", &config.presets, &config.variants).unwrap();
+    assert_eq!(cost.clean_model, "openai-codex:gpt-5.6-sol");
+    assert_eq!(cost.policy.as_deref(), Some("auto"));
+    assert_eq!(cost.prefs.sort, SortOrder::Cost);
+
+    let physical = resolve_presets(
+        "openai-codex:gpt-5.6-sol",
+        &config.presets,
+        &config.variants,
+    )
+    .unwrap();
+    assert_eq!(physical.clean_model, "openai-codex:gpt-5.6-sol");
+    assert!(physical.policy.is_none());
+}
+
+#[test]
 fn parses_multi_account_provider() {
     let yaml = r#"
 providers:
@@ -610,30 +637,90 @@ fn policy_table_absent_leaves_section_empty() {
     .unwrap();
     assert!(cfg.policy_table.tiers.is_empty());
     assert!(cfg.policy_table.fingerprints.is_empty());
-    assert_eq!(
-        cfg.policy_table.key_strategy,
-        PolicyKeyStrategy::LegacyFingerprint
-    );
+    assert_eq!(cfg.policy_table.key_strategy, PolicyKeyStrategy::AgentTrace);
     assert!(cfg.policy_table.default_tier.is_none());
     assert!(cfg.policy_table.tool_use_tier.is_none());
     assert!(cfg.policy_table.tool_safe_tiers.is_empty());
 }
 
 #[test]
-fn parses_policy_table_workflow_state_key_strategy() {
+fn policy_table_agent_trace_key_strategy_is_canonical_and_workflow_state_is_compatible() {
     let yaml = r#"
 policy_table:
-  key_strategy: workflow_state
+  key_strategy: agent_trace
   tiers:
     cheap: vendor/cheap
   fingerprints:
-    "generic|unknown|opening|-|-|-|none|small|none|low|low|low|low|medium|medium|": cheap
+    "agent_trace/v1|opening|normal": cheap
 "#;
     let cfg = parse_with(yaml, |_| None).unwrap();
+    assert_eq!(cfg.policy_table.key_strategy, PolicyKeyStrategy::AgentTrace);
+
+    let serialized = serde_saphyr::to_string(&cfg.policy_table).unwrap();
+    assert!(serialized.contains("key_strategy: agent_trace"));
+
+    let compatible = parse_with(
+        "policy_table:\n  key_strategy: workflow_state\n  tiers: { cheap: vendor/cheap }\n",
+        |_| None,
+    )
+    .unwrap();
     assert_eq!(
-        cfg.policy_table.key_strategy,
-        PolicyKeyStrategy::WorkflowState
+        compatible.policy_table.key_strategy,
+        PolicyKeyStrategy::AgentTrace
     );
+
+    let schema = serde_json::to_value(schemars::schema_for!(PolicyTableConfig)).unwrap();
+    let rendered = serde_json::to_string(&schema).unwrap();
+    assert!(rendered.contains("agent_trace"));
+    assert!(!rendered.contains("workflow_state"));
+}
+
+#[test]
+fn policy_key_strategy_keeps_the_workflow_state_rust_variant_and_serializes_canonically() {
+    let legacy_api = PolicyKeyStrategy::WorkflowState;
+    assert!(matches!(legacy_api, PolicyKeyStrategy::WorkflowState));
+    let serialized = serde_saphyr::to_string(&legacy_api).unwrap();
+    assert_eq!(serialized.trim(), "agent_trace");
+
+    let unsupported_api = PolicyKeyStrategy::LegacyFingerprint;
+    let serialized = serde_saphyr::to_string(&unsupported_api).unwrap();
+    assert_eq!(serialized.trim(), "agent_trace");
+}
+
+#[test]
+fn policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance() {
+    let err = parse_with(
+        "policy_table:\n  key_strategy: legacy_fingerprint\n  tiers: { cheap: vendor/cheap }\n",
+        |_| None,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "policy_table.key_strategy: 'legacy_fingerprint' is no longer supported; use 'agent_trace'"
+        ),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn policy_table_rejects_the_removed_session_downgrade_budget() {
+    let err = parse_with(
+        "policy_table:\n  tiers: { cheap: vendor/cheap }\n  adequacy:\n    max_downgraded_requests_per_session: 1\n",
+        |_| None,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "policy_table.adequacy.max_downgraded_requests_per_session is no longer supported"
+        ),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn policy_schema_hides_the_removed_session_downgrade_budget() {
+    let schema = serde_json::to_string(&schemars::schema_for!(PolicyTableConfig)).unwrap();
+    assert!(!schema.contains("max_downgraded_requests_per_session"));
 }
 
 #[test]

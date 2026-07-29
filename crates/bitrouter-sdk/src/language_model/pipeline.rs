@@ -636,6 +636,12 @@ impl Pipeline {
                 }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
                     FallbackDecision::TryNext => {
+                        tracing::warn!(
+                            provider = %target.provider_name,
+                            model = %target.service_id,
+                            error = %e,
+                            "upstream route candidate failed"
+                        );
                         errors.push(e);
                         continue;
                     }
@@ -689,6 +695,12 @@ impl Pipeline {
                 }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
                     FallbackDecision::TryNext => {
+                        tracing::warn!(
+                            provider = %target.provider_name,
+                            model = %target.service_id,
+                            error = %e,
+                            "upstream streaming route candidate failed"
+                        );
                         errors.push(e);
                         continue;
                     }

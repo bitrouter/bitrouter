@@ -308,9 +308,22 @@ impl AdequacyLedger {
     /// be a trial on the explore tier (deterministic cadence). The router only
     /// consults this when the fingerprint is neither pinned nor locked.
     pub fn should_trial(&self, fingerprint: &str) -> bool {
+        self.should_trial_with_semantic_threshold(fingerprint, 0)
+    }
+
+    /// Whether the next request should remain an exploration trial while a
+    /// request-qualified downgrade is still awaiting independent task-level
+    /// semantic confirmation.
+    pub fn should_trial_with_semantic_threshold(
+        &self,
+        fingerprint: &str,
+        minimum_semantic_successes: u32,
+    ) -> bool {
         let guard = self.state.read().unwrap_or_else(PoisonError::into_inner);
+        let threshold = self.semantic_success_threshold(minimum_semantic_successes);
         match guard.entries.get(fingerprint) {
-            Some(e) if !e.locked => e.observed > 0 && e.observed % self.explore_interval == 0,
+            Some(e) if e.locked => e.semantic_successes < threshold,
+            Some(e) => e.observed > 0 && e.observed % self.explore_interval == 0,
             // Unseen candidate: observed == 0, not yet a trial (the first request
             // routes to the safe escalation tier and advances the cadence).
             _ => false,

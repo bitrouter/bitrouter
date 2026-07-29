@@ -25,6 +25,7 @@ use crate::adequacy::settlement::PendingAdequacyStore;
 use crate::adequacy::store::{AdequacyStore, PersistedExplorationState};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
+use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const POLICY_LOCKFILE_VERSION: u32 = 1;
@@ -69,7 +70,7 @@ pub struct PolicyDefinition {
 impl Default for PolicyDefinition {
     fn default() -> Self {
         Self {
-            key_strategy: PolicyKeyStrategy::WorkflowState,
+            key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: BTreeMap::new(),
             routes: BTreeMap::new(),
             default_tier: None,
@@ -297,6 +298,9 @@ pub fn evolve_document(
         let Some((policy_name, request_key)) = row.fingerprint.split_once('\0') else {
             continue;
         };
+        let Some(projection) = RouteProjection::parse_key(request_key) else {
+            continue;
+        };
         let Some(policy) = document.policies.get_mut(policy_name) else {
             continue;
         };
@@ -306,7 +310,7 @@ pub fn evolve_document(
         let Some(explore_tier) = policy.adequacy.explore_tier.clone() else {
             continue;
         };
-        let opening_minimum = if is_opening_key(request_key) {
+        let opening_minimum = if projection.state_kind == WorkflowStateKind::Opening {
             policy.adequacy.min_semantic_successes_for_opening
         } else {
             0
@@ -339,8 +343,66 @@ pub fn evolve_document(
     Ok(EvolutionResult { document, changes })
 }
 
-fn is_opening_key(request_key: &str) -> bool {
-    request_key == "opening" || request_key.split('|').nth(2) == Some("opening")
+/// Turn an evolved candidate into a deployment artifact. Learned routes and
+/// routing-only session budgets remain active, while the adequacy learner and
+/// future exploration are disabled so holdout routing cannot mutate itself.
+pub fn freeze_document(mut document: PolicyLock) -> PolicyLock {
+    for policy in document.policies.values_mut() {
+        policy.adequacy.enabled = false;
+        policy.adequacy.explore_enabled = false;
+    }
+    document
+}
+
+/// Atomically publish a candidate without permitting it to replace the lock
+/// currently selected by `bitrouter.yaml`.
+pub fn export_candidate_file(
+    active_lock_path: &Path,
+    candidate_path: &Path,
+    document: &PolicyLock,
+) -> Result<String> {
+    let active = resolved_file_location(active_lock_path)?;
+    let candidate = resolved_file_location(candidate_path)?;
+    if active == candidate {
+        anyhow::bail!(
+            "candidate output '{}' is the active policy lock; choose a separate path",
+            candidate_path.display()
+        );
+    }
+    write_atomic(candidate_path, None, document)
+}
+
+fn resolved_file_location(path: &Path) -> Result<PathBuf> {
+    path.file_name()
+        .ok_or_else(|| anyhow::anyhow!("policy output must name a file: {}", path.display()))?;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("resolving current directory")?
+            .join(path)
+    };
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                resolved.push(component.as_os_str());
+            }
+            std::path::Component::Normal(_) => {
+                resolved.push(component.as_os_str());
+                if resolved.exists() {
+                    resolved = std::fs::canonicalize(&resolved).with_context(|| {
+                        format!("resolving policy path component {}", resolved.display())
+                    })?;
+                }
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 /// Bind an existing preset to a routing policy and set the optimizer's
@@ -1045,6 +1107,142 @@ mod tests {
     }
 
     #[test]
+    fn freezing_disables_all_learning() {
+        let mut policy = definition();
+        policy.adequacy.enabled = true;
+        policy.adequacy.explore_enabled = true;
+        policy.adequacy.explore_tier = Some("economy".into());
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), policy)]),
+        };
+
+        let frozen = freeze_document(lock);
+
+        assert!(!frozen.policies["coding"].adequacy.enabled);
+        assert!(!frozen.policies["coding"].adequacy.explore_enabled);
+        assert_eq!(
+            frozen.policies["coding"].adequacy.explore_tier.as_deref(),
+            Some("economy")
+        );
+    }
+
+    #[test]
+    fn legacy_workflow_state_locks_deserialize_as_agent_trace_and_freeze_canonically() {
+        let lock: PolicyLock = serde_saphyr::from_str(
+            r#"
+lockfileVersion: 1
+policies:
+  coding:
+    key_strategy: workflow_state
+    tiers:
+      strong: vendor:strong
+    routes:
+      agent_trace/v1|edit|normal: strong
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            lock.policies["coding"].key_strategy,
+            PolicyKeyStrategy::AgentTrace
+        );
+
+        let frozen = freeze_document(lock);
+        let rendered = deterministic_yaml(&frozen).unwrap();
+        assert!(rendered.contains("key_strategy: agent_trace"));
+        assert!(!rendered.contains("key_strategy: workflow_state"));
+    }
+
+    #[test]
+    fn auto_router_template_lock_is_bound_and_canonical() {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let config = bitrouter_sdk::config::parse(
+            &std::fs::read_to_string(template_dir.join("bitrouter.yaml")).unwrap(),
+        )
+        .unwrap();
+        let lock: PolicyLock = serde_saphyr::from_str(
+            &std::fs::read_to_string(template_dir.join("policy-lock.yaml")).unwrap(),
+        )
+        .unwrap();
+
+        validate_for_config(&config, &lock).unwrap();
+        let policy = &lock.policies["auto"];
+        assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
+        assert_eq!(policy.routes["agent_trace/v1|edit|normal"], "economy");
+        assert_eq!(policy.routes["agent_trace/v1|test|normal"], "economy");
+        assert_eq!(
+            policy.routes["agent_trace/v1|tool_followup|normal"],
+            "economy"
+        );
+        assert_eq!(policy.default_tier.as_deref(), Some("strong"));
+        assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
+        assert_eq!(policy.tool_safe_tiers, ["strong", "economy"]);
+
+        let rendered = deterministic_yaml(&lock).unwrap();
+        assert!(rendered.contains("key_strategy: agent_trace"));
+        assert!(!rendered.contains("key_strategy: workflow_state"));
+    }
+
+    #[test]
+    fn candidate_export_refuses_to_replace_the_active_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("policy-lock.yaml");
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+        };
+        write_atomic(&active, None, &lock).unwrap();
+        let before = std::fs::read(&active).unwrap();
+
+        let error = export_candidate_file(&active, &active, &lock).unwrap_err();
+
+        assert!(error.to_string().contains("active policy lock"));
+        assert_eq!(std::fs::read(&active).unwrap(), before);
+    }
+
+    #[test]
+    fn candidate_export_refuses_nonexistent_parent_alias_of_active_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("policy-lock.yaml");
+        let candidate = dir.path().join("new").join("..").join("policy-lock.yaml");
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+        };
+        write_atomic(&active, None, &lock).unwrap();
+        let before = std::fs::read(&active).unwrap();
+
+        let error = export_candidate_file(&active, &candidate, &lock).unwrap_err();
+
+        assert!(error.to_string().contains("active policy lock"));
+        assert_eq!(std::fs::read(&active).unwrap(), before);
+    }
+
+    #[test]
+    fn independent_candidate_exports_are_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("policy-lock.yaml");
+        let first = dir.path().join("candidate-a.yaml");
+        let second = dir.path().join("candidate-b.yaml");
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+        };
+        write_atomic(&active, None, &lock).unwrap();
+
+        let first_digest = export_candidate_file(&active, &first, &lock).unwrap();
+        let second_digest = export_candidate_file(&active, &second, &lock).unwrap();
+
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap()
+        );
+        assert_eq!(first_digest, second_digest);
+    }
+
+    #[test]
     fn validation_rejects_empty_or_duplicate_tier_models() {
         let mut empty = definition();
         empty.tiers.insert("strong".into(), "   ".into());
@@ -1171,7 +1369,7 @@ presets:
     }
 
     #[test]
-    fn evolution_only_materializes_qualified_namespaced_locks() {
+    fn evolution_only_materializes_qualified_canonical_projection_locks() {
         use crate::adequacy::store::PersistedExplorationState;
 
         let mut policy = definition();
@@ -1191,7 +1389,7 @@ presets:
                 locked: true,
             },
             PersistedExplorationState {
-                fingerprint: "coding\0opening".into(),
+                fingerprint: "coding\0agent_trace/v1|tool_followup|normal".into(),
                 observed: 8,
                 adequate_trials: 4,
                 locked: true,
@@ -1203,13 +1401,7 @@ presets:
                 locked: true,
             },
         ];
-        let semantic = BTreeMap::from([
-            (
-                "coding\0codex|responses|tool_followup|-|-|exec_command".into(),
-                2,
-            ),
-            ("coding\0opening".into(), 1),
-        ]);
+        let semantic = BTreeMap::from([("coding\0agent_trace/v1|tool_followup|normal".into(), 2)]);
 
         let evolved = evolve_document(&lock, &rows, &semantic).unwrap();
 
@@ -1217,13 +1409,15 @@ presets:
         assert_eq!(evolved.changes[0].policy, "coding");
         assert_eq!(evolved.changes[0].tier, "economy");
         assert_eq!(
-            evolved.document.policies["coding"].routes["codex|responses|tool_followup|-|-|exec_command"],
+            evolved.document.policies["coding"].routes["agent_trace/v1|tool_followup|normal"],
             "economy"
         );
-        assert_eq!(
-            evolved.document.policies["coding"].routes["opening"],
-            "strong"
+        assert!(
+            !evolved.document.policies["coding"]
+                .routes
+                .contains_key("codex|responses|tool_followup|-|-|exec_command")
         );
+        assert!(evolved.document.policies["coding"].routes["opening"] == "strong");
         assert!(
             !evolved.document.policies["coding"]
                 .routes
@@ -1232,8 +1426,55 @@ presets:
     }
 
     #[test]
+    fn evolution_requires_the_opening_semantic_threshold_for_canonical_keys() {
+        use crate::adequacy::store::PersistedExplorationState;
+
+        let mut policy = definition();
+        policy.adequacy.enabled = true;
+        policy.adequacy.explore_enabled = true;
+        policy.adequacy.explore_tier = Some("economy".into());
+        policy.adequacy.min_semantic_successes_for_lock = 1;
+        policy.adequacy.min_semantic_successes_for_opening = 3;
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            policies: BTreeMap::from([("coding".into(), policy)]),
+        };
+        let row = PersistedExplorationState {
+            fingerprint: "coding\0agent_trace/v1|opening|normal".into(),
+            observed: 8,
+            adequate_trials: 4,
+            locked: true,
+        };
+
+        let below_threshold = evolve_document(
+            &lock,
+            std::slice::from_ref(&row),
+            &BTreeMap::from([(row.fingerprint.clone(), 2)]),
+        )
+        .unwrap();
+        assert!(below_threshold.changes.is_empty());
+        assert!(
+            !below_threshold.document.policies["coding"]
+                .routes
+                .contains_key("agent_trace/v1|opening|normal")
+        );
+
+        let qualified = evolve_document(
+            &lock,
+            std::slice::from_ref(&row),
+            &BTreeMap::from([(row.fingerprint.clone(), 3)]),
+        )
+        .unwrap();
+        assert_eq!(qualified.changes.len(), 1);
+        assert_eq!(
+            qualified.document.policies["coding"].routes["agent_trace/v1|opening|normal"],
+            "economy"
+        );
+    }
+
+    #[test]
     fn evolution_never_removes_an_existing_operator_route() {
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = "agent_trace/v1|tool_followup|normal";
         let mut policy = definition();
         policy.adequacy.enabled = true;
         policy.adequacy.explore_enabled = true;
@@ -1333,6 +1574,62 @@ presets:
     }
 
     #[tokio::test]
+    async fn locked_config_can_export_without_mutating_active_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"database:
+  url: sqlite://./bitrouter.db
+presets:
+  coding:
+    model: anthropic/claude-opus-4.8
+"#,
+        )
+        .await
+        .unwrap();
+        let initialized = initialize_files(
+            &config_path,
+            "terminal-bench",
+            "coding",
+            None,
+            "moonshotai/kimi-k2.7-code",
+        )
+        .await
+        .unwrap();
+        let db_path = dir.path().join("bitrouter.db");
+        let db = crate::db::connect(&format!("sqlite://{}", db_path.display()))
+            .await
+            .unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+        db.close().await.unwrap();
+        let before_config = tokio::fs::read(&config_path).await.unwrap();
+        let before_lock = tokio::fs::read(&initialized.path).await.unwrap();
+        let candidate_path = dir.path().join("candidate.yaml");
+
+        let update = evolve_files(&config_path, false).await.unwrap();
+        let frozen = freeze_document(update.document);
+        export_candidate_file(&update.path, &candidate_path, &frozen).unwrap();
+
+        assert_eq!(tokio::fs::read(&config_path).await.unwrap(), before_config);
+        assert_eq!(
+            tokio::fs::read(&initialized.path).await.unwrap(),
+            before_lock
+        );
+        let candidate = load(&candidate_path).await.unwrap();
+        assert!(
+            !candidate.document.policies["terminal-bench"]
+                .adequacy
+                .enabled
+        );
+        assert!(
+            !candidate.document.policies["terminal-bench"]
+                .adequacy
+                .explore_enabled
+        );
+    }
+
+    #[tokio::test]
     async fn reload_swaps_valid_policy_and_keeps_last_known_good_on_error() {
         use bitrouter_sdk::caller::CallerContext;
         use bitrouter_sdk::language_model::{
@@ -1369,7 +1666,7 @@ presets:
         let config = bitrouter_sdk::config::load(&config_path).await.unwrap();
         let lock_path = dir.path().join("policy-lock.yaml");
         let mut reloadable = definition();
-        reloadable.key_strategy = PolicyKeyStrategy::LegacyFingerprint;
+        reloadable.key_strategy = PolicyKeyStrategy::AgentTrace;
         let mut lock = PolicyLock {
             lockfile_version: 1,
             policies: BTreeMap::from([("coding".into(), reloadable)]),
@@ -1395,7 +1692,7 @@ presets:
             .get_mut("coding")
             .unwrap()
             .routes
-            .insert("opening".into(), "economy".into());
+            .insert("agent_trace/v1|opening|normal".into(), "economy".into());
         write_atomic(&lock_path, None, &lock).unwrap();
         runtime
             .reload_for_config(&config, Some(&config_path))
@@ -1452,7 +1749,7 @@ presets:
             .unwrap();
         crate::db::run_migrations(&db).await.unwrap();
         let store = AdequacyStore::new(db);
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
+        let request_key = "agent_trace/v1|tool_followup|normal";
         let ledger_key = format!("coding\0{request_key}");
         store
             .upsert_exploration(&ledger_key, 4, 3, true)

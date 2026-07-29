@@ -404,11 +404,12 @@ credential file. The latter resolves static keys and refreshable OAuth without
 putting a bearer in the environment. Price specs use
 `provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
 
-`bundle` is fail-closed: every non-empty trace set needs an exact usage join and
-computed auditable charge, policy decisions must cover the exact request-id set
-when supplied, and outcomes must join through an explicit session/trial key.
-Timestamp-only reward attribution is available to analytical in-memory reports,
-not accepted benchmark bundles.
+`bundle` is fail-closed: every non-empty trace set needs an exact request-ID
+usage join and computed auditable charge; supplied policy decisions and outcomes
+must each cover that same request-ID set exactly once. Session/trial metadata
+and timestamps are benchmark diagnostics, not strict join keys. Reward-feedback
+admission also requires completed requests and authoritative settlement; it
+does not use diagnostic identity fields for learning.
 
 ---
 

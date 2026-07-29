@@ -97,15 +97,18 @@ fn explicit_protocol_combines_with_terminus_prompt_detection() {
 }
 
 #[test]
-fn explicit_terminus_harness_defaults_to_chat_completions() {
+fn explicit_terminus_harness_is_compatibility_evidence_only() {
     let prompt = prompt(vec![user("ordinary task text")]);
     let mut headers = HeaderMap::new();
     headers.insert("x-bitrouter-harness", "terminus_2".parse().unwrap());
 
     let online = OnlineWorkflowState::from_headers(&headers, &prompt);
 
-    assert_eq!(online.ir.harness_id, HarnessId::Terminus2);
-    assert_eq!(online.ir.protocol, ProtocolKind::ChatCompletions);
+    assert_eq!(online.ir.harness_id, HarnessId::Generic);
+    assert_eq!(online.ir.protocol, ProtocolKind::Unknown);
+    assert!(online.ir.evidence.iter().any(|evidence| {
+        evidence.kind == "trace_adapter" && evidence.value == "compatibility_harness_hint:Terminus2"
+    }));
 }
 
 #[test]
@@ -252,6 +255,8 @@ fn identity_for(
     prompt: &Prompt,
     trial_id: &str,
 ) -> bitrouter::workflow_state::ir::WorkflowIdentity {
+    let mut native_prompt = prompt.clone();
+    native_prompt.system = Some(TERMINUS_OPENING.to_string());
     let mut headers = HeaderMap::new();
     headers.insert("x-session-id", "terminus-parent".parse().unwrap());
     headers.insert(
@@ -266,7 +271,7 @@ fn identity_for(
             protocol_hint: ProtocolKind::ChatCompletions,
             headers: &headers,
             raw_body: &raw_body,
-            prompt,
+            prompt: &native_prompt,
         },
         tracker,
     )
@@ -277,6 +282,8 @@ fn identity_for_session(
     session_id: &str,
     prompt: &Prompt,
 ) -> bitrouter::workflow_state::ir::WorkflowIdentity {
+    let mut native_prompt = prompt.clone();
+    native_prompt.system = Some(TERMINUS_OPENING.to_string());
     let mut headers = HeaderMap::new();
     headers.insert("x-session-id", session_id.parse().unwrap());
     headers.insert(
@@ -291,7 +298,7 @@ fn identity_for_session(
             protocol_hint: ProtocolKind::ChatCompletions,
             headers: &headers,
             raw_body: &raw_body,
-            prompt,
+            prompt: &native_prompt,
         },
         tracker,
     )

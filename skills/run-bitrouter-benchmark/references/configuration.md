@@ -191,7 +191,9 @@ Freeze:
 - entry model name and API protocol exposed by BitRouter;
 - `api_base` placement and `llm_kwargs` passed by the pinned Harbor version;
 - the non-secret daemon key field required by the Terminus 2 LiteLLM client;
-- the exact workflow-session propagation mechanism;
+- the native Terminus session diagnostic mechanism, if retained by the pinned
+  Harbor version, and the persisted request-ID artifact path used for strict
+  joins;
 - EC2 environment fields and Pydantic validation command.
 
 Record whether a multi-trial Harbor `JobConfig` or a one-case `TrialConfig` will be used. The two shapes differ; do not translate between them by string editing after validation.

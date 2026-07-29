@@ -7,6 +7,34 @@ use crate::workflow_state::ir::{
 pub struct CodexResponsesExtractor;
 
 impl WorkflowStateExtractor for CodexResponsesExtractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        if input.protocol_hint != ProtocolKind::Responses {
+            return None;
+        }
+        if header_contains(input.headers, "user-agent", "codex") {
+            return Some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Codex,
+                confidence: 0.95,
+                evidence_kind: "responses_codex_user_agent",
+                native: true,
+            });
+        }
+        input
+            .raw_body
+            .get("previous_response_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+            .then_some(crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Codex,
+                confidence: 0.9,
+                evidence_kind: "responses_previous_response_id",
+                native: true,
+            })
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::Codex),
@@ -37,6 +65,22 @@ impl WorkflowStateExtractor for CodexResponsesExtractor {
     }
 }
 
+fn header_contains(headers: &bitrouter_sdk::HeaderMap, name: &str, needle: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains(needle))
+}
+
+pub(crate) fn previous_response_id(raw_body: &serde_json::Value) -> Option<String> {
+    raw_body
+        .get("previous_response_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,7 +92,9 @@ mod tests {
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
-    use crate::workflow_state::ir::{EvidenceLevel, HarnessId, ProtocolKind, SessionConfidence};
+    use crate::workflow_state::ir::{
+        EvidenceLevel, HarnessId, ProtocolKind, SessionConfidence, WorkflowStateKind,
+    };
 
     fn prompt() -> Prompt {
         Prompt {
@@ -120,5 +166,58 @@ mod tests {
                 e.kind == "server_side_context_gap" && e.level == EvidenceLevel::Missing
             })
         );
+    }
+
+    #[test]
+    fn codex_superpowers_headers_do_not_change_route_projection_inputs() {
+        let prompt = prompt();
+        let raw_body = serde_json::json!({"input": "apply the task implementation"});
+        let baseline_headers = HeaderMap::new();
+        let baseline = CodexResponsesExtractor.extract(&ExtractorInput {
+            harness_hint: None,
+            protocol_hint: ProtocolKind::Responses,
+            headers: &baseline_headers,
+            raw_body: &raw_body,
+            prompt: &prompt,
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-superpowers-phase",
+            HeaderValue::from_static("implementation"),
+        );
+        headers.insert(
+            "x-superpowers-skill",
+            HeaderValue::from_static("superpowers:subagent-driven-development"),
+        );
+        let ir = CodexResponsesExtractor.extract(&ExtractorInput {
+            harness_hint: None,
+            protocol_hint: ProtocolKind::Responses,
+            headers: &headers,
+            raw_body: &raw_body,
+            prompt: &prompt,
+        });
+        assert_eq!(ir.state_kind, baseline.state_kind);
+        assert_eq!(ir.active_workflow, baseline.active_workflow);
+        assert_eq!(ir.route_projection(), baseline.route_projection());
+    }
+
+    #[test]
+    fn codex_unrecognized_superpowers_phase_does_not_change_route_projection_inputs() {
+        let prompt = prompt();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-superpowers-phase",
+            HeaderValue::from_static("implementation-but-trust-me"),
+        );
+        let raw_body = serde_json::json!({"input": "inspect"});
+        let ir = CodexResponsesExtractor.extract(&ExtractorInput {
+            harness_hint: None,
+            protocol_hint: ProtocolKind::Responses,
+            headers: &headers,
+            raw_body: &raw_body,
+            prompt: &prompt,
+        });
+        assert_eq!(ir.state_kind, WorkflowStateKind::Opening);
+        assert_eq!(ir.active_workflow, None);
     }
 }

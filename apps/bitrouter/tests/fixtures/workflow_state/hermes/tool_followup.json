@@ -48,7 +48,7 @@
     ]
   },
   "expected": {
-    "state_kind": "tool_followup",
+    "state_kind": "test",
     "baseline_fingerprint": "after_bash",
     "confidence_min": 0.7
   }

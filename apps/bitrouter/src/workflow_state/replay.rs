@@ -45,7 +45,7 @@ impl ReplayEvaluator {
         };
         let mut baseline_buckets = BTreeSet::new();
         let mut ir_buckets = BTreeSet::new();
-        let mut labels_by_ir_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut labels_by_projection_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
         for fixture in fixtures {
             let baseline = fixture.baseline_fingerprint();
@@ -64,9 +64,9 @@ impl ReplayEvaluator {
                 summary.covered += 1;
             }
 
-            let key = ir.routing_key();
+            let key = ir.route_projection().key();
             ir_buckets.insert(key.clone());
-            labels_by_ir_key
+            labels_by_projection_key
                 .entry(key)
                 .or_default()
                 .insert(fixture.expected.state_kind.to_string());
@@ -98,7 +98,7 @@ impl ReplayEvaluator {
         };
         summary.baseline_bucket_count = baseline_buckets.len();
         summary.ir_bucket_count = ir_buckets.len();
-        summary.collision_count = labels_by_ir_key
+        summary.collision_count = labels_by_projection_key
             .values()
             .filter(|labels| labels.len() > 1)
             .count();
@@ -148,6 +148,7 @@ fn harness_key(harness: &HarnessId) -> String {
         HarnessId::Hermes => "hermes",
         HarnessId::ClaudeCode => "claude_code",
         HarnessId::Codex => "codex",
+        HarnessId::Smithers => "smithers",
         HarnessId::Terminus2 => "terminus_2",
         HarnessId::OpenClaw => "openclaw",
         HarnessId::Unknown => "unknown",

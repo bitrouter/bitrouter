@@ -1,0 +1,34 @@
+{
+  "id": "claude-code-test-tool-001",
+  "harness": "claude_code",
+  "protocol": "messages",
+  "headers": {
+    "anthropic-beta": "claude-code-20250219"
+  },
+  "raw_body": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 512,
+    "messages": [
+      {"role": "user", "content": "run the tests"},
+      {"role": "assistant", "content": [{"type": "tool_use", "id": "tool_test_1", "name": "Bash", "input": {"command": "cargo test -p bitrouter"}}]},
+      {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_test_1", "content": "All tests passed."}]}
+    ],
+    "tools": [{
+      "name": "Bash",
+      "description": "Executes a given bash command in a persistent shell session.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {"type": "string"},
+          "timeout": {"type": "number"}
+        },
+        "required": ["command"]
+      }
+    }]
+  },
+  "expected": {
+    "state_kind": "test",
+    "baseline_fingerprint": "after_Bash",
+    "confidence_min": 0.7
+  }
+}

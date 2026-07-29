@@ -20,6 +20,20 @@ const MAX_ACTION_BYTES: usize = 256 * 1024;
 pub struct Terminus2Extractor;
 
 impl WorkflowStateExtractor for Terminus2Extractor {
+    fn detect(
+        &self,
+        input: &ExtractorInput<'_>,
+    ) -> Option<crate::workflow_state::extractors::TraceAdapterMatch> {
+        has_terminus_2_prompt_contract(input.prompt).then_some(
+            crate::workflow_state::extractors::TraceAdapterMatch {
+                source: HarnessId::Terminus2,
+                confidence: 0.95,
+                evidence_kind: "terminus_2_prompt_contract",
+                native: true,
+            },
+        )
+    }
+
     fn extract(&self, input: &ExtractorInput<'_>) -> WorkflowStateIR {
         let mut ir = GenericPromptExtractor.extract(&ExtractorInput {
             harness_hint: Some(HarnessId::Terminus2),
@@ -84,10 +98,141 @@ impl WorkflowStateExtractor for Terminus2Extractor {
     }
 }
 
+pub(crate) fn has_terminus_2_prompt_contract(prompt: &Prompt) -> bool {
+    prompt
+        .system
+        .iter()
+        .map(String::as_str)
+        .chain(
+            prompt
+                .messages
+                .iter()
+                .flat_map(|message| message.content.iter())
+                .filter_map(|content| match content {
+                    Content::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                }),
+        )
+        .any(|text| {
+            let normalized = text.to_ascii_lowercase();
+            normalized.contains(
+                "you are an ai assistant tasked with solving command-line tasks in a linux environment",
+            ) && (normalized.contains("format your response as json")
+                || normalized.contains("format your response as xml"))
+                && normalized.contains("commands")
+                && normalized.contains("task_complete")
+        })
+}
+
 struct ParsedAction {
     commands: Vec<String>,
     task_complete: bool,
     format: ActionFormat,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TerminusSessionIdentity {
+    pub parent_session_id: String,
+    pub role: Option<crate::workflow_state::ir::AgentRole>,
+    pub context_epoch: Option<u32>,
+}
+
+pub(crate) fn session_id(input: &ExtractorInput<'_>) -> Option<String> {
+    input
+        .headers
+        .get("x-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            input
+                .raw_body
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+pub(crate) fn parse_session_identity(session_id: &str) -> TerminusSessionIdentity {
+    use crate::workflow_state::ir::AgentRole;
+
+    if let Some(marker) = session_id.rfind("-summarization-") {
+        let parent = &session_id[..marker];
+        let suffix = &session_id[marker + "-summarization-".len()..];
+        if !parent.is_empty()
+            && let Some((epoch, role)) = suffix.split_once('-')
+            && let Ok(context_epoch) = epoch.parse::<u32>()
+        {
+            let role = match role {
+                "summary" => Some(AgentRole::Summary),
+                "questions" => Some(AgentRole::Questions),
+                "answers" => Some(AgentRole::Answers),
+                _ => None,
+            };
+            if role.is_some() {
+                return TerminusSessionIdentity {
+                    parent_session_id: parent.to_string(),
+                    role,
+                    context_epoch: Some(context_epoch),
+                };
+            }
+        }
+    }
+    if let Some(marker) = session_id.rfind("-cont-") {
+        let parent = &session_id[..marker];
+        let epoch = &session_id[marker + "-cont-".len()..];
+        if !parent.is_empty()
+            && let Ok(context_epoch) = epoch.parse::<u32>()
+        {
+            return TerminusSessionIdentity {
+                parent_session_id: parent.to_string(),
+                role: Some(AgentRole::Main),
+                context_epoch: Some(context_epoch),
+            };
+        }
+    }
+    TerminusSessionIdentity {
+        parent_session_id: session_id.to_string(),
+        role: None,
+        context_epoch: None,
+    }
+}
+
+pub(crate) fn infer_role(prompt: &Prompt) -> crate::workflow_state::ir::AgentRole {
+    use crate::workflow_state::ir::AgentRole;
+
+    let latest_user = prompt
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == Role::User)
+        .map(|message| {
+            message
+                .content
+                .iter()
+                .filter_map(|content| match content {
+                    Content::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let normalized = latest_user.to_ascii_lowercase();
+    if normalized.contains("you are about to hand off your work to another ai agent") {
+        AgentRole::Summary
+    } else if normalized.contains("you are picking up work from a previous ai agent on this task") {
+        AgentRole::Questions
+    } else if normalized.contains("the next agent has a few questions for you") {
+        AgentRole::Answers
+    } else if normalized.trim().is_empty() {
+        AgentRole::Unknown
+    } else {
+        AgentRole::Main
+    }
 }
 
 #[derive(Clone, Copy)]

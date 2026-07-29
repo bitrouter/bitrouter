@@ -8,6 +8,7 @@ pub enum HarnessId {
     Hermes,
     ClaudeCode,
     Codex,
+    Smithers,
     #[serde(rename = "terminus_2", alias = "terminus-2", alias = "terminus2")]
     Terminus2,
     #[serde(alias = "openclaw")]
@@ -42,6 +43,19 @@ pub enum WorkflowStateKind {
 }
 
 impl fmt::Display for WorkflowStateKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&enum_key(self))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteRisk {
+    Normal,
+    Guarded,
+}
+
+impl fmt::Display for RouteRisk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&enum_key(self))
     }
@@ -103,6 +117,83 @@ impl Default for CapabilityConstraints {
             output_precision: RequirementLevel::Unknown,
             compatibility: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteProjection {
+    pub schema_version: u8,
+    pub state_kind: WorkflowStateKind,
+    pub risk: RouteRisk,
+}
+
+impl RouteProjection {
+    pub fn key(&self) -> String {
+        format!(
+            "agent_trace/v{}|{}|{}",
+            self.schema_version, self.state_kind, self.risk
+        )
+    }
+
+    /// Parse a canonical policy/ledger key without recovering information from
+    /// legacy source-specific keys.
+    pub fn parse_key(value: &str) -> Option<Self> {
+        let mut segments = value.split('|');
+        let (Some(namespace_version), Some(state), Some(risk), None) = (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ) else {
+            return None;
+        };
+        if namespace_version != "agent_trace/v1" {
+            return None;
+        }
+        Some(Self {
+            schema_version: 1,
+            state_kind: parse_workflow_state_kind(state)?,
+            risk: parse_route_risk(risk)?,
+        })
+    }
+
+    /// Whether `value` is a persistence-safe learning key. A policy namespace
+    /// may prefix the canonical projection with one NUL separator; the suffix
+    /// is always validated and never inferred from legacy routing data.
+    pub fn is_canonical_learning_key(value: &str) -> bool {
+        match value.rsplit_once('\0') {
+            Some((namespace, projection)) => {
+                !namespace.is_empty()
+                    && !namespace.contains('\0')
+                    && Self::parse_key(projection).is_some()
+            }
+            None => Self::parse_key(value).is_some(),
+        }
+    }
+}
+
+fn parse_workflow_state_kind(value: &str) -> Option<WorkflowStateKind> {
+    match value {
+        "unknown" => Some(WorkflowStateKind::Unknown),
+        "opening" => Some(WorkflowStateKind::Opening),
+        "planning" => Some(WorkflowStateKind::Planning),
+        "tool_followup" => Some(WorkflowStateKind::ToolFollowup),
+        "edit" => Some(WorkflowStateKind::Edit),
+        "test" => Some(WorkflowStateKind::Test),
+        "debug" => Some(WorkflowStateKind::Debug),
+        "review" => Some(WorkflowStateKind::Review),
+        "recovery" => Some(WorkflowStateKind::Recovery),
+        "subagent_dispatch" => Some(WorkflowStateKind::SubagentDispatch),
+        "finalization" => Some(WorkflowStateKind::Finalization),
+        _ => None,
+    }
+}
+
+fn parse_route_risk(value: &str) -> Option<RouteRisk> {
+    match value {
+        "normal" => Some(RouteRisk::Normal),
+        "guarded" => Some(RouteRisk::Guarded),
+        _ => None,
     }
 }
 
@@ -244,7 +335,8 @@ pub struct WorkflowStateIR {
 }
 
 impl WorkflowStateIR {
-    pub fn routing_key(&self) -> String {
+    /// Detailed legacy evidence key. New policy routing uses [`Self::route_projection`].
+    pub fn legacy_routing_key(&self) -> String {
         let mut compatibility = self.capability_constraints.compatibility.clone();
         compatibility.sort();
         [
@@ -266,6 +358,41 @@ impl WorkflowStateIR {
             compatibility.join(","),
         ]
         .join("|")
+    }
+
+    pub fn route_projection(&self) -> RouteProjection {
+        let guarded_state = matches!(
+            self.state_kind,
+            WorkflowStateKind::Unknown
+                | WorkflowStateKind::Debug
+                | WorkflowStateKind::Review
+                | WorkflowStateKind::Recovery
+                | WorkflowStateKind::Finalization
+        );
+        let high_cost_constraint = matches!(
+            self.capability_constraints.context_pressure,
+            RequirementLevel::High
+        ) || matches!(
+            self.capability_constraints.expected_redo_penalty,
+            RequirementLevel::High
+        ) || matches!(
+            self.capability_constraints.output_precision,
+            RequirementLevel::High
+        );
+        let risk = if self.recovery_signal == RecoverySignal::LikelyRecovery
+            || guarded_state
+            || high_cost_constraint
+        {
+            RouteRisk::Guarded
+        } else {
+            RouteRisk::Normal
+        };
+
+        RouteProjection {
+            schema_version: 1,
+            state_kind: self.state_kind.clone(),
+            risk,
+        }
     }
 }
 
@@ -343,7 +470,7 @@ mod tests {
         let first = sample_ir();
         let mut second = sample_ir();
         second.evidence.reverse();
-        assert_eq!(first.routing_key(), second.routing_key());
+        assert_eq!(first.legacy_routing_key(), second.legacy_routing_key());
     }
 
     #[test]
@@ -364,6 +491,151 @@ mod tests {
             fingerprint: "sha256:test".to_string(),
             ..Default::default()
         };
-        assert_eq!(first.routing_key(), second.routing_key());
+        assert_eq!(first.legacy_routing_key(), second.legacy_routing_key());
+    }
+
+    #[test]
+    fn route_projection_key_is_shared_by_equivalent_harnesses() {
+        let harnesses = [
+            HarnessId::Codex,
+            HarnessId::ClaudeCode,
+            HarnessId::Hermes,
+            HarnessId::Terminus2,
+            HarnessId::OpenClaw,
+            HarnessId::Smithers,
+            HarnessId::Generic,
+        ];
+
+        for harness_id in harnesses {
+            let mut ir = sample_ir();
+            ir.harness_id = harness_id;
+            ir.protocol = ProtocolKind::Responses;
+            ir.state_kind = WorkflowStateKind::Edit;
+            ir.recovery_signal = RecoverySignal::None;
+            ir.capability_constraints = CapabilityConstraints::default();
+
+            assert_eq!(ir.route_projection().key(), "agent_trace/v1|edit|normal");
+        }
+    }
+
+    #[test]
+    fn route_projection_parser_accepts_only_canonical_v1_keys() {
+        let projection = RouteProjection::parse_key("agent_trace/v1|tool_followup|normal")
+            .expect("canonical agent trace projection");
+        assert_eq!(projection.key(), "agent_trace/v1|tool_followup|normal");
+        assert!(RouteProjection::is_canonical_learning_key(
+            "coding\0agent_trace/v1|tool_followup|normal"
+        ));
+
+        for key in [
+            "codex|responses|tool_followup|-|-|exec_command",
+            "agent_trace/v2|tool_followup|normal",
+            "agent_trace/v1|not_a_state|normal",
+            "agent_trace/v1|tool_followup|not_a_risk",
+            "agent_trace/v1|tool_followup|normal|extra",
+            "coding\0agent_trace/v1|tool_followup|normal|extra",
+            "coding\0codex|responses|tool_followup|-|-|exec_command",
+        ] {
+            assert!(RouteProjection::parse_key(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
+    fn route_projection_ignores_source_specific_identity() {
+        let mut baseline = sample_ir();
+        baseline.state_kind = WorkflowStateKind::Edit;
+        baseline.recovery_signal = RecoverySignal::None;
+        baseline.capability_constraints = CapabilityConstraints::default();
+        let expected = "agent_trace/v1|edit|normal";
+
+        let mut changed = baseline.clone();
+        changed.harness_id = HarnessId::ClaudeCode;
+        assert_eq!(changed.route_projection().key(), expected);
+
+        let mut changed = baseline.clone();
+        changed.protocol = ProtocolKind::Messages;
+        assert_eq!(changed.route_projection().key(), expected);
+
+        let mut changed = baseline.clone();
+        changed.active_workflow = Some("review-release".to_string());
+        assert_eq!(changed.route_projection().key(), expected);
+
+        let mut changed = baseline.clone();
+        changed.subagent_role = Some("reviewer".to_string());
+        assert_eq!(changed.route_projection().key(), expected);
+
+        let mut changed = baseline;
+        changed.last_tool_name = Some("apply_patch".to_string());
+        assert_eq!(changed.route_projection().key(), expected);
+    }
+
+    #[test]
+    fn route_projection_keys_normal_and_guarded_risk() {
+        let cases = [
+            (WorkflowStateKind::Edit, "agent_trace/v1|edit|normal"),
+            (WorkflowStateKind::Test, "agent_trace/v1|test|normal"),
+            (
+                WorkflowStateKind::ToolFollowup,
+                "agent_trace/v1|tool_followup|normal",
+            ),
+            (WorkflowStateKind::Unknown, "agent_trace/v1|unknown|guarded"),
+            (WorkflowStateKind::Debug, "agent_trace/v1|debug|guarded"),
+            (WorkflowStateKind::Review, "agent_trace/v1|review|guarded"),
+            (
+                WorkflowStateKind::Recovery,
+                "agent_trace/v1|recovery|guarded",
+            ),
+            (
+                WorkflowStateKind::Finalization,
+                "agent_trace/v1|finalization|guarded",
+            ),
+        ];
+
+        for (state_kind, expected) in cases {
+            let mut ir = sample_ir();
+            ir.state_kind = state_kind;
+            ir.recovery_signal = RecoverySignal::None;
+            ir.capability_constraints = CapabilityConstraints::default();
+            assert_eq!(ir.route_projection().key(), expected);
+        }
+    }
+
+    #[test]
+    fn route_projection_guards_recovery_and_high_cost_constraints() {
+        let cases = [
+            (
+                RecoverySignal::LikelyRecovery,
+                CapabilityConstraints::default(),
+            ),
+            (
+                RecoverySignal::None,
+                CapabilityConstraints {
+                    context_pressure: RequirementLevel::High,
+                    ..CapabilityConstraints::default()
+                },
+            ),
+            (
+                RecoverySignal::None,
+                CapabilityConstraints {
+                    expected_redo_penalty: RequirementLevel::High,
+                    ..CapabilityConstraints::default()
+                },
+            ),
+            (
+                RecoverySignal::None,
+                CapabilityConstraints {
+                    output_precision: RequirementLevel::High,
+                    ..CapabilityConstraints::default()
+                },
+            ),
+        ];
+
+        for (recovery_signal, capability_constraints) in cases {
+            let mut ir = sample_ir();
+            ir.state_kind = WorkflowStateKind::Edit;
+            ir.recovery_signal = recovery_signal;
+            ir.capability_constraints = capability_constraints;
+            assert_eq!(ir.route_projection().key(), "agent_trace/v1|edit|guarded");
+        }
     }
 }
