@@ -1,4 +1,11 @@
-lockfileVersion: 1
+lockfileVersion: 2
+artifact:
+  evidence_root: "sha256:418cffc3ef87521257683679e326cc6d638d536daaf388351867c5bad88758cd"
+  source_snapshot_time_unix_ms: 0
+  compiler:
+    id: bitrouter-template-compiler
+    version: 1
+    config_digest: "sha256:f5770ed5849566ff315715ee70f7c7e6310f8e631f1ed3cac7b91b25f6007396"
 policies:
   auto:
     key_strategy: agent_trace
@@ -24,3 +31,38 @@ policies:
       min_semantic_successes_for_lock: 1
       explore_opening: false
       min_semantic_successes_for_opening: 1
+certificates:
+  auto:
+    "agent_trace/v1|edit|normal":
+      owner: operator
+      selected_tier: economy
+      baseline_tier: strong
+      source: operator
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: retain
+      compiler_config_digest: "sha256:f5770ed5849566ff315715ee70f7c7e6310f8e631f1ed3cac7b91b25f6007396"
+      evidence_digest: "sha256:474fe9afab41feb204ddc1e96dab88ef76fc5320d7670384558a61d719f8e0a9"
+    "agent_trace/v1|test|normal":
+      owner: operator
+      selected_tier: economy
+      baseline_tier: strong
+      source: operator
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: retain
+      compiler_config_digest: "sha256:f5770ed5849566ff315715ee70f7c7e6310f8e631f1ed3cac7b91b25f6007396"
+      evidence_digest: "sha256:7540cf9b82402f66cec51f2b47313cfdaa5ace99a69d0bc068a96d7670208a4a"
+    "agent_trace/v1|tool_followup|normal":
+      owner: operator
+      selected_tier: economy
+      baseline_tier: strong
+      source: operator
+      eligible_episodes: 0
+      independent_tasks: 0
+      critical_violations: 0
+      verdict: retain
+      compiler_config_digest: "sha256:f5770ed5849566ff315715ee70f7c7e6310f8e631f1ed3cac7b91b25f6007396"
+      evidence_digest: "sha256:3f0e5fb7cdd81edc005158d7640eff58fd970a683f60400e9762c9aae049cf87"

@@ -1,11 +1,11 @@
 # Eval-Compiled Policy Lock Specification
 
-**Status:** Proposed
+**Status:** Implemented baseline; evaluator workers and causal credit remain future work
 
 **Date:** 2026-07-30
 
 **Scope:** BitRouter OSS policy routing, legacy adequacy state migration, and the
-future external Eval Exchange boundary
+external Eval Exchange boundary
 
 ## 1. Decision
 
@@ -34,7 +34,7 @@ but not to serve the published policy.
 
 ## 2. Problem
 
-The current adaptive runtime has two independent authorities:
+The pre-v2 adaptive runtime had two independent authorities:
 
 1. `policy-lock.yaml` supplies static tiers, route entries, guardrails, and
    adequacy thresholds.
@@ -202,7 +202,7 @@ but must use the same compile, validate, and atomic publish boundary.
 
 ## 7. Policy lock v2
 
-Phase 1 introduces `lockfileVersion: 2`. The route map stays compact and easy
+`lockfileVersion: 2` keeps the route map compact and easy
 to diff. Certificates are stored separately so the selector does not need to
 parse raw evaluation records.
 
@@ -213,6 +213,7 @@ lockfileVersion: 2
 artifact:
   parent_digest: "sha256:..."
   evidence_root: "sha256:..."
+  eval_snapshot_root: "sha256:..."
   source_snapshot_time_unix_ms: 1785369600000
   migration:
     legacy_adequacy_digest: "sha256:..."
@@ -237,21 +238,26 @@ policies:
       economy: strong
 
 certificates:
-  "auto\u0000agent_trace/v1|edit|normal":
-    selected_tier: economy
-    source: evaluated
-    eligible_episodes: 84
-    independent_tasks: 31
-    quality:
-      baseline_pass_rate_ppm: 950000
-      candidate_pass_rate_ppm: 940000
-      delta_ppm: -10000
-      lower_bound_ppm: -35000
-    economics:
-      normalized_cost_delta_ppm: -420000
-    critical_violations: 0
-    verdict: promote
-    evidence_digest: "sha256:..."
+  auto:
+    "agent_trace/v1|edit|normal":
+      owner: compiler
+      selected_tier: economy
+      baseline_tier: strong
+      source: task_native
+      eligible_episodes: 84
+      independent_tasks: 31
+      quality:
+        baseline_pass_rate_ppm: 950000
+        candidate_pass_rate_ppm: 950000
+        delta_ppm: 0
+        lower_bound_ppm: 950000
+      economics:
+        normalized_cost_delta_ppm: -420000
+      critical_violations: 0
+      verdict: promote
+      evaluator_config_digest: "sha256:..."
+      compiler_config_digest: "sha256:..."
+      evidence_digest: "sha256:..."
 ```
 
 The exact schema will use integer fixed-point values for portable,
@@ -373,7 +379,7 @@ serveable because their database state was already non-authoritative.
 
 ## 9. Eval Exchange boundary
 
-Phase 2 adds external evaluation without changing the serving invariant.
+The Eval Exchange adds external evaluation without changing the serving invariant.
 
 ### 9.1 EvalSubject
 
@@ -408,37 +414,42 @@ failure by default.
 
 ## 10. CLI and compatibility surface
 
-The intended first-stage surface is:
+The shipped policy surface is:
 
 ```text
-bitrouter policy compile --legacy-state --output <candidate.yaml>
+bitrouter policy compile --output <candidate.yaml> [--eval-snapshot sha256:...]
 bitrouter policy check --config <bitrouter.yaml>
 bitrouter policy diff <active.yaml> <candidate.yaml>
+bitrouter policy verify --evidence --config <bitrouter.yaml>
 bitrouter policy evolve --apply --config <bitrouter.yaml>
+bitrouter policy rollback <digest> --config <bitrouter.yaml>
 ```
 
 The final command name may remain `evolve` for compatibility, but its
 implementation becomes compile, validate, and atomic publish. It no longer
 means "copy positive rows into an add-only route map".
 
-The intended second-stage surface is:
+The shipped eval surface is:
 
 ```text
-bitrouter eval list [--pending]
-bitrouter eval show <eval-id>
-bitrouter eval export <eval-id>
-bitrouter eval submit <result.json>
-bitrouter eval review <eval-id> (--pass | --fail)
+bitrouter eval subject put <subject.json>
+bitrouter eval subject get <eval-id>
+bitrouter eval subject list
+bitrouter eval result submit <result.json>
+bitrouter eval snapshot freeze [--at RFC3339]
+bitrouter eval snapshot get <sha256-root>
 bitrouter eval status
 ```
 
 REST mirrors the same library operations:
 
 ```text
-GET  /v1/evals?status=pending
-GET  /v1/evals/{eval_id}
-GET  /v1/evals/{eval_id}/evidence
-POST /v1/evals/{eval_id}/results
+GET/POST /v1/evals/subjects
+GET      /v1/evals/subjects/{eval_id}
+POST     /v1/evals/results
+POST     /v1/evals/snapshots
+GET      /v1/evals/snapshots/{evidence_root}
+GET      /v1/evals/status
 ```
 
 CLI and REST are thin adapters over one eval library and must produce
@@ -533,17 +544,17 @@ Implementation is intentionally split so the source-of-truth fix ships before
 the general Eval Exchange. Slices A through C form one migration milestone:
 none of them is released as a selector cutover on its own.
 
-### Slice A: Legacy compiler and lock v2
+### Slice A: Legacy compiler and lock v2 — shipped
 
 - add lock v2 parsing, canonical serialization, artifact lineage, migration
   digest, and certificates;
 - snapshot and compile positive locks plus negative pins;
 - keep reliability evidence out of semantic compilation;
 - replace add-only evolution with deterministic candidate compilation;
-- add a shadow comparison between current adaptive decisions and the compiled
-  candidate before cutover.
+- route diffs ship in `policy diff`; richer traffic-replay shadow comparison
+  remains follow-up work.
 
-### Slice B: Atomic promotion and migration preflight
+### Slice B: Atomic promotion and migration preflight — shipped
 
 - validate expected parent digest and referenced config/model contracts;
 - publish atomically in adaptive mode;
@@ -553,7 +564,7 @@ none of them is released as a selector cutover on its own.
 - prove a lock-only target with an empty database reproduces policy decisions
   before selector cutover.
 
-### Slice C: Lock-only selector cutover
+### Slice C: Lock-only selector cutover — shipped
 
 - remove semantic pins, learned locks, and exploration cadence from the live
   policy selector;
@@ -563,18 +574,19 @@ none of them is released as a selector cutover on its own.
 - stop writing legacy adequacy tables and add regression tests proving database
   independence.
 
-### Slice D: Eval Exchange records and CLI
+### Slice D: Eval Exchange records and CLI — shipped baseline
 
 - add immutable EvalSubject, EvaluationResult, and admitted EvaluationRecord
   stores;
 - add authority, conflict, idempotency, cohort, and holdout admission;
-- add `eval list/show/export/submit/review/status`;
+- add subject/result/snapshot/status commands over one shared library;
 - retain current workflow-state reward import as a compatibility adapter.
 
-### Slice E: REST and reference adapters
+### Slice E: REST and reference adapters — REST and reward adapter shipped
 
 - expose authenticated REST operations over the same eval library;
-- add Terminal-Bench, shell/CI, human, and mock agentic fixtures;
+- the workflow reward adapter is shipped; broader shell/CI, human, and mock
+  agentic reference fixtures remain follow-up work;
 - compile admitted evidence summaries and digests into lock certificates;
 - keep worker scheduling and a bundled general agentic evaluator out of scope.
 
@@ -597,15 +609,16 @@ The implementation plan must include:
 
 ## 17. Rollout
 
-1. Ship the v2 compiler, shadow comparison, and migration preflight without
-   changing the active selector.
-2. Require adaptive users with non-empty legacy state to compile and publish a
-   v2 candidate.
-3. Cut the selector over to lock-only behavior only after the migration and
-   portability checks pass; keep frozen v1 locks readable and deterministic.
-4. Publish the `@auto` router template as v2 after the same checks pass.
-5. Add Eval Exchange CLI after the lock boundary is stable.
-6. Add REST and external evaluator examples without making any evaluator a
-   required runtime dependency.
-7. Consider optional agentic evaluator packaging only after deterministic and
-   human/enterprise adapters prove the protocol.
+1. **Done:** ship the v2 compiler, migration preflight, atomic history, and
+   lock-only selector while retaining readable v1 locks.
+2. **Done:** require adaptive users with non-empty legacy state to publish a v2
+   migration candidate.
+3. **Done:** publish the `@auto` router template as v2.
+4. **Done:** add immutable Eval Exchange contracts, admission, snapshots, CLI,
+   authenticated REST, and the legacy reward adapter.
+5. **Next:** add richer reference adapters and paired/holdout experiment
+   tooling; evaluator execution remains out of process.
+6. **Next:** improve statistical bounds and learned causal credit without
+   changing the exchange or serving boundary.
+7. **Later:** consider optional agentic evaluator packaging only after
+   task-native, human, and enterprise adapters prove the protocol.

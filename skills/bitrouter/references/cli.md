@@ -33,6 +33,26 @@ Bare `bitrouter` (no subcommand) is the onboarding front door: it runs the netwo
 | `bitrouter agents install <id>` | Print a paste-ready YAML stub for `<id>` — resolved from the bundled catalog first, then the ACP registry (`npx`/`uvx` distributions, version-pinned, `env` included). Binary-only registry entries are refused with a manual-install pointer (the registry has no checksums). |
 | `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: wired / endpoint / sampler / cardinality usage / in-flight spans. JSON output for tooling. |
 
+## Generic eval exchange
+
+These commands operate on the local append-only evidence ledger. They never
+edit or publish `policy-lock.yaml`.
+
+| Command | Effect |
+|---|---|
+| `bitrouter eval subject put <FILE> [--config PATH]` | Insert an immutable JSON/YAML request, episode, or task subject. |
+| `bitrouter eval subject get <EVAL_ID> [--config PATH]` | Read one subject. |
+| `bitrouter eval subject list [--config PATH]` | List subjects, including automatically observed routed requests. |
+| `bitrouter eval result submit <FILE> [--config PATH]` | Submit a JSON/YAML evaluator result as the local operator; runs the same admission logic as REST. |
+| `bitrouter eval snapshot freeze [--at RFC3339] [--config PATH]` | Freeze currently admitted results into a content-addressed manifest. |
+| `bitrouter eval snapshot get <SHA256> [--config PATH]` | Read an immutable snapshot manifest. |
+| `bitrouter eval status [--config PATH]` | Count subjects and latest admission states. |
+
+Authenticated daemon endpoints mirror the exchange at
+`/v1/evals/subjects`, `/v1/evals/results`, `/v1/evals/snapshots`, and
+`/v1/evals/status`. External evaluators submit scores; BitRouter owns schema,
+identity/metric authority, conflict/holdout admission, and snapshots.
+
 ## ACP sessions
 
 Per-session ACP substrate — one process = one session = one agent. Managers (GUI, AI agents, editors) spawn one process per session and drive it; orchestration is external to the substrate. `bitrouter spawn <agent> --serve|-p` is the newer umbrella over these (same code path); `acp serve|prompt` remain as stable aliases. Both **route the sub-agent's LLM traffic through the daemon by default** — add `--direct` / `--base-url` / `--model` / `--no-start` (see "Harness launch & spawn").
@@ -74,8 +94,12 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | `bitrouter policy init <name> --preset <preset> --economy <model> [--strong <model>] [--config PATH]` | Create or extend deterministic `policy-lock.yaml`, bind the named policy to a preset, and set the process configuration to `policy.mode: frozen`. The strong model is inferred from an existing preset when omitted. Presets use `@preset[:variant]`; `templates/auto-router` provides `@auto` and `@auto:cost`. |
 | `bitrouter policy check|status [--config PATH]` | Cross-validate the main config and lock, or report the resolved path, semantic digest, runtime mode, policies, and preset bindings. |
 | `bitrouter policy show <name> [--config PATH]` | Print one validated effective policy. |
-| `bitrouter policy evolve [--apply \| --output FILE] [--config PATH]` | Project policy-namespaced adequacy evidence into a deterministic candidate. Dry-run and separate candidate export work in both modes; `--apply` requires `policy.mode: adaptive`. Candidate export refuses the active lock path. Existing routes are never overwritten or removed. |
+| `bitrouter policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile legacy migration evidence and an optional frozen generic-eval snapshot into a deterministic v2 candidate. Never changes the active lock. |
+| `bitrouter policy diff <ACTIVE> <CANDIDATE>` | Compare explicit route selections. |
+| `bitrouter policy verify --evidence [--config PATH]` | Reconstruct the active v2 lock's evidence root from the local ledger/snapshot. |
+| `bitrouter policy evolve [--apply \| --output FILE] [--config PATH]` | Compatibility compile/publish command. `--apply` requires `policy.mode: adaptive`; request-time routing remains lock-only. |
 | `bitrouter policy reload [--config PATH] [--socket PATH]` | Hot-reload main config and policy lock through the existing daemon control socket. Invalid locks preserve the last-known-good runtime snapshot. |
+| `bitrouter policy rollback <DIGEST> [--config PATH] [--socket PATH]` | Restore exact lock bytes from local promotion history, then reload or restore on rejection. |
 | `bitrouter key sign --user <id> [--db URL] [--policy ID]` | Mint a `brvk_…` virtual key in the auth DB. Plaintext is shown once; only its SHA-256 hash is stored. Default DB is `sqlite://./bitrouter.db`. |
 
 Adaptive routing uses generic `agent_trace` projections. Native runtime adapters
@@ -90,9 +114,9 @@ source-neutral opening projections. The removed
 session identity is diagnostic-only.
 
 `policy.mode` belongs to the running process and defaults to `frozen`. Frozen
-mode ignores adequacy DB pins and locks for live routing and forbids active
-lock replacement while continuing to record evidence. `adaptive` activates
-the configured adequacy thresholds and permits validated writeback. Legacy
+mode ignores evidence-ledger rows for live routing and forbids active lock
+replacement while continuing to record evidence. `adaptive` permits validated
+writeback but routes identically from the lock. Legacy
 `writeback: locked|evolve` input parses as `frozen|adaptive`, but new config and
 status output use only `mode`.
 

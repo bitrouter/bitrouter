@@ -12,6 +12,7 @@ use serde::Deserialize;
 use super::EvalService;
 use super::admission::SubmissionPrincipal;
 use super::types::{EvalSubject, EvaluationResult};
+use crate::auth::hook::credential_from_headers;
 use crate::auth::{db as auth_db, keys};
 
 #[derive(Clone)]
@@ -197,24 +198,6 @@ async fn authenticate(
         key_id: record.id,
         user_id: record.user_id,
     })
-}
-
-fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
-    if let Some(auth) = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-    {
-        let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
-        if !token.is_empty() {
-            return Some(token.to_string());
-        }
-    }
-    headers
-        .get("x-api-key")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 struct ApiError {

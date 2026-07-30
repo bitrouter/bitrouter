@@ -29,35 +29,34 @@ Optimizing a loop isn't just model selection — it's choosing the model, the to
 
 ## The self-improving loop
 
-BitRouter wraps your agentic loop in a second loop. Each loop gets its own **policy spec** — `bitrouter.yaml` — declaring how its calls, tools, and agents route. The routing key is **context-aware and lives as code**: it's the *step in the loop*, not just the model name — so "plan on the flagship, do routine file reads on something cheap" is one declarative table.
+BitRouter wraps your agentic loop in a second loop. `bitrouter.yaml` declares
+providers, presets, and whether the process may publish; `policy-lock.yaml` is
+the only live route authority. The routing key is **context-aware and lives as
+code**: it is the step in the loop, not just the model name.
 
 ```yaml
-# bitrouter.yaml — context-aware routing as code, keyed on the loop's step
 policy:
-  mode: adaptive                  # the running process may learn and publish
-policy_table:
-  tiers:                         # a tier name → the model it routes to
-    cheap:    moonshotai/kimi-k2.6
-    flagship: gpt-5.5
-  fingerprints:                  # the agentic-loop step → which tier handles it
-    opening:         flagship    #   first turn        → plan on the strong model
-    after_read_file: cheap       #   routine file read → downgrade
-    midstream:       cheap
-  default_tier:    flagship      # anything unmapped stays safe
-  tool_use_tier:   flagship      # guardrail: a tool call is never
-  tool_safe_tiers: [flagship]    #   stranded on a tool-blind model
-  adequacy:
-    escalation_tier: flagship    #   …escalates itself back up
+  path: ./policy-lock.yaml
+  mode: adaptive                 # authorizes explicit publication only
+presets:
+  auto:
+    model: openai-codex:gpt-5.6-sol
+    policy: auto
 ```
 
-Against that spec BitRouter runs a continuous **act → observe → evaluate → learn** cycle — and every step is a component it already ships:
+The v2 lock behind `@auto` contains the tier models, canonical `agent_trace`
+routes, capability guardrails, and a decision certificate for every explicit
+route. `@auto:cost` selects the cost variant when one is defined; explicit
+physical model IDs remain passthrough.
 
-- **Act — the router** reads the table and rewrites each call to its tier's model: policy-table routing, cross-protocol translation, multi-account failover.
+Against that spec BitRouter provides the control plane for an **act → observe → evaluate → compile** cycle:
+
+- **Act — the router** reads the lock and rewrites each `@preset[:variant]` call to its tier's model: policy routing, cross-protocol translation, multi-account failover.
 - **Observe — telemetry** attributes every hop with cost, tokens, latency, and outcome, exported to Prometheus or any OTLP backend.
-- **Evaluate — the eval engine** scores each routing decision against your objective: did the cheap route it picked still reach the goal?
-- **Learn — the policy engine** folds that signal back into the spec. In-loop, `adequacy:` self-escalates a downgrade that starts failing; across runs the optimizer publishes an evolved, resolved `policy-lock.yaml` (an npm-style manifest/lock split, git-owned) — or you edit the table by hand.
+- **Evaluate — the generic eval exchange** lets task-native tests, humans, enterprise systems, or an external agentic judge submit the same versioned outcome contract. BitRouter admits, disputes, and snapshots evidence; it does not pretend one bundled judge is universal.
+- **Compile — the policy compiler** turns a frozen admitted-evidence snapshot into a deterministic, certificate-backed `policy-lock.yaml` candidate (an npm-style manifest/lock split, git-owned). Review and publication are explicit; the evidence database never changes a live route.
 
-You choose what the loop optimizes for — cost, latency, or accuracy — and the spec sharpens the longer it runs in production.
+You choose what the external evaluator measures — cost, latency, quality, or a private objective — while the active lock remains the only authority for live policy routing.
 
 ## Benchmarks
 
@@ -89,7 +88,7 @@ _All but OpenRouter are open-source and self-hostable; BitRouter and TensorZero 
 
 ## What BitRouter is not
 
-- **Not a static gateway** — it doesn't just forward calls to a fixed route; it runs an act → observe → evaluate → learn loop that keeps tightening the route as it runs. Every change it makes lands in a git-owned `policy-lock.yaml` you can read, diff, and revert — auto-tuning you fully own, never a black box.
+- **Not a static gateway** — it observes routed agent loops and compiles admitted external outcomes into a git-owned `policy-lock.yaml` you can read, diff, and revert. The live route never changes implicitly between publications.
 - **Not an orchestration framework** — it doesn't define your agent's control flow, steps, or state; it routes the calls, tools, and sub-agents your loop already makes.
 - **Not an agent harness** — it runs *under* Claude Code, Codex, and the rest, not instead of them.
 

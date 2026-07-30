@@ -32,6 +32,7 @@ use sea_orm::DatabaseConnection;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
 use bitrouter_sdk::{PluginId, Result};
+use http::HeaderMap;
 
 use crate::auth::db::{self, ApiKeyRecord};
 use crate::auth::events::Authenticated;
@@ -63,26 +64,33 @@ impl AuthHook {
     /// Both the OpenAI-style `Authorization: Bearer …` and the
     /// Anthropic-style `x-api-key: …` headers are accepted.
     fn extract_credential(ctx: &PipelineContext) -> Option<String> {
-        let headers = ctx.headers();
-        if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-            let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
-            if !token.is_empty() {
-                return Some(token.to_string());
-            }
-        }
-        if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
-            let key = key.trim();
-            if !key.is_empty() {
-                return Some(key.to_string());
-            }
-        }
-        None
+        credential_from_headers(ctx.headers())
     }
 
     /// Turn a validated key record into a `CallerContext`.
     fn caller_from_record(record: &ApiKeyRecord) -> CallerContext {
         CallerContext::new(&record.id, &record.user_id)
     }
+}
+
+/// Shared credential extraction for native inference and app-owned control
+/// plane endpoints.
+pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
+    if let Some(auth) = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+    {
+        let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+    headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 #[async_trait]
