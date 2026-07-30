@@ -452,7 +452,7 @@ mod tests {
             schema_version: 1,
             eval_id: "eval-1".into(),
             evidence_digest:
-                "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e7b49b870acb8a2d7f7f5f8".into(),
+                "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945".into(),
             evaluator: EvaluatorIdentity {
                 authority_id: "local".into(),
                 evaluator_id: "human".into(),

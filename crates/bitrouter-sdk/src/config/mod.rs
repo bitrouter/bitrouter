@@ -50,6 +50,8 @@ pub struct Config {
     pub upstream: UpstreamConfig,
     /// Database connection settings.
     pub database: DatabaseConfig,
+    /// Generic evaluation exchange authorities and admission scopes.
+    pub eval: EvalConfig,
     /// Upstream providers, keyed by provider id.
     pub providers: HashMap<String, ProviderConfig>,
     /// Explicit virtual-model definitions (Strategy 2.2). Optional —
@@ -107,6 +109,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
+            eval: EvalConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
             presets: HashMap::new(),
@@ -124,6 +127,49 @@ impl Default for Config {
             policy_table: PolicyTableConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+/// Generic evaluation exchange configuration.
+pub struct EvalConfig {
+    /// Trusted evaluator authorities keyed by stable authority id.
+    pub authorities: HashMap<String, EvalAuthorityConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+/// Identity and metric scope admitted for one evaluator authority.
+pub struct EvalAuthorityConfig {
+    /// Evaluator class this authority may claim.
+    pub kind: EvalAuthorityKind,
+    /// Virtual-key record ids authorized for submissions.
+    pub api_key_ids: Vec<String>,
+    /// Authenticated user ids authorized for submissions.
+    pub user_ids: Vec<String>,
+    /// Exact metric ids, namespace wildcards, or `*` accepted from this authority.
+    pub allowed_metrics: Vec<String>,
+    /// Whether submissions may declare hard violations.
+    pub allow_hard_fail: bool,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+/// Evaluator trust class configured by the operator.
+pub enum EvalAuthorityKind {
+    /// Benchmark- or task-native verifier.
+    TaskNative,
+    /// Human review.
+    Human,
+    /// Enterprise-owned private evaluator.
+    Enterprise,
+    /// Agent-driven review.
+    Agentic,
+    /// Evaluator without a stronger domain-specific class.
+    #[default]
+    Generic,
 }
 
 /// `bitrouter tui` settings.
