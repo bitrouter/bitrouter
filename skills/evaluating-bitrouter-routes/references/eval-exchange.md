@@ -21,6 +21,18 @@ An `EvalSubject` has these required fields:
 | `evidence_digest` | Canonical digest of `evidence`; leave this empty in a draft and let `subject seal` populate it. |
 | `observed_at` | RFC 3339 timestamp. |
 
+Choose `scope` from the evidence packet's observable boundary:
+
+| Observable boundary | Scope |
+|---|---|
+| The verdict concerns one request-local outcome. | `request` |
+| The verdict concerns a bounded workflow or conversation spanning multiple requests. | `episode` |
+| The verdict concerns an externally defined task with a task identity and terminal task or verifier outcome. | `task` |
+
+Decision count and evaluator organization do not determine scope. For example,
+a bounded multi-request enterprise workflow is an `episode` unless its packet
+names an externally defined task and terminal task outcome.
+
 Each `decisions[]` entry is exactly:
 
 ```json
@@ -73,10 +85,24 @@ idempotency_key: stable non-empty identifier
 submitted_at: RFC 3339 timestamp
 ```
 
-`evaluator.kind` is one of `task_native`, `human`, `enterprise`, `agentic`, or
-`generic`. `config_digest` is a SHA-256 digest of the fixed evaluator rubric
-and credit policy. Do not vary evaluator identity, configuration digest, or
-idempotency key for an equivalent retry.
+Copy `evaluator.kind` from the actual evaluation source:
+
+| Actual source | `evaluator.kind` |
+|---|---|
+| Task-native verifier | `task_native` |
+| Human reviewer | `human` |
+| Private enterprise evaluator | `enterprise` |
+| Agentic judge | `agentic` |
+| Genuinely uncategorized evaluator | `generic` |
+
+`config_digest` is a SHA-256 digest of the fixed evaluator rubric and credit
+policy. Keep evaluator identity, configuration digest, and idempotency key
+stable for an equivalent retry.
+
+`confidence_ppm` represents the evaluator's confidence that its `verdict` is
+correct. It is not a quality score, star rating, rubric score, or conversion of
+an illustrative value. Use `null` when the evaluator or fixed rubric does not
+supply verdict confidence.
 
 Metric ids must be lowercase namespaced identifiers. Units have exact values:
 
@@ -114,14 +140,15 @@ eval:
       api_key_ids: [brvk_ci]
       user_ids: []
       allowed_metrics: [quality.*, cost.*, latency.*]
-      allow_hard_fail: true
+      allow_hard_fail: false
 ```
 
 `kind` must match the submitted evaluator kind. `api_key_ids` or `user_ids`
 must bind the authenticated principal; `allowed_metrics` accepts exact ids,
-namespace wildcards such as `quality.*`, or `*`. `allow_hard_fail` controls
-whether that authority may report hard violations. Local CLI submission is a
-local operator action and does not consult an authority binding.
+namespace wildcards such as `quality.*`, or `*`. Keep `allow_hard_fail: false`
+for a remote authority. Set it to `true` only when that authority's explicit
+contract permits hard-violation reports. Local CLI submission is a local
+operator action and does not consult an authority binding.
 
 Use these CLI operations:
 
@@ -216,7 +243,7 @@ bitrouter eval subject seal subject-draft.json --output subject.json
     "latency.ms": {"value":315,"unit":"milliseconds"}
   },
   "hard_violations": [],
-  "confidence_ppm": 970000,
+  "confidence_ppm": null,
   "evidence_refs": ["verifier", "settlement"],
   "decision_credit": {
     "decision-edit": {"weight_ppm":1000000,"metric_ids":["quality.pass"]},
