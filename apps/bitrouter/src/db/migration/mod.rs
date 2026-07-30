@@ -17,6 +17,8 @@ pub mod m20240101_000006_create_adequacy_semantic_success_table;
 pub mod m20240101_000007_add_metering_evidence;
 pub mod m20240101_000008_add_metering_reconciliation;
 pub mod m20240101_000009_create_adequacy_reliability_events;
+pub mod m20240101_000010_create_eval_exchange;
+pub mod m20240101_000011_scope_eval_exchange;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -37,6 +39,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000007_add_metering_evidence::Migration),
             Box::new(m20240101_000008_add_metering_reconciliation::Migration),
             Box::new(m20240101_000009_create_adequacy_reliability_events::Migration),
+            Box::new(m20240101_000010_create_eval_exchange::Migration),
+            Box::new(m20240101_000011_scope_eval_exchange::Migration),
         ]
     }
 }

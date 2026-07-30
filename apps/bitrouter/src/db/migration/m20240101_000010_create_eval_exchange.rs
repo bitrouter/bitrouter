@@ -1,0 +1,220 @@
+//! Persist immutable generic-eval subjects, results, admissions, and snapshots.
+
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(EvalSubjects::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(EvalSubjects::EvalId)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(EvalSubjects::SubjectId).string().not_null())
+                    .col(ColumnDef::new(EvalSubjects::Scope).string().not_null())
+                    .col(
+                        ColumnDef::new(EvalSubjects::PolicyDigest)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(EvalSubjects::Holdout).boolean().not_null())
+                    .col(
+                        ColumnDef::new(EvalSubjects::ContentDigest)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(EvalSubjects::SubjectJson).text().not_null())
+                    .col(ColumnDef::new(EvalSubjects::CreatedAt).string().not_null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(EvalResults::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(EvalResults::ResultId)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(EvalResults::EvalId).string().not_null())
+                    .col(
+                        ColumnDef::new(EvalResults::IdempotencyKey)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(EvalResults::AuthorityId).string().not_null())
+                    .col(
+                        ColumnDef::new(EvalResults::EvaluatorKind)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalResults::ContentDigest)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(EvalResults::ResultJson).text().not_null())
+                    .col(ColumnDef::new(EvalResults::CreatedAt).string().not_null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_eval_results_eval_id")
+                    .table(EvalResults::Table)
+                    .col(EvalResults::EvalId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(EvalAdmissionEvents::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(EvalAdmissionEvents::Sequence)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalAdmissionEvents::ResultId)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalAdmissionEvents::Status)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalAdmissionEvents::Reason)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalAdmissionEvents::AuthorityId)
+                            .string()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalAdmissionEvents::CreatedAt)
+                            .string()
+                            .not_null(),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_eval_admission_result_sequence")
+                    .table(EvalAdmissionEvents::Table)
+                    .col(EvalAdmissionEvents::ResultId)
+                    .col(EvalAdmissionEvents::Sequence)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(EvalSnapshots::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(EvalSnapshots::EvidenceRoot)
+                            .string()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalSnapshots::ManifestJson)
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(EvalSnapshots::ResultCount)
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(EvalSnapshots::FrozenAt).string().not_null())
+                    .to_owned(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(EvalSnapshots::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(EvalAdmissionEvents::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(EvalResults::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(EvalSubjects::Table).to_owned())
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(DeriveIden)]
+enum EvalSubjects {
+    Table,
+    EvalId,
+    SubjectId,
+    Scope,
+    PolicyDigest,
+    Holdout,
+    ContentDigest,
+    SubjectJson,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum EvalResults {
+    Table,
+    ResultId,
+    EvalId,
+    IdempotencyKey,
+    AuthorityId,
+    EvaluatorKind,
+    ContentDigest,
+    ResultJson,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum EvalAdmissionEvents {
+    Table,
+    Sequence,
+    ResultId,
+    Status,
+    Reason,
+    AuthorityId,
+    CreatedAt,
+}
+#[derive(DeriveIden)]
+enum EvalSnapshots {
+    Table,
+    EvidenceRoot,
+    ManifestJson,
+    ResultCount,
+    FrozenAt,
+}

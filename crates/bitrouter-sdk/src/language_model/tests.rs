@@ -193,6 +193,7 @@ impl RoutingTable for PresetAwareRoutingTable {
                 },
                 overrides: PromptOverrides::default(),
                 policy: Some("coding".into()),
+                variant: Some("preferred".into()),
             })
         } else {
             Ok(ModelResolution::passthrough(model))

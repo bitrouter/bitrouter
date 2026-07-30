@@ -578,7 +578,7 @@ impl Pipeline {
         ctx.set_model(resolution.clean_model);
         if let Some(policy) = resolution.policy.as_deref() {
             for selector in &self.model_selectors {
-                selector.select(policy, ctx)?;
+                selector.select_variant(policy, resolution.variant.as_deref(), ctx)?;
             }
         }
 

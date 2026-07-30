@@ -16,6 +16,13 @@
       "description": "Database connection settings.",
       "$ref": "#/$defs/DatabaseConfig"
     },
+    "eval": {
+      "description": "Generic evaluation exchange authorities and admission scopes.",
+      "$ref": "#/$defs/EvalConfig",
+      "default": {
+        "authorities": {}
+      }
+    },
     "providers": {
       "description": "Upstream providers, keyed by provider id.",
       "type": "object",
@@ -230,6 +237,90 @@
           "default": "sqlite://./bitrouter.db"
         }
       }
+    },
+    "EvalConfig": {
+      "description": "Generic evaluation exchange configuration.",
+      "type": "object",
+      "properties": {
+        "authorities": {
+          "description": "Trusted evaluator authorities keyed by stable authority id.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/EvalAuthorityConfig"
+          },
+          "default": {}
+        }
+      }
+    },
+    "EvalAuthorityConfig": {
+      "description": "Identity and metric scope admitted for one evaluator authority.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Evaluator class this authority may claim.",
+          "$ref": "#/$defs/EvalAuthorityKind",
+          "default": "generic"
+        },
+        "api_key_ids": {
+          "description": "Virtual-key record ids authorized for submissions.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "user_ids": {
+          "description": "Authenticated user ids authorized for submissions.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "allowed_metrics": {
+          "description": "Exact metric ids, namespace wildcards, or `*` accepted from this authority.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "allow_hard_fail": {
+          "description": "Whether submissions may declare hard violations.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "EvalAuthorityKind": {
+      "description": "Evaluator trust class configured by the operator.",
+      "oneOf": [
+        {
+          "description": "Benchmark- or task-native verifier.",
+          "type": "string",
+          "const": "task_native"
+        },
+        {
+          "description": "Human review.",
+          "type": "string",
+          "const": "human"
+        },
+        {
+          "description": "Enterprise-owned private evaluator.",
+          "type": "string",
+          "const": "enterprise"
+        },
+        {
+          "description": "Agent-driven review.",
+          "type": "string",
+          "const": "agentic"
+        },
+        {
+          "description": "Evaluator without a stronger domain-specific class.",
+          "type": "string",
+          "const": "generic"
+        }
+      ]
     },
     "ProviderConfig": {
       "description": "One upstream provider entry — registry-style.\n\n`Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?config, …)`\ncan't dump the platform credential straight into structured logs.",
@@ -1623,7 +1714,7 @@
           "const": "frozen"
         },
         {
-          "description": "Permit adequacy state to affect routing and validated evolution output\nto atomically replace the active lock.",
+          "description": "Permit explicit validated publication to atomically replace the active\nlock. Request-time routing remains identical to frozen mode.",
           "type": "string",
           "const": "adaptive"
         }

@@ -531,6 +531,7 @@ impl RoutingTable for ConfigRoutingTable {
             prefs: resolution.prefs,
             overrides: resolution.overrides,
             policy: resolution.policy,
+            variant: resolution.variant,
         })
     }
 

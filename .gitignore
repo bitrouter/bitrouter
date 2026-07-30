@@ -32,3 +32,4 @@ skills/bitrouter-e2e-test/
 
 # Per-repo BitRouter state (session records, worktrees, runtime files)
 .bitrouter/
+.worktrees/

@@ -1,18 +1,19 @@
 use std::collections::BTreeMap;
 
-use bitrouter::adequacy::store::AdequacyStore;
+use bitrouter::eval::EvalService;
+use bitrouter::eval::compiler::EvalEvidenceSnapshot;
+use bitrouter::eval::store::EvalStore;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
-use bitrouter::policy_lock::{
-    PolicyDefinition, PolicyLock, deterministic_yaml, evolve_document, semantic_digest,
-};
+use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
+use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::archive::{CloudUsageRecord, WorkflowRunArtifact};
 use bitrouter::workflow_state::decision::PolicyDecisionRecord;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
-use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
+use bitrouter::workflow_state::reward_feedback::import_semantic_reward_feedback;
 use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
 
@@ -75,13 +76,14 @@ fn policy() -> PolicyDefinition {
     policy.adequacy.enabled = true;
     policy.adequacy.explore_enabled = true;
     policy.adequacy.explore_tier = Some("economy".to_string());
+    policy.adequacy.explore_opening = true;
     policy.adequacy.escalation_tier = Some("strong".to_string());
     policy.adequacy.min_semantic_successes_for_lock = 1;
     policy
 }
 
 #[tokio::test]
-async fn smithers_terminal_reward_materializes_only_the_credited_route() {
+async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyhow::Result<()> {
     let request_id = "req-smithers-1";
     let run_id = "run-smithers-1";
     let task_id = "case-release-review";
@@ -124,6 +126,12 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
         key_strategy: "agent_trace".to_string(),
         request_key: target_key.to_string(),
         ledger_key: Some(ledger_key.clone()),
+        policy: Some("smithers".to_string()),
+        policy_digest: Some(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        ),
+        preset_variant: Some("smithers".to_string()),
+        baseline_tier: Some("strong".to_string()),
         legacy_fingerprint: "opening".to_string(),
         workflow_state: "opening".to_string(),
         workflow_identity: Default::default(),
@@ -145,56 +153,67 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
         std::slice::from_ref(&usage),
         std::slice::from_ref(&outcome),
         std::slice::from_ref(&decision),
-    )
-    .unwrap();
+    )?;
     let artifact = WorkflowRunArtifact::build_with_decisions(
         "smithers-reward",
         &[trace],
         &[usage],
         &[outcome],
         &[decision],
-    )
-    .unwrap();
+    )?;
     assert_eq!(artifact.reward_join.unmatched_trace_count, 0);
     assert_eq!(artifact.reward_join.unmatched_outcome_count, 0);
     assert_eq!(artifact.semantic_policy_transition_candidates.len(), 1);
 
-    let db = bitrouter::db::connect("sqlite::memory:").await.unwrap();
-    bitrouter::db::run_migrations(&db).await.unwrap();
-    let store = AdequacyStore::new(db);
-    store
-        .upsert_exploration(&ledger_key, 3, 3, true)
-        .await
-        .unwrap();
+    let db = bitrouter::db::connect("sqlite::memory:").await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let eval_store = EvalStore::new(db);
+    let service = EvalService::new(eval_store.clone(), Default::default());
     let feedback =
-        apply_semantic_reward_feedback(&store, &artifact.semantic_policy_transition_candidates)
-            .await
-            .unwrap();
-    assert_eq!(feedback.semantic_success_evidence_count, 1);
+        import_semantic_reward_feedback(&service, &artifact.semantic_policy_transition_candidates)
+            .await?;
+    assert_eq!(feedback.admitted_count, 1);
+    let manifest = eval_store.freeze_snapshot("2026-07-30T00:02:00Z").await?;
+    let evidence = EvalEvidenceSnapshot::load(&eval_store, &manifest.evidence_root).await?;
 
     let lock = PolicyLock {
         lockfile_version: 1,
+        artifact: None,
         policies: BTreeMap::from([("smithers".to_string(), policy())]),
+        certificates: BTreeMap::new(),
     };
-    let exploration = store.load_exploration_all().await.unwrap();
-    let semantic = store.load_semantic_success_counts().await.unwrap();
-    let evolved = evolve_document(&lock, &exploration, &semantic)
-        .unwrap()
-        .document;
+    let legacy = LegacyAdequacySnapshot {
+        snapshot_time_unix_ms: 1_785_369_600_000,
+        pins: Vec::new(),
+        exploration: Vec::new(),
+        semantic_successes: Vec::new(),
+        reliability_events: Vec::new(),
+    };
+    let parent_digest = semantic_digest(&lock)?;
+    let evolved = compile_candidate(CompileInput {
+        current: &lock,
+        parent_digest: Some(&parent_digest),
+        legacy: &legacy,
+        eval: Some(&evidence),
+    })?
+    .document;
     assert_eq!(evolved.policies["smithers"].routes[target_key], "economy");
     assert!(!evolved.policies["smithers"].routes.contains_key(other_key));
 
-    let independently_evolved = evolve_document(&lock, &exploration, &semantic)
-        .unwrap()
-        .document;
+    let independently_evolved = compile_candidate(CompileInput {
+        current: &lock,
+        parent_digest: Some(&parent_digest),
+        legacy: &legacy,
+        eval: Some(&evidence),
+    })?
+    .document;
     assert_eq!(
-        deterministic_yaml(&evolved).unwrap().as_bytes(),
-        deterministic_yaml(&independently_evolved)
-            .unwrap()
-            .as_bytes()
+        deterministic_yaml(&evolved)?.as_bytes(),
+        deterministic_yaml(&independently_evolved)?.as_bytes()
     );
     assert_eq!(
-        semantic_digest(&evolved).unwrap(),
-        semantic_digest(&independently_evolved).unwrap()
+        semantic_digest(&evolved)?,
+        semantic_digest(&independently_evolved)?
     );
+    Ok(())
 }

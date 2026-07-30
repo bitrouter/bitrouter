@@ -41,14 +41,60 @@ source-neutral opening projections into exploration. Do not configure the
 removed `adequacy.max_downgraded_requests_per_session`; session identity is
 diagnostic-only and the parser rejects that setting.
 
-## Evaluation and publication
+## Generic evaluation and publication
 
-Treat the starter as a baseline. Evaluate it against representative traffic,
-then review generated candidates before publication. A process running in
-frozen mode is deterministic and can check, export, or reload a lock without
-permitting programmatic replacement:
+The daemon automatically turns settled routed requests into redacted eval
+subjects. It does not run a bundled judge. Task-native tests, humans,
+bitrouter-agent, and private enterprise evaluators submit the same versioned
+result contract through the CLI or authenticated REST API. Results are
+immutable and pass authority, metric-scope, holdout, and conflict admission
+before they can enter a snapshot.
+
+Remote result writers bind their existing virtual key or user identity to an
+authority in `bitrouter.yaml`:
+
+```yaml
+eval:
+  authorities:
+    ci:
+      kind: task_native
+      api_key_ids: [brvk_ci]
+      allowed_metrics: [quality.*, cost.*, latency.*]
+      allow_hard_fail: true
+```
+
+With `server.skip_auth: false`, the REST exchange accepts the same Bearer or
+`x-api-key` credential shape as inference. Local CLI submission is treated as
+an operator action.
+
+The hot path never reads eval rows. Freeze admitted evidence, compile a
+candidate, and inspect the diff:
 
 ```bash
+bitrouter eval status --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
+bitrouter eval snapshot freeze --config bitrouter.yaml
+bitrouter policy compile --eval-snapshot sha256:... --output candidate.yaml --config bitrouter.yaml
+bitrouter policy diff policy-lock.yaml candidate.yaml
 bitrouter policy check --config bitrouter.yaml
-bitrouter policy reload --config bitrouter.yaml
+bitrouter policy publish candidate.yaml --config bitrouter.yaml
 ```
+
+Only an explicit publication under `policy.mode: adaptive` may replace the
+active lock. `frozen` and `adaptive` route identically; mode controls write
+authority, not request-time learning. `bitrouter policy verify --evidence`
+reconstructs an active v2 lock's evidence root when the local ledger is
+available. Shipping only the lock preserves routing behavior; the ledger is
+needed only for audit or later compilation.
+
+`publish` promotes the exact candidate produced by `compile`. Its embedded
+parent digest is the compare-and-swap token, so stale and concurrent publishers
+cannot overwrite a newer lock. A frozen process rejects publication without
+changing the active file.
+
+Eval storage is ownership-scoped without adding tenant fields to the wire
+contract: local CLI records belong to `local`, while authenticated REST records
+belong to the virtual key's user. A frozen snapshot commits both subject and
+result digests. Multi-decision episodes must use `decision_credit.metric_ids`
+to attribute quality, cost, latency, and violations; full implicit credit is
+allowed only for a single decision.

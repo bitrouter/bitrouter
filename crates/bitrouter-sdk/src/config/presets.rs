@@ -38,6 +38,9 @@ pub struct PresetResolution {
     /// App-owned policy bound to the selected preset. Bare models and presets
     /// without a binding return `None`.
     pub policy: Option<String>,
+    /// Known variant selected by the caller, preserved for app-owned policy
+    /// selection independently of routing preferences.
+    pub variant: Option<String>,
 }
 
 fn apply_routing(prefs: &mut RoutingPrefs, routing: &RoutingConfig) {
@@ -126,6 +129,7 @@ pub fn resolve_presets(
         prefs,
         overrides,
         policy: preset.and_then(|p| p.policy.clone()),
+        variant: variant_name.map(ToString::to_string),
     })
 }
 
@@ -199,6 +203,7 @@ mod tests {
     fn preset_and_variant_compose() {
         let r = resolve_presets("@careful:free", &presets(), &variants()).unwrap();
         assert_eq!(r.clean_model, "gpt-5");
+        assert_eq!(r.variant.as_deref(), Some("free"));
         // preset's `paid` + variant's `free`
         assert_eq!(r.prefs.require_tags, vec!["paid", "free"]);
     }

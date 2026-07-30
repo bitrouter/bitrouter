@@ -567,19 +567,19 @@ fn policy_runtime_mode_controls_effective_adequacy_flags() -> crate::Result<()> 
     assert!(!frozen.explore_enabled);
 
     let adaptive = PolicyRuntimeMode::Adaptive.apply_to_adequacy(&config);
-    assert!(adaptive.enabled);
-    assert!(adaptive.explore_enabled);
+    assert!(!adaptive.enabled);
+    assert!(!adaptive.explore_enabled);
 
     let without_explore_tier =
         PolicyRuntimeMode::Adaptive.apply_to_adequacy(&AdequacyConfig::default());
-    assert!(without_explore_tier.enabled);
+    assert!(!without_explore_tier.enabled);
     assert!(!without_explore_tier.explore_enabled);
     Ok(())
 }
 
 #[test]
-fn adaptive_runtime_mode_validates_effective_legacy_policy_table() {
-    let error = parse(
+fn adaptive_runtime_mode_does_not_require_legacy_learner_configuration() -> crate::Result<()> {
+    let config = parse(
         r#"
 policy:
   mode: adaptive
@@ -590,10 +590,16 @@ policy_table:
   adequacy:
     enabled: false
 "#,
-    )
-    .unwrap_err();
+    )?;
 
-    assert!(error.to_string().contains("no escalation target"));
+    assert_eq!(config.policy.mode, PolicyRuntimeMode::Adaptive);
+    let effective_adequacy = config
+        .policy
+        .mode
+        .apply_to_adequacy(&config.policy_table.adequacy);
+    assert!(!effective_adequacy.enabled);
+    assert!(!effective_adequacy.explore_enabled);
+    Ok(())
 }
 
 #[test]

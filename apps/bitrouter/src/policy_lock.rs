@@ -1,9 +1,8 @@
 //! File-backed, preset-bound adaptive routing policies.
 //!
-//! `policy-lock.yaml` is the current effective policy artifact. Git owns file
-//! history; the adequacy database owns evolution evidence. The file contains no
-//! runtime generation chain, timestamps, or database ids, so serialising the
-//! same semantic policy is deterministic.
+//! `policy-lock.yaml` is the current effective policy artifact. The evidence
+//! ledger can compile a candidate, but only explicit publication replaces this
+//! file. Serving never reads learned database rows for semantic selection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -20,35 +19,197 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::adequacy::AdequacyLedger;
-use crate::adequacy::settlement::PendingAdequacyStore;
-use crate::adequacy::store::{AdequacyStore, PersistedExplorationState};
+use crate::adequacy::store::AdequacyStore;
+use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
-pub const POLICY_LOCKFILE_VERSION: u32 = 1;
+pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
+pub const POLICY_LOCKFILE_VERSION: u32 = 2;
+pub const POLICY_COMPILER_ID: &str = "bitrouter-policy-compiler";
+pub const POLICY_COMPILER_VERSION: u32 = 1;
+const EMPTY_SHA256: &str =
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 /// The complete deterministic policy artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyLock {
-    /// File-format version only. Evolution history lives in Git and the DB.
+    /// File-format version only.
     #[serde(rename = "lockfileVersion")]
     pub lockfile_version: u32,
+    /// Reproducible compiler inputs and artifact lineage. Required for v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<PolicyArtifact>,
     /// Named policies referenced by `presets.<name>.policy`.
     #[serde(default)]
     pub policies: BTreeMap<String, PolicyDefinition>,
+    /// Decision-relevant provenance for explicit routes, nested by policy and
+    /// canonical route key. Required for every v2 route.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub certificates: BTreeMap<String, BTreeMap<String, PolicyCertificate>>,
 }
 
 impl Default for PolicyLock {
     fn default() -> Self {
         Self {
             lockfile_version: POLICY_LOCKFILE_VERSION,
+            artifact: Some(PolicyArtifact::empty()),
             policies: BTreeMap::new(),
+            certificates: BTreeMap::new(),
         }
     }
+}
+
+impl PolicyLock {
+    pub fn is_v2(&self) -> bool {
+        self.lockfile_version == POLICY_LOCKFILE_VERSION
+    }
+
+    pub fn certificate(&self, policy: &str, request_key: &str) -> Option<&PolicyCertificate> {
+        self.certificates
+            .get(policy)
+            .and_then(|entries| entries.get(request_key))
+    }
+}
+
+/// Reproducible identity and evidence lineage for one compiled lock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyArtifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_digest: Option<String>,
+    pub evidence_root: String,
+    /// Content-addressed admitted eval snapshot used by this compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_snapshot_root: Option<String>,
+    pub source_snapshot_time_unix_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<LegacyMigration>,
+    pub compiler: CompilerIdentity,
+}
+
+impl PolicyArtifact {
+    fn empty() -> Self {
+        Self {
+            parent_digest: None,
+            evidence_root: EMPTY_SHA256.to_string(),
+            eval_snapshot_root: None,
+            source_snapshot_time_unix_ms: 0,
+            migration: None,
+            compiler: CompilerIdentity {
+                id: POLICY_COMPILER_ID.to_string(),
+                version: POLICY_COMPILER_VERSION,
+                config_digest: EMPTY_SHA256.to_string(),
+            },
+        }
+    }
+}
+
+/// Digest of the sealed pre-v2 learner tables projected into this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyMigration {
+    pub legacy_adequacy_digest: String,
+}
+
+/// Compiler implementation and deterministic configuration identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerIdentity {
+    pub id: String,
+    pub version: u32,
+    pub config_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteOwner {
+    Operator,
+    Compiler,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CertificateSource {
+    Operator,
+    LegacyAdequacyV1,
+    TaskNative,
+    Human,
+    Enterprise,
+    Agentic,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionVerdict {
+    Retain,
+    Promote,
+    Demote,
+    Experiment,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualitySummary {
+    pub baseline_pass_rate_ppm: i64,
+    pub candidate_pass_rate_ppm: i64,
+    pub delta_ppm: i64,
+    pub lower_bound_ppm: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EconomicsSummary {
+    pub normalized_cost_delta_ppm: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatencySummary {
+    pub normalized_latency_delta_ppm: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyAdequacySummary {
+    pub observed: u32,
+    pub adequate_trials: u32,
+    pub semantic_successes: u32,
+    pub pinned: bool,
+}
+
+/// Auditable decision summary for one explicit route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyCertificate {
+    pub owner: RouteOwner,
+    pub selected_tier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_tier: Option<String>,
+    pub source: CertificateSource,
+    #[serde(default)]
+    pub eligible_episodes: u32,
+    #[serde(default)]
+    pub independent_tasks: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualitySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub economics: Option<EconomicsSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency: Option<LatencySummary>,
+    #[serde(default)]
+    pub critical_violations: u32,
+    pub verdict: PromotionVerdict,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator_config_digest: Option<String>,
+    pub compiler_config_digest: String,
+    pub evidence_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy: Option<LegacyAdequacySummary>,
 }
 
 /// One named effective routing policy.
@@ -177,12 +338,18 @@ pub async fn load(path: &Path) -> Result<LoadedPolicyLock> {
 }
 
 pub fn validate_document(document: &PolicyLock) -> Result<()> {
-    if document.lockfile_version != POLICY_LOCKFILE_VERSION {
-        anyhow::bail!(
-            "unsupported policy lockfileVersion {}; expected {}",
-            document.lockfile_version,
-            POLICY_LOCKFILE_VERSION
-        );
+    match document.lockfile_version {
+        LEGACY_POLICY_LOCKFILE_VERSION => {
+            if document.artifact.is_some() || !document.certificates.is_empty() {
+                anyhow::bail!("policy lock v1 cannot contain v2 artifact or certificates");
+            }
+        }
+        POLICY_LOCKFILE_VERSION => validate_v2_metadata(document)?,
+        version => {
+            anyhow::bail!(
+                "unsupported policy lockfileVersion {version}; expected {LEGACY_POLICY_LOCKFILE_VERSION} or {POLICY_LOCKFILE_VERSION}"
+            );
+        }
     }
     for (name, policy) in &document.policies {
         validate_name(name)?;
@@ -209,6 +376,131 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
                 );
             }
         }
+    }
+    if document.lockfile_version == POLICY_LOCKFILE_VERSION {
+        validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_v2_metadata(document: &PolicyLock) -> Result<()> {
+    let artifact = document
+        .artifact
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("policy lock v2 requires artifact metadata"))?;
+    if let Some(parent) = artifact.parent_digest.as_deref() {
+        validate_sha256_digest(parent, "artifact.parent_digest")?;
+    }
+    validate_sha256_digest(&artifact.evidence_root, "artifact.evidence_root")?;
+    if let Some(root) = artifact.eval_snapshot_root.as_deref() {
+        validate_sha256_digest(root, "artifact.eval_snapshot_root")?;
+    }
+    if artifact.source_snapshot_time_unix_ms < 0 {
+        anyhow::bail!("artifact.source_snapshot_time_unix_ms cannot be negative");
+    }
+    if artifact.compiler.id.trim().is_empty() {
+        anyhow::bail!("artifact.compiler.id cannot be empty");
+    }
+    if artifact.compiler.version == 0 {
+        anyhow::bail!("artifact.compiler.version must be positive");
+    }
+    validate_sha256_digest(
+        &artifact.compiler.config_digest,
+        "artifact.compiler.config_digest",
+    )?;
+    if let Some(migration) = &artifact.migration {
+        validate_sha256_digest(
+            &migration.legacy_adequacy_digest,
+            "artifact.migration.legacy_adequacy_digest",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
+    for policy_name in document.certificates.keys() {
+        if !document.policies.contains_key(policy_name) {
+            anyhow::bail!("certificates reference missing policy '{policy_name}'");
+        }
+    }
+    for (policy_name, policy) in &document.policies {
+        let certificates = document.certificates.get(policy_name);
+        for (request_key, selected_tier) in &policy.routes {
+            let certificate = certificates
+                .and_then(|entries| entries.get(request_key))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "policy '{policy_name}' route '{request_key}' requires a v2 certificate"
+                    )
+                })?;
+            if certificate.selected_tier != *selected_tier {
+                anyhow::bail!(
+                    "policy '{policy_name}' route '{request_key}' selects tier '{selected_tier}' but its certificate selected tier '{}'",
+                    certificate.selected_tier
+                );
+            }
+        }
+        if let Some(certificates) = certificates {
+            for (request_key, certificate) in certificates {
+                if !policy.routes.contains_key(request_key) {
+                    anyhow::bail!(
+                        "policy '{policy_name}' certificate '{request_key}' has no explicit route"
+                    );
+                }
+                if !policy.tiers.contains_key(&certificate.selected_tier) {
+                    anyhow::bail!(
+                        "policy '{policy_name}' certificate '{request_key}' references unknown selected tier '{}'",
+                        certificate.selected_tier
+                    );
+                }
+                if let Some(baseline) = certificate.baseline_tier.as_deref()
+                    && !policy.tiers.contains_key(baseline)
+                {
+                    anyhow::bail!(
+                        "policy '{policy_name}' certificate '{request_key}' references unknown baseline tier '{baseline}'"
+                    );
+                }
+                validate_sha256_digest(
+                    &certificate.compiler_config_digest,
+                    "certificate.compiler_config_digest",
+                )?;
+                validate_sha256_digest(
+                    &certificate.evidence_digest,
+                    "certificate.evidence_digest",
+                )?;
+                if let Some(digest) = certificate.evaluator_config_digest.as_deref() {
+                    validate_sha256_digest(digest, "certificate.evaluator_config_digest")?;
+                }
+                match (certificate.owner, certificate.source) {
+                    (RouteOwner::Operator, CertificateSource::Operator)
+                    | (RouteOwner::Compiler, CertificateSource::LegacyAdequacyV1)
+                    | (RouteOwner::Compiler, CertificateSource::TaskNative)
+                    | (RouteOwner::Compiler, CertificateSource::Human)
+                    | (RouteOwner::Compiler, CertificateSource::Enterprise)
+                    | (RouteOwner::Compiler, CertificateSource::Agentic)
+                    | (RouteOwner::Compiler, CertificateSource::Mixed) => {}
+                    _ => {
+                        anyhow::bail!(
+                            "policy '{policy_name}' certificate '{request_key}' has inconsistent owner and source"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_sha256_digest(value: &str, field: &str) -> Result<()> {
+    let Some(hex_digest) = value.strip_prefix("sha256:") else {
+        anyhow::bail!("{field} must be a sha256 digest");
+    };
+    if hex_digest.len() != 64
+        || !hex_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        anyhow::bail!("{field} must contain 64 lowercase hexadecimal digits");
     }
     Ok(())
 }
@@ -245,18 +537,52 @@ pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()>
     Ok(())
 }
 
-pub fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.starts_with('.')
-        || name.chars().any(|c| {
-            c.is_whitespace() || !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-        })
-    {
+/// Ensure a non-empty legacy database has been sealed into the active v2 lock
+/// before an adaptive process accepts publication-capable traffic.
+pub fn verify_legacy_migration(
+    mode: PolicyRuntimeMode,
+    document: &PolicyLock,
+    snapshot: &crate::policy_compile::LegacyAdequacySnapshot,
+) -> Result<()> {
+    if mode == PolicyRuntimeMode::Frozen || snapshot.is_empty() {
+        return Ok(());
+    }
+    let actual = snapshot.semantic_digest()?;
+    let migrated = document
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.migration.as_ref())
+        .map(|migration| migration.legacy_adequacy_digest.as_str());
+    if migrated != Some(actual.as_str()) {
         anyhow::bail!(
-            "invalid policy name '{name}' (use letters, digits, '.', '_' or '-', without a leading '.')"
+            "adaptive policy startup found unsealed legacy learned state; run `bitrouter policy compile --output policy-candidate.yaml` and publish the candidate"
         );
     }
     Ok(())
+}
+
+pub fn validate_name(name: &str) -> Result<()> {
+    let mut segments = name.split(':');
+    let base = segments.next().unwrap_or_default();
+    let variant = segments.next();
+    if segments.next().is_some()
+        || !valid_policy_name_segment(base)
+        || variant.is_some_and(|segment| !valid_policy_name_segment(segment))
+    {
+        anyhow::bail!(
+            "invalid policy name '{name}' (use base or base:variant; each segment accepts letters, digits, '.', '_' or '-', without a leading '.')"
+        );
+    }
+    Ok(())
+}
+
+fn valid_policy_name_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && !segment.starts_with('.')
+        && !segment.chars().any(|character| {
+            character.is_whitespace()
+                || !(character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+        })
 }
 
 /// Stable semantic identity. YAML comments and map presentation do not affect
@@ -275,81 +601,6 @@ pub fn deterministic_yaml(document: &PolicyLock) -> Result<String> {
     Ok(rendered)
 }
 
-/// One deterministic database-to-lock projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct EvolutionChange {
-    pub policy: String,
-    pub request_key: String,
-    pub tier: String,
-}
-
-/// Candidate lock produced from positive adequacy evidence.
-#[derive(Debug, Clone)]
-pub struct EvolutionResult {
-    pub document: PolicyLock,
-    pub changes: Vec<EvolutionChange>,
-}
-
-/// Materialize qualified positive exploration locks into the current policy
-/// artifact. Only namespaced rows are considered, and an explicit route in the
-/// file is never overwritten by the optimizer.
-pub fn evolve_document(
-    current: &PolicyLock,
-    exploration: &[PersistedExplorationState],
-    semantic_successes: &BTreeMap<String, u32>,
-) -> Result<EvolutionResult> {
-    validate_document(current)?;
-    let mut document = current.clone();
-    let mut rows = exploration.iter().collect::<Vec<_>>();
-    rows.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
-    let mut changes = Vec::new();
-
-    for row in rows {
-        let Some((policy_name, request_key)) = row.fingerprint.split_once('\0') else {
-            continue;
-        };
-        let Some(projection) = RouteProjection::parse_key(request_key) else {
-            continue;
-        };
-        let Some(policy) = document.policies.get_mut(policy_name) else {
-            continue;
-        };
-        let Some(explore_tier) = policy.adequacy.explore_tier.clone() else {
-            continue;
-        };
-        let opening_minimum = if projection.state_kind == WorkflowStateKind::Opening {
-            policy.adequacy.min_semantic_successes_for_opening
-        } else {
-            0
-        };
-        let minimum = policy
-            .adequacy
-            .min_semantic_successes_for_lock
-            .max(opening_minimum);
-        let observed = semantic_successes
-            .get(&row.fingerprint)
-            .copied()
-            .unwrap_or_default();
-        let qualified = row.locked && observed >= minimum;
-        match policy.routes.get(request_key) {
-            None if qualified => {
-                policy
-                    .routes
-                    .insert(request_key.to_string(), explore_tier.clone());
-                changes.push(EvolutionChange {
-                    policy: policy_name.to_string(),
-                    request_key: request_key.to_string(),
-                    tier: explore_tier,
-                });
-            }
-            Some(_) | None => {}
-        }
-    }
-
-    validate_document(&document)?;
-    Ok(EvolutionResult { document, changes })
-}
-
 /// Atomically publish a candidate without permitting it to replace the lock
 /// currently selected by `bitrouter.yaml`.
 pub fn export_candidate_file(
@@ -366,6 +617,201 @@ pub fn export_candidate_file(
         );
     }
     write_atomic(candidate_path, None, document)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyRouteDiff {
+    pub policy: String,
+    pub request_key: String,
+    pub active_tier: Option<String>,
+    pub candidate_tier: Option<String>,
+}
+
+pub fn diff_documents(active: &PolicyLock, candidate: &PolicyLock) -> Vec<PolicyRouteDiff> {
+    let mut policies = active.policies.keys().cloned().collect::<BTreeSet<_>>();
+    policies.extend(candidate.policies.keys().cloned());
+    let mut differences = Vec::new();
+    for policy_name in policies {
+        let active_routes = active
+            .policies
+            .get(&policy_name)
+            .map(|policy| &policy.routes);
+        let candidate_routes = candidate
+            .policies
+            .get(&policy_name)
+            .map(|policy| &policy.routes);
+        let mut request_keys = active_routes
+            .into_iter()
+            .flat_map(|routes| routes.keys().cloned())
+            .collect::<BTreeSet<_>>();
+        request_keys.extend(
+            candidate_routes
+                .into_iter()
+                .flat_map(|routes| routes.keys().cloned()),
+        );
+        for request_key in request_keys {
+            let active_tier = active_routes
+                .and_then(|routes| routes.get(&request_key))
+                .cloned();
+            let candidate_tier = candidate_routes
+                .and_then(|routes| routes.get(&request_key))
+                .cloned();
+            if active_tier != candidate_tier {
+                differences.push(PolicyRouteDiff {
+                    policy: policy_name.clone(),
+                    request_key,
+                    active_tier,
+                    candidate_tier,
+                });
+            }
+        }
+    }
+    differences
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionRecord {
+    pub action: String,
+    pub parent_digest: String,
+    pub child_digest: String,
+    pub recorded_at: String,
+}
+
+/// Publish a validated candidate while retaining exact parent and child bytes.
+pub fn publish_candidate(
+    active_path: &Path,
+    expected_digest: &str,
+    candidate: &PolicyLock,
+    history_dir: &Path,
+) -> Result<PromotionRecord> {
+    let candidate_bytes = deterministic_yaml(candidate)?.into_bytes();
+    publish_bytes(
+        active_path,
+        expected_digest,
+        &candidate_bytes,
+        candidate,
+        history_dir,
+        "promote",
+    )
+}
+
+/// Restore the exact bytes previously archived for a semantic digest.
+pub fn rollback_to_digest(
+    active_path: &Path,
+    expected_digest: &str,
+    target_digest: &str,
+    history_dir: &Path,
+) -> Result<PromotionRecord> {
+    validate_sha256_digest(target_digest, "rollback target digest")?;
+    let target_path = history_snapshot_path(history_dir, target_digest)?;
+    let target_bytes = std::fs::read(&target_path)
+        .with_context(|| format!("reading policy history {}", target_path.display()))?;
+    let target_raw = std::str::from_utf8(&target_bytes).context("policy history is not UTF-8")?;
+    let target: PolicyLock = serde_saphyr::from_str(target_raw)
+        .with_context(|| format!("parsing policy history {}", target_path.display()))?;
+    validate_document(&target)?;
+    let actual = semantic_digest(&target)?;
+    if actual != target_digest {
+        anyhow::bail!(
+            "policy history digest mismatch for {} (expected {target_digest}, found {actual})",
+            target_path.display()
+        );
+    }
+    publish_bytes(
+        active_path,
+        expected_digest,
+        &target_bytes,
+        &target,
+        history_dir,
+        "rollback",
+    )
+}
+
+fn publish_bytes(
+    active_path: &Path,
+    expected_digest: &str,
+    target_bytes: &[u8],
+    target: &PolicyLock,
+    history_dir: &Path,
+    action: &str,
+) -> Result<PromotionRecord> {
+    let _publication_lock = acquire_publication_lock(active_path)?;
+    let parent_bytes = std::fs::read(active_path)
+        .with_context(|| format!("reading active policy lock {}", active_path.display()))?;
+    let parent_raw =
+        std::str::from_utf8(&parent_bytes).context("active policy lock is not UTF-8")?;
+    let parent: PolicyLock = serde_saphyr::from_str(parent_raw)
+        .with_context(|| format!("parsing active policy lock {}", active_path.display()))?;
+    validate_document(&parent)?;
+    let parent_digest = semantic_digest(&parent)?;
+    if parent_digest != expected_digest {
+        anyhow::bail!(
+            "policy lock changed since it was loaded (expected {expected_digest}, found {parent_digest}); refusing to overwrite"
+        );
+    }
+    let child_digest = semantic_digest(target)?;
+    archive_policy_bytes(history_dir, &parent_digest, &parent_bytes)?;
+    archive_policy_bytes(history_dir, &child_digest, target_bytes)?;
+    write_bytes_atomic(active_path, target_bytes)?;
+    let record = PromotionRecord {
+        action: action.to_string(),
+        parent_digest,
+        child_digest,
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+    };
+    append_promotion_record(history_dir, &record)?;
+    Ok(record)
+}
+
+fn history_snapshot_path(history_dir: &Path, digest: &str) -> Result<PathBuf> {
+    let hex_digest = digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| anyhow::anyhow!("history digest must use sha256"))?;
+    Ok(history_dir.join(format!("{hex_digest}.yaml")))
+}
+
+fn archive_policy_bytes(history_dir: &Path, digest: &str, bytes: &[u8]) -> Result<()> {
+    std::fs::create_dir_all(history_dir)
+        .with_context(|| format!("creating policy history {}", history_dir.display()))?;
+    let path = history_snapshot_path(history_dir, digest)?;
+    if path.exists() {
+        let existing = std::fs::read(&path)
+            .with_context(|| format!("reading policy history {}", path.display()))?;
+        if existing != bytes {
+            anyhow::bail!(
+                "policy history {} already exists with different bytes",
+                path.display()
+            );
+        }
+        return Ok(());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    let mut file = options
+        .open(&path)
+        .with_context(|| format!("creating policy history {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("writing policy history {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing policy history {}", path.display()))?;
+    sync_parent(&path)
+}
+
+fn append_promotion_record(history_dir: &Path, record: &PromotionRecord) -> Result<()> {
+    std::fs::create_dir_all(history_dir)
+        .with_context(|| format!("creating policy history {}", history_dir.display()))?;
+    let path = history_dir.join("promotions.jsonl");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening policy history log {}", path.display()))?;
+    serde_json::to_writer(&mut file, record).context("serializing promotion record")?;
+    file.write_all(b"\n")
+        .with_context(|| format!("writing policy history log {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing policy history log {}", path.display()))?;
+    sync_parent(&path)
 }
 
 fn resolved_file_location(path: &Path) -> Result<PathBuf> {
@@ -599,6 +1045,7 @@ pub struct PolicyFileUpdate {
     pub digest: String,
     pub document: PolicyLock,
     pub changes: Vec<String>,
+    pub conflicts: Vec<String>,
 }
 
 /// Create one named adaptive policy and bind it to a preset. The candidate
@@ -696,6 +1143,231 @@ pub async fn initialize_files(
             format!("created policy '{policy_name}'"),
             format!("bound preset '@{preset_name}'"),
         ],
+        conflicts: Vec::new(),
+    })
+}
+
+/// Compile a candidate from a caller-frozen database snapshot time.
+pub async fn compile_files(
+    config_path: &Path,
+    snapshot_time_unix_ms: i64,
+) -> Result<PolicyFileUpdate> {
+    compile_files_with_eval(config_path, snapshot_time_unix_ms, None).await
+}
+
+/// Compile against an explicit immutable eval snapshot. Omitting the root
+/// preserves the legacy-only compatibility path.
+pub async fn compile_files_with_eval(
+    config_path: &Path,
+    snapshot_time_unix_ms: i64,
+    eval_evidence_root: Option<&str>,
+) -> Result<PolicyFileUpdate> {
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let loaded = load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    let database_url = readonly_database_url(&config.database.url, config_path)?;
+    let db = crate::db::connect(&database_url)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let store = AdequacyStore::new(db.clone());
+    let legacy =
+        crate::policy_compile::LegacyAdequacySnapshot::load(&store, snapshot_time_unix_ms).await?;
+    let eval = match eval_evidence_root {
+        Some(root) => Some(
+            crate::eval::compiler::EvalEvidenceSnapshot::load(
+                &crate::eval::store::EvalStore::new(db),
+                root,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let compiled = crate::policy_compile::compile_candidate(crate::policy_compile::CompileInput {
+        current: &loaded.document,
+        parent_digest: Some(&loaded.digest),
+        legacy: &legacy,
+        eval: eval.as_ref(),
+    })?;
+    let digest = semantic_digest(&compiled.document)?;
+    let changes = compiled
+        .changes
+        .iter()
+        .map(|change| {
+            let previous = change.previous_tier.as_deref().unwrap_or("default");
+            format!(
+                "{}: {} {} -> {}",
+                change.policy, change.request_key, previous, change.selected_tier
+            )
+        })
+        .collect();
+    let conflicts = compiled
+        .conflicts
+        .iter()
+        .map(|conflict| {
+            format!(
+                "{}: {} keeps operator tier {} (compiler recommended {}): {}",
+                conflict.policy,
+                conflict.request_key,
+                conflict.operator_tier,
+                conflict.recommended_tier,
+                conflict.reason
+            )
+        })
+        .collect();
+    Ok(PolicyFileUpdate {
+        path: loaded.path,
+        digest,
+        document: compiled.document,
+        changes,
+        conflicts,
+    })
+}
+
+/// Validate and publish one exact precompiled v2 candidate. The candidate's
+/// parent digest is the compare-and-swap token, so a stale compiler can never
+/// overwrite a newer active lock.
+pub async fn publish_candidate_file(
+    config_path: &Path,
+    candidate_path: &Path,
+) -> Result<PolicyFileUpdate> {
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    if config.policy.mode == PolicyRuntimeMode::Frozen {
+        anyhow::bail!(
+            "policy runtime mode is frozen; set `policy.mode: adaptive` before publishing"
+        );
+    }
+    let active = load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    let candidate = load(candidate_path).await?;
+    validate_for_config(&config, &candidate.document)?;
+    let artifact = candidate
+        .document
+        .artifact
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("policy publish requires a compiled v2 candidate"))?;
+    let parent_digest = artifact
+        .parent_digest
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("compiled candidate has no parent digest"))?;
+    if parent_digest != active.digest {
+        anyhow::bail!(
+            "candidate parent digest {parent_digest} does not match active policy digest {}; recompile against the current lock",
+            active.digest
+        );
+    }
+    if candidate
+        .document
+        .certificates
+        .values()
+        .flat_map(BTreeMap::values)
+        .any(|certificate| certificate.verdict == PromotionVerdict::Blocked)
+    {
+        anyhow::bail!("compiled candidate contains blocked route conflicts");
+    }
+    let differences = diff_documents(&active.document, &candidate.document);
+    let history_dir = default_history_dir(&active.path);
+    let record = publish_candidate(
+        &active.path,
+        parent_digest,
+        &candidate.document,
+        &history_dir,
+    )?;
+    Ok(PolicyFileUpdate {
+        path: active.path,
+        digest: record.child_digest,
+        document: candidate.document,
+        changes: differences
+            .into_iter()
+            .map(|difference| {
+                format!(
+                    "{}: {} {} -> {}",
+                    difference.policy,
+                    difference.request_key,
+                    difference.active_tier.as_deref().unwrap_or("default"),
+                    difference.candidate_tier.as_deref().unwrap_or("default")
+                )
+            })
+            .collect(),
+        conflicts: Vec::new(),
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceVerification {
+    pub policy_digest: String,
+    pub evidence_root: String,
+    pub legacy_evidence_root: String,
+    pub eval_snapshot_root: Option<String>,
+    pub eval_results: usize,
+}
+
+/// Reconstruct the artifact-level evidence root from the local append-only
+/// ledger and content-addressed eval snapshot. This never changes the lock.
+pub async fn verify_evidence_files(config_path: &Path) -> Result<EvidenceVerification> {
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let loaded = load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    let artifact = loaded
+        .document
+        .artifact
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("policy lock v1 has no verifiable evidence artifact"))?;
+    let database_url = readonly_database_url(&config.database.url, config_path)?;
+    let db = crate::db::connect(&database_url)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let legacy = crate::policy_compile::LegacyAdequacySnapshot::load(
+        &AdequacyStore::new(db.clone()),
+        artifact.source_snapshot_time_unix_ms,
+    )
+    .await?;
+    let legacy_evidence_root = legacy.semantic_digest()?;
+    if artifact
+        .migration
+        .as_ref()
+        .is_some_and(|migration| migration.legacy_adequacy_digest != legacy_evidence_root)
+    {
+        anyhow::bail!("local legacy evidence no longer matches the compiled migration digest");
+    }
+    let eval = match artifact.eval_snapshot_root.as_deref() {
+        Some(root) => Some(
+            crate::eval::compiler::EvalEvidenceSnapshot::load(
+                &crate::eval::store::EvalStore::new(db),
+                root,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let reconstructed = match &eval {
+        Some(eval) => crate::eval::types::canonical_digest(&(
+            "policy-evidence-v2",
+            legacy_evidence_root.as_str(),
+            eval.evidence_root.as_str(),
+        ))?,
+        None => legacy_evidence_root.clone(),
+    };
+    if reconstructed != artifact.evidence_root {
+        anyhow::bail!("policy artifact evidence_root does not match local evidence");
+    }
+    Ok(EvidenceVerification {
+        policy_digest: loaded.digest,
+        evidence_root: reconstructed,
+        legacy_evidence_root,
+        eval_snapshot_root: eval.as_ref().map(|snapshot| snapshot.evidence_root.clone()),
+        eval_results: eval.map_or(0, |snapshot| snapshot.records.len()),
     })
 }
 
@@ -711,43 +1383,29 @@ pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileU
             "policy runtime mode is frozen; set `policy.mode: adaptive` before `policy evolve --apply`"
         );
     }
-    let loaded = load_for_config(&config, Some(config_path))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-    let database_url = readonly_database_url(&config.database.url, config_path)?;
-    let db = crate::db::connect(&database_url)
-        .await
-        .map_err(anyhow::Error::from)?;
-    let store = AdequacyStore::new(db);
-    let exploration = store
-        .load_exploration_all()
-        .await
-        .map_err(anyhow::Error::from)?;
-    let semantic = store
-        .load_semantic_success_counts()
-        .await
-        .map_err(anyhow::Error::from)?;
-    let evolved = evolve_document(&loaded.document, &exploration, &semantic)?;
-    let digest = semantic_digest(&evolved.document)?;
-    if apply && !evolved.changes.is_empty() {
-        write_atomic(&loaded.path, Some(&loaded.digest), &evolved.document)?;
+    let update = compile_files(config_path, chrono::Utc::now().timestamp_millis()).await?;
+    if apply {
+        if !update.conflicts.is_empty() {
+            anyhow::bail!(
+                "compiled policy has unresolved conflicts; inspect `bitrouter policy compile` before applying"
+            );
+        }
+        let loaded = load_for_config(&config, Some(config_path))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+        if loaded.digest != update.digest {
+            let history_dir = default_history_dir(&loaded.path);
+            publish_candidate(&loaded.path, &loaded.digest, &update.document, &history_dir)?;
+        }
     }
-    let changes = evolved
-        .changes
-        .iter()
-        .map(|change| {
-            format!(
-                "{}: {} -> {}",
-                change.policy, change.request_key, change.tier
-            )
-        })
-        .collect();
-    Ok(PolicyFileUpdate {
-        path: loaded.path,
-        digest,
-        document: evolved.document,
-        changes,
-    })
+    Ok(update)
+}
+
+pub fn default_history_dir(active_path: &Path) -> PathBuf {
+    active_path
+        .parent()
+        .map(|parent| parent.join(".bitrouter-policy-history"))
+        .unwrap_or_else(|| PathBuf::from(".bitrouter-policy-history"))
 }
 
 /// Explicit helper for changing process-owned policy mode in the main config.
@@ -805,6 +1463,7 @@ fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
 /// Publish a main-config edit only if the file still matches the caller's
 /// snapshot. File permissions are retained across the atomic replacement.
 pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<()> {
+    let _publication_lock = acquire_publication_lock(path)?;
     let current = std::fs::read_to_string(path)
         .with_context(|| format!("reading current config {}", path.display()))?;
     if current != expected {
@@ -842,12 +1501,65 @@ pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<(
     result
 }
 
+fn write_bytes_atomic(path: &Path, updated: &[u8]) -> Result<()> {
+    let permissions = std::fs::metadata(path)
+        .with_context(|| format!("reading permissions for {}", path.display()))?
+        .permissions();
+    let tmp = sibling_temp_path(path);
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::File::create(&tmp)
+            .with_context(|| format!("creating policy temp file {}", tmp.display()))?;
+        std::fs::set_permissions(&tmp, permissions)
+            .with_context(|| format!("preserving permissions on {}", tmp.display()))?;
+        file.write_all(updated)
+            .with_context(|| format!("writing policy temp file {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("syncing policy temp file {}", tmp.display()))?;
+        #[cfg(windows)]
+        if path.exists() {
+            std::fs::remove_file(path)
+                .with_context(|| format!("replacing policy lock {}", path.display()))?;
+        }
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("publishing policy lock {}", path.display()))?;
+        sync_parent(path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 fn sibling_temp_path(path: &Path) -> PathBuf {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("policy-lock.yaml");
     path.with_file_name(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()))
+}
+
+fn acquire_publication_lock(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating policy directory {}", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("policy-lock.yaml");
+    let lock_path = path.with_file_name(format!(".{file_name}.bitrouter.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening publication lock {}", lock_path.display()))?;
+    lock.lock()
+        .with_context(|| format!("acquiring publication lock {}", lock_path.display()))?;
+    Ok(lock)
 }
 
 #[cfg(unix)]
@@ -874,6 +1586,7 @@ pub fn write_atomic(
     expected_digest: Option<&str>,
     document: &PolicyLock,
 ) -> Result<String> {
+    let _publication_lock = acquire_publication_lock(path)?;
     if let Some(expected) = expected_digest {
         let current = std::fs::read_to_string(path)
             .with_context(|| format!("reading current policy lock {}", path.display()))?;
@@ -887,12 +1600,6 @@ pub fn write_atomic(
         }
     }
     let rendered = deterministic_yaml(document)?;
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating policy directory {}", parent.display()))?;
-    }
     let permissions = std::fs::metadata(path)
         .ok()
         .map(|metadata| metadata.permissions());
@@ -941,8 +1648,8 @@ pub(crate) struct PreparedPolicySnapshot(Arc<PolicySnapshot>);
 pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     db: DatabaseConnection,
-    pending: Arc<PendingAdequacyStore>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+    eval_decisions: PendingEvalDecisionStore,
 }
 
 impl PolicyRuntime {
@@ -950,14 +1657,14 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
         db: DatabaseConnection,
-        pending: Arc<PendingAdequacyStore>,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+        eval_decisions: PendingEvalDecisionStore,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
-            pending,
             decision_recorder,
+            eval_decisions,
         });
         runtime.reload_for_config(config, config_path).await?;
         Ok(runtime)
@@ -981,28 +1688,24 @@ impl PolicyRuntime {
         let loaded = load_for_config(config, config_path).await?;
         let mut routers = BTreeMap::new();
         if let Some(loaded) = &loaded {
+            let snapshot = crate::policy_compile::LegacyAdequacySnapshot::load(
+                &AdequacyStore::new(self.db.clone()),
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?;
+            verify_legacy_migration(config.policy.mode, &loaded.document, &snapshot)?;
             for (name, definition) in &loaded.document.policies {
                 let table_config = definition.as_table_config(config.policy.mode);
                 let table = PolicyTable::from_config(&table_config)
                     .ok_or_else(|| anyhow::anyhow!("policy '{name}' is inert"))?;
-                let ledger = if table_config.adequacy.enabled {
-                    Some(Arc::new(
-                        AdequacyLedger::load(
-                            &table_config.adequacy,
-                            AdequacyStore::new(self.db.clone()),
-                        )
-                        .await?,
-                    ))
-                } else {
-                    None
-                };
-                let mut router = PolicyTableRouter::new(table, ledger.clone())
-                    .with_state_namespace(name.clone());
+                let mut router = PolicyTableRouter::new(table).with_state_namespace(name.clone());
+                router = router.with_eval_observer(
+                    self.eval_decisions.clone(),
+                    name.clone(),
+                    loaded.digest.clone(),
+                );
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
-                }
-                if ledger.is_some() {
-                    router = router.with_pending_adequacy_store(self.pending.clone());
                 }
                 routers.insert(name.clone(), Arc::new(router));
             }
@@ -1038,16 +1741,30 @@ impl PolicyRuntime {
 
 impl ModelSelector for PolicyRuntime {
     fn select(&self, policy: &str, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<()> {
+        self.select_variant(policy, None, ctx)
+    }
+
+    fn select_variant(
+        &self,
+        policy: &str,
+        variant: Option<&str>,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
         let snapshot = self
             .snapshot
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let router = snapshot.routers.get(policy).ok_or_else(|| {
-            bitrouter_sdk::BitrouterError::bad_request(format!(
-                "preset references unavailable policy '{policy}'"
-            ))
-        })?;
+        let variant_policy = variant.map(|variant| format!("{policy}:{variant}"));
+        let router = variant_policy
+            .as_deref()
+            .and_then(|name| snapshot.routers.get(name))
+            .or_else(|| snapshot.routers.get(policy))
+            .ok_or_else(|| {
+                bitrouter_sdk::BitrouterError::bad_request(format!(
+                    "preset references unavailable policy '{policy}'"
+                ))
+            })?;
         let input_model = ctx.model().to_string();
         let selected = router.select_for_bound_policy(&input_model, ctx.prompt(), ctx.headers());
         if let Some(model) = selected {
@@ -1083,11 +1800,132 @@ mod tests {
         }
     }
 
+    const TEST_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn v1_remains_readable_but_v2_requires_an_artifact() -> anyhow::Result<()> {
+        let v1: PolicyLock = serde_saphyr::from_str("lockfileVersion: 1\npolicies: {}\n")?;
+        validate_document(&v1)?;
+
+        let v2_without_artifact: PolicyLock =
+            serde_saphyr::from_str("lockfileVersion: 2\npolicies: {}\n")?;
+        let result = validate_document(&v2_without_artifact);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .map(|error| error.to_string())
+                .is_some_and(|message| message.contains("artifact"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn v2_certificate_must_match_its_route_and_selected_tier() -> anyhow::Result<()> {
+        let raw = format!(
+            r#"lockfileVersion: 2
+artifact:
+  parent_digest: null
+  evidence_root: "{TEST_DIGEST}"
+  source_snapshot_time_unix_ms: 1785369600000
+  compiler:
+    id: bitrouter-policy-compiler
+    version: 1
+    config_digest: "{TEST_DIGEST}"
+policies:
+  coding:
+    tiers:
+      economy: vendor:economy
+      strong: vendor:strong
+    routes:
+      agent_trace/v1|edit|normal: economy
+    default_tier: strong
+certificates:
+  coding:
+    agent_trace/v1|edit|normal:
+      owner: compiler
+      selected_tier: strong
+      baseline_tier: strong
+      source: legacy_adequacy_v1
+      eligible_episodes: 1
+      independent_tasks: 1
+      critical_violations: 0
+      verdict: promote
+      compiler_config_digest: "{TEST_DIGEST}"
+      evidence_digest: "{TEST_DIGEST}"
+"#
+        );
+        let lock: PolicyLock = serde_saphyr::from_str(&raw)?;
+        let result = validate_document(&lock);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .map(|error| error.to_string())
+                .is_some_and(|message| message.contains("selected tier 'strong'"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn adaptive_v1_with_nonempty_legacy_state_fails_closed() {
+        let snapshot = crate::policy_compile::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: 1_700_000_000_000,
+            pins: vec![crate::adequacy::store::LegacyPin {
+                fingerprint: "auto\0agent_trace/v1|edit|normal".into(),
+                pinned_at_unix: 1_700_000_000,
+            }],
+            exploration: Vec::new(),
+            semantic_successes: Vec::new(),
+            reliability_events: Vec::new(),
+        };
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::new(),
+            certificates: BTreeMap::new(),
+        };
+
+        let result = verify_legacy_migration(PolicyRuntimeMode::Adaptive, &lock, &snapshot);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| { error.to_string().contains("bitrouter policy compile") })
+        );
+    }
+
+    #[test]
+    fn copied_v2_lock_serves_with_an_empty_target_database() {
+        let snapshot = crate::policy_compile::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: 1_700_000_000_000,
+            pins: Vec::new(),
+            exploration: Vec::new(),
+            semantic_successes: Vec::new(),
+            reliability_events: Vec::new(),
+        };
+
+        assert!(
+            verify_legacy_migration(
+                PolicyRuntimeMode::Adaptive,
+                &PolicyLock::default(),
+                &snapshot
+            )
+            .is_ok()
+        );
+    }
+
     #[test]
     fn deterministic_round_trip_and_digest() {
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         let first = deterministic_yaml(&lock).unwrap();
         let parsed: PolicyLock = serde_saphyr::from_str(&first).unwrap();
@@ -1102,7 +1940,7 @@ mod tests {
     }
 
     #[test]
-    fn process_mode_is_authoritative_for_learning_activation() {
+    fn process_mode_never_activates_request_time_learning() {
         let mut policy = definition();
         policy.adequacy.enabled = false;
         policy.adequacy.explore_enabled = false;
@@ -1113,14 +1951,13 @@ mod tests {
         assert!(!frozen.adequacy.explore_enabled);
 
         let adaptive = policy.as_table_config(PolicyRuntimeMode::Adaptive);
-        assert!(adaptive.adequacy.enabled);
-        assert!(adaptive.adequacy.explore_enabled);
+        assert!(!adaptive.adequacy.enabled);
+        assert!(!adaptive.adequacy.explore_enabled);
         assert_eq!(adaptive.adequacy.explore_tier.as_deref(), Some("economy"));
     }
 
     #[tokio::test]
-    async fn frozen_runtime_ignores_learned_db_routes_until_reloaded_as_adaptive()
-    -> anyhow::Result<()> {
+    async fn frozen_and_adaptive_modes_route_identically_from_the_lock() -> anyhow::Result<()> {
         use bitrouter_sdk::caller::CallerContext;
         use bitrouter_sdk::language_model::{
             GenerationParams, Message, PipelineRequest, Prompt, Role,
@@ -1165,7 +2002,9 @@ presets:
         policy.adequacy.min_semantic_successes_for_lock = 1;
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), policy)]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
 
@@ -1178,18 +2017,46 @@ presets:
         store
             .record_semantic_success(ledger_key, "terminal-bench/task-a")
             .await?;
+        let snapshot =
+            crate::policy_compile::LegacyAdequacySnapshot::load(&store, 1_700_000_100_000).await?;
+        let compiled =
+            crate::policy_compile::compile_candidate(crate::policy_compile::CompileInput {
+                current: &lock,
+                parent_digest: None,
+                legacy: &snapshot,
+                eval: None,
+            })?;
+        write_atomic(
+            &dir.path().join("policy-lock.yaml"),
+            Some(&semantic_digest(&lock)?),
+            &compiled.document,
+        )?;
 
         let runtime = PolicyRuntime::new(
             &config,
             Some(&config_path),
             db,
-            Arc::new(PendingAdequacyStore::default()),
             None,
+            PendingEvalDecisionStore::default(),
         )
         .await?;
         let mut frozen = context();
         runtime.select("coding", &mut frozen)?;
-        assert_eq!(frozen.model(), "vendor:strong");
+        assert_eq!(frozen.model(), "vendor:economy");
+
+        let empty_target_db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&empty_target_db).await?;
+        let empty_target = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            empty_target_db,
+            None,
+            PendingEvalDecisionStore::default(),
+        )
+        .await?;
+        let mut copied = context();
+        empty_target.select("coding", &mut copied)?;
+        assert_eq!(copied.model(), frozen.model());
 
         config.policy.mode = PolicyRuntimeMode::Adaptive;
         runtime
@@ -1198,6 +2065,75 @@ presets:
         let mut adaptive = context();
         runtime.select("coding", &mut adaptive)?;
         assert_eq!(adaptive.model(), "vendor:economy");
+
+        store.upsert_pin(ledger_key, 1_700_000_200).await?;
+        store.upsert_exploration(ledger_key, 99, 0, false).await?;
+        let mut after_database_mutation = context();
+        runtime.select("coding", &mut after_database_mutation)?;
+        assert_eq!(after_database_mutation.model(), adaptive.model());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_runtime_prefers_exact_variant_then_falls_back() -> anyhow::Result<()> {
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::language_model::{
+            GenerationParams, Message, PipelineRequest, Prompt, Role,
+        };
+
+        fn context() -> PipelineContext {
+            PipelineContext::new(PipelineRequest::new(
+                "vendor:strong",
+                CallerContext::local(),
+                Prompt {
+                    model: "vendor:strong".into(),
+                    system: None,
+                    system_provider_metadata: Default::default(),
+                    messages: vec![Message::text(Role::User, "solve this")],
+                    tools: Vec::new(),
+                    params: GenerationParams::default(),
+                    response_format: None,
+                    tool_choice: None,
+                    stream: false,
+                },
+            ))
+        }
+
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            "presets:\n  auto:\n    model: vendor:strong\n    policy: auto\n",
+        )
+        .await?;
+        let mut cost = definition();
+        cost.routes.insert("opening".into(), "economy".into());
+        cost.default_tier = Some("economy".into());
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("auto".into(), definition()), ("auto:cost".into(), cost)]),
+            certificates: BTreeMap::new(),
+        };
+        write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
+        let config = bitrouter_sdk::config::load(&config_path).await?;
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+        )
+        .await?;
+
+        let mut exact = context();
+        runtime.select_variant("auto", Some("cost"), &mut exact)?;
+        assert_eq!(exact.model(), "vendor:economy");
+        let mut fallback = context();
+        runtime.select_variant("auto", Some("latency"), &mut fallback)?;
+        assert_eq!(fallback.model(), "vendor:strong");
         Ok(())
     }
 
@@ -1264,7 +2200,9 @@ policies:
         let active = dir.path().join("policy-lock.yaml");
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&active, None, &lock).unwrap();
         let before = std::fs::read(&active).unwrap();
@@ -1282,7 +2220,9 @@ policies:
         let candidate = dir.path().join("new").join("..").join("policy-lock.yaml");
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&active, None, &lock).unwrap();
         let before = std::fs::read(&active).unwrap();
@@ -1301,7 +2241,9 @@ policies:
         let second = dir.path().join("candidate-b.yaml");
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&active, None, &lock).unwrap();
 
@@ -1316,12 +2258,37 @@ policies:
     }
 
     #[test]
+    fn publish_preserves_exact_parent_bytes_for_rollback() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let active = dir.path().join("policy-lock.yaml");
+        let history = dir.path().join("history");
+        let original = "# operator comment\nlockfileVersion: 1\npolicies: {}\n";
+        std::fs::write(&active, original)?;
+        let current: PolicyLock = serde_saphyr::from_str(original)?;
+        let mut candidate = current.clone();
+        candidate.policies.insert("coding".into(), definition());
+
+        let record = publish_candidate(&active, &semantic_digest(&current)?, &candidate, &history)?;
+        rollback_to_digest(
+            &active,
+            &record.child_digest,
+            &record.parent_digest,
+            &history,
+        )?;
+
+        assert_eq!(std::fs::read(&active)?, original.as_bytes());
+        Ok(())
+    }
+
+    #[test]
     fn validation_rejects_empty_or_duplicate_tier_models() {
         let mut empty = definition();
         empty.tiers.insert("strong".into(), "   ".into());
         let error = validate_document(&PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), empty)]),
+            certificates: BTreeMap::new(),
         })
         .unwrap_err();
         assert!(error.to_string().contains("non-empty model id"));
@@ -1332,7 +2299,9 @@ policies:
             .insert("economy".into(), "vendor:strong".into());
         let error = validate_document(&PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), duplicate)]),
+            certificates: BTreeMap::new(),
         })
         .unwrap_err();
         assert!(error.to_string().contains("same model"));
@@ -1352,7 +2321,9 @@ policies:
             &config,
             &PolicyLock {
                 lockfile_version: 1,
+                artifact: None,
                 policies: BTreeMap::from([("coding".into(), definition())]),
+                certificates: BTreeMap::new(),
             },
         )
         .unwrap_err();
@@ -1368,7 +2339,9 @@ policies:
         let path = dir.path().join("policy-lock.yaml");
         let mut lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         let digest = write_atomic(&path, None, &lock).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -1438,140 +2411,6 @@ presets:
             error
                 .to_string()
                 .contains("already binds policy 'production'")
-        );
-    }
-
-    #[test]
-    fn evolution_only_materializes_qualified_canonical_projection_locks() {
-        use crate::adequacy::store::PersistedExplorationState;
-
-        let mut policy = definition();
-        // Artifact booleans are legacy input only. Candidate generation uses
-        // accumulated evidence and configured tier/threshold parameters.
-        policy.adequacy.enabled = false;
-        policy.adequacy.explore_enabled = false;
-        policy.adequacy.explore_tier = Some("economy".into());
-        policy.adequacy.min_semantic_successes_for_lock = 2;
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            policies: BTreeMap::from([("coding".into(), policy), ("other".into(), definition())]),
-        };
-        let rows = vec![
-            PersistedExplorationState {
-                fingerprint: "coding\0codex|responses|tool_followup|-|-|exec_command".into(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            },
-            PersistedExplorationState {
-                fingerprint: "coding\0agent_trace/v1|tool_followup|normal".into(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            },
-            PersistedExplorationState {
-                fingerprint: "other\0must-not-leak".into(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            },
-        ];
-        let semantic = BTreeMap::from([("coding\0agent_trace/v1|tool_followup|normal".into(), 2)]);
-
-        let evolved = evolve_document(&lock, &rows, &semantic).unwrap();
-
-        assert_eq!(evolved.changes.len(), 1);
-        assert_eq!(evolved.changes[0].policy, "coding");
-        assert_eq!(evolved.changes[0].tier, "economy");
-        assert_eq!(
-            evolved.document.policies["coding"].routes["agent_trace/v1|tool_followup|normal"],
-            "economy"
-        );
-        assert!(
-            !evolved.document.policies["coding"]
-                .routes
-                .contains_key("codex|responses|tool_followup|-|-|exec_command")
-        );
-        assert!(evolved.document.policies["coding"].routes["opening"] == "strong");
-        assert!(
-            !evolved.document.policies["coding"]
-                .routes
-                .contains_key("must-not-leak")
-        );
-    }
-
-    #[test]
-    fn evolution_requires_the_opening_semantic_threshold_for_canonical_keys() {
-        use crate::adequacy::store::PersistedExplorationState;
-
-        let mut policy = definition();
-        policy.adequacy.enabled = true;
-        policy.adequacy.explore_enabled = true;
-        policy.adequacy.explore_tier = Some("economy".into());
-        policy.adequacy.min_semantic_successes_for_lock = 1;
-        policy.adequacy.min_semantic_successes_for_opening = 3;
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            policies: BTreeMap::from([("coding".into(), policy)]),
-        };
-        let row = PersistedExplorationState {
-            fingerprint: "coding\0agent_trace/v1|opening|normal".into(),
-            observed: 8,
-            adequate_trials: 4,
-            locked: true,
-        };
-
-        let below_threshold = evolve_document(
-            &lock,
-            std::slice::from_ref(&row),
-            &BTreeMap::from([(row.fingerprint.clone(), 2)]),
-        )
-        .unwrap();
-        assert!(below_threshold.changes.is_empty());
-        assert!(
-            !below_threshold.document.policies["coding"]
-                .routes
-                .contains_key("agent_trace/v1|opening|normal")
-        );
-
-        let qualified = evolve_document(
-            &lock,
-            std::slice::from_ref(&row),
-            &BTreeMap::from([(row.fingerprint.clone(), 3)]),
-        )
-        .unwrap();
-        assert_eq!(qualified.changes.len(), 1);
-        assert_eq!(
-            qualified.document.policies["coding"].routes["agent_trace/v1|opening|normal"],
-            "economy"
-        );
-    }
-
-    #[test]
-    fn evolution_never_removes_an_existing_operator_route() {
-        let request_key = "agent_trace/v1|tool_followup|normal";
-        let mut policy = definition();
-        policy.adequacy.enabled = true;
-        policy.adequacy.explore_enabled = true;
-        policy.adequacy.explore_tier = Some("economy".into());
-        policy.routes.insert(request_key.into(), "economy".into());
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            policies: BTreeMap::from([("coding".into(), policy)]),
-        };
-        let rows = vec![PersistedExplorationState {
-            fingerprint: format!("coding\0{request_key}"),
-            observed: 9,
-            adequate_trials: 0,
-            locked: false,
-        }];
-
-        let evolved = evolve_document(&lock, &rows, &BTreeMap::new()).unwrap();
-
-        assert!(evolved.changes.is_empty());
-        assert_eq!(
-            evolved.document.policies["coding"].routes[request_key],
-            "economy"
         );
     }
 
@@ -1734,7 +2573,9 @@ presets:
         reloadable.key_strategy = PolicyKeyStrategy::AgentTrace;
         let mut lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), reloadable)]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
@@ -1743,8 +2584,8 @@ presets:
             &config,
             Some(&config_path),
             db,
-            Arc::new(PendingAdequacyStore::default()),
             None,
+            PendingEvalDecisionStore::default(),
         )
         .await
         .unwrap();

@@ -348,7 +348,6 @@ providers:
 
     #[tokio::test]
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
-        use crate::adequacy::settlement::PendingAdequacyStore;
         use crate::policy_lock::PolicyRuntime;
         use bitrouter_sdk::config::PolicyRuntimeMode;
 
@@ -388,8 +387,8 @@ policies:
             &initial,
             Some(&path),
             db,
-            Arc::new(PendingAdequacyStore::default()),
             None,
+            crate::eval::settlement::PendingEvalDecisionStore::default(),
         )
         .await
         .expect("build policy runtime");

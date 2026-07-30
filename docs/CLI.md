@@ -325,8 +325,13 @@ In `-p` mode the **first** NDJSON line is a `session` correlation line — `{"ty
 ```text
 bitrouter policy init NAME --preset PRESET --economy MODEL [--strong MODEL]
 bitrouter policy check|status|show [--config PATH]
+bitrouter policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
+bitrouter policy diff ACTIVE CANDIDATE
+bitrouter policy publish CANDIDATE [--config PATH] [--socket PATH]
+bitrouter policy verify --evidence [--config PATH]
 bitrouter policy evolve [--config PATH] [--apply | --output FILE]
 bitrouter policy reload [--config PATH] [--socket PATH]
+bitrouter policy rollback DIGEST [--config PATH] [--socket PATH]
 ```
 
 The BitRouter process, not the policy lock, owns adaptive behavior:
@@ -337,9 +342,49 @@ policy:
   mode: frozen # or adaptive
 ```
 
-`frozen` is the safe default. Live routes use the static lock while BitRouter continues to record observations and rewards; database-learned routes cannot affect requests or replace the lock. Dry-run evolution and candidate export remain available. `adaptive` enables configured exploration and learned pins, and permits validated `policy evolve --apply` publication.
+`frozen` is the safe default. Live routes use only the static lock while BitRouter continues to record observations and evaluator results; ledger rows cannot affect requests or replace the lock. Dry-run compilation and candidate export remain available. `adaptive` permits validated publication, but does not enable request-time learning.
+
+`policy publish` promotes the exact compiled v2 candidate after validating its
+parent digest, certificates, and current config. A stale candidate or frozen
+process leaves the active bytes unchanged. `policy evolve --apply` remains the
+legacy migration shortcut; use `compile` + `publish` whenever an eval snapshot
+is part of the candidate lineage.
 
 The lock contains deterministic routes, tiers, and learning thresholds, but no activation or freeze switch. Older `policy.writeback: locked|evolve` input remains readable as `frozen|adaptive`; newly written configuration uses `policy.mode`. The old `policy lock`, `policy unlock`, and `policy evolve --freeze` surfaces have been removed.
+
+### `bitrouter eval`
+
+```text
+bitrouter eval subject put FILE [--config PATH]
+bitrouter eval subject get EVAL_ID [--config PATH]
+bitrouter eval subject list [--config PATH]
+bitrouter eval result submit FILE [--config PATH]
+bitrouter eval snapshot freeze [--at RFC3339] [--config PATH]
+bitrouter eval snapshot get SHA256 [--config PATH]
+bitrouter eval status [--config PATH]
+```
+
+Generic eval sits outside the inference hot path. Routed requests create
+redacted subjects automatically. A task-native runner, human, enterprise
+system, or agentic evaluator submits the same immutable `EvaluationResult` via
+CLI or authenticated REST. BitRouter validates evaluator authority and metric
+scope, retains rejected/disputed outcomes, and admits trusted results into a
+content-addressed snapshot. It does not bundle or execute a universal judge.
+The local CLI operates in the `local` ownership scope. Authenticated REST
+operations are isolated to the virtual key's owning user, including list/get,
+result submission, status, and snapshot access.
+
+A snapshot commits the exact subject and result digests, is bound to its owner
+scope, and excludes held-out, rejected, and disputed results. For episodes with
+multiple route decisions, `decision_credit.metric_ids` determines which
+decision receives verdict, cost, latency, or violation evidence; omitted credit
+is implicit only for a single-decision subject.
+
+The daemon exposes the same library operations at
+`GET/POST /v1/evals/subjects`, `GET /v1/evals/subjects/{eval_id}`,
+`POST /v1/evals/results`, `POST /v1/evals/snapshots`,
+`GET /v1/evals/snapshots/{evidence_root}`, and `GET /v1/evals/status`.
+These endpoints mutate evidence only; no evaluator can edit or publish a lock.
 
 ### `bitrouter key sign`
 

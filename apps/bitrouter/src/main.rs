@@ -33,6 +33,7 @@ use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::{
     DaemonActionReport, RouteHopView, RouteReport, StatusReport,
 };
+use bitrouter::output::reports::eval::EvalReport;
 use bitrouter::output::reports::mcp::{McpAddReport, McpRegistryReport, McpRegistryRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
 use bitrouter::output::reports::policy::PolicyReport;
@@ -246,6 +247,11 @@ enum Command {
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
+    },
+    /// Evaluator-neutral evidence exchange.
+    Eval {
+        #[command(subcommand)]
+        action: EvalAction,
     },
     /// Provider management.
     Providers {
@@ -857,6 +863,13 @@ enum PolicyAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// Verify the lock's compiled evidence root against the local ledger.
+    Verify {
+        #[arg(long)]
+        evidence: bool,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
     /// Show policy path, digest, runtime mode, and preset bindings.
     Status {
         #[arg(short, long)]
@@ -875,6 +888,30 @@ enum PolicyAction {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
+    /// Compile a deterministic v2 candidate without changing the active lock.
+    Compile {
+        /// Candidate output path.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// Frozen evidence snapshot time in Unix milliseconds.
+        #[arg(long, value_name = "UNIX_MS")]
+        snapshot_time: Option<i64>,
+        /// Immutable admitted-evidence root from `eval snapshot freeze`.
+        #[arg(long, value_name = "SHA256")]
+        eval_snapshot: Option<String>,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Compare explicit routes in two policy lock artifacts.
+    Diff { active: PathBuf, candidate: PathBuf },
+    /// Publish one already-compiled candidate after lineage validation.
+    Publish {
+        candidate: PathBuf,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Project qualified database evidence into a deterministic policy lock.
     Evolve {
         /// Publish the candidate. Without this flag, print a dry-run report.
@@ -883,6 +920,86 @@ enum PolicyAction {
         /// Export the candidate without changing the active policy lock.
         #[arg(long, value_name = "FILE", conflicts_with = "apply")]
         output: Option<PathBuf>,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Restore an exact lock snapshot from local promotion history.
+    Rollback {
+        digest: String,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalAction {
+    /// Create, inspect, and list eval subjects.
+    Subject {
+        #[command(subcommand)]
+        action: EvalSubjectAction,
+    },
+    /// Submit an evaluator result through authority admission.
+    Result {
+        #[command(subcommand)]
+        action: EvalResultAction,
+    },
+    /// Freeze or inspect an immutable admitted-evidence snapshot.
+    Snapshot {
+        #[command(subcommand)]
+        action: EvalSnapshotAction,
+    },
+    /// Summarize local exchange state.
+    Status {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalSubjectAction {
+    /// Insert an immutable subject from JSON or YAML.
+    Put {
+        file: PathBuf,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Get one subject by eval id.
+    Get {
+        eval_id: String,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// List subjects.
+    List {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalResultAction {
+    /// Submit an immutable result from JSON or YAML as the local operator.
+    Submit {
+        file: PathBuf,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvalSnapshotAction {
+    /// Freeze all currently admitted results into a content-addressed manifest.
+    Freeze {
+        #[arg(long)]
+        at: Option<String>,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Get a frozen manifest by evidence root.
+    Get {
+        evidence_root: String,
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -1207,6 +1324,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Tools { action } => tools(action, output).await,
         Command::Observe { action } => observe(action, output).await,
         Command::Policy { action } => policy(action, output).await,
+        Command::Eval { action } => eval(action, output).await,
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::Launch {
@@ -1627,13 +1745,14 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             outcomes,
             policy_decisions,
         } => {
-            use bitrouter::adequacy::store::AdequacyStore;
+            use bitrouter::eval::EvalService;
+            use bitrouter::eval::store::EvalStore;
             use bitrouter::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
             use bitrouter::workflow_state::decision::PolicyDecisionRecord;
             use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
-            use bitrouter::workflow_state::reward_feedback::apply_semantic_reward_feedback;
+            use bitrouter::workflow_state::reward_feedback::import_semantic_reward_feedback;
 
             let traces = TraceArchive::read_jsonl(&traces)
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
@@ -1657,30 +1776,20 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             .context("build workflow artifact for reward feedback")?;
             let db = bitrouter::db::connect(&database_url)
                 .await
-                .with_context(|| format!("connect adequacy database {database_url}"))?;
-            let summary = apply_semantic_reward_feedback(
-                &AdequacyStore::new(db),
+                .with_context(|| format!("connect eval exchange database {database_url}"))?;
+            bitrouter::db::run_migrations(&db).await?;
+            let summary = import_semantic_reward_feedback(
+                &EvalService::new(EvalStore::new(db), Default::default()),
                 &artifact.semantic_policy_transition_candidates,
             )
             .await
-            .context("apply reward feedback pins")?;
+            .context("import reward feedback into generic eval exchange")?;
             println!(
-                "✓ applied reward feedback: {} candidates, {} pinned keys, {} new task-success evidence rows",
-                summary.candidate_count,
-                summary.pinned_count,
-                summary.semantic_success_evidence_count
+                "✓ imported reward feedback: {} candidates, {} admitted eval results, {} skipped",
+                summary.candidate_count, summary.admitted_count, summary.skipped_count
             );
-            for key in summary.pinned_request_keys {
-                println!("  pinned {key}");
-            }
-            for key in summary.semantic_success_request_keys {
-                println!("  confirmed success {key}");
-            }
-            for decision in summary.decisions {
-                println!(
-                    "  feedback {} request={} reason={}",
-                    decision.action, decision.request_id, decision.reason
-                );
+            for eval_id in summary.eval_ids {
+                println!("  admitted {eval_id}");
             }
             Ok(())
         }
@@ -2298,6 +2407,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         );
     }
     let app = Arc::new(assembled.app);
+    let eval_router = bitrouter::eval::api::router(
+        assembled.eval_service.clone(),
+        assembled.db.clone(),
+        cfg.server.skip_auth,
+    );
     let policy_store = assembled.policy_store;
     // Clone before moving the original into `run_control_socket` — we
     // need a handle here too so the shutdown path below can drive the
@@ -2337,15 +2451,18 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         match workflow_trace_capture {
             Some(capture) => {
                 let workflow_wrapper = capture.router_wrapper();
+                let eval_router = eval_router.clone();
                 http_app
                     .serve_with_router_wrapper(&http_listen, move |router| {
-                        workflow_wrapper(otel_wrapper(router))
+                        workflow_wrapper(otel_wrapper(router.merge(eval_router.clone())))
                     })
                     .await
             }
             None => {
                 http_app
-                    .serve_with_router_wrapper(&http_listen, otel_wrapper)
+                    .serve_with_router_wrapper(&http_listen, move |router| {
+                        otel_wrapper(router.merge(eval_router.clone()))
+                    })
                     .await
             }
         }
@@ -2895,6 +3012,29 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 &routing_policy_report(config_path, "check", false, Vec::new(), None).await?,
             )?;
         }
+        PolicyAction::Verify { evidence, config } => {
+            if !evidence {
+                anyhow::bail!("policy verify currently requires `--evidence`");
+            }
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let verification = bitrouter::policy_lock::verify_evidence_files(config_path).await?;
+            output.emit(&PolicyReport {
+                action: "verify-evidence".into(),
+                path: Some(config_path.display().to_string()),
+                candidate_path: None,
+                digest: Some(verification.policy_digest.clone()),
+                mode: "n/a".into(),
+                policies: Vec::new(),
+                bindings: Default::default(),
+                changes: vec![format!(
+                    "verified {} eval results under {}",
+                    verification.eval_results, verification.evidence_root
+                )],
+                policy: Some(serde_json::to_value(verification)?),
+                applied: false,
+            })?;
+        }
         PolicyAction::Status { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
@@ -2914,6 +3054,88 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             output.emit(&reload(&socket).await?)?;
         }
+        PolicyAction::Compile {
+            output: candidate_path,
+            snapshot_time,
+            eval_snapshot,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let snapshot_time =
+                snapshot_time.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let update = bitrouter::policy_lock::compile_files_with_eval(
+                config_path,
+                snapshot_time,
+                eval_snapshot.as_deref(),
+            )
+            .await?;
+            let digest = bitrouter::policy_lock::export_candidate_file(
+                &update.path,
+                &candidate_path,
+                &update.document,
+            )?;
+            let mut changes = update.changes;
+            changes.extend(
+                update
+                    .conflicts
+                    .into_iter()
+                    .map(|conflict| format!("conflict: {conflict}")),
+            );
+            let mut report =
+                routing_policy_report(config_path, "compile", false, changes, None).await?;
+            report.candidate_path = Some(candidate_path.display().to_string());
+            report.digest = Some(digest);
+            output.emit(&report)?;
+        }
+        PolicyAction::Diff { active, candidate } => {
+            let active_lock = bitrouter::policy_lock::load(&active).await?;
+            let candidate_lock = bitrouter::policy_lock::load(&candidate).await?;
+            let changes = bitrouter::policy_lock::diff_documents(
+                &active_lock.document,
+                &candidate_lock.document,
+            )
+            .into_iter()
+            .map(|difference| {
+                format!(
+                    "{}: {} {} -> {}",
+                    difference.policy,
+                    difference.request_key,
+                    difference.active_tier.as_deref().unwrap_or("default"),
+                    difference.candidate_tier.as_deref().unwrap_or("default")
+                )
+            })
+            .collect();
+            output.emit(&PolicyReport {
+                action: "diff".into(),
+                path: Some(active.display().to_string()),
+                candidate_path: Some(candidate.display().to_string()),
+                digest: Some(candidate_lock.digest),
+                mode: "n/a".into(),
+                policies: candidate_lock.document.policies.keys().cloned().collect(),
+                bindings: Default::default(),
+                changes,
+                policy: None,
+                applied: false,
+            })?;
+        }
+        PolicyAction::Publish {
+            candidate,
+            config,
+            socket,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let update =
+                bitrouter::policy_lock::publish_candidate_file(config_path, &candidate).await?;
+            reload_published_policy_or_restore(&source, &update, socket.as_deref()).await?;
+            let changes = update.changes.clone();
+            let mut report =
+                routing_policy_report(config_path, "publish", true, changes, None).await?;
+            report.candidate_path = Some(candidate.display().to_string());
+            report.digest = Some(update.digest);
+            output.emit(&report)?;
+        }
         PolicyAction::Evolve {
             apply,
             output: candidate_output,
@@ -2929,9 +3151,19 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             } else {
                 "evolve-dry-run"
             };
-            let published = apply && !update.changes.is_empty();
+            let published = apply;
+            if published {
+                reload_published_policy_or_restore(&source, &update, None).await?;
+            }
+            let mut changes = update.changes.clone();
+            changes.extend(
+                update
+                    .conflicts
+                    .iter()
+                    .map(|conflict| format!("conflict: {conflict}")),
+            );
             let mut report =
-                routing_policy_report(config_path, action, published, update.changes, None).await?;
+                routing_policy_report(config_path, action, published, changes, None).await?;
             if let Some(candidate_path) = candidate_output {
                 report.digest = Some(bitrouter::policy_lock::export_candidate_file(
                     &update.path,
@@ -2944,6 +3176,205 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             }
             output.emit(&report)?;
         }
+        PolicyAction::Rollback {
+            digest,
+            config,
+            socket,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let cfg = config::load(config_path).await?;
+            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
+                anyhow::bail!(
+                    "policy runtime mode is frozen; use adaptive mode for policy publication"
+                );
+            }
+            let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+            let history_dir = bitrouter::policy_lock::default_history_dir(&loaded.path);
+            let record = bitrouter::policy_lock::rollback_to_digest(
+                &loaded.path,
+                &loaded.digest,
+                &digest,
+                &history_dir,
+            )?;
+            if let Err(error) = reload_policy_if_reachable(&source, socket.as_deref()).await {
+                bitrouter::policy_lock::rollback_to_digest(
+                    &loaded.path,
+                    &record.child_digest,
+                    &record.parent_digest,
+                    &history_dir,
+                )?;
+                let _ = reload_policy_if_reachable(&source, socket.as_deref()).await;
+                return Err(error.context("daemon rejected rollback; restored previous lock"));
+            }
+            output.emit(
+                &routing_policy_report(
+                    config_path,
+                    "rollback",
+                    true,
+                    vec![format!("restored {}", record.child_digest)],
+                    None,
+                )
+                .await?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+async fn eval(action: EvalAction, output: &Output) -> Result<()> {
+    use bitrouter::eval::admission::SubmissionPrincipal;
+    use bitrouter::eval::types::{EvalSubject, EvaluationResult};
+
+    let (action_name, data) = match action {
+        EvalAction::Subject { action } => match action {
+            EvalSubjectAction::Put { file, config } => {
+                let subject: EvalSubject = read_eval_file(&file)?;
+                let service = local_eval_service(config.as_deref()).await?;
+                let outcome = service.store().insert_subject(&subject).await?;
+                (
+                    "subject-put",
+                    serde_json::json!({
+                        "eval_id": subject.eval_id,
+                        "outcome": format!("{outcome:?}").to_ascii_lowercase(),
+                    }),
+                )
+            }
+            EvalSubjectAction::Get { eval_id, config } => {
+                let service = local_eval_service(config.as_deref()).await?;
+                let subject = service
+                    .store()
+                    .subject_for_owner(&eval_id, "local")
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("eval subject '{eval_id}' not found"))?;
+                ("subject-get", serde_json::to_value(subject)?)
+            }
+            EvalSubjectAction::List { config } => {
+                let service = local_eval_service(config.as_deref()).await?;
+                (
+                    "subject-list",
+                    serde_json::to_value(service.store().list_subjects_for_owner("local").await?)?,
+                )
+            }
+        },
+        EvalAction::Result { action } => match action {
+            EvalResultAction::Submit { file, config } => {
+                let result: EvaluationResult = read_eval_file(&file)?;
+                let service = local_eval_service(config.as_deref()).await?;
+                let outcome = service
+                    .submit(result, SubmissionPrincipal::LocalOperator)
+                    .await?;
+                ("result-submit", serde_json::to_value(outcome)?)
+            }
+        },
+        EvalAction::Snapshot { action } => match action {
+            EvalSnapshotAction::Freeze { at, config } => {
+                let service = local_eval_service(config.as_deref()).await?;
+                let frozen_at = at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+                let snapshot = service
+                    .store()
+                    .freeze_snapshot_for_owner(&frozen_at, "local")
+                    .await?;
+                ("snapshot-freeze", serde_json::to_value(snapshot)?)
+            }
+            EvalSnapshotAction::Get {
+                evidence_root,
+                config,
+            } => {
+                let service = local_eval_service(config.as_deref()).await?;
+                let snapshot = service
+                    .store()
+                    .snapshot_by_root_for_owner(&evidence_root, "local")
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("eval snapshot '{evidence_root}' not found"))?;
+                ("snapshot-get", serde_json::to_value(snapshot)?)
+            }
+        },
+        EvalAction::Status { config } => {
+            let service = local_eval_service(config.as_deref()).await?;
+            let subjects = service.store().list_subjects_for_owner("local").await?;
+            let admissions = service.store().latest_admissions_for_owner("local").await?;
+            let mut counts = std::collections::BTreeMap::<String, usize>::new();
+            for event in admissions.values() {
+                *counts
+                    .entry(format!("{:?}", event.status).to_ascii_lowercase())
+                    .or_default() += 1;
+            }
+            (
+                "status",
+                serde_json::json!({
+                    "subjects": subjects.len(),
+                    "results": admissions.len(),
+                    "admission": counts,
+                }),
+            )
+        }
+    };
+    output.emit(&EvalReport {
+        action: action_name.into(),
+        data,
+    })?;
+    Ok(())
+}
+
+async fn local_eval_service(config_path: Option<&Path>) -> Result<bitrouter::eval::EvalService> {
+    let source = bitrouter::paths::resolve_config(config_path)?;
+    let config = bitrouter::paths::load_config(&source).await?;
+    let db = bitrouter::db::connect(&config.database.url).await?;
+    bitrouter::db::run_migrations(&db).await?;
+    Ok(bitrouter::eval::EvalService::new(
+        bitrouter::eval::store::EvalStore::new(db),
+        config.eval,
+    ))
+}
+
+fn read_eval_file<T>(path: &Path) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("reading eval exchange file {}", path.display()))?;
+    match serde_json::from_str(&content) {
+        Ok(value) => Ok(value),
+        Err(json_error) => serde_saphyr::from_str(&content)
+            .with_context(|| format!("parsing {} as JSON ({json_error}) or YAML", path.display())),
+    }
+}
+
+async fn reload_policy_if_reachable(
+    source: &bitrouter::paths::ConfigSource,
+    socket_override: Option<&Path>,
+) -> Result<()> {
+    let socket = resolve_client_socket_from(source, socket_override).await?;
+    if !daemon::endpoint_in_use(&socket) {
+        return Ok(());
+    }
+    reload(&socket).await.map(|_| ())
+}
+
+async fn reload_published_policy_or_restore(
+    source: &bitrouter::paths::ConfigSource,
+    update: &bitrouter::policy_lock::PolicyFileUpdate,
+    socket_override: Option<&Path>,
+) -> Result<()> {
+    if let Err(error) = reload_policy_if_reachable(source, socket_override).await {
+        let parent_digest = update
+            .document
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.parent_digest.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("published policy has no parent digest"))?;
+        let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
+        bitrouter::policy_lock::rollback_to_digest(
+            &update.path,
+            &update.digest,
+            parent_digest,
+            &history_dir,
+        )?;
+        let _ = reload_policy_if_reachable(source, socket_override).await;
+        return Err(error.context("daemon rejected candidate; restored previous lock"));
     }
     Ok(())
 }
@@ -3548,6 +3979,38 @@ mod tests {
     }
 
     #[test]
+    fn generic_eval_commands_parse_as_nested_exchange_operations() {
+        use clap::Parser;
+        let submit = Cli::try_parse_from(["bitrouter", "eval", "result", "submit", "result.json"])
+            .expect("parse eval result submit");
+        assert!(matches!(
+            submit.command,
+            Some(Command::Eval {
+                action: EvalAction::Result {
+                    action: EvalResultAction::Submit { .. }
+                }
+            })
+        ));
+        let freeze = Cli::try_parse_from([
+            "bitrouter",
+            "eval",
+            "snapshot",
+            "freeze",
+            "--at",
+            "2026-07-30T00:00:00Z",
+        ])
+        .expect("parse eval snapshot freeze");
+        assert!(matches!(
+            freeze.command,
+            Some(Command::Eval {
+                action: EvalAction::Snapshot {
+                    action: EvalSnapshotAction::Freeze { .. }
+                }
+            })
+        ));
+    }
+
+    #[test]
     fn fleet_only_flags_are_noted_ignored_off_fleet() {
         // On a non-fleet backend, `--allow-writes` / `--budget-usd` are
         // politely ignored (a note is printed for each), never enforced.
@@ -3841,6 +4304,38 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn policy_compile_diff_and_rollback_commands_parse() {
+        use clap::Parser;
+
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "compile",
+                "--output",
+                "candidate.yaml"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["bitrouter", "policy", "diff", "active.yaml", "next.yaml"])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "publish",
+                "candidate.yaml",
+                "--config",
+                "bitrouter.yaml",
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["bitrouter", "policy", "rollback", "sha256:abc"]).is_ok());
     }
 
     #[test]
