@@ -124,6 +124,12 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
         key_strategy: "agent_trace".to_string(),
         request_key: target_key.to_string(),
         ledger_key: Some(ledger_key.clone()),
+        policy: Some("smithers".to_string()),
+        policy_digest: Some(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        ),
+        preset_variant: Some("smithers".to_string()),
+        baseline_tier: Some("strong".to_string()),
         legacy_fingerprint: "opening".to_string(),
         workflow_state: "opening".to_string(),
         workflow_identity: Default::default(),

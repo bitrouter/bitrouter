@@ -342,10 +342,7 @@ impl EvalStore {
             anyhow::bail!("eval snapshot root already exists with different entries");
         }
         let manifest_json = serde_json::to_string(&snapshot)?;
-        let result_count = match i32::try_from(snapshot.entries.len()) {
-            Ok(value) => value,
-            Err(_) => i32::MAX,
-        };
+        let result_count = i32::try_from(snapshot.entries.len()).unwrap_or(i32::MAX);
         snapshot_entity::ActiveModel {
             evidence_root: Set(evidence_root),
             manifest_json: Set(manifest_json),

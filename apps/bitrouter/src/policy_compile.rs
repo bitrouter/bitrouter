@@ -637,10 +637,7 @@ fn pin_is_active(pin: &LegacyPin, cooldown_secs: u64, snapshot_time_unix_ms: i64
         return true;
     }
     let snapshot_secs = snapshot_time_unix_ms / 1_000;
-    let cooldown = match i64::try_from(cooldown_secs) {
-        Ok(value) => value,
-        Err(_) => i64::MAX,
-    };
+    let cooldown = i64::try_from(cooldown_secs).unwrap_or(i64::MAX);
     pin.pinned_at_unix.saturating_add(cooldown) > snapshot_secs
 }
 
@@ -756,25 +753,25 @@ mod tests {
                     }]
                 })
                 .unwrap_or_default(),
-            exploration: positive
-                .then(|| {
-                    vec![PersistedExplorationState {
-                        fingerprint: fingerprint.clone(),
-                        observed: 8,
-                        adequate_trials: 4,
-                        locked: true,
-                    }]
-                })
-                .unwrap_or_default(),
-            semantic_successes: positive
-                .then(|| {
-                    vec![PersistedSemanticSuccess {
-                        evidence_id: format!("{fingerprint}\ntask-a"),
-                        fingerprint,
-                        task_id: "task-a".into(),
-                    }]
-                })
-                .unwrap_or_default(),
+            exploration: if positive {
+                vec![PersistedExplorationState {
+                    fingerprint: fingerprint.clone(),
+                    observed: 8,
+                    adequate_trials: 4,
+                    locked: true,
+                }]
+            } else {
+                Vec::new()
+            },
+            semantic_successes: if positive {
+                vec![PersistedSemanticSuccess {
+                    evidence_id: format!("{fingerprint}\ntask-a"),
+                    fingerprint,
+                    task_id: "task-a".into(),
+                }]
+            } else {
+                Vec::new()
+            },
             reliability_events: Vec::new(),
         }
     }

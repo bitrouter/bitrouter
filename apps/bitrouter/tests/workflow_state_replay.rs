@@ -8,6 +8,8 @@ use axum::routing::post;
 use axum_test::TestServer;
 use bitrouter::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
 use bitrouter::adequacy::store::AdequacyStore;
+use bitrouter::eval::store::EvalStore;
+use bitrouter::eval::types::AdmissionStatus;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
@@ -335,6 +337,10 @@ fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|opening|normal".to_string(),
         ledger_key: None,
+        policy: None,
+        policy_digest: None,
+        preset_variant: None,
+        baseline_tier: Some("strong".to_string()),
         legacy_fingerprint: "opening".to_string(),
         workflow_state: "opening".to_string(),
         workflow_identity: Default::default(),
@@ -385,8 +391,7 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 }
 
 #[tokio::test]
-async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger_without_private_headers()
- {
+async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_private_headers() {
     let canonical_key = "agent_trace/v1|tool_followup|normal";
     let ledger_key = format!("coding\0{canonical_key}");
     let mut generic = benchmark_trace("req-reward-generic-merge");
@@ -530,12 +535,26 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
     );
 
     let db = bitrouter::db::connect(&database_url).await.unwrap();
-    let counts = AdequacyStore::new(db.clone())
+    let eval_store = EvalStore::new(db.clone());
+    let subjects = eval_store.list_subjects().await.unwrap();
+    assert_eq!(subjects.len(), 2);
+    assert!(subjects.iter().all(|subject| {
+        subject.decisions.len() == 1
+            && subject.decisions[0].policy == "coding"
+            && subject.decisions[0].request_key == canonical_key
+    }));
+    let admissions = eval_store.latest_admissions().await.unwrap();
+    assert_eq!(admissions.len(), 2);
+    assert!(
+        admissions
+            .values()
+            .all(|event| event.status == AdmissionStatus::Admitted)
+    );
+    let legacy_counts = AdequacyStore::new(db.clone())
         .load_semantic_success_counts()
         .await
         .unwrap();
-    assert_eq!(counts.len(), 1);
-    assert_eq!(counts.get(&ledger_key), Some(&1));
+    assert!(legacy_counts.is_empty());
     db.close().await.unwrap();
 
     let mut conflicting_trace = benchmark_trace("header-public-b");
@@ -597,16 +616,13 @@ async fn equivalent_generic_and_terminus_rewards_share_canonical_learning_ledger
         String::from_utf8_lossy(&conflicting_output.stderr)
     );
     let db = bitrouter::db::connect(&database_url).await.unwrap();
-    let counts = AdequacyStore::new(db.clone())
-        .load_semantic_success_counts()
-        .await
-        .unwrap();
+    let eval_store = EvalStore::new(db.clone());
     assert_eq!(
-        counts.len(),
-        1,
-        "failed feedback must not mutate the ledger"
+        eval_store.list_subjects().await.unwrap().len(),
+        2,
+        "failed feedback must not mutate the eval ledger"
     );
-    assert_eq!(counts.get(&ledger_key), Some(&1));
+    assert_eq!(eval_store.latest_admissions().await.unwrap().len(), 2);
     db.close().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1853,6 +1869,10 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
+        policy: None,
+        policy_digest: None,
+        preset_variant: None,
+        baseline_tier: Some("capable".to_string()),
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
@@ -2123,6 +2143,10 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: None,
+        policy: None,
+        policy_digest: None,
+        preset_variant: None,
+        baseline_tier: Some("capable".to_string()),
         legacy_fingerprint: "after_bash".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
@@ -2228,6 +2252,12 @@ fn run_artifact_attributes_successful_task_to_policy_transition() {
         key_strategy: "workflow_state".to_string(),
         request_key: "agent_trace/v1|tool_followup|normal".to_string(),
         ledger_key: Some("coding\0agent_trace/v1|tool_followup|normal".to_string()),
+        policy: Some("coding".to_string()),
+        policy_digest: Some(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        ),
+        preset_variant: Some("coding".to_string()),
+        baseline_tier: Some("capable".to_string()),
         legacy_fingerprint: "after_exec_command".to_string(),
         workflow_state: "tool_followup".to_string(),
         workflow_identity: Default::default(),
