@@ -2210,6 +2210,27 @@ policies:
     }
 
     #[test]
+    fn auto_router_template_migrated_routes_are_compiler_owned() -> anyhow::Result<()> {
+        let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router");
+        let lock_raw = std::fs::read_to_string(template_dir.join("policy-lock.yaml"))?;
+        let lock: PolicyLock = serde_saphyr::from_str(&lock_raw)?;
+
+        validate_document(&lock)?;
+        let certificates = lock
+            .certificates
+            .get("auto")
+            .ok_or_else(|| anyhow::anyhow!("auto template is missing route certificates"))?;
+        assert_eq!(certificates.len(), 3);
+        for certificate in certificates.values() {
+            assert_eq!(certificate.owner, RouteOwner::Compiler);
+            assert_eq!(certificate.source, CertificateSource::LegacyAdequacyV1);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn candidate_export_refuses_to_replace_the_active_lock() {
         let dir = tempfile::tempdir().unwrap();
         let active = dir.path().join("policy-lock.yaml");

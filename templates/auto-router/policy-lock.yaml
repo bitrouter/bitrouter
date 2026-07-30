@@ -34,10 +34,10 @@ policies:
 certificates:
   auto:
     "agent_trace/v1|edit|normal":
-      owner: operator
+      owner: compiler
       selected_tier: economy
       baseline_tier: strong
-      source: operator
+      source: legacy_adequacy_v1
       eligible_episodes: 0
       independent_tasks: 0
       critical_violations: 0
@@ -45,10 +45,10 @@ certificates:
       compiler_config_digest: "sha256:f5770ed5849566ff315715ee70f7c7e6310f8e631f1ed3cac7b91b25f6007396"
       evidence_digest: "sha256:474fe9afab41feb204ddc1e96dab88ef76fc5320d7670384558a61d719f8e0a9"
     "agent_trace/v1|test|normal":
-      owner: operator
+      owner: compiler
       selected_tier: economy
       baseline_tier: strong
-      source: operator
+      source: legacy_adequacy_v1
       eligible_episodes: 0
       independent_tasks: 0
       critical_violations: 0
@@ -56,10 +56,10 @@ certificates:
       compiler_config_digest: "sha256:f5770ed5849566ff315715ee70f7c7e6310f8e631f1ed3cac7b91b25f6007396"
       evidence_digest: "sha256:7540cf9b82402f66cec51f2b47313cfdaa5ace99a69d0bc068a96d7670208a4a"
     "agent_trace/v1|tool_followup|normal":
-      owner: operator
+      owner: compiler
       selected_tier: economy
       baseline_tier: strong
-      source: operator
+      source: legacy_adequacy_v1
       eligible_episodes: 0
       independent_tasks: 0
       critical_violations: 0
