@@ -14,6 +14,7 @@ use sea_orm::sea_query::OnConflict;
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use bitrouter_sdk::{BitrouterError, Result};
+use serde::Serialize;
 
 use self::adequacy_exploration::Entity as Exploration;
 use self::adequacy_pins::Entity as Pins;
@@ -122,7 +123,13 @@ pub mod adequacy_reliability_events {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LegacyPin {
+    pub fingerprint: String,
+    pub pinned_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PersistedExplorationState {
     pub fingerprint: String,
     pub observed: u32,
@@ -130,7 +137,14 @@ pub struct PersistedExplorationState {
     pub locked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PersistedSemanticSuccess {
+    pub evidence_id: String,
+    pub fingerprint: String,
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PersistedReliabilityEvent {
     pub sequence: i64,
     pub event: ReliabilityEvent,
@@ -158,13 +172,26 @@ impl AdequacyStore {
     /// Load every pin as `(fingerprint, pinned_at_unix)`. Called once at startup
     /// to warm the in-memory pin cache.
     pub async fn load_all(&self) -> Result<Vec<(String, i64)>> {
+        Ok(self
+            .load_pins()
+            .await?
+            .into_iter()
+            .map(|row| (row.fingerprint, row.pinned_at_unix))
+            .collect())
+    }
+
+    /// Load complete pin rows for offline migration and policy compilation.
+    pub async fn load_pins(&self) -> Result<Vec<LegacyPin>> {
         let rows = Pins::find()
             .all(&self.db)
             .await
             .map_err(|e| BitrouterError::internal(format!("adequacy load_all: {e}")))?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.fingerprint, row.pinned_at_unix))
+            .map(|row| LegacyPin {
+                fingerprint: row.fingerprint,
+                pinned_at_unix: row.pinned_at_unix,
+            })
             .collect())
     }
 
@@ -187,15 +214,28 @@ impl AdequacyStore {
     }
 
     pub async fn load_semantic_success_counts(&self) -> Result<BTreeMap<String, u32>> {
-        let rows = SemanticSuccess::find().all(&self.db).await.map_err(|e| {
-            BitrouterError::internal(format!("adequacy load semantic successes: {e}"))
-        })?;
+        let rows = self.load_semantic_successes().await?;
         let mut counts = BTreeMap::new();
         for row in rows {
             let count = counts.entry(row.fingerprint).or_insert(0_u32);
             *count = count.saturating_add(1);
         }
         Ok(counts)
+    }
+
+    /// Load complete semantic-success rows for reproducible compilation.
+    pub async fn load_semantic_successes(&self) -> Result<Vec<PersistedSemanticSuccess>> {
+        let rows = SemanticSuccess::find().all(&self.db).await.map_err(|e| {
+            BitrouterError::internal(format!("adequacy load semantic successes: {e}"))
+        })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| PersistedSemanticSuccess {
+                evidence_id: row.evidence_id,
+                fingerprint: row.fingerprint,
+                task_id: row.task_id,
+            })
+            .collect())
     }
 
     pub async fn record_semantic_success(&self, fingerprint: &str, task_id: &str) -> Result<bool> {
