@@ -45,11 +45,11 @@ async fn put_subject(
     headers: HeaderMap,
     Json(subject): Json<EvalSubject>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    authenticate(&state, &headers).await?;
+    let principal = authenticate(&state, &headers).await?;
     let outcome = state
         .service
         .store()
-        .insert_subject(&subject)
+        .insert_subject_owned(&subject, principal.owner_user_id())
         .await
         .map_err(ApiError::bad_request)?;
     Ok(Json(serde_json::json!({
@@ -62,12 +62,12 @@ async fn list_subjects(
     State(state): State<ApiState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<EvalSubject>>, ApiError> {
-    authenticate(&state, &headers).await?;
+    let principal = authenticate(&state, &headers).await?;
     Ok(Json(
         state
             .service
             .store()
-            .list_subjects()
+            .list_subjects_for_owner(principal.owner_user_id())
             .await
             .map_err(ApiError::internal)?,
     ))
@@ -78,11 +78,11 @@ async fn get_subject(
     headers: HeaderMap,
     Path(eval_id): Path<String>,
 ) -> Result<Json<EvalSubject>, ApiError> {
-    authenticate(&state, &headers).await?;
+    let principal = authenticate(&state, &headers).await?;
     let subject = state
         .service
         .store()
-        .subject(&eval_id)
+        .subject_for_owner(&eval_id, principal.owner_user_id())
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("eval subject not found"))?;
@@ -113,7 +113,7 @@ async fn freeze_snapshot(
     headers: HeaderMap,
     payload: Option<Json<FreezeRequest>>,
 ) -> Result<Json<super::store::EvalSnapshot>, ApiError> {
-    authenticate(&state, &headers).await?;
+    let principal = authenticate(&state, &headers).await?;
     let frozen_at = payload
         .and_then(|Json(request)| request.frozen_at)
         .unwrap_or_else(|| Utc::now().to_rfc3339());
@@ -121,7 +121,7 @@ async fn freeze_snapshot(
         state
             .service
             .store()
-            .freeze_snapshot(&frozen_at)
+            .freeze_snapshot_for_owner(&frozen_at, principal.owner_user_id())
             .await
             .map_err(ApiError::bad_request)?,
     ))
@@ -132,11 +132,11 @@ async fn get_snapshot(
     headers: HeaderMap,
     Path(evidence_root): Path<String>,
 ) -> Result<Json<super::store::EvalSnapshot>, ApiError> {
-    authenticate(&state, &headers).await?;
+    let principal = authenticate(&state, &headers).await?;
     let snapshot = state
         .service
         .store()
-        .snapshot_by_root(&evidence_root)
+        .snapshot_by_root_for_owner(&evidence_root, principal.owner_user_id())
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("eval snapshot not found"))?;
@@ -147,17 +147,17 @@ async fn status(
     State(state): State<ApiState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    authenticate(&state, &headers).await?;
+    let principal = authenticate(&state, &headers).await?;
     let subjects = state
         .service
         .store()
-        .list_subjects()
+        .list_subjects_for_owner(principal.owner_user_id())
         .await
         .map_err(ApiError::internal)?;
     let admissions = state
         .service
         .store()
-        .latest_admissions()
+        .latest_admissions_for_owner(principal.owner_user_id())
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({
@@ -247,15 +247,20 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use axum_test::TestServer;
     use bitrouter_sdk::config::EvalConfig;
+    use sea_orm::DatabaseConnection;
 
     use super::router;
+    use crate::auth::{db as auth_db, keys};
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
-    use crate::eval::types::{EvalScope, EvalSubject, evidence_digest};
+    use crate::eval::types::{
+        EVAL_SCHEMA_VERSION, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
+        EvaluatorIdentity, EvaluatorKind, evidence_digest,
+    };
 
     #[tokio::test]
     async fn local_http_exchange_round_trips_a_subject() -> anyhow::Result<()> {
@@ -276,6 +281,110 @@ mod tests {
             .json::<EvalSubject>();
         assert_eq!(fetched, subject);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn authenticated_exchange_is_tenant_scoped() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let user_a_key = insert_active_key(&db, "user-a").await?;
+        let user_b_key = insert_active_key(&db, "user-b").await?;
+        let service = EvalService::new(EvalStore::new(db.clone()), EvalConfig::default());
+        let server = TestServer::new(router(service, db, false));
+        let mut subject_a = subject()?;
+        subject_a.eval_id = "eval-user-a".into();
+        subject_a.subject_id = "task-user-a".into();
+        let mut subject_b = subject()?;
+        subject_b.eval_id = "eval-user-b".into();
+        subject_b.subject_id = "task-user-b".into();
+
+        server
+            .post("/v1/evals/subjects")
+            .authorization_bearer(&user_a_key)
+            .json(&subject_a)
+            .await
+            .assert_status_ok();
+        server
+            .post("/v1/evals/subjects")
+            .authorization_bearer(&user_b_key)
+            .json(&subject_b)
+            .await
+            .assert_status_ok();
+
+        let user_a_subjects = server
+            .get("/v1/evals/subjects")
+            .authorization_bearer(&user_a_key)
+            .await
+            .json::<Vec<EvalSubject>>();
+        assert_eq!(user_a_subjects, vec![subject_a.clone()]);
+        server
+            .get("/v1/evals/subjects/eval-user-a")
+            .authorization_bearer(&user_b_key)
+            .await
+            .assert_status_not_found();
+        server
+            .post("/v1/evals/results")
+            .authorization_bearer(&user_b_key)
+            .json(&EvaluationResult {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: "eval-user-a".into(),
+                evidence_digest: subject_a.evidence_digest.clone(),
+                evaluator: EvaluatorIdentity {
+                    authority_id: "user-b-evaluator".into(),
+                    evaluator_id: "cross-tenant-probe".into(),
+                    kind: EvaluatorKind::Generic,
+                    version: "1".into(),
+                    config_digest: subject_a.policy_digest.clone(),
+                },
+                verdict: EvalVerdict::Pass,
+                metrics: BTreeMap::new(),
+                hard_violations: Vec::new(),
+                confidence_ppm: None,
+                evidence_refs: Vec::new(),
+                decision_credit: BTreeMap::new(),
+                idempotency_key: "cross-tenant-result".into(),
+                submitted_at: "2026-07-30T00:01:00Z".into(),
+            })
+            .await
+            .assert_status_bad_request();
+
+        let snapshot_a = server
+            .post("/v1/evals/snapshots")
+            .authorization_bearer(&user_a_key)
+            .json(&serde_json::json!({ "frozen_at": "2026-07-30T00:02:00Z" }))
+            .await
+            .json::<crate::eval::store::EvalSnapshot>();
+        let snapshot_b = server
+            .post("/v1/evals/snapshots")
+            .authorization_bearer(&user_b_key)
+            .json(&serde_json::json!({ "frozen_at": "2026-07-30T00:02:00Z" }))
+            .await
+            .json::<crate::eval::store::EvalSnapshot>();
+        assert_ne!(snapshot_a.evidence_root, snapshot_b.evidence_root);
+        server
+            .get(&format!("/v1/evals/snapshots/{}", snapshot_a.evidence_root))
+            .authorization_bearer(&user_b_key)
+            .await
+            .assert_status_not_found();
+        Ok(())
+    }
+
+    async fn insert_active_key(db: &DatabaseConnection, user_id: &str) -> anyhow::Result<String> {
+        auth_db::upsert_user(db, user_id).await?;
+        let key = keys::generate();
+        auth_db::insert_api_key(
+            db,
+            &auth_db::NewApiKey {
+                id: format!("key-{user_id}"),
+                key_hash: key.hash,
+                user_id: user_id.to_string(),
+                spend_limit_micro_usd: None,
+                rpm_limit: None,
+                policy_id: None,
+            },
+        )
+        .await?;
+        Ok(key.secret)
     }
 
     fn subject() -> anyhow::Result<EvalSubject> {

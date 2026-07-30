@@ -52,6 +52,8 @@ Authenticated daemon endpoints mirror the exchange at
 `/v1/evals/subjects`, `/v1/evals/results`, `/v1/evals/snapshots`, and
 `/v1/evals/status`. External evaluators submit scores; BitRouter owns schema,
 identity/metric authority, conflict/holdout admission, and snapshots.
+The CLI uses the local ownership scope; authenticated REST is isolated by the
+virtual key's owning user. Snapshot roots commit both subject and result content.
 
 ## ACP sessions
 
@@ -96,6 +98,7 @@ See `references/sessions.md` for the full per-session model (identity, turn queu
 | `bitrouter policy show <name> [--config PATH]` | Print one validated effective policy. |
 | `bitrouter policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile legacy migration evidence and an optional frozen generic-eval snapshot into a deterministic v2 candidate. Never changes the active lock. |
 | `bitrouter policy diff <ACTIVE> <CANDIDATE>` | Compare explicit route selections. |
+| `bitrouter policy publish <CANDIDATE> [--config PATH] [--socket PATH]` | Publish that exact compiled v2 candidate under adaptive mode using its parent digest as a compare-and-swap token. |
 | `bitrouter policy verify --evidence [--config PATH]` | Reconstruct the active v2 lock's evidence root from the local ledger/snapshot. |
 | `bitrouter policy evolve [--apply \| --output FILE] [--config PATH]` | Compatibility compile/publish command. `--apply` requires `policy.mode: adaptive`; request-time routing remains lock-only. |
 | `bitrouter policy reload [--config PATH] [--socket PATH]` | Hot-reload main config and policy lock through the existing daemon control socket. Invalid locks preserve the last-known-good runtime snapshot. |

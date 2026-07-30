@@ -420,14 +420,16 @@ The shipped policy surface is:
 bitrouter policy compile --output <candidate.yaml> [--eval-snapshot sha256:...]
 bitrouter policy check --config <bitrouter.yaml>
 bitrouter policy diff <active.yaml> <candidate.yaml>
+bitrouter policy publish <candidate.yaml> --config <bitrouter.yaml>
 bitrouter policy verify --evidence --config <bitrouter.yaml>
 bitrouter policy evolve --apply --config <bitrouter.yaml>
 bitrouter policy rollback <digest> --config <bitrouter.yaml>
 ```
 
-The final command name may remain `evolve` for compatibility, but its
-implementation becomes compile, validate, and atomic publish. It no longer
-means "copy positive rows into an add-only route map".
+`publish` is the canonical promotion boundary because it promotes the exact
+candidate (including its eval snapshot root) using the embedded parent digest
+as a compare-and-swap token. `evolve --apply` remains only as a compatibility
+shortcut for legacy migration compilation.
 
 The shipped eval surface is:
 
@@ -455,6 +457,14 @@ GET      /v1/evals/status
 CLI and REST are thin adapters over one eval library and must produce
 semantically identical records.
 
+Ownership is storage metadata rather than part of the evaluator-neutral wire
+contract. Local CLI operations use the `local` scope; authenticated REST
+operations can access only rows owned by the virtual key's user. Snapshot roots
+are owner-domain-separated and commit both immutable subject and result
+digests. Explicit `decision_credit.metric_ids` controls per-decision quality,
+cost, latency, and hard-violation attribution; implicit full credit is valid
+only for a subject with exactly one decision.
+
 ## 11. Publication and rollback
 
 Candidate compilation never mutates the active lock. Apply performs:
@@ -478,7 +488,9 @@ rerun evaluation or recompile evidence.
 - **Missing evidence blobs:** serving continues; `policy verify --evidence`
   reports incomplete audit coverage.
 - **Invalid candidate:** active bytes remain unchanged.
-- **Concurrent apply:** expected-digest mismatch rejects the later publisher.
+- **Concurrent apply:** BitRouter publishers take a cross-process publication
+  lock; after acquiring it, the expected-digest mismatch rejects the later
+  publisher before active bytes change.
 - **Evaluator unavailable:** eval remains pending; active routing is unchanged.
 - **Stale evaluation digest:** result is retained as rejected evidence and is
   ineligible for compilation.
@@ -574,7 +586,7 @@ none of them is released as a selector cutover on its own.
 - stop writing legacy adequacy tables and add regression tests proving database
   independence.
 
-### Slice D: Eval Exchange records and CLI — shipped baseline
+### Slice D: Eval Exchange records and CLI — shipped
 
 - add immutable EvalSubject, EvaluationResult, and admitted EvaluationRecord
   stores;
@@ -582,11 +594,12 @@ none of them is released as a selector cutover on its own.
 - add subject/result/snapshot/status commands over one shared library;
 - retain current workflow-state reward import as a compatibility adapter.
 
-### Slice E: REST and reference adapters — REST and reward adapter shipped
+### Slice E: REST and reference adapters — shipped core
 
 - expose authenticated REST operations over the same eval library;
-- the workflow reward adapter is shipped; broader shell/CI, human, and mock
-  agentic reference fixtures remain follow-up work;
+- the workflow reward adapter and task-native, human, enterprise, agentic, and
+  generic contract fixtures are shipped; richer worker adapters remain
+  follow-up work;
 - compile admitted evidence summaries and digests into lock certificates;
 - keep worker scheduling and a bundled general agentic evaluator out of scope.
 
@@ -616,9 +629,11 @@ The implementation plan must include:
 3. **Done:** publish the `@auto` router template as v2.
 4. **Done:** add immutable Eval Exchange contracts, admission, snapshots, CLI,
    authenticated REST, and the legacy reward adapter.
-5. **Next:** add richer reference adapters and paired/holdout experiment
+5. **Done:** add tenant isolation, subject+result snapshot commitments, explicit
+   metric-level decision credit, and exact candidate publication.
+6. **Next:** add richer reference adapters and paired/holdout experiment
    tooling; evaluator execution remains out of process.
-6. **Next:** improve statistical bounds and learned causal credit without
+7. **Next:** improve statistical bounds and learned causal credit without
    changing the exchange or serving boundary.
-7. **Later:** consider optional agentic evaluator packaging only after
+8. **Later:** consider optional agentic evaluator packaging only after
    task-native, human, and enterprise adapters prove the protocol.

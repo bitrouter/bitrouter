@@ -1,11 +1,9 @@
-//! Persistence for the adequacy ledger's escalation pins and exploration state.
+//! Migration reader for sealed pre-v2 adequacy evidence.
 //!
 //! `adequacy_pins` stores negative safety state. `adequacy_exploration` stores
-//! positive learning state: trial cadence and learned cheap-route locks. The
-//! ledger is the single writer; the only reader is the ledger's startup warm-up.
-//! Every query goes through sea-orm, so the store works unchanged on whichever
-//! backend `database.url` selects (SQLite / Postgres / MySQL), mirroring
-//! [`crate::metering::MeteringStore`].
+//! positive legacy state. Production code reads these tables only to compile a
+//! v2 migration candidate. New semantic observations use the generic eval
+//! exchange; test-only writers remain for deterministic migration fixtures.
 
 use std::collections::BTreeMap;
 
@@ -238,6 +236,7 @@ impl AdequacyStore {
             .collect())
     }
 
+    #[cfg(test)]
     pub async fn record_semantic_success(&self, fingerprint: &str, task_id: &str) -> Result<bool> {
         let evidence_id = format!("{fingerprint}\n{task_id}");
         let row = adequacy_semantic_success::ActiveModel {
@@ -263,6 +262,7 @@ impl AdequacyStore {
         }
     }
 
+    #[cfg(test)]
     pub async fn clear_semantic_successes(&self, fingerprint: &str) -> Result<()> {
         SemanticSuccess::delete_many()
             .filter(adequacy_semantic_success::Column::Fingerprint.eq(fingerprint))
@@ -349,6 +349,7 @@ impl AdequacyStore {
 
     /// Upsert a pin, refreshing the cooldown clock (`pinned_at_unix`) without
     /// resetting `created_at`.
+    #[cfg(test)]
     pub async fn upsert_pin(&self, fingerprint: &str, pinned_at_unix: i64) -> Result<()> {
         let row = adequacy_pins::ActiveModel {
             fingerprint: Set(fingerprint.to_string()),
@@ -368,6 +369,7 @@ impl AdequacyStore {
     }
 
     /// Upsert positive exploration state for one fingerprint.
+    #[cfg(test)]
     pub async fn upsert_exploration(
         &self,
         fingerprint: &str,
@@ -450,398 +452,4 @@ fn reliability_event_from_row(
             observed_at_unix,
         },
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
-    use crate::adequacy::{AdequacyLedger, Outcome};
-    use crate::db;
-    use bitrouter_sdk::config::AdequacyConfig;
-
-    async fn store() -> AdequacyStore {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        AdequacyStore::new(db)
-    }
-
-    fn reliability_event(
-        request_id: &str,
-        observation: ReliabilityObservation,
-        observed_at_unix: u64,
-    ) -> ReliabilityEvent {
-        ReliabilityEvent {
-            request_id: request_id.to_string(),
-            route_key: "bitrouter:canary-weak".to_string(),
-            endpoint_key: ReliabilityKey {
-                provider: "bitrouter".to_string(),
-                model: "canary-weak".to_string(),
-                credential_class: "default:x_api_key".to_string(),
-                endpoint_scope: "127.0.0.1:18090".to_string(),
-                protocol: "chat_completions".to_string(),
-            },
-            observation,
-            half_open_probe: false,
-            observed_at_unix,
-        }
-    }
-
-    #[tokio::test]
-    async fn reliability_events_round_trip_in_database_order_and_are_idempotent() {
-        let store = store().await;
-        let first = reliability_event("request-1", ReliabilityObservation::TransientFailure, 100);
-        let second = reliability_event("request-2", ReliabilityObservation::Success, 101);
-
-        assert_eq!(
-            store.append_reliability_event(&first).await.unwrap(),
-            ReliabilityAppendOutcome::Inserted,
-        );
-        assert_eq!(
-            store.append_reliability_event(&second).await.unwrap(),
-            ReliabilityAppendOutcome::Inserted,
-        );
-        assert_eq!(
-            store
-                .append_reliability_event(&ReliabilityEvent {
-                    observed_at_unix: 999,
-                    ..first.clone()
-                })
-                .await
-                .unwrap(),
-            ReliabilityAppendOutcome::Duplicate,
-        );
-
-        let rows = store.load_reliability_events().await.unwrap();
-        assert_eq!(rows.len(), 2);
-        assert!(rows[0].sequence < rows[1].sequence);
-        assert_eq!(rows[0].event, first);
-        assert_eq!(rows[1].event, second);
-    }
-
-    #[tokio::test]
-    async fn reliability_conflicting_duplicate_is_rejected() {
-        let store = store().await;
-        let first = reliability_event("request-1", ReliabilityObservation::TransientFailure, 100);
-        store.append_reliability_event(&first).await.unwrap();
-        let conflicting = reliability_event("request-1", ReliabilityObservation::Success, 100);
-
-        let error = store
-            .append_reliability_event(&conflicting)
-            .await
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("conflicting reliability event for request request-1")
-        );
-    }
-
-    #[tokio::test]
-    async fn reliability_persists_open_half_open_and_closed_phases_across_restarts() {
-        use crate::adequacy::reliability::RoutePermit;
-
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        let store = AdequacyStore::new(db);
-        let cfg = AdequacyConfig {
-            enabled: true,
-            reliability_window_size: 23,
-            reliability_consecutive_failures: 2,
-            reliability_error_rate_percent: 35,
-            reliability_cooldown_secs: 0,
-            ..Default::default()
-        };
-        let route = "bitrouter:canary-weak";
-        let endpoint = reliability_event("unused", ReliabilityObservation::Success, 0).endpoint_key;
-
-        let ledger = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
-        ledger
-            .observe_provider_reliability(
-                "request-1",
-                route,
-                endpoint.clone(),
-                ReliabilityObservation::TransientFailure,
-                false,
-            )
-            .await
-            .unwrap();
-        ledger
-            .observe_provider_reliability(
-                "request-1",
-                route,
-                endpoint.clone(),
-                ReliabilityObservation::TransientFailure,
-                false,
-            )
-            .await
-            .unwrap();
-        assert_eq!(ledger.reliability_permit(route), RoutePermit::Closed);
-        ledger
-            .observe_provider_reliability(
-                "request-2",
-                route,
-                endpoint.clone(),
-                ReliabilityObservation::TransientFailure,
-                false,
-            )
-            .await
-            .unwrap();
-
-        let reopened = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
-        assert_eq!(
-            reopened.reliability_permit(route),
-            RoutePermit::HalfOpenProbe
-        );
-        assert_eq!(reopened.reliability_permit(route), RoutePermit::Open);
-        reopened
-            .observe_provider_reliability(
-                "request-3",
-                route,
-                endpoint,
-                ReliabilityObservation::Success,
-                true,
-            )
-            .await
-            .unwrap();
-
-        let closed = AdequacyLedger::load(&cfg, store).await.unwrap();
-        assert_eq!(closed.reliability_permit(route), RoutePermit::Closed);
-    }
-
-    #[tokio::test]
-    async fn reliability_persistence_failure_leaves_online_state_unchanged() {
-        use crate::adequacy::reliability::RoutePermit;
-        use sea_orm::ConnectionTrait;
-
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        let store = AdequacyStore::new(db.clone());
-        let ledger = AdequacyLedger::load(&AdequacyConfig::default(), store)
-            .await
-            .unwrap();
-        db.execute_unprepared("DROP TABLE adequacy_reliability_events")
-            .await
-            .unwrap();
-        let route = "bitrouter:canary-weak";
-        let endpoint = reliability_event("unused", ReliabilityObservation::Success, 0).endpoint_key;
-
-        let error = ledger
-            .observe_provider_reliability(
-                "request-1",
-                route,
-                endpoint,
-                ReliabilityObservation::TransientFailure,
-                false,
-            )
-            .await
-            .unwrap_err();
-
-        assert!(error.to_string().contains("append reliability event"));
-        assert_eq!(ledger.reliability_permit(route), RoutePermit::Closed);
-    }
-
-    #[tokio::test]
-    async fn upsert_then_load_round_trips() {
-        let store = store().await;
-        store.upsert_pin("after_edit", 1000).await.unwrap();
-        store.upsert_pin("after_run", 2000).await.unwrap();
-        let mut rows = store.load_all().await.unwrap();
-        rows.sort();
-        assert_eq!(
-            rows,
-            vec![
-                ("after_edit".to_string(), 1000),
-                ("after_run".to_string(), 2000),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn upsert_refreshes_the_cooldown_clock_without_duplicating() {
-        let store = store().await;
-        store.upsert_pin("after_edit", 1000).await.unwrap();
-        store.upsert_pin("after_edit", 5000).await.unwrap();
-        assert_eq!(
-            store.load_all().await.unwrap(),
-            vec![("after_edit".to_string(), 5000)]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_pin_survives_a_restart_via_persistence() {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        let cfg = AdequacyConfig {
-            enabled: true,
-            escalation_tier: None,
-            escalation_threshold: 1,
-            pin_cooldown_secs: 0,
-            ..Default::default()
-        };
-        // First ledger: a failure pins the fingerprint and persists it.
-        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
-            .await
-            .unwrap();
-        ledger
-            .observe(
-                "after_edit",
-                Outcome::StaticDowngrade {
-                    cause: crate::adequacy::InadequacyCause::ProviderPermanent,
-                },
-            )
-            .await;
-        assert!(ledger.is_pinned("after_edit"));
-        // A fresh ledger over the same db warms its cache from the stored pin.
-        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
-            .await
-            .unwrap();
-        assert!(
-            reloaded.is_pinned("after_edit"),
-            "the pin must survive via persistence"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_exploration_lock_survives_a_restart_via_persistence() {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        let cfg = AdequacyConfig {
-            enabled: true,
-            escalation_tier: None,
-            escalation_threshold: 1,
-            pin_cooldown_secs: 0,
-            explore_enabled: true,
-            explore_tier: Some("cheap".to_string()),
-            explore_interval: 1,
-            explore_threshold: 2,
-            ..Default::default()
-        };
-
-        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
-            .await
-            .unwrap();
-        ledger
-            .observe(
-                "tool_followup",
-                Outcome::Exploration {
-                    trialed: true,
-                    cause: crate::adequacy::InadequacyCause::None,
-                },
-            )
-            .await;
-        ledger
-            .observe(
-                "tool_followup",
-                Outcome::Exploration {
-                    trialed: true,
-                    cause: crate::adequacy::InadequacyCause::None,
-                },
-            )
-            .await;
-        assert!(ledger.is_locked("tool_followup"));
-
-        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
-            .await
-            .unwrap();
-        assert!(
-            reloaded.is_locked("tool_followup"),
-            "learned cheap-route locks should survive daemon restart"
-        );
-    }
-
-    #[tokio::test]
-    async fn exploration_cadence_survives_a_restart_via_persistence() {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        let cfg = AdequacyConfig {
-            enabled: true,
-            escalation_tier: None,
-            escalation_threshold: 1,
-            pin_cooldown_secs: 0,
-            explore_enabled: true,
-            explore_tier: Some("cheap".to_string()),
-            explore_interval: 2,
-            explore_threshold: 3,
-            ..Default::default()
-        };
-
-        let ledger = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
-            .await
-            .unwrap();
-        ledger
-            .observe(
-                "tool_followup",
-                Outcome::Exploration {
-                    trialed: false,
-                    cause: crate::adequacy::InadequacyCause::None,
-                },
-            )
-            .await;
-        ledger
-            .observe(
-                "tool_followup",
-                Outcome::Exploration {
-                    trialed: false,
-                    cause: crate::adequacy::InadequacyCause::None,
-                },
-            )
-            .await;
-        assert!(ledger.should_trial("tool_followup"));
-
-        let reloaded = AdequacyLedger::load(&cfg, AdequacyStore::new(db.clone()))
-            .await
-            .unwrap();
-        assert!(
-            reloaded.should_trial("tool_followup"),
-            "trial cadence should survive daemon restart"
-        );
-    }
-
-    #[tokio::test]
-    async fn request_lock_waits_for_distinct_task_successes_when_configured() {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        let cfg = AdequacyConfig {
-            enabled: true,
-            explore_enabled: true,
-            explore_tier: Some("cheap".to_string()),
-            explore_interval: 1,
-            explore_threshold: 1,
-            min_semantic_successes_for_lock: 2,
-            ..Default::default()
-        };
-        let request_key = "codex|responses|tool_followup|-|-|exec_command";
-        let store = AdequacyStore::new(db.clone());
-        let ledger = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
-
-        ledger
-            .observe(
-                request_key,
-                Outcome::Exploration {
-                    trialed: true,
-                    cause: crate::adequacy::InadequacyCause::None,
-                },
-            )
-            .await;
-        assert!(ledger.is_request_qualified(request_key));
-        assert!(!ledger.is_locked(request_key));
-
-        store
-            .record_semantic_success(request_key, "terminal-bench/regex-log")
-            .await
-            .unwrap();
-        let one_success = AdequacyLedger::load(&cfg, store.clone()).await.unwrap();
-        assert_eq!(one_success.semantic_successes(request_key), 1);
-        assert!(!one_success.is_locked(request_key));
-
-        store
-            .record_semantic_success(request_key, "terminal-bench/fix-git")
-            .await
-            .unwrap();
-        let two_successes = AdequacyLedger::load(&cfg, store).await.unwrap();
-        assert_eq!(two_successes.semantic_successes(request_key), 2);
-        assert!(two_successes.is_locked(request_key));
-    }
 }

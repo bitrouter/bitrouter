@@ -1,9 +1,8 @@
 //! File-backed, preset-bound adaptive routing policies.
 //!
-//! `policy-lock.yaml` is the current effective policy artifact. Git owns file
-//! history; the adequacy database owns evolution evidence. The file contains no
-//! runtime generation chain, timestamps, or database ids, so serialising the
-//! same semantic policy is deterministic.
+//! `policy-lock.yaml` is the current effective policy artifact. The evidence
+//! ledger can compile a candidate, but only explicit publication replaces this
+//! file. Serving never reads learned database rows for semantic selection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -20,11 +19,10 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::adequacy::store::{AdequacyStore, PersistedExplorationState};
+use crate::adequacy::store::AdequacyStore;
 use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
@@ -603,137 +601,6 @@ pub fn deterministic_yaml(document: &PolicyLock) -> Result<String> {
     Ok(rendered)
 }
 
-/// One deterministic database-to-lock projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct EvolutionChange {
-    pub policy: String,
-    pub request_key: String,
-    pub tier: String,
-}
-
-/// Candidate lock produced from positive adequacy evidence.
-#[derive(Debug, Clone)]
-pub struct EvolutionResult {
-    pub document: PolicyLock,
-    pub changes: Vec<EvolutionChange>,
-}
-
-/// Materialize qualified positive exploration locks into the current policy
-/// artifact. Only namespaced rows are considered, and an explicit route in the
-/// file is never overwritten by the optimizer.
-pub fn evolve_document(
-    current: &PolicyLock,
-    exploration: &[PersistedExplorationState],
-    semantic_successes: &BTreeMap<String, u32>,
-) -> Result<EvolutionResult> {
-    validate_document(current)?;
-    let mut document = current.clone();
-    let is_v2 = document.is_v2();
-    let compiler_config_digest = document
-        .artifact
-        .as_ref()
-        .map(|artifact| artifact.compiler.config_digest.clone())
-        .unwrap_or_else(|| EMPTY_SHA256.to_string());
-    let mut rows = exploration.iter().collect::<Vec<_>>();
-    rows.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
-    let mut changes = Vec::new();
-
-    for row in rows {
-        let Some((policy_name, request_key)) = row.fingerprint.split_once('\0') else {
-            continue;
-        };
-        let Some(projection) = RouteProjection::parse_key(request_key) else {
-            continue;
-        };
-        let Some(policy) = document.policies.get_mut(policy_name) else {
-            continue;
-        };
-        let Some(explore_tier) = policy.adequacy.explore_tier.clone() else {
-            continue;
-        };
-        let opening_minimum = if projection.state_kind == WorkflowStateKind::Opening {
-            policy.adequacy.min_semantic_successes_for_opening
-        } else {
-            0
-        };
-        let minimum = policy
-            .adequacy
-            .min_semantic_successes_for_lock
-            .max(opening_minimum);
-        let observed = semantic_successes
-            .get(&row.fingerprint)
-            .copied()
-            .unwrap_or_default();
-        let qualified = row.locked && observed >= minimum;
-        match policy.routes.get(request_key) {
-            None if qualified => {
-                let baseline_tier = policy
-                    .adequacy
-                    .escalation_tier
-                    .clone()
-                    .or_else(|| policy.default_tier.clone());
-                policy
-                    .routes
-                    .insert(request_key.to_string(), explore_tier.clone());
-                if is_v2 {
-                    let evidence = format!(
-                        "{}\0{}\0{}\0{}",
-                        row.fingerprint, row.observed, row.adequate_trials, observed
-                    );
-                    let evidence_digest =
-                        format!("sha256:{}", hex::encode(Sha256::digest(evidence)));
-                    document
-                        .certificates
-                        .entry(policy_name.to_string())
-                        .or_default()
-                        .insert(
-                            request_key.to_string(),
-                            PolicyCertificate {
-                                owner: RouteOwner::Compiler,
-                                selected_tier: explore_tier.clone(),
-                                baseline_tier,
-                                source: CertificateSource::LegacyAdequacyV1,
-                                eligible_episodes: row.adequate_trials,
-                                independent_tasks: observed,
-                                quality: None,
-                                economics: None,
-                                latency: None,
-                                critical_violations: 0,
-                                verdict: PromotionVerdict::Promote,
-                                evaluator_config_digest: None,
-                                compiler_config_digest: compiler_config_digest.clone(),
-                                evidence_digest,
-                                legacy: Some(LegacyAdequacySummary {
-                                    observed: row.observed,
-                                    adequate_trials: row.adequate_trials,
-                                    semantic_successes: observed,
-                                    pinned: false,
-                                }),
-                            },
-                        );
-                }
-                changes.push(EvolutionChange {
-                    policy: policy_name.to_string(),
-                    request_key: request_key.to_string(),
-                    tier: explore_tier,
-                });
-            }
-            Some(_) | None => {}
-        }
-    }
-
-    if is_v2 {
-        let evidence = serde_json::to_vec(&document.certificates)
-            .context("serializing compatibility evolution evidence")?;
-        if let Some(artifact) = document.artifact.as_mut() {
-            artifact.evidence_root = format!("sha256:{}", hex::encode(Sha256::digest(evidence)));
-        }
-    }
-
-    validate_document(&document)?;
-    Ok(EvolutionResult { document, changes })
-}
-
 /// Atomically publish a candidate without permitting it to replace the lock
 /// currently selected by `bitrouter.yaml`.
 pub fn export_candidate_file(
@@ -868,6 +735,7 @@ fn publish_bytes(
     history_dir: &Path,
     action: &str,
 ) -> Result<PromotionRecord> {
+    let _publication_lock = acquire_publication_lock(active_path)?;
     let parent_bytes = std::fs::read(active_path)
         .with_context(|| format!("reading active policy lock {}", active_path.display()))?;
     let parent_raw =
@@ -1359,6 +1227,79 @@ pub async fn compile_files_with_eval(
     })
 }
 
+/// Validate and publish one exact precompiled v2 candidate. The candidate's
+/// parent digest is the compare-and-swap token, so a stale compiler can never
+/// overwrite a newer active lock.
+pub async fn publish_candidate_file(
+    config_path: &Path,
+    candidate_path: &Path,
+) -> Result<PolicyFileUpdate> {
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    if config.policy.mode == PolicyRuntimeMode::Frozen {
+        anyhow::bail!(
+            "policy runtime mode is frozen; set `policy.mode: adaptive` before publishing"
+        );
+    }
+    let active = load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    let candidate = load(candidate_path).await?;
+    validate_for_config(&config, &candidate.document)?;
+    let artifact = candidate
+        .document
+        .artifact
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("policy publish requires a compiled v2 candidate"))?;
+    let parent_digest = artifact
+        .parent_digest
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("compiled candidate has no parent digest"))?;
+    if parent_digest != active.digest {
+        anyhow::bail!(
+            "candidate parent digest {parent_digest} does not match active policy digest {}; recompile against the current lock",
+            active.digest
+        );
+    }
+    if candidate
+        .document
+        .certificates
+        .values()
+        .flat_map(BTreeMap::values)
+        .any(|certificate| certificate.verdict == PromotionVerdict::Blocked)
+    {
+        anyhow::bail!("compiled candidate contains blocked route conflicts");
+    }
+    let differences = diff_documents(&active.document, &candidate.document);
+    let history_dir = default_history_dir(&active.path);
+    let record = publish_candidate(
+        &active.path,
+        parent_digest,
+        &candidate.document,
+        &history_dir,
+    )?;
+    Ok(PolicyFileUpdate {
+        path: active.path,
+        digest: record.child_digest,
+        document: candidate.document,
+        changes: differences
+            .into_iter()
+            .map(|difference| {
+                format!(
+                    "{}: {} {} -> {}",
+                    difference.policy,
+                    difference.request_key,
+                    difference.active_tier.as_deref().unwrap_or("default"),
+                    difference.candidate_tier.as_deref().unwrap_or("default")
+                )
+            })
+            .collect(),
+        conflicts: Vec::new(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct EvidenceVerification {
     pub policy_digest: String,
@@ -1522,6 +1463,7 @@ fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
 /// Publish a main-config edit only if the file still matches the caller's
 /// snapshot. File permissions are retained across the atomic replacement.
 pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<()> {
+    let _publication_lock = acquire_publication_lock(path)?;
     let current = std::fs::read_to_string(path)
         .with_context(|| format!("reading current config {}", path.display()))?;
     if current != expected {
@@ -1596,6 +1538,30 @@ fn sibling_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()))
 }
 
+fn acquire_publication_lock(path: &Path) -> Result<std::fs::File> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating policy directory {}", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("policy-lock.yaml");
+    let lock_path = path.with_file_name(format!(".{file_name}.bitrouter.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening publication lock {}", lock_path.display()))?;
+    lock.lock()
+        .with_context(|| format!("acquiring publication lock {}", lock_path.display()))?;
+    Ok(lock)
+}
+
 #[cfg(unix)]
 fn sync_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -1620,6 +1586,7 @@ pub fn write_atomic(
     expected_digest: Option<&str>,
     document: &PolicyLock,
 ) -> Result<String> {
+    let _publication_lock = acquire_publication_lock(path)?;
     if let Some(expected) = expected_digest {
         let current = std::fs::read_to_string(path)
             .with_context(|| format!("reading current policy lock {}", path.display()))?;
@@ -1633,12 +1600,6 @@ pub fn write_atomic(
         }
     }
     let rendered = deterministic_yaml(document)?;
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating policy directory {}", parent.display()))?;
-    }
     let permissions = std::fs::metadata(path)
         .ok()
         .map(|metadata| metadata.permissions());
@@ -2083,6 +2044,20 @@ presets:
         runtime.select("coding", &mut frozen)?;
         assert_eq!(frozen.model(), "vendor:economy");
 
+        let empty_target_db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&empty_target_db).await?;
+        let empty_target = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            empty_target_db,
+            None,
+            PendingEvalDecisionStore::default(),
+        )
+        .await?;
+        let mut copied = context();
+        empty_target.select("coding", &mut copied)?;
+        assert_eq!(copied.model(), frozen.model());
+
         config.policy.mode = PolicyRuntimeMode::Adaptive;
         runtime
             .reload_for_config(&config, Some(&config_path))
@@ -2090,6 +2065,12 @@ presets:
         let mut adaptive = context();
         runtime.select("coding", &mut adaptive)?;
         assert_eq!(adaptive.model(), "vendor:economy");
+
+        store.upsert_pin(ledger_key, 1_700_000_200).await?;
+        store.upsert_exploration(ledger_key, 99, 0, false).await?;
+        let mut after_database_mutation = context();
+        runtime.select("coding", &mut after_database_mutation)?;
+        assert_eq!(after_database_mutation.model(), adaptive.model());
         Ok(())
     }
 
@@ -2430,146 +2411,6 @@ presets:
             error
                 .to_string()
                 .contains("already binds policy 'production'")
-        );
-    }
-
-    #[test]
-    fn evolution_only_materializes_qualified_canonical_projection_locks() {
-        use crate::adequacy::store::PersistedExplorationState;
-
-        let mut policy = definition();
-        // Artifact booleans are legacy input only. Candidate generation uses
-        // accumulated evidence and configured tier/threshold parameters.
-        policy.adequacy.enabled = false;
-        policy.adequacy.explore_enabled = false;
-        policy.adequacy.explore_tier = Some("economy".into());
-        policy.adequacy.min_semantic_successes_for_lock = 2;
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            policies: BTreeMap::from([("coding".into(), policy), ("other".into(), definition())]),
-            certificates: BTreeMap::new(),
-        };
-        let rows = vec![
-            PersistedExplorationState {
-                fingerprint: "coding\0codex|responses|tool_followup|-|-|exec_command".into(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            },
-            PersistedExplorationState {
-                fingerprint: "coding\0agent_trace/v1|tool_followup|normal".into(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            },
-            PersistedExplorationState {
-                fingerprint: "other\0must-not-leak".into(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            },
-        ];
-        let semantic = BTreeMap::from([("coding\0agent_trace/v1|tool_followup|normal".into(), 2)]);
-
-        let evolved = evolve_document(&lock, &rows, &semantic).unwrap();
-
-        assert_eq!(evolved.changes.len(), 1);
-        assert_eq!(evolved.changes[0].policy, "coding");
-        assert_eq!(evolved.changes[0].tier, "economy");
-        assert_eq!(
-            evolved.document.policies["coding"].routes["agent_trace/v1|tool_followup|normal"],
-            "economy"
-        );
-        assert!(
-            !evolved.document.policies["coding"]
-                .routes
-                .contains_key("codex|responses|tool_followup|-|-|exec_command")
-        );
-        assert!(evolved.document.policies["coding"].routes["opening"] == "strong");
-        assert!(
-            !evolved.document.policies["coding"]
-                .routes
-                .contains_key("must-not-leak")
-        );
-    }
-
-    #[test]
-    fn evolution_requires_the_opening_semantic_threshold_for_canonical_keys() {
-        use crate::adequacy::store::PersistedExplorationState;
-
-        let mut policy = definition();
-        policy.adequacy.enabled = true;
-        policy.adequacy.explore_enabled = true;
-        policy.adequacy.explore_tier = Some("economy".into());
-        policy.adequacy.min_semantic_successes_for_lock = 1;
-        policy.adequacy.min_semantic_successes_for_opening = 3;
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            policies: BTreeMap::from([("coding".into(), policy)]),
-            certificates: BTreeMap::new(),
-        };
-        let row = PersistedExplorationState {
-            fingerprint: "coding\0agent_trace/v1|opening|normal".into(),
-            observed: 8,
-            adequate_trials: 4,
-            locked: true,
-        };
-
-        let below_threshold = evolve_document(
-            &lock,
-            std::slice::from_ref(&row),
-            &BTreeMap::from([(row.fingerprint.clone(), 2)]),
-        )
-        .unwrap();
-        assert!(below_threshold.changes.is_empty());
-        assert!(
-            !below_threshold.document.policies["coding"]
-                .routes
-                .contains_key("agent_trace/v1|opening|normal")
-        );
-
-        let qualified = evolve_document(
-            &lock,
-            std::slice::from_ref(&row),
-            &BTreeMap::from([(row.fingerprint.clone(), 3)]),
-        )
-        .unwrap();
-        assert_eq!(qualified.changes.len(), 1);
-        assert_eq!(
-            qualified.document.policies["coding"].routes["agent_trace/v1|opening|normal"],
-            "economy"
-        );
-    }
-
-    #[test]
-    fn evolution_never_removes_an_existing_operator_route() {
-        let request_key = "agent_trace/v1|tool_followup|normal";
-        let mut policy = definition();
-        policy.adequacy.enabled = true;
-        policy.adequacy.explore_enabled = true;
-        policy.adequacy.explore_tier = Some("economy".into());
-        policy.routes.insert(request_key.into(), "economy".into());
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            policies: BTreeMap::from([("coding".into(), policy)]),
-            certificates: BTreeMap::new(),
-        };
-        let rows = vec![PersistedExplorationState {
-            fingerprint: format!("coding\0{request_key}"),
-            observed: 9,
-            adequate_trials: 0,
-            locked: false,
-        }];
-
-        let evolved = evolve_document(&lock, &rows, &BTreeMap::new()).unwrap();
-
-        assert!(evolved.changes.is_empty());
-        assert_eq!(
-            evolved.document.policies["coding"].routes[request_key],
-            "economy"
         );
     }
 

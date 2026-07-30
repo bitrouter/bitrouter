@@ -1,10 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+//! Compatibility import for pre-eval workflow reward artifacts.
 
-use bitrouter_sdk::Result;
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
-use crate::adequacy::store::AdequacyStore;
 use crate::eval::EvalService;
 use crate::eval::admission::SubmissionPrincipal;
 use crate::eval::types::{
@@ -18,26 +17,6 @@ use crate::workflow_state::archive::{
 use crate::workflow_state::ir::RouteProjection;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RewardFeedbackSummary {
-    pub candidate_count: usize,
-    pub skipped_candidate_count: usize,
-    pub skipped_reasons: BTreeMap<String, usize>,
-    pub pinned_count: usize,
-    pub semantic_success_evidence_count: usize,
-    pub pinned_request_keys: Vec<String>,
-    pub semantic_success_request_keys: Vec<String>,
-    pub decisions: Vec<RewardFeedbackDecision>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RewardFeedbackDecision {
-    pub request_id: String,
-    pub ledger_key: Option<String>,
-    pub action: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RewardEvalImportSummary {
     pub candidate_count: usize,
     pub admitted_count: usize,
@@ -46,8 +25,9 @@ pub struct RewardEvalImportSummary {
     pub eval_ids: Vec<String>,
 }
 
-/// Compatibility adapter for benchmark reward artifacts. New feedback enters
-/// the generic exchange and cannot mutate request-time learned state.
+/// Translate legacy benchmark reward artifacts into the generic eval exchange.
+/// This is intentionally one-way: the adapter cannot write policy locks or the
+/// sealed legacy adequacy tables.
 pub async fn import_semantic_reward_feedback(
     service: &EvalService,
     candidates: &[SemanticPolicyTransitionCandidate],
@@ -196,427 +176,72 @@ fn import_skip(summary: &mut RewardEvalImportSummary, reason: &str) {
         .or_default() += 1;
 }
 
-/// Legacy migration helper. New callers should use
-/// [`import_semantic_reward_feedback`] so feedback cannot write learner state.
-pub async fn apply_semantic_reward_feedback(
-    store: &AdequacyStore,
-    candidates: &[SemanticPolicyTransitionCandidate],
-) -> Result<RewardFeedbackSummary> {
-    let mut failed_keys = BTreeSet::new();
-    let mut successful_candidates = Vec::new();
-    let mut skipped_reasons = BTreeMap::new();
-    let mut decisions = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        let key = candidate
-            .ledger_key
-            .as_deref()
-            .unwrap_or(&candidate.request_key)
-            .trim();
-        if key.is_empty() {
-            record_skip(&mut skipped_reasons, "empty_ledger_key");
-            decisions.push(feedback_decision(
-                candidate,
-                None,
-                "skipped",
-                "empty_ledger_key",
-            ));
-            continue;
-        }
-        if !RouteProjection::is_canonical_learning_key(key) {
-            record_skip(&mut skipped_reasons, "non_canonical_agent_trace_key");
-            decisions.push(feedback_decision(
-                candidate,
-                Some(key),
-                "skipped",
-                "non_canonical_agent_trace_key",
-            ));
-            continue;
-        }
-        if candidate.request_transport_outcome != RequestTransportOutcome::Completed {
-            record_skip(&mut skipped_reasons, "request_not_completed");
-            decisions.push(feedback_decision(
-                candidate,
-                Some(key),
-                "skipped",
-                "request_not_completed",
-            ));
-            continue;
-        }
-        if !matches!(
-            candidate.settlement_outcome,
-            SemanticSettlementOutcome::AuthoritativeComputed
-                | SemanticSettlementOutcome::ProviderReportedComputed
-        ) {
-            record_skip(
-                &mut skipped_reasons,
-                "settlement_not_authoritative_computed",
-            );
-            decisions.push(feedback_decision(
-                candidate,
-                Some(key),
-                "skipped",
-                "settlement_not_authoritative_computed",
-            ));
-            continue;
-        }
-        let task_id = candidate.task_id.trim();
-        if task_id.is_empty() {
-            record_skip(&mut skipped_reasons, "empty_task_id");
-            decisions.push(feedback_decision(
-                candidate,
-                Some(key),
-                "skipped",
-                "empty_task_id",
-            ));
-            continue;
-        }
-        if candidate.reward >= 1.0 {
-            let decision_index = decisions.len();
-            decisions.push(feedback_decision(
-                candidate,
-                Some(key),
-                "pending",
-                "semantic_success_eligible",
-            ));
-            successful_candidates.push((decision_index, key.to_string(), task_id.to_string()));
-        } else {
-            failed_keys.insert(key.to_string());
-            decisions.push(feedback_decision(
-                candidate,
-                Some(key),
-                "applied",
-                "semantic_failure_pinned",
-            ));
-        }
-    }
-
-    let exploration = store.load_exploration_all().await?;
-    let now = now_unix();
-    for key in &failed_keys {
-        store.upsert_pin(key, now as i64).await?;
-        store.clear_semantic_successes(key).await?;
-        if let Some(row) = exploration.iter().find(|row| row.fingerprint == *key) {
-            store
-                .upsert_exploration(key, row.observed, 0, false)
-                .await?;
-        }
-    }
-
-    let mut semantic_success_evidence_count = 0;
-    let mut semantic_success_request_keys = BTreeSet::new();
-    for (decision_index, key, task_id) in successful_candidates {
-        if failed_keys.contains(&key) {
-            record_skip(&mut skipped_reasons, "semantic_failure_wins");
-            decisions[decision_index].action = "skipped".to_string();
-            decisions[decision_index].reason = "semantic_failure_wins".to_string();
-        } else if store.record_semantic_success(&key, &task_id).await? {
-            semantic_success_evidence_count += 1;
-            semantic_success_request_keys.insert(key);
-            decisions[decision_index].action = "applied".to_string();
-            decisions[decision_index].reason = "semantic_success_recorded".to_string();
-        } else {
-            record_skip(&mut skipped_reasons, "duplicate_semantic_evidence");
-            decisions[decision_index].action = "skipped".to_string();
-            decisions[decision_index].reason = "duplicate_semantic_evidence".to_string();
-        }
-    }
-
-    Ok(RewardFeedbackSummary {
-        candidate_count: candidates.len(),
-        skipped_candidate_count: skipped_reasons.values().sum(),
-        skipped_reasons,
-        pinned_count: failed_keys.len(),
-        semantic_success_evidence_count,
-        pinned_request_keys: failed_keys.into_iter().collect(),
-        semantic_success_request_keys: semantic_success_request_keys.into_iter().collect(),
-        decisions,
-    })
-}
-
-fn feedback_decision(
-    candidate: &SemanticPolicyTransitionCandidate,
-    ledger_key: Option<&str>,
-    action: &str,
-    reason: &str,
-) -> RewardFeedbackDecision {
-    RewardFeedbackDecision {
-        request_id: candidate.request_id.clone(),
-        ledger_key: ledger_key.map(ToString::to_string),
-        action: action.to_string(),
-        reason: reason.to_string(),
-    }
-}
-
-fn record_skip(reasons: &mut BTreeMap<String, usize>, reason: &str) {
-    *reasons.entry(reason.to_string()).or_default() += 1;
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adequacy::store::AdequacyStore;
     use crate::db;
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
 
     const TOOL_FOLLOWUP_KEY: &str = "agent_trace/v1|tool_followup|normal";
 
-    async fn store() -> AdequacyStore {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
-        AdequacyStore::new(db)
-    }
-
-    fn candidate(
-        request_key: &str,
-        task_id: &str,
-        reward: f64,
-    ) -> SemanticPolicyTransitionCandidate {
+    fn candidate(reward: f64) -> SemanticPolicyTransitionCandidate {
         SemanticPolicyTransitionCandidate {
-            trace_id: "trace-1".to_string(),
-            request_id: "req-1".to_string(),
-            session_key: "trial-1".to_string(),
-            task_id: task_id.to_string(),
+            trace_id: "trace-1".into(),
+            request_id: "req-1".into(),
+            session_key: "trial-1".into(),
+            task_id: "task-a".into(),
             reward,
-            failed_reason: (reward < 1.0).then(|| "verifier_failed".to_string()),
+            failed_reason: (reward < 1.0).then(|| "verifier_failed".into()),
             request_transport_outcome: RequestTransportOutcome::Completed,
             settlement_outcome: SemanticSettlementOutcome::AuthoritativeComputed,
-            request_key: request_key.to_string(),
+            request_key: TOOL_FOLLOWUP_KEY.into(),
             ledger_key: None,
-            policy: None,
-            policy_digest: None,
-            trace_state: "tool_followup".to_string(),
-            static_tier: Some("capable".to_string()),
-            selected_tier: Some("cheap".to_string()),
-            tier_transition: Some("capable -> cheap".to_string()),
-            static_model: Some("openai-codex:gpt-5.5".to_string()),
-            selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".to_string()),
-            model_transition: Some(
-                "openai-codex:gpt-5.5 -> bitrouter:moonshotai/kimi-k2.7-code".to_string(),
+            policy: Some("auto:cost".into()),
+            policy_digest: Some(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             ),
-            reason: "exploration_locked".to_string(),
+            trace_state: "tool_followup".into(),
+            static_tier: Some("capable".into()),
+            selected_tier: Some("cheap".into()),
+            tier_transition: Some("capable -> cheap".into()),
+            static_model: Some("openai-codex:gpt-5.5".into()),
+            selected_model: Some("bitrouter:moonshotai/kimi-k2.7-code".into()),
+            model_transition: Some(
+                "openai-codex:gpt-5.5 -> bitrouter:moonshotai/kimi-k2.7-code".into(),
+            ),
+            reason: "exploration_locked".into(),
         }
     }
 
     #[tokio::test]
-    async fn semantic_failure_feedback_pins_and_unlocks_request_keys() {
-        let store = store().await;
-        let request_key = TOOL_FOLLOWUP_KEY;
-        store
-            .upsert_exploration(request_key, 8, 4, true)
-            .await
-            .unwrap();
-
-        let summary = apply_semantic_reward_feedback(
-            &store,
-            &[
-                candidate(request_key, "terminal-bench/regex-log", 0.0),
-                candidate(request_key, "terminal-bench/regex-log", 0.0),
-            ],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(summary.candidate_count, 2);
-        assert_eq!(summary.pinned_count, 1);
-        assert_eq!(summary.pinned_request_keys, vec![request_key.to_string()]);
-        let pins = store.load_all().await.unwrap();
-        assert_eq!(pins.len(), 1);
-        assert_eq!(pins[0].0, request_key);
-        let exploration = store.load_exploration_all().await.unwrap();
-        assert_eq!(exploration.len(), 1);
-        assert_eq!(exploration[0].fingerprint, request_key);
-        assert_eq!(exploration[0].observed, 8);
-        assert_eq!(exploration[0].adequate_trials, 0);
-        assert!(!exploration[0].locked);
-    }
-
-    #[tokio::test]
-    async fn compatibility_reward_import_writes_eval_exchange_not_legacy_learning_state() {
-        let db = db::connect("sqlite::memory:").await.unwrap();
-        db::run_migrations(&db).await.unwrap();
+    async fn compatibility_reward_import_writes_only_the_eval_exchange() -> anyhow::Result<()> {
+        let db = db::connect("sqlite::memory:").await?;
+        db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db.clone()), Default::default());
-        let mut imported = candidate(TOOL_FOLLOWUP_KEY, "task-a", 1.0);
-        imported.policy = Some("auto:cost".into());
-        imported.policy_digest =
-            Some("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into());
 
-        let summary = import_semantic_reward_feedback(&service, &[imported])
-            .await
-            .unwrap();
+        let summary = import_semantic_reward_feedback(&service, &[candidate(1.0)]).await?;
 
         assert_eq!(summary.admitted_count, 1);
-        assert_eq!(service.store().list_subjects().await.unwrap().len(), 1);
-        assert!(AdequacyStore::new(db).load_all().await.unwrap().is_empty());
+        assert_eq!(service.store().list_subjects().await?.len(), 1);
+        assert!(AdequacyStore::new(db).load_all().await?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn semantic_success_feedback_counts_distinct_tasks_once() {
-        let store = store().await;
-        let request_key = TOOL_FOLLOWUP_KEY;
+    async fn incomplete_reward_is_not_imported() -> anyhow::Result<()> {
+        let db = db::connect("sqlite::memory:").await?;
+        db::run_migrations(&db).await?;
+        let service = EvalService::new(EvalStore::new(db), Default::default());
+        let mut incomplete = candidate(1.0);
+        incomplete.request_transport_outcome = RequestTransportOutcome::Failed;
 
-        let summary = apply_semantic_reward_feedback(
-            &store,
-            &[
-                candidate(request_key, "terminal-bench/regex-log", 1.0),
-                candidate(request_key, "terminal-bench/regex-log", 1.0),
-                candidate(request_key, "terminal-bench/fix-git", 1.0),
-            ],
-        )
-        .await
-        .unwrap();
+        let summary = import_semantic_reward_feedback(&service, &[incomplete]).await?;
 
-        assert_eq!(summary.pinned_count, 0);
-        assert_eq!(summary.semantic_success_evidence_count, 2);
-        assert_eq!(
-            store.load_semantic_success_counts().await.unwrap(),
-            [(request_key.to_string(), 2)].into_iter().collect()
-        );
-
-        let replayed = apply_semantic_reward_feedback(
-            &store,
-            &[candidate(request_key, "terminal-bench/regex-log", 1.0)],
-        )
-        .await
-        .unwrap();
-        assert_eq!(replayed.semantic_success_evidence_count, 0);
-        assert_eq!(
-            store.load_semantic_success_counts().await.unwrap(),
-            [(request_key.to_string(), 2)].into_iter().collect()
-        );
-    }
-
-    #[tokio::test]
-    async fn semantic_feedback_uses_the_named_policy_ledger_key() {
-        let store = store().await;
-        let request_key = TOOL_FOLLOWUP_KEY;
-        let ledger_key = format!("coding\0{request_key}");
-        let mut named = candidate(request_key, "terminal-bench/regex-log", 1.0);
-        named.ledger_key = Some(ledger_key.clone());
-
-        apply_semantic_reward_feedback(&store, &[named])
-            .await
-            .unwrap();
-
-        assert_eq!(
-            store.load_semantic_success_counts().await.unwrap(),
-            [(ledger_key, 1)].into_iter().collect()
-        );
-    }
-
-    #[tokio::test]
-    async fn semantic_failure_wins_over_success_for_the_same_request_key() {
-        let store = store().await;
-        let request_key = TOOL_FOLLOWUP_KEY;
-
-        let summary = apply_semantic_reward_feedback(
-            &store,
-            &[
-                candidate(request_key, "terminal-bench/regex-log", 1.0),
-                candidate(request_key, "terminal-bench/fix-git", 0.0),
-            ],
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(summary.pinned_count, 1);
-        assert_eq!(summary.semantic_success_evidence_count, 0);
-        assert!(
-            store
-                .load_semantic_success_counts()
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn transport_failure_cannot_hitchhike_on_a_successful_task_reward() {
-        let store = store().await;
-        let request_key = TOOL_FOLLOWUP_KEY;
-        let mut timed_out = candidate(request_key, "terminal-bench/regex-log", 1.0);
-        timed_out.request_transport_outcome = RequestTransportOutcome::Failed;
-        timed_out.settlement_outcome = SemanticSettlementOutcome::AuthoritativeComputed;
-
-        let summary = apply_semantic_reward_feedback(&store, &[timed_out])
-            .await
-            .unwrap();
-
-        assert_eq!(summary.semantic_success_evidence_count, 0);
-        assert_eq!(summary.pinned_count, 0);
-        assert_eq!(summary.decisions.len(), 1);
-        assert_eq!(summary.decisions[0].request_id, "req-1");
-        assert_eq!(summary.decisions[0].action, "skipped");
-        assert_eq!(summary.decisions[0].reason, "request_not_completed");
-        assert!(
-            store
-                .load_semantic_success_counts()
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        assert!(store.load_all().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn unsettled_request_cannot_write_semantic_evidence() {
-        let store = store().await;
-        let request_key = TOOL_FOLLOWUP_KEY;
-        let mut pending = candidate(request_key, "terminal-bench/regex-log", 1.0);
-        pending.settlement_outcome = SemanticSettlementOutcome::Pending;
-
-        let summary = apply_semantic_reward_feedback(&store, &[pending])
-            .await
-            .unwrap();
-
-        assert_eq!(summary.semantic_success_evidence_count, 0);
-        assert_eq!(summary.pinned_count, 0);
-        assert_eq!(summary.decisions[0].action, "skipped");
-        assert_eq!(
-            summary.decisions[0].reason,
-            "settlement_not_authoritative_computed"
-        );
-        assert!(
-            store
-                .load_semantic_success_counts()
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn non_canonical_projection_keys_are_skipped_without_learning() {
-        let store = store().await;
-        let keys = [
-            "codex|responses|tool_followup|-|-|exec_command",
-            "agent_trace/v1|not_a_state|normal",
-            "agent_trace/v1|tool_followup|not_a_risk",
-            "agent_trace/v1|tool_followup|normal|extra",
-            "coding\0codex|responses|tool_followup|-|-|exec_command",
-            "coding\0agent_trace/v1|tool_followup|normal|extra",
-        ];
-        let candidates = keys
-            .iter()
-            .map(|key| candidate(key, "terminal-bench/regex-log", 0.0))
-            .collect::<Vec<_>>();
-
-        let summary = apply_semantic_reward_feedback(&store, &candidates)
-            .await
-            .unwrap();
-
-        assert_eq!(summary.pinned_count, 0);
-        assert_eq!(summary.skipped_candidate_count, keys.len());
-        assert_eq!(
-            summary.skipped_reasons["non_canonical_agent_trace_key"],
-            keys.len()
-        );
-        assert!(store.load_all().await.unwrap().is_empty());
+        assert_eq!(summary.admitted_count, 0);
+        assert_eq!(summary.skipped_reasons["request_not_completed"], 1);
+        assert!(service.store().list_subjects().await?.is_empty());
+        Ok(())
     }
 }

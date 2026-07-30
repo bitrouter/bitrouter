@@ -6,7 +6,9 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use super::store::{EvalSnapshot, EvalStore};
-use super::types::{EvalSubject, EvalVerdict, EvaluationResult, EvaluatorKind, MetricUnit};
+use super::types::{
+    DecisionCredit, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorKind, MetricUnit,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvalEvidenceRecord {
@@ -44,6 +46,11 @@ impl EvalEvidenceSnapshot {
             let subject = store.subject(&entry.eval_id).await?.ok_or_else(|| {
                 anyhow::anyhow!("snapshot subject '{}' is missing", entry.eval_id)
             })?;
+            let subject_digest = subject.semantic_digest()?;
+            if subject_digest != entry.subject_content_digest {
+                anyhow::bail!("snapshot subject '{}' changed content", entry.eval_id);
+            }
+            super::types::validate_result_for_subject(&stored.result, &subject)?;
             records.push(EvalEvidenceRecord {
                 result_id: entry.result_id,
                 content_digest: entry.content_digest,
@@ -63,19 +70,27 @@ impl EvalEvidenceSnapshot {
         let mut routes = BTreeMap::<(String, String), RouteEvalEvidence>::new();
         for record in &self.records {
             for decision in &record.subject.decisions {
-                let weight_ppm = if record.result.decision_credit.is_empty()
-                    && record.subject.decisions.len() == 1
-                {
-                    1_000_000
-                } else {
-                    record
-                        .result
-                        .decision_credit
-                        .get(&decision.decision_id)
-                        .map(|credit| credit.weight_ppm)
-                        .unwrap_or_default()
+                let Some(credit) = credit_for_decision(
+                    &record.result,
+                    &decision.decision_id,
+                    record.subject.decisions.len(),
+                ) else {
+                    continue;
                 };
-                if weight_ppm == 0 {
+                let quality_credited = credit.includes("quality.pass");
+                let cost_credited = credit.includes("cost.usd_micros");
+                let latency_credited = credit.includes("latency.ms");
+                let credited_violations = record
+                    .result
+                    .hard_violations
+                    .iter()
+                    .filter(|violation| credit.includes(violation))
+                    .count();
+                if !quality_credited
+                    && !cost_credited
+                    && !latency_credited
+                    && credited_violations == 0
+                {
                     continue;
                 }
                 let route = routes
@@ -107,32 +122,42 @@ impl EvalEvidenceSnapshot {
                     .tiers
                     .entry(decision.selected_tier.clone())
                     .or_default();
-                tier.eligible_episodes = tier.eligible_episodes.saturating_add(1);
-                tier.independent_tasks
-                    .insert(record.subject.subject_id.clone());
-                tier.total_weight_ppm = tier.total_weight_ppm.saturating_add(weight_ppm);
-                match record.result.verdict {
-                    EvalVerdict::Pass => {
-                        tier.pass_weight_ppm = tier.pass_weight_ppm.saturating_add(weight_ppm)
+                if quality_credited {
+                    tier.eligible_episodes = tier.eligible_episodes.saturating_add(1);
+                    tier.independent_tasks
+                        .insert(record.subject.subject_id.clone());
+                    tier.total_weight_ppm = tier.total_weight_ppm.saturating_add(credit.weight_ppm);
+                    match record.result.verdict {
+                        EvalVerdict::Pass => {
+                            tier.pass_weight_ppm =
+                                tier.pass_weight_ppm.saturating_add(credit.weight_ppm)
+                        }
+                        EvalVerdict::Fail => {
+                            tier.fail_weight_ppm =
+                                tier.fail_weight_ppm.saturating_add(credit.weight_ppm)
+                        }
+                        EvalVerdict::Inconclusive => {}
                     }
-                    EvalVerdict::Fail => {
-                        tier.fail_weight_ppm = tier.fail_weight_ppm.saturating_add(weight_ppm)
-                    }
-                    EvalVerdict::Inconclusive => {}
                 }
-                tier.critical_violations = tier.critical_violations.saturating_add(
-                    u32::try_from(record.result.hard_violations.len()).unwrap_or(u32::MAX),
-                );
-                add_metric(
-                    &mut tier.cost_micro_usd,
-                    record.result.metrics.get("cost.usd_micros"),
-                    MetricUnit::MicroUsd,
-                )?;
-                add_metric(
-                    &mut tier.latency_ms,
-                    record.result.metrics.get("latency.ms"),
-                    MetricUnit::Milliseconds,
-                )?;
+                tier.critical_violations = tier
+                    .critical_violations
+                    .saturating_add(u32::try_from(credited_violations).unwrap_or(u32::MAX));
+                if cost_credited {
+                    add_metric(
+                        &mut tier.cost_micro_usd,
+                        record.result.metrics.get("cost.usd_micros"),
+                        MetricUnit::MicroUsd,
+                        credit.weight_ppm,
+                    )?;
+                }
+                if latency_credited {
+                    add_metric(
+                        &mut tier.latency_ms,
+                        record.result.metrics.get("latency.ms"),
+                        MetricUnit::Milliseconds,
+                        credit.weight_ppm,
+                    )?;
+                }
             }
         }
         for route in routes.values_mut() {
@@ -179,20 +204,62 @@ impl TierEvalEvidence {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MetricAggregate {
-    pub total: i64,
-    pub count: u32,
+    weighted_total: i128,
+    total_weight_ppm: i64,
 }
 
 impl MetricAggregate {
     pub fn mean(&self) -> Option<i64> {
-        (self.count > 0).then(|| self.total / i64::from(self.count))
+        if self.total_weight_ppm == 0 {
+            return None;
+        }
+        i64::try_from(self.weighted_total / i128::from(self.total_weight_ppm)).ok()
     }
+}
+
+struct AttributedCredit<'a> {
+    weight_ppm: i64,
+    metric_ids: Option<&'a BTreeSet<String>>,
+}
+
+impl AttributedCredit<'_> {
+    fn includes(&self, metric_id: &str) -> bool {
+        self.metric_ids
+            .is_none_or(|metric_ids| metric_ids.is_empty() || metric_ids.contains(metric_id))
+    }
+}
+
+fn credit_for_decision<'a>(
+    result: &'a EvaluationResult,
+    decision_id: &str,
+    decision_count: usize,
+) -> Option<AttributedCredit<'a>> {
+    if result.decision_credit.is_empty() && decision_count == 1 {
+        return Some(AttributedCredit {
+            weight_ppm: 1_000_000,
+            metric_ids: None,
+        });
+    }
+    result
+        .decision_credit
+        .get(decision_id)
+        .filter(|credit| credit.weight_ppm > 0)
+        .map(
+            |DecisionCredit {
+                 weight_ppm,
+                 metric_ids,
+             }| AttributedCredit {
+                weight_ppm: *weight_ppm,
+                metric_ids: Some(metric_ids),
+            },
+        )
 }
 
 fn add_metric(
     aggregate: &mut MetricAggregate,
     metric: Option<&super::types::MetricValue>,
     expected_unit: MetricUnit,
+    weight_ppm: i64,
 ) -> Result<()> {
     let Some(metric) = metric else {
         return Ok(());
@@ -200,11 +267,14 @@ fn add_metric(
     if metric.unit != expected_unit {
         anyhow::bail!("evaluation metric has an incompatible unit");
     }
-    aggregate.total = aggregate
-        .total
-        .checked_add(metric.value)
+    let weighted = i128::from(metric.value)
+        .checked_mul(i128::from(weight_ppm))
+        .context("evaluation metric weighted value overflow")?;
+    aggregate.weighted_total = aggregate
+        .weighted_total
+        .checked_add(weighted)
         .context("evaluation metric aggregate overflow")?;
-    aggregate.count = aggregate.count.saturating_add(1);
+    aggregate.total_weight_ppm = aggregate.total_weight_ppm.saturating_add(weight_ppm);
     Ok(())
 }
 
@@ -238,6 +308,63 @@ mod tests {
         let tier = &routes[&("auto".into(), "agent_trace/v1|edit|normal".into())].tiers["economy"];
         assert_eq!(tier.pass_rate_ppm(), 1_000_000);
         assert_eq!(tier.independent_tasks.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_credit_never_broadcasts_metrics_between_decisions() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let service = EvalService::new(store.clone(), EvalConfig::default());
+        let mut subject = subject()?;
+        subject.decisions.push(EvalDecisionRef {
+            decision_id: "decision-b".into(),
+            policy: "auto".into(),
+            request_key: "agent_trace/v1|review|normal".into(),
+            selected_tier: "strong".into(),
+            baseline_tier: Some("strong".into()),
+            policy_digest: subject.policy_digest.clone(),
+        });
+        subject
+            .requested_dimensions
+            .insert("cost.usd_micros".into());
+        store.insert_subject(&subject).await?;
+        let mut result = result(&subject);
+        result.metrics.insert(
+            "cost.usd_micros".into(),
+            MetricValue::new(420, MetricUnit::MicroUsd),
+        );
+        result.decision_credit.insert(
+            "decision-a".into(),
+            DecisionCredit {
+                weight_ppm: 1_000_000,
+                metric_ids: BTreeSet::from(["quality.pass".into()]),
+            },
+        );
+        result.decision_credit.insert(
+            "decision-b".into(),
+            DecisionCredit {
+                weight_ppm: 1_000_000,
+                metric_ids: BTreeSet::from(["cost.usd_micros".into()]),
+            },
+        );
+        service
+            .submit(result, SubmissionPrincipal::LocalOperator)
+            .await?;
+        let frozen = store.freeze_snapshot("2026-07-30T00:02:00Z").await?;
+
+        let routes = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
+            .await?
+            .route_evidence()?;
+        let quality =
+            &routes[&("auto".into(), "agent_trace/v1|edit|normal".into())].tiers["economy"];
+        assert_eq!(quality.pass_rate_ppm(), 1_000_000);
+        assert_eq!(quality.cost_micro_usd.mean(), None);
+        let cost = &routes[&("auto".into(), "agent_trace/v1|review|normal".into())].tiers["strong"];
+        assert_eq!(cost.pass_rate_ppm(), 0);
+        assert_eq!(cost.eligible_episodes, 0);
+        assert_eq!(cost.cost_micro_usd.mean(), Some(420));
         Ok(())
     }
 

@@ -52,8 +52,7 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new(EvalResults::IdempotencyKey)
                             .string()
-                            .not_null()
-                            .unique_key(),
+                            .not_null(),
                     )
                     .col(ColumnDef::new(EvalResults::AuthorityId).string().not_null())
                     .col(

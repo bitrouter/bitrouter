@@ -40,8 +40,10 @@ Freeze admitted evidence and compile without changing the active lock:
 bitrouter eval snapshot freeze --config bitrouter.yaml
 bitrouter policy compile --eval-snapshot sha256:... --output candidate.yaml --config bitrouter.yaml
 bitrouter policy diff policy-lock.yaml candidate.yaml
+bitrouter policy publish candidate.yaml --config bitrouter.yaml
 ```
 
+`publish` requires `policy.mode: adaptive` and rejects stale parent digests.
 After explicit publication, `bitrouter policy verify --evidence --config
 bitrouter.yaml` reconstructs the active lock's evidence root from the local
 ledger.

@@ -179,11 +179,14 @@ impl SettlementRecorder for EvalSettlementRecorder {
                 "building request eval subject: {error}"
             ))
         })?;
-        self.store.insert_subject(&subject).await.map_err(|error| {
-            bitrouter_sdk::BitrouterError::internal(format!(
-                "persisting request eval subject: {error}"
-            ))
-        })?;
+        self.store
+            .insert_subject_owned(&subject, context.caller.user_id())
+            .await
+            .map_err(|error| {
+                bitrouter_sdk::BitrouterError::internal(format!(
+                    "persisting request eval subject: {error}"
+                ))
+            })?;
         Ok(())
     }
 }

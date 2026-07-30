@@ -904,6 +904,14 @@ enum PolicyAction {
     },
     /// Compare explicit routes in two policy lock artifacts.
     Diff { active: PathBuf, candidate: PathBuf },
+    /// Publish one already-compiled candidate after lineage validation.
+    Publish {
+        candidate: PathBuf,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Project qualified database evidence into a deterministic policy lock.
     Evolve {
         /// Publish the candidate. Without this flag, print a dry-run report.
@@ -3111,6 +3119,23 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 applied: false,
             })?;
         }
+        PolicyAction::Publish {
+            candidate,
+            config,
+            socket,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let update =
+                bitrouter::policy_lock::publish_candidate_file(config_path, &candidate).await?;
+            reload_published_policy_or_restore(&source, &update, socket.as_deref()).await?;
+            let changes = update.changes.clone();
+            let mut report =
+                routing_policy_report(config_path, "publish", true, changes, None).await?;
+            report.candidate_path = Some(candidate.display().to_string());
+            report.digest = Some(update.digest);
+            output.emit(&report)?;
+        }
         PolicyAction::Evolve {
             apply,
             output: candidate_output,
@@ -3221,7 +3246,7 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
                 let service = local_eval_service(config.as_deref()).await?;
                 let subject = service
                     .store()
-                    .subject(&eval_id)
+                    .subject_for_owner(&eval_id, "local")
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("eval subject '{eval_id}' not found"))?;
                 ("subject-get", serde_json::to_value(subject)?)
@@ -3230,7 +3255,7 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
                 let service = local_eval_service(config.as_deref()).await?;
                 (
                     "subject-list",
-                    serde_json::to_value(service.store().list_subjects().await?)?,
+                    serde_json::to_value(service.store().list_subjects_for_owner("local").await?)?,
                 )
             }
         },
@@ -3248,7 +3273,10 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
             EvalSnapshotAction::Freeze { at, config } => {
                 let service = local_eval_service(config.as_deref()).await?;
                 let frozen_at = at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-                let snapshot = service.store().freeze_snapshot(&frozen_at).await?;
+                let snapshot = service
+                    .store()
+                    .freeze_snapshot_for_owner(&frozen_at, "local")
+                    .await?;
                 ("snapshot-freeze", serde_json::to_value(snapshot)?)
             }
             EvalSnapshotAction::Get {
@@ -3258,7 +3286,7 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
                 let service = local_eval_service(config.as_deref()).await?;
                 let snapshot = service
                     .store()
-                    .snapshot_by_root(&evidence_root)
+                    .snapshot_by_root_for_owner(&evidence_root, "local")
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("eval snapshot '{evidence_root}' not found"))?;
                 ("snapshot-get", serde_json::to_value(snapshot)?)
@@ -3266,8 +3294,8 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
         },
         EvalAction::Status { config } => {
             let service = local_eval_service(config.as_deref()).await?;
-            let subjects = service.store().list_subjects().await?;
-            let admissions = service.store().latest_admissions().await?;
+            let subjects = service.store().list_subjects_for_owner("local").await?;
+            let admissions = service.store().latest_admissions_for_owner("local").await?;
             let mut counts = std::collections::BTreeMap::<String, usize>::new();
             for event in admissions.values() {
                 *counts
@@ -4295,6 +4323,17 @@ mod tests {
         assert!(
             Cli::try_parse_from(["bitrouter", "policy", "diff", "active.yaml", "next.yaml"])
                 .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "publish",
+                "candidate.yaml",
+                "--config",
+                "bitrouter.yaml",
+            ])
+            .is_ok()
         );
         assert!(Cli::try_parse_from(["bitrouter", "policy", "rollback", "sha256:abc"]).is_ok());
     }

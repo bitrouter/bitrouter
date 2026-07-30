@@ -77,6 +77,7 @@ bitrouter eval snapshot freeze --config bitrouter.yaml
 bitrouter policy compile --eval-snapshot sha256:... --output candidate.yaml --config bitrouter.yaml
 bitrouter policy diff policy-lock.yaml candidate.yaml
 bitrouter policy check --config bitrouter.yaml
+bitrouter policy publish candidate.yaml --config bitrouter.yaml
 ```
 
 Only an explicit publication under `policy.mode: adaptive` may replace the
@@ -85,3 +86,15 @@ authority, not request-time learning. `bitrouter policy verify --evidence`
 reconstructs an active v2 lock's evidence root when the local ledger is
 available. Shipping only the lock preserves routing behavior; the ledger is
 needed only for audit or later compilation.
+
+`publish` promotes the exact candidate produced by `compile`. Its embedded
+parent digest is the compare-and-swap token, so stale and concurrent publishers
+cannot overwrite a newer lock. A frozen process rejects publication without
+changing the active file.
+
+Eval storage is ownership-scoped without adding tenant fields to the wire
+contract: local CLI records belong to `local`, while authenticated REST records
+belong to the virtual key's user. A frozen snapshot commits both subject and
+result digests. Multi-decision episodes must use `decision_credit.metric_ids`
+to attribute quality, cost, latency, and violations; full implicit credit is
+allowed only for a single decision.

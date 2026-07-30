@@ -21,6 +21,7 @@ mod subject_entity {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub eval_id: String,
+        pub owner_user_id: String,
         pub subject_id: String,
         pub scope: String,
         pub policy_digest: String,
@@ -43,6 +44,7 @@ mod result_entity {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub result_id: String,
+        pub owner_user_id: String,
         pub eval_id: String,
         pub idempotency_key: String,
         pub authority_id: String,
@@ -85,6 +87,7 @@ mod snapshot_entity {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub evidence_root: String,
+        pub owner_user_id: String,
         pub manifest_json: String,
         pub result_count: i32,
         pub frozen_at: String,
@@ -136,6 +139,7 @@ pub struct StoredEvaluationResult {
 pub struct EvalSnapshotEntry {
     pub result_id: String,
     pub content_digest: String,
+    pub subject_content_digest: String,
     pub eval_id: String,
 }
 
@@ -157,13 +161,23 @@ impl EvalStore {
     }
 
     pub async fn insert_subject(&self, subject: &EvalSubject) -> Result<SubjectInsertOutcome> {
+        self.insert_subject_owned(subject, "local").await
+    }
+
+    pub async fn insert_subject_owned(
+        &self,
+        subject: &EvalSubject,
+        owner_user_id: &str,
+    ) -> Result<SubjectInsertOutcome> {
+        validate_owner(owner_user_id)?;
         validate_subject(subject)?;
         let content_digest = subject.semantic_digest()?;
         if let Some(existing) = subject_entity::Entity::find_by_id(&subject.eval_id)
             .one(&self.db)
             .await?
         {
-            if existing.content_digest == content_digest {
+            if existing.owner_user_id == owner_user_id && existing.content_digest == content_digest
+            {
                 return Ok(SubjectInsertOutcome::Duplicate);
             }
             anyhow::bail!(
@@ -173,6 +187,7 @@ impl EvalStore {
         }
         subject_entity::ActiveModel {
             eval_id: Set(subject.eval_id.clone()),
+            owner_user_id: Set(owner_user_id.to_string()),
             subject_id: Set(subject.subject_id.clone()),
             scope: Set(scope_name(subject.scope).into()),
             policy_digest: Set(subject.policy_digest.clone()),
@@ -191,10 +206,20 @@ impl EvalStore {
         let row = subject_entity::Entity::find_by_id(eval_id)
             .one(&self.db)
             .await?;
-        row.map(|row| {
-            serde_json::from_str(&row.subject_json).context("parsing stored eval subject")
-        })
-        .transpose()
+        row.map(stored_subject).transpose()
+    }
+
+    pub async fn subject_for_owner(
+        &self,
+        eval_id: &str,
+        owner_user_id: &str,
+    ) -> Result<Option<EvalSubject>> {
+        subject_entity::Entity::find_by_id(eval_id)
+            .filter(subject_entity::Column::OwnerUserId.eq(owner_user_id))
+            .one(&self.db)
+            .await?
+            .map(stored_subject)
+            .transpose()
     }
 
     pub async fn list_subjects(&self) -> Result<Vec<EvalSubject>> {
@@ -203,16 +228,42 @@ impl EvalStore {
             .all(&self.db)
             .await?
             .into_iter()
-            .map(|row| {
-                serde_json::from_str(&row.subject_json).context("parsing stored eval subject")
-            })
+            .map(stored_subject)
+            .collect()
+    }
+
+    pub async fn list_subjects_for_owner(&self, owner_user_id: &str) -> Result<Vec<EvalSubject>> {
+        subject_entity::Entity::find()
+            .filter(subject_entity::Column::OwnerUserId.eq(owner_user_id))
+            .order_by_asc(subject_entity::Column::EvalId)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(stored_subject)
             .collect()
     }
 
     pub async fn insert_result(&self, result: &EvaluationResult) -> Result<ResultInsertOutcome> {
+        self.insert_result_owned(result, "local").await
+    }
+
+    pub async fn insert_result_owned(
+        &self,
+        result: &EvaluationResult,
+        owner_user_id: &str,
+    ) -> Result<ResultInsertOutcome> {
+        validate_owner(owner_user_id)?;
         validate_result(result)?;
+        if self
+            .subject_for_owner(&result.eval_id, owner_user_id)
+            .await?
+            .is_none()
+        {
+            anyhow::bail!("unknown eval subject '{}'", result.eval_id);
+        }
         let content_digest = result.semantic_digest()?;
         if let Some(existing) = result_entity::Entity::find()
+            .filter(result_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(result_entity::Column::IdempotencyKey.eq(&result.idempotency_key))
             .one(&self.db)
             .await?
@@ -230,6 +281,7 @@ impl EvalStore {
         let result_id = content_digest.clone();
         result_entity::ActiveModel {
             result_id: Set(result_id.clone()),
+            owner_user_id: Set(owner_user_id.to_string()),
             eval_id: Set(result.eval_id.clone()),
             idempotency_key: Set(result.idempotency_key.clone()),
             authority_id: Set(result.evaluator.authority_id.clone()),
@@ -308,28 +360,82 @@ impl EvalStore {
         Ok(latest)
     }
 
+    pub async fn latest_admissions_for_owner(
+        &self,
+        owner_user_id: &str,
+    ) -> Result<BTreeMap<String, AdmissionEvent>> {
+        let owned_ids = result_entity::Entity::find()
+            .filter(result_entity::Column::OwnerUserId.eq(owner_user_id))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|row| row.result_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(self
+            .latest_admissions()
+            .await?
+            .into_iter()
+            .filter(|(result_id, _)| owned_ids.contains(result_id))
+            .collect())
+    }
+
     pub async fn freeze_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
+        self.freeze_snapshot_scoped(frozen_at, None).await
+    }
+
+    pub async fn freeze_snapshot_for_owner(
+        &self,
+        frozen_at: &str,
+        owner_user_id: &str,
+    ) -> Result<EvalSnapshot> {
+        validate_owner(owner_user_id)?;
+        self.freeze_snapshot_scoped(frozen_at, Some(owner_user_id))
+            .await
+    }
+
+    async fn freeze_snapshot_scoped(
+        &self,
+        frozen_at: &str,
+        owner_user_id: Option<&str>,
+    ) -> Result<EvalSnapshot> {
         chrono::DateTime::parse_from_rfc3339(frozen_at)
             .context("snapshot frozen_at must be RFC3339")?;
         let latest = self.latest_admissions().await?;
-        let rows = result_entity::Entity::find()
+        let mut query = result_entity::Entity::find();
+        if let Some(owner_user_id) = owner_user_id {
+            query = query.filter(result_entity::Column::OwnerUserId.eq(owner_user_id));
+        }
+        let rows = query
             .order_by_asc(result_entity::Column::ResultId)
             .all(&self.db)
             .await?;
-        let entries = rows
-            .into_iter()
-            .filter(|row| {
-                latest
-                    .get(&row.result_id)
-                    .is_some_and(|event| event.status == AdmissionStatus::Admitted)
-            })
-            .map(|row| EvalSnapshotEntry {
+        let mut entries = Vec::new();
+        for row in rows {
+            if latest
+                .get(&row.result_id)
+                .is_none_or(|event| event.status != AdmissionStatus::Admitted)
+            {
+                continue;
+            }
+            let subject = subject_entity::Entity::find_by_id(&row.eval_id)
+                .one(&self.db)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "admitted result '{}' references missing subject '{}'",
+                        row.result_id,
+                        row.eval_id
+                    )
+                })?;
+            entries.push(EvalSnapshotEntry {
                 result_id: row.result_id,
                 content_digest: row.content_digest,
+                subject_content_digest: subject.content_digest,
                 eval_id: row.eval_id,
-            })
-            .collect::<Vec<_>>();
-        let evidence_root = canonical_digest(&entries)?;
+            });
+        }
+        let snapshot_owner = owner_user_id.unwrap_or("*");
+        let evidence_root = canonical_digest(&(snapshot_owner, frozen_at, &entries))?;
         let snapshot = EvalSnapshot {
             evidence_root: evidence_root.clone(),
             frozen_at: frozen_at.to_string(),
@@ -342,9 +448,11 @@ impl EvalStore {
             anyhow::bail!("eval snapshot root already exists with different entries");
         }
         let manifest_json = serde_json::to_string(&snapshot)?;
-        let result_count = i32::try_from(snapshot.entries.len()).unwrap_or(i32::MAX);
+        let result_count = i32::try_from(snapshot.entries.len())
+            .context("eval snapshot contains too many rows")?;
         snapshot_entity::ActiveModel {
             evidence_root: Set(evidence_root),
+            owner_user_id: Set(snapshot_owner.to_string()),
             manifest_json: Set(manifest_json),
             result_count: Set(result_count),
             frozen_at: Set(frozen_at.to_string()),
@@ -359,18 +467,75 @@ impl EvalStore {
         snapshot_entity::Entity::find_by_id(evidence_root)
             .one(&self.db)
             .await?
-            .map(|row| serde_json::from_str(&row.manifest_json).context("parsing eval snapshot"))
+            .map(stored_snapshot)
+            .transpose()
+    }
+
+    pub async fn snapshot_by_root_for_owner(
+        &self,
+        evidence_root: &str,
+        owner_user_id: &str,
+    ) -> Result<Option<EvalSnapshot>> {
+        snapshot_entity::Entity::find_by_id(evidence_root)
+            .filter(snapshot_entity::Column::OwnerUserId.eq(owner_user_id))
+            .one(&self.db)
+            .await?
+            .map(stored_snapshot)
             .transpose()
     }
 }
 
+fn validate_owner(owner_user_id: &str) -> Result<()> {
+    if owner_user_id.trim().is_empty() || owner_user_id.len() > 512 {
+        anyhow::bail!("eval owner user id must contain 1 to 512 characters")
+    }
+    Ok(())
+}
+
+fn stored_subject(row: subject_entity::Model) -> Result<EvalSubject> {
+    let subject: EvalSubject =
+        serde_json::from_str(&row.subject_json).context("parsing stored eval subject")?;
+    if subject.eval_id != row.eval_id || subject.semantic_digest()? != row.content_digest {
+        anyhow::bail!("stored eval subject does not match its content address");
+    }
+    Ok(subject)
+}
+
 fn stored_result(row: result_entity::Model) -> Result<StoredEvaluationResult> {
+    let result: EvaluationResult =
+        serde_json::from_str(&row.result_json).context("parsing stored evaluation result")?;
+    let semantic_digest = result.semantic_digest()?;
+    if result.eval_id != row.eval_id
+        || semantic_digest != row.content_digest
+        || semantic_digest != row.result_id
+    {
+        anyhow::bail!("stored evaluation result does not match its content address");
+    }
     Ok(StoredEvaluationResult {
         result_id: row.result_id,
         content_digest: row.content_digest,
-        result: serde_json::from_str(&row.result_json)
-            .context("parsing stored evaluation result")?,
+        result,
     })
+}
+
+fn stored_snapshot(row: snapshot_entity::Model) -> Result<EvalSnapshot> {
+    let snapshot: EvalSnapshot =
+        serde_json::from_str(&row.manifest_json).context("parsing eval snapshot")?;
+    if snapshot.evidence_root != row.evidence_root
+        || snapshot.frozen_at != row.frozen_at
+        || i32::try_from(snapshot.entries.len()).ok() != Some(row.result_count)
+    {
+        anyhow::bail!("stored eval snapshot does not match its indexed metadata");
+    }
+    let actual_root = canonical_digest(&(
+        row.owner_user_id.as_str(),
+        snapshot.frozen_at.as_str(),
+        &snapshot.entries,
+    ))?;
+    if actual_root != snapshot.evidence_root {
+        anyhow::bail!("stored eval snapshot manifest does not match its evidence root");
+    }
+    Ok(snapshot)
 }
 
 fn admission_event(row: admission_entity::Model) -> Result<AdmissionEvent> {
@@ -414,6 +579,8 @@ fn parse_admission_status(value: &str) -> Result<AdmissionStatus> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+
+    use sea_orm::IntoActiveModel;
 
     use super::*;
     use crate::eval::types::*;
@@ -484,6 +651,7 @@ mod tests {
     #[tokio::test]
     async fn idempotency_replays_identical_content_and_rejects_conflicts() -> anyhow::Result<()> {
         let store = store().await?;
+        store.insert_subject(&subject()?).await?;
         let pass = result(EvalVerdict::Pass);
         assert!(matches!(
             store.insert_result(&pass).await?,
@@ -496,6 +664,73 @@ mod tests {
         assert!(
             store
                 .insert_result(&result(EvalVerdict::Fail))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_root_commits_subject_decisions() -> anyhow::Result<()> {
+        async fn root_for(selected_tier: &str) -> anyhow::Result<String> {
+            let store = store().await?;
+            let mut subject = subject()?;
+            subject.decisions = vec![EvalDecisionRef {
+                decision_id: "decision-1".into(),
+                policy: "auto".into(),
+                request_key: "agent_trace/v1|edit|normal".into(),
+                selected_tier: selected_tier.into(),
+                baseline_tier: Some("strong".into()),
+                policy_digest: subject.policy_digest.clone(),
+            }];
+            store.insert_subject(&subject).await?;
+            let inserted = store.insert_result(&result(EvalVerdict::Pass)).await?;
+            store
+                .append_admission_event(
+                    inserted.result_id(),
+                    AdmissionStatus::Admitted,
+                    "admitted",
+                    "local",
+                )
+                .await?;
+            Ok(store
+                .freeze_snapshot("2026-07-30T00:02:00Z")
+                .await?
+                .evidence_root)
+        }
+
+        assert_ne!(root_for("economy").await?, root_for("strong").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_manifest_tampering_breaks_content_address_verification() -> anyhow::Result<()>
+    {
+        let store = store().await?;
+        store.insert_subject(&subject()?).await?;
+        let inserted = store.insert_result(&result(EvalVerdict::Pass)).await?;
+        store
+            .append_admission_event(
+                inserted.result_id(),
+                AdmissionStatus::Admitted,
+                "admitted",
+                "local",
+            )
+            .await?;
+        let snapshot = store.freeze_snapshot("2026-07-30T00:02:00Z").await?;
+        let row = snapshot_entity::Entity::find_by_id(&snapshot.evidence_root)
+            .one(&store.db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("snapshot row is missing"))?;
+        let mut tampered = snapshot.clone();
+        tampered.entries[0].eval_id = "different-eval".into();
+        let mut active = row.into_active_model();
+        active.manifest_json = Set(serde_json::to_string(&tampered)?);
+        active.update(&store.db).await?;
+
+        assert!(
+            store
+                .snapshot_by_root(&snapshot.evidence_root)
                 .await
                 .is_err()
         );

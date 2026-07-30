@@ -221,6 +221,16 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
         if !item.redacted {
             anyhow::bail!("evidence '{}' is not explicitly redacted", item.evidence_id)
         }
+        if item
+            .attributes
+            .iter()
+            .any(|(key, value)| attribute_looks_sensitive(key, value))
+        {
+            anyhow::bail!(
+                "evidence '{}' contains credential-shaped attribute material",
+                item.evidence_id
+            )
+        }
     }
     validate_digest(&subject.evidence_digest, "evidence_digest")?;
     let actual = evidence_digest(&subject.evidence)?;
@@ -253,6 +263,20 @@ pub fn validate_result(result: &EvaluationResult) -> Result<()> {
         validate_metric_id(metric_id)?;
         value.validate()?;
     }
+    let mut evidence_refs = BTreeSet::new();
+    for evidence_ref in &result.evidence_refs {
+        validate_identifier(evidence_ref, "evidence_ref")?;
+        if !evidence_refs.insert(evidence_ref.as_str()) {
+            anyhow::bail!("duplicate evidence reference '{evidence_ref}'")
+        }
+    }
+    let mut hard_violations = BTreeSet::new();
+    for violation in &result.hard_violations {
+        validate_metric_id(violation)?;
+        if !hard_violations.insert(violation.as_str()) {
+            anyhow::bail!("duplicate hard violation '{violation}'")
+        }
+    }
     for (decision_id, credit) in &result.decision_credit {
         validate_identifier(decision_id, "decision_credit id")?;
         if !(0..=1_000_000).contains(&credit.weight_ppm) {
@@ -260,7 +284,10 @@ pub fn validate_result(result: &EvaluationResult) -> Result<()> {
         }
         for metric_id in &credit.metric_ids {
             validate_metric_id(metric_id)?;
-            if !result.metrics.contains_key(metric_id) {
+            if metric_id != "quality.pass"
+                && !result.metrics.contains_key(metric_id)
+                && !result.hard_violations.contains(metric_id)
+            {
                 anyhow::bail!("decision credit references absent metric '{metric_id}'")
             }
         }
@@ -285,6 +312,25 @@ pub fn validate_result_for_subject(result: &EvaluationResult, subject: &EvalSubj
         .any(|decision_id| !decisions.contains(decision_id.as_str()))
     {
         anyhow::bail!("evaluation result credits an unknown decision")
+    }
+    if result
+        .metrics
+        .keys()
+        .any(|metric_id| !subject.requested_dimensions.contains(metric_id))
+    {
+        anyhow::bail!("evaluation result contains an unrequested metric")
+    }
+    let evidence_ids = subject
+        .evidence
+        .iter()
+        .map(|item| item.evidence_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if result
+        .evidence_refs
+        .iter()
+        .any(|evidence_ref| !evidence_ids.contains(evidence_ref.as_str()))
+    {
+        anyhow::bail!("evaluation result references absent subject evidence")
     }
     Ok(())
 }
@@ -336,6 +382,31 @@ fn validate_digest(value: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+fn attribute_looks_sensitive(key: &str, value: &str) -> bool {
+    let normalized_key = key.to_ascii_lowercase().replace('-', "_");
+    let sensitive_key = matches!(
+        normalized_key.as_str(),
+        "authorization"
+            | "proxy_authorization"
+            | "x_api_key"
+            | "api_key"
+            | "access_token"
+            | "refresh_token"
+            | "cookie"
+            | "set_cookie"
+            | "secret"
+    ) || normalized_key.ends_with("_secret")
+        || normalized_key.ends_with("_api_key")
+        || normalized_key.ends_with("_access_token")
+        || normalized_key.ends_with("_refresh_token");
+    let normalized_value = value.to_ascii_lowercase();
+    sensitive_key
+        || normalized_value.starts_with("bearer ")
+        || normalized_value.contains("brvk_")
+        || normalized_value.starts_with("sk-")
+        || normalized_value.contains("-----begin private key-----")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +430,58 @@ mod tests {
     }
 
     #[test]
+    fn redacted_flag_cannot_hide_obvious_secret_material() {
+        let mut subject = subject_fixture();
+        subject.evidence[0]
+            .attributes
+            .insert("authorization".into(), "Bearer brvk_super-secret".into());
+        subject.evidence_digest = evidence_digest(&subject.evidence).unwrap_or_default();
+
+        assert!(validate_subject(&subject).is_err());
+    }
+
+    #[test]
+    fn every_evaluator_kind_uses_the_same_versioned_result_contract() -> anyhow::Result<()> {
+        for kind in [
+            EvaluatorKind::TaskNative,
+            EvaluatorKind::Human,
+            EvaluatorKind::Enterprise,
+            EvaluatorKind::Agentic,
+            EvaluatorKind::Generic,
+        ] {
+            let subject = subject_fixture();
+            let result = EvaluationResult {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: subject.eval_id.clone(),
+                evidence_digest: subject.evidence_digest.clone(),
+                evaluator: EvaluatorIdentity {
+                    authority_id: "fixture-authority".into(),
+                    evaluator_id: "fixture-evaluator".into(),
+                    kind,
+                    version: "1".into(),
+                    config_digest: subject.policy_digest.clone(),
+                },
+                verdict: EvalVerdict::Pass,
+                metrics: BTreeMap::from([(
+                    "quality.pass".into(),
+                    MetricValue::new(1, MetricUnit::Boolean),
+                )]),
+                hard_violations: Vec::new(),
+                confidence_ppm: Some(1_000_000),
+                evidence_refs: vec!["usage".into()],
+                decision_credit: BTreeMap::new(),
+                idempotency_key: format!("fixture-{kind:?}"),
+                submitted_at: "2026-07-30T00:01:00Z".into(),
+            };
+            let encoded = serde_json::to_vec(&result)?;
+            let decoded: EvaluationResult = serde_json::from_slice(&encoded)?;
+            assert_eq!(decoded, result);
+            validate_result_for_subject(&decoded, &subject)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn subject_digest_is_stable_for_ordered_maps() -> anyhow::Result<()> {
         let left = subject_fixture();
         let mut right = subject_fixture();
@@ -367,6 +490,34 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         assert_eq!(left.semantic_digest()?, right.semantic_digest()?);
+        Ok(())
+    }
+
+    #[test]
+    fn result_cannot_reference_missing_subject_evidence() -> anyhow::Result<()> {
+        let subject = subject_fixture();
+        let result = EvaluationResult {
+            schema_version: EVAL_SCHEMA_VERSION,
+            eval_id: subject.eval_id.clone(),
+            evidence_digest: subject.evidence_digest.clone(),
+            evaluator: EvaluatorIdentity {
+                authority_id: "local".into(),
+                evaluator_id: "task-runner".into(),
+                kind: EvaluatorKind::TaskNative,
+                version: "1".into(),
+                config_digest: subject.policy_digest.clone(),
+            },
+            verdict: EvalVerdict::Pass,
+            metrics: BTreeMap::new(),
+            hard_violations: Vec::new(),
+            confidence_ppm: Some(1_000_000),
+            evidence_refs: vec!["missing-evidence".into()],
+            decision_credit: BTreeMap::new(),
+            idempotency_key: "missing-evidence-result".into(),
+            submitted_at: "2026-07-30T00:01:00Z".into(),
+        };
+
+        assert!(validate_result_for_subject(&result, &subject).is_err());
         Ok(())
     }
 

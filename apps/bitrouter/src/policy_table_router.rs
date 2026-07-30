@@ -33,18 +33,13 @@ use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::eval::settlement::{PendingEvalDecision, PendingEvalDecisionStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
-use crate::workflow_state::ir::{HarnessId, WorkflowIdentity, WorkflowStateKind};
+use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
 use crate::workflow_state::session::WorkflowIdentityTracker;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionReason {
     StaticTable,
-    ExplorationTrial,
-    ExplorationLocked,
-    AdequacyPin,
-    ReliabilityCircuitOpen,
-    ReliabilityHalfOpenProbe,
     ToolGuardrail,
     NoMatch,
 }
@@ -53,11 +48,6 @@ impl PolicyDecisionReason {
     fn as_str(&self) -> &'static str {
         match self {
             Self::StaticTable => "static_table",
-            Self::ExplorationTrial => "exploration_trial",
-            Self::ExplorationLocked => "exploration_locked",
-            Self::AdequacyPin => "adequacy_pin",
-            Self::ReliabilityCircuitOpen => "reliability_circuit_open",
-            Self::ReliabilityHalfOpenProbe => "reliability_half_open_probe",
             Self::ToolGuardrail => "tool_guardrail",
             Self::NoMatch => "no_match",
         }
@@ -105,11 +95,8 @@ impl PolicyDecision {
     }
 }
 
-/// The resolved, immutable policy spec — the fingerprint→tier→model table plus
-/// the guardrail and (for adaptive routing) the escalation tier and a reverse
-/// model→tier index. Shared via [`Arc`] between the router (which reads it on
-/// the ingress hot path) and the adequacy observer (which recomputes the
-/// fingerprint and maps the served model back to a tier).
+/// The resolved, immutable policy spec: fingerprint→tier→model plus tool-use
+/// guardrails. Learned-state databases never participate in this hot path.
 pub struct PolicyTable {
     /// Tier name → model id the request is rewritten to.
     tiers: HashMap<String, String>,
@@ -122,19 +109,6 @@ pub struct PolicyTable {
     tool_use_tier: Option<String>,
     /// Tiers that handle tool calls reliably.
     tool_safe_tiers: Vec<String>,
-    /// Tier a pinned fingerprint escalates to (adequacy.escalation_tier, else
-    /// default_tier). `None` when neither is configured.
-    escalation_tier: Option<String>,
-    /// Cheap tier exploration trials toward (adequacy.explore_tier). `None` when
-    /// exploration is off.
-    explore_tier: Option<String>,
-    /// Whether aggressive downgrade discovery is enabled.
-    exploration_enabled: bool,
-    /// Whether source-neutral opening requests are eligible for exploration.
-    explore_opening: bool,
-    /// Reverse index model id → tier name, for mapping a served model back to
-    /// its tier at observe time.
-    model_to_tier: HashMap<String, String>,
 }
 
 impl PolicyTable {
@@ -144,32 +118,12 @@ impl PolicyTable {
         if config.tiers.is_empty() {
             return None;
         }
-        let model_to_tier = config
-            .tiers
-            .iter()
-            .map(|(tier, model)| (model.clone(), tier.clone()))
-            .collect();
-        let escalation_tier = config
-            .adequacy
-            .escalation_tier
-            .clone()
-            .or_else(|| config.default_tier.clone());
-        // Exploration is live only when enabled, a target tier is set, and there
-        // is an escalation tier to be a candidate against.
-        let exploration_enabled = config.adequacy.explore_enabled
-            && config.adequacy.explore_tier.is_some()
-            && escalation_tier.is_some();
         Some(Arc::new(Self {
             tiers: config.tiers.clone(),
             fingerprints: config.fingerprints.clone(),
             default_tier: config.default_tier.clone(),
             tool_use_tier: config.tool_use_tier.clone(),
             tool_safe_tiers: config.tool_safe_tiers.clone(),
-            escalation_tier,
-            explore_tier: config.adequacy.explore_tier.clone(),
-            exploration_enabled,
-            explore_opening: config.adequacy.explore_opening,
-            model_to_tier,
         }))
     }
 
@@ -180,12 +134,6 @@ impl PolicyTable {
             .get(fingerprint)
             .or(self.default_tier.as_ref())
             .map(String::as_str)
-    }
-
-    /// Apply the hard tool-use guardrail: a tool-carrying request whose `tier` is
-    /// not tool-safe is clamped up to `tool_use_tier`. Returns the effective tier.
-    fn guardrail<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> &'a str {
-        self.guardrail_with_status(tier, prompt).0
     }
 
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
@@ -201,89 +149,6 @@ impl PolicyTable {
     /// The model id a tier routes to.
     pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
         self.tiers.get(tier).map(String::as_str)
-    }
-
-    /// The tier a served model id belongs to (reverse of [`Self::model_of_tier`]).
-    /// Used by the adequacy observer to map an outcome back to a tier.
-    pub(crate) fn tier_of_model(&self, model: &str) -> Option<&str> {
-        if let Some(tier) = self.model_to_tier.get(model) {
-            return Some(tier.as_str());
-        }
-        if model.contains(':') {
-            return None;
-        }
-        let mut matched = None;
-        for (tier, route_model) in &self.tiers {
-            let Some((_, service_id)) = route_model.split_once(':') else {
-                continue;
-            };
-            if service_id != model {
-                continue;
-            }
-            if matched.is_some() {
-                return None;
-            }
-            matched = Some(tier.as_str());
-        }
-        matched
-    }
-
-    /// The tier a pinned fingerprint escalates to. Used by the router (to apply a
-    /// pin) and the observer (to tell a downgrade from the escalation tier).
-    pub(crate) fn escalation_tier(&self) -> Option<&str> {
-        self.escalation_tier.as_deref()
-    }
-
-    pub(crate) fn static_tier_with_headers(
-        &self,
-        prompt: &Prompt,
-        headers: &HeaderMap,
-    ) -> Option<&str> {
-        let key = self.request_key(prompt, headers);
-        self.static_tier_for(key.as_str(), prompt)
-    }
-
-    pub(crate) fn request_key(&self, prompt: &Prompt, headers: &HeaderMap) -> String {
-        OnlineWorkflowState::from_headers(headers, prompt)
-            .routing_key()
-            .to_string()
-    }
-
-    /// [`Self::static_tier`] for an already-computed fingerprint.
-    fn static_tier_for(&self, fingerprint: &str, prompt: &Prompt) -> Option<&str> {
-        let tier = self.tier_for_fingerprint(fingerprint)?;
-        Some(self.guardrail(tier, prompt))
-    }
-
-    /// The cheap tier exploration trials toward (raw; gate on
-    /// [`Self::exploration_enabled`]).
-    pub(crate) fn explore_tier(&self) -> Option<&str> {
-        self.explore_tier.as_deref()
-    }
-
-    /// Whether aggressive downgrade discovery is live.
-    pub(crate) fn exploration_enabled(&self) -> bool {
-        self.exploration_enabled
-    }
-
-    pub(crate) fn exploration_allowed_for_prompt(
-        &self,
-        prompt: &Prompt,
-        headers: &HeaderMap,
-    ) -> bool {
-        let online = OnlineWorkflowState::from_headers(headers, prompt);
-        self.exploration_allowed_for_online(&online)
-    }
-
-    fn exploration_allowed_for_online(&self, online: &OnlineWorkflowState) -> bool {
-        (self.explore_opening && online.ir.state_kind == WorkflowStateKind::Opening)
-            || matches!(
-                online.ir.state_kind,
-                WorkflowStateKind::ToolFollowup
-                    | WorkflowStateKind::Edit
-                    | WorkflowStateKind::Test
-                    | WorkflowStateKind::Debug
-            )
     }
 
     /// A coarse fingerprint of the agent-loop step, derived purely from the

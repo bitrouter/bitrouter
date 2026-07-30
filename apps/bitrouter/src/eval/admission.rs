@@ -15,6 +15,15 @@ pub enum SubmissionPrincipal {
     ApiKey { key_id: String, user_id: String },
 }
 
+impl SubmissionPrincipal {
+    pub fn owner_user_id(&self) -> &str {
+        match self {
+            Self::LocalOperator => "local",
+            Self::ApiKey { user_id, .. } => user_id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AdmissionOutcome {
     pub result_id: String,
@@ -29,22 +38,21 @@ pub async fn submit(
     result: EvaluationResult,
     principal: SubmissionPrincipal,
 ) -> Result<AdmissionOutcome> {
-    let subject = store
-        .subject(&result.eval_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("unknown eval subject '{}'", result.eval_id))?;
+    let subject = match &principal {
+        SubmissionPrincipal::LocalOperator => {
+            store.subject_for_owner(&result.eval_id, "local").await?
+        }
+        SubmissionPrincipal::ApiKey { user_id, .. } => {
+            store.subject_for_owner(&result.eval_id, user_id).await?
+        }
+    }
+    .ok_or_else(|| anyhow::anyhow!("unknown eval subject '{}'", result.eval_id))?;
     validate_result_for_subject(&result, &subject)?;
-    let insertion = store.insert_result(&result).await?;
+    let insertion = store
+        .insert_result_owned(&result, principal.owner_user_id())
+        .await?;
     let duplicate = matches!(insertion, ResultInsertOutcome::Duplicate { .. });
     let result_id = insertion.result_id().to_string();
-    if duplicate && let Some(existing) = store.latest_admissions().await?.remove(&result_id) {
-        return Ok(AdmissionOutcome {
-            result_id,
-            status: existing.status,
-            reason: existing.reason,
-            duplicate: true,
-        });
-    }
 
     let authority = match &principal {
         SubmissionPrincipal::LocalOperator => None,
@@ -115,6 +123,15 @@ pub async fn submit(
         }
     }
 
+    if duplicate && let Some(existing) = store.latest_admissions().await?.remove(&result_id) {
+        return Ok(AdmissionOutcome {
+            result_id,
+            status: existing.status,
+            reason: existing.reason,
+            duplicate: true,
+        });
+    }
+
     if subject.holdout {
         return record(
             store,
@@ -128,25 +145,44 @@ pub async fn submit(
     }
 
     let latest = store.latest_admissions().await?;
-    for prior in store.results_for_subject(&result.eval_id).await? {
-        if prior.result_id == result_id
-            || latest.get(&prior.result_id).map(|event| event.status)
-                != Some(AdmissionStatus::Admitted)
-            || !verdicts_conflict(prior.result.verdict, result.verdict)
-        {
-            continue;
-        }
-        let prior_rank = evaluator_rank(prior.result.evaluator.kind);
+    let prior_results = store.results_for_subject(&result.eval_id).await?;
+    let conflicting = prior_results
+        .iter()
+        .filter(|prior| {
+            prior.result_id != result_id
+                && latest.get(&prior.result_id).map(|event| event.status)
+                    == Some(AdmissionStatus::Admitted)
+                && verdicts_conflict(prior.result.verdict, result.verdict)
+        })
+        .collect::<Vec<_>>();
+    if let Some(highest_prior_rank) = conflicting
+        .iter()
+        .map(|prior| evaluator_rank(prior.result.evaluator.kind))
+        .max()
+    {
         let new_rank = evaluator_rank(result.evaluator.kind);
-        if prior_rank == new_rank {
-            store
-                .append_admission_event(
-                    &prior.result_id,
-                    AdmissionStatus::Disputed,
-                    "conflicting outcome at the same authority level",
-                    &result.evaluator.authority_id,
-                )
-                .await?;
+        if highest_prior_rank > new_rank {
+            return record(
+                store,
+                result_id,
+                AdmissionStatus::Disputed,
+                "result conflicts with a higher-authority admitted outcome",
+                &result.evaluator.authority_id,
+                duplicate,
+            )
+            .await;
+        }
+        if highest_prior_rank == new_rank {
+            for prior in &conflicting {
+                store
+                    .append_admission_event(
+                        &prior.result_id,
+                        AdmissionStatus::Disputed,
+                        "conflicting outcome at the same authority level",
+                        &result.evaluator.authority_id,
+                    )
+                    .await?;
+            }
             return record(
                 store,
                 result_id,
@@ -157,21 +193,15 @@ pub async fn submit(
             )
             .await;
         }
-        if prior_rank > new_rank
-            && prior.result.evaluator.kind == EvaluatorKind::TaskNative
-            && prior.result.verdict == EvalVerdict::Fail
-            && (!prior.result.hard_violations.is_empty()
-                || result.evaluator.kind == EvaluatorKind::Agentic)
-        {
-            return record(
-                store,
-                result_id,
-                AdmissionStatus::Disputed,
-                "lower-authority result conflicts with task-native failure",
-                &result.evaluator.authority_id,
-                duplicate,
-            )
-            .await;
+        for prior in conflicting {
+            store
+                .append_admission_event(
+                    &prior.result_id,
+                    AdmissionStatus::Disputed,
+                    "superseded by a conflicting higher-authority outcome",
+                    &result.evaluator.authority_id,
+                )
+                .await?;
         }
     }
 
@@ -270,21 +300,24 @@ mod tests {
         let store = EvalStore::new(db);
         let evidence = Vec::new();
         store
-            .insert_subject(&EvalSubject {
-                schema_version: EVAL_SCHEMA_VERSION,
-                eval_id: "eval-1".into(),
-                scope: EvalScope::Task,
-                subject_id: "task-1".into(),
-                policy_digest: digest(),
-                preset: Some("auto".into()),
-                cohort: None,
-                holdout: false,
-                decisions: Vec::new(),
-                requested_dimensions: BTreeSet::new(),
-                evidence_digest: evidence_digest(&evidence)?,
-                evidence,
-                observed_at: "2026-07-30T00:00:00Z".into(),
-            })
+            .insert_subject_owned(
+                &EvalSubject {
+                    schema_version: EVAL_SCHEMA_VERSION,
+                    eval_id: "eval-1".into(),
+                    scope: EvalScope::Task,
+                    subject_id: "task-1".into(),
+                    policy_digest: digest(),
+                    preset: Some("auto".into()),
+                    cohort: None,
+                    holdout: false,
+                    decisions: Vec::new(),
+                    requested_dimensions: BTreeSet::new(),
+                    evidence_digest: evidence_digest(&evidence)?,
+                    evidence,
+                    observed_at: "2026-07-30T00:00:00Z".into(),
+                },
+                "user",
+            )
             .await?;
         let authorities = HashMap::from([
             (
@@ -399,6 +432,100 @@ mod tests {
             )
             .await?;
         assert_eq!(agentic.status, AdmissionStatus::Disputed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lower_authority_conflict_never_enters_training_evidence() -> anyhow::Result<()> {
+        let service = service().await?;
+        let native = service
+            .submit(
+                result(
+                    "native",
+                    EvaluatorKind::TaskNative,
+                    EvalVerdict::Pass,
+                    "native-pass",
+                ),
+                SubmissionPrincipal::ApiKey {
+                    key_id: "key-native".into(),
+                    user_id: "user".into(),
+                },
+            )
+            .await?;
+        assert_eq!(native.status, AdmissionStatus::Admitted);
+
+        let mut agentic_result = result(
+            "agent",
+            EvaluatorKind::Agentic,
+            EvalVerdict::Fail,
+            "agent-fail",
+        );
+        agentic_result.hard_violations.clear();
+        let agentic = service
+            .submit(
+                agentic_result,
+                SubmissionPrincipal::ApiKey {
+                    key_id: "key-agent".into(),
+                    user_id: "user".into(),
+                },
+            )
+            .await?;
+
+        assert_eq!(agentic.status, AdmissionStatus::Disputed);
+        let snapshot = service
+            .store()
+            .freeze_snapshot("2026-07-30T00:02:00Z")
+            .await?;
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].result_id, native.result_id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn held_out_results_never_enter_training_evidence() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let evidence = Vec::new();
+        store
+            .insert_subject(&EvalSubject {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: "eval-1".into(),
+                scope: EvalScope::Task,
+                subject_id: "held-out-task".into(),
+                policy_digest: digest(),
+                preset: Some("auto".into()),
+                cohort: Some("holdout".into()),
+                holdout: true,
+                decisions: Vec::new(),
+                requested_dimensions: BTreeSet::new(),
+                evidence_digest: evidence_digest(&evidence)?,
+                evidence,
+                observed_at: "2026-07-30T00:00:00Z".into(),
+            })
+            .await?;
+        let service = crate::eval::EvalService::new(store.clone(), EvalConfig::default());
+
+        let outcome = service
+            .submit(
+                result(
+                    "native",
+                    EvaluatorKind::TaskNative,
+                    EvalVerdict::Pass,
+                    "held-out",
+                ),
+                SubmissionPrincipal::LocalOperator,
+            )
+            .await?;
+
+        assert_eq!(outcome.status, AdmissionStatus::HeldOut);
+        assert!(
+            store
+                .freeze_snapshot("2026-07-30T00:02:00Z")
+                .await?
+                .entries
+                .is_empty()
+        );
         Ok(())
     }
 }
