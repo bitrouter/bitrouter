@@ -28,27 +28,187 @@ use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
-pub const POLICY_LOCKFILE_VERSION: u32 = 1;
+pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
+pub const POLICY_LOCKFILE_VERSION: u32 = 2;
+pub const POLICY_COMPILER_ID: &str = "bitrouter-policy-compiler";
+pub const POLICY_COMPILER_VERSION: u32 = 1;
+const EMPTY_SHA256: &str =
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 /// The complete deterministic policy artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyLock {
-    /// File-format version only. Evolution history lives in Git and the DB.
+    /// File-format version only.
     #[serde(rename = "lockfileVersion")]
     pub lockfile_version: u32,
+    /// Reproducible compiler inputs and artifact lineage. Required for v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<PolicyArtifact>,
     /// Named policies referenced by `presets.<name>.policy`.
     #[serde(default)]
     pub policies: BTreeMap<String, PolicyDefinition>,
+    /// Decision-relevant provenance for explicit routes, nested by policy and
+    /// canonical route key. Required for every v2 route.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub certificates: BTreeMap<String, BTreeMap<String, PolicyCertificate>>,
 }
 
 impl Default for PolicyLock {
     fn default() -> Self {
         Self {
             lockfile_version: POLICY_LOCKFILE_VERSION,
+            artifact: Some(PolicyArtifact::empty()),
             policies: BTreeMap::new(),
+            certificates: BTreeMap::new(),
         }
     }
+}
+
+impl PolicyLock {
+    pub fn is_v2(&self) -> bool {
+        self.lockfile_version == POLICY_LOCKFILE_VERSION
+    }
+
+    pub fn certificate(&self, policy: &str, request_key: &str) -> Option<&PolicyCertificate> {
+        self.certificates
+            .get(policy)
+            .and_then(|entries| entries.get(request_key))
+    }
+}
+
+/// Reproducible identity and evidence lineage for one compiled lock.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyArtifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_digest: Option<String>,
+    pub evidence_root: String,
+    pub source_snapshot_time_unix_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<LegacyMigration>,
+    pub compiler: CompilerIdentity,
+}
+
+impl PolicyArtifact {
+    fn empty() -> Self {
+        Self {
+            parent_digest: None,
+            evidence_root: EMPTY_SHA256.to_string(),
+            source_snapshot_time_unix_ms: 0,
+            migration: None,
+            compiler: CompilerIdentity {
+                id: POLICY_COMPILER_ID.to_string(),
+                version: POLICY_COMPILER_VERSION,
+                config_digest: EMPTY_SHA256.to_string(),
+            },
+        }
+    }
+}
+
+/// Digest of the sealed pre-v2 learner tables projected into this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyMigration {
+    pub legacy_adequacy_digest: String,
+}
+
+/// Compiler implementation and deterministic configuration identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerIdentity {
+    pub id: String,
+    pub version: u32,
+    pub config_digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteOwner {
+    Operator,
+    Compiler,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CertificateSource {
+    Operator,
+    LegacyAdequacyV1,
+    TaskNative,
+    Human,
+    Enterprise,
+    Agentic,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionVerdict {
+    Retain,
+    Promote,
+    Demote,
+    Experiment,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualitySummary {
+    pub baseline_pass_rate_ppm: i64,
+    pub candidate_pass_rate_ppm: i64,
+    pub delta_ppm: i64,
+    pub lower_bound_ppm: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EconomicsSummary {
+    pub normalized_cost_delta_ppm: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatencySummary {
+    pub normalized_latency_delta_ppm: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyAdequacySummary {
+    pub observed: u32,
+    pub adequate_trials: u32,
+    pub semantic_successes: u32,
+    pub pinned: bool,
+}
+
+/// Auditable decision summary for one explicit route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyCertificate {
+    pub owner: RouteOwner,
+    pub selected_tier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_tier: Option<String>,
+    pub source: CertificateSource,
+    #[serde(default)]
+    pub eligible_episodes: u32,
+    #[serde(default)]
+    pub independent_tasks: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualitySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub economics: Option<EconomicsSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency: Option<LatencySummary>,
+    #[serde(default)]
+    pub critical_violations: u32,
+    pub verdict: PromotionVerdict,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator_config_digest: Option<String>,
+    pub compiler_config_digest: String,
+    pub evidence_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy: Option<LegacyAdequacySummary>,
 }
 
 /// One named effective routing policy.
@@ -177,12 +337,18 @@ pub async fn load(path: &Path) -> Result<LoadedPolicyLock> {
 }
 
 pub fn validate_document(document: &PolicyLock) -> Result<()> {
-    if document.lockfile_version != POLICY_LOCKFILE_VERSION {
-        anyhow::bail!(
-            "unsupported policy lockfileVersion {}; expected {}",
-            document.lockfile_version,
-            POLICY_LOCKFILE_VERSION
-        );
+    match document.lockfile_version {
+        LEGACY_POLICY_LOCKFILE_VERSION => {
+            if document.artifact.is_some() || !document.certificates.is_empty() {
+                anyhow::bail!("policy lock v1 cannot contain v2 artifact or certificates");
+            }
+        }
+        POLICY_LOCKFILE_VERSION => validate_v2_metadata(document)?,
+        version => {
+            anyhow::bail!(
+                "unsupported policy lockfileVersion {version}; expected {LEGACY_POLICY_LOCKFILE_VERSION} or {POLICY_LOCKFILE_VERSION}"
+            );
+        }
     }
     for (name, policy) in &document.policies {
         validate_name(name)?;
@@ -209,6 +375,128 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
                 );
             }
         }
+    }
+    if document.lockfile_version == POLICY_LOCKFILE_VERSION {
+        validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_v2_metadata(document: &PolicyLock) -> Result<()> {
+    let artifact = document
+        .artifact
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("policy lock v2 requires artifact metadata"))?;
+    if let Some(parent) = artifact.parent_digest.as_deref() {
+        validate_sha256_digest(parent, "artifact.parent_digest")?;
+    }
+    validate_sha256_digest(&artifact.evidence_root, "artifact.evidence_root")?;
+    if artifact.source_snapshot_time_unix_ms < 0 {
+        anyhow::bail!("artifact.source_snapshot_time_unix_ms cannot be negative");
+    }
+    if artifact.compiler.id.trim().is_empty() {
+        anyhow::bail!("artifact.compiler.id cannot be empty");
+    }
+    if artifact.compiler.version == 0 {
+        anyhow::bail!("artifact.compiler.version must be positive");
+    }
+    validate_sha256_digest(
+        &artifact.compiler.config_digest,
+        "artifact.compiler.config_digest",
+    )?;
+    if let Some(migration) = &artifact.migration {
+        validate_sha256_digest(
+            &migration.legacy_adequacy_digest,
+            "artifact.migration.legacy_adequacy_digest",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_v2_certificates(document: &PolicyLock) -> Result<()> {
+    for policy_name in document.certificates.keys() {
+        if !document.policies.contains_key(policy_name) {
+            anyhow::bail!("certificates reference missing policy '{policy_name}'");
+        }
+    }
+    for (policy_name, policy) in &document.policies {
+        let certificates = document.certificates.get(policy_name);
+        for (request_key, selected_tier) in &policy.routes {
+            let certificate = certificates
+                .and_then(|entries| entries.get(request_key))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "policy '{policy_name}' route '{request_key}' requires a v2 certificate"
+                    )
+                })?;
+            if certificate.selected_tier != *selected_tier {
+                anyhow::bail!(
+                    "policy '{policy_name}' route '{request_key}' selects tier '{selected_tier}' but its certificate selected tier '{}'",
+                    certificate.selected_tier
+                );
+            }
+        }
+        if let Some(certificates) = certificates {
+            for (request_key, certificate) in certificates {
+                if !policy.routes.contains_key(request_key) {
+                    anyhow::bail!(
+                        "policy '{policy_name}' certificate '{request_key}' has no explicit route"
+                    );
+                }
+                if !policy.tiers.contains_key(&certificate.selected_tier) {
+                    anyhow::bail!(
+                        "policy '{policy_name}' certificate '{request_key}' references unknown selected tier '{}'",
+                        certificate.selected_tier
+                    );
+                }
+                if let Some(baseline) = certificate.baseline_tier.as_deref()
+                    && !policy.tiers.contains_key(baseline)
+                {
+                    anyhow::bail!(
+                        "policy '{policy_name}' certificate '{request_key}' references unknown baseline tier '{baseline}'"
+                    );
+                }
+                validate_sha256_digest(
+                    &certificate.compiler_config_digest,
+                    "certificate.compiler_config_digest",
+                )?;
+                validate_sha256_digest(
+                    &certificate.evidence_digest,
+                    "certificate.evidence_digest",
+                )?;
+                if let Some(digest) = certificate.evaluator_config_digest.as_deref() {
+                    validate_sha256_digest(digest, "certificate.evaluator_config_digest")?;
+                }
+                match (certificate.owner, certificate.source) {
+                    (RouteOwner::Operator, CertificateSource::Operator)
+                    | (RouteOwner::Compiler, CertificateSource::LegacyAdequacyV1)
+                    | (RouteOwner::Compiler, CertificateSource::TaskNative)
+                    | (RouteOwner::Compiler, CertificateSource::Human)
+                    | (RouteOwner::Compiler, CertificateSource::Enterprise)
+                    | (RouteOwner::Compiler, CertificateSource::Agentic)
+                    | (RouteOwner::Compiler, CertificateSource::Mixed) => {}
+                    _ => {
+                        anyhow::bail!(
+                            "policy '{policy_name}' certificate '{request_key}' has inconsistent owner and source"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_sha256_digest(value: &str, field: &str) -> Result<()> {
+    let Some(hex_digest) = value.strip_prefix("sha256:") else {
+        anyhow::bail!("{field} must be a sha256 digest");
+    };
+    if hex_digest.len() != 64
+        || !hex_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        anyhow::bail!("{field} must contain 64 lowercase hexadecimal digits");
     }
     Ok(())
 }
@@ -300,6 +588,12 @@ pub fn evolve_document(
 ) -> Result<EvolutionResult> {
     validate_document(current)?;
     let mut document = current.clone();
+    let is_v2 = document.is_v2();
+    let compiler_config_digest = document
+        .artifact
+        .as_ref()
+        .map(|artifact| artifact.compiler.config_digest.clone())
+        .unwrap_or_else(|| EMPTY_SHA256.to_string());
     let mut rows = exploration.iter().collect::<Vec<_>>();
     rows.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
     let mut changes = Vec::new();
@@ -333,9 +627,51 @@ pub fn evolve_document(
         let qualified = row.locked && observed >= minimum;
         match policy.routes.get(request_key) {
             None if qualified => {
+                let baseline_tier = policy
+                    .adequacy
+                    .escalation_tier
+                    .clone()
+                    .or_else(|| policy.default_tier.clone());
                 policy
                     .routes
                     .insert(request_key.to_string(), explore_tier.clone());
+                if is_v2 {
+                    let evidence = format!(
+                        "{}\0{}\0{}\0{}",
+                        row.fingerprint, row.observed, row.adequate_trials, observed
+                    );
+                    let evidence_digest =
+                        format!("sha256:{}", hex::encode(Sha256::digest(evidence)));
+                    document
+                        .certificates
+                        .entry(policy_name.to_string())
+                        .or_default()
+                        .insert(
+                            request_key.to_string(),
+                            PolicyCertificate {
+                                owner: RouteOwner::Compiler,
+                                selected_tier: explore_tier.clone(),
+                                baseline_tier,
+                                source: CertificateSource::LegacyAdequacyV1,
+                                eligible_episodes: row.adequate_trials,
+                                independent_tasks: observed,
+                                quality: None,
+                                economics: None,
+                                latency: None,
+                                critical_violations: 0,
+                                verdict: PromotionVerdict::Promote,
+                                evaluator_config_digest: None,
+                                compiler_config_digest: compiler_config_digest.clone(),
+                                evidence_digest,
+                                legacy: Some(LegacyAdequacySummary {
+                                    observed: row.observed,
+                                    adequate_trials: row.adequate_trials,
+                                    semantic_successes: observed,
+                                    pinned: false,
+                                }),
+                            },
+                        );
+                }
                 changes.push(EvolutionChange {
                     policy: policy_name.to_string(),
                     request_key: request_key.to_string(),
@@ -343,6 +679,14 @@ pub fn evolve_document(
                 });
             }
             Some(_) | None => {}
+        }
+    }
+
+    if is_v2 {
+        let evidence = serde_json::to_vec(&document.certificates)
+            .context("serializing compatibility evolution evidence")?;
+        if let Some(artifact) = document.artifact.as_mut() {
+            artifact.evidence_root = format!("sha256:{}", hex::encode(Sha256::digest(evidence)));
         }
     }
 
@@ -1083,11 +1427,83 @@ mod tests {
         }
     }
 
+    const TEST_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn v1_remains_readable_but_v2_requires_an_artifact() -> anyhow::Result<()> {
+        let v1: PolicyLock = serde_saphyr::from_str("lockfileVersion: 1\npolicies: {}\n")?;
+        validate_document(&v1)?;
+
+        let v2_without_artifact: PolicyLock =
+            serde_saphyr::from_str("lockfileVersion: 2\npolicies: {}\n")?;
+        let result = validate_document(&v2_without_artifact);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .map(|error| error.to_string())
+                .is_some_and(|message| message.contains("artifact"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn v2_certificate_must_match_its_route_and_selected_tier() -> anyhow::Result<()> {
+        let raw = format!(
+            r#"lockfileVersion: 2
+artifact:
+  parent_digest: null
+  evidence_root: "{TEST_DIGEST}"
+  source_snapshot_time_unix_ms: 1785369600000
+  compiler:
+    id: bitrouter-policy-compiler
+    version: 1
+    config_digest: "{TEST_DIGEST}"
+policies:
+  coding:
+    tiers:
+      economy: vendor:economy
+      strong: vendor:strong
+    routes:
+      agent_trace/v1|edit|normal: economy
+    default_tier: strong
+certificates:
+  coding:
+    agent_trace/v1|edit|normal:
+      owner: compiler
+      selected_tier: strong
+      baseline_tier: strong
+      source: legacy_adequacy_v1
+      eligible_episodes: 1
+      independent_tasks: 1
+      critical_violations: 0
+      verdict: promote
+      compiler_config_digest: "{TEST_DIGEST}"
+      evidence_digest: "{TEST_DIGEST}"
+"#
+        );
+        let lock: PolicyLock = serde_saphyr::from_str(&raw)?;
+        let result = validate_document(&lock);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .map(|error| error.to_string())
+                .is_some_and(|message| message.contains("selected tier 'strong'"))
+        );
+        Ok(())
+    }
+
     #[test]
     fn deterministic_round_trip_and_digest() {
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         let first = deterministic_yaml(&lock).unwrap();
         let parsed: PolicyLock = serde_saphyr::from_str(&first).unwrap();
@@ -1165,7 +1581,9 @@ presets:
         policy.adequacy.min_semantic_successes_for_lock = 1;
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), policy)]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
 
@@ -1264,7 +1682,9 @@ policies:
         let active = dir.path().join("policy-lock.yaml");
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&active, None, &lock).unwrap();
         let before = std::fs::read(&active).unwrap();
@@ -1282,7 +1702,9 @@ policies:
         let candidate = dir.path().join("new").join("..").join("policy-lock.yaml");
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&active, None, &lock).unwrap();
         let before = std::fs::read(&active).unwrap();
@@ -1301,7 +1723,9 @@ policies:
         let second = dir.path().join("candidate-b.yaml");
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&active, None, &lock).unwrap();
 
@@ -1321,7 +1745,9 @@ policies:
         empty.tiers.insert("strong".into(), "   ".into());
         let error = validate_document(&PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), empty)]),
+            certificates: BTreeMap::new(),
         })
         .unwrap_err();
         assert!(error.to_string().contains("non-empty model id"));
@@ -1332,7 +1758,9 @@ policies:
             .insert("economy".into(), "vendor:strong".into());
         let error = validate_document(&PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), duplicate)]),
+            certificates: BTreeMap::new(),
         })
         .unwrap_err();
         assert!(error.to_string().contains("same model"));
@@ -1352,7 +1780,9 @@ policies:
             &config,
             &PolicyLock {
                 lockfile_version: 1,
+                artifact: None,
                 policies: BTreeMap::from([("coding".into(), definition())]),
+                certificates: BTreeMap::new(),
             },
         )
         .unwrap_err();
@@ -1368,7 +1798,9 @@ policies:
         let path = dir.path().join("policy-lock.yaml");
         let mut lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         let digest = write_atomic(&path, None, &lock).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -1454,7 +1886,9 @@ presets:
         policy.adequacy.min_semantic_successes_for_lock = 2;
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), policy), ("other".into(), definition())]),
+            certificates: BTreeMap::new(),
         };
         let rows = vec![
             PersistedExplorationState {
@@ -1512,7 +1946,9 @@ presets:
         policy.adequacy.min_semantic_successes_for_opening = 3;
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), policy)]),
+            certificates: BTreeMap::new(),
         };
         let row = PersistedExplorationState {
             fingerprint: "coding\0agent_trace/v1|opening|normal".into(),
@@ -1557,7 +1993,9 @@ presets:
         policy.routes.insert(request_key.into(), "economy".into());
         let lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), policy)]),
+            certificates: BTreeMap::new(),
         };
         let rows = vec![PersistedExplorationState {
             fingerprint: format!("coding\0{request_key}"),
@@ -1734,7 +2172,9 @@ presets:
         reloadable.key_strategy = PolicyKeyStrategy::AgentTrace;
         let mut lock = PolicyLock {
             lockfile_version: 1,
+            artifact: None,
             policies: BTreeMap::from([("coding".into(), reloadable)]),
+            certificates: BTreeMap::new(),
         };
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();

@@ -174,7 +174,9 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() {
 
     let lock = PolicyLock {
         lockfile_version: 1,
+        artifact: None,
         policies: BTreeMap::from([("smithers".to_string(), policy())]),
+        certificates: BTreeMap::new(),
     };
     let exploration = store.load_exploration_all().await.unwrap();
     let semantic = store.load_semantic_success_counts().await.unwrap();
