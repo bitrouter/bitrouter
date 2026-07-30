@@ -1,6 +1,8 @@
 //! Evaluator-agnostic evidence exchange and policy compilation control plane.
 
 pub mod admission;
+pub mod api;
+pub mod compiler;
 pub mod settlement;
 pub mod store;
 pub mod types;

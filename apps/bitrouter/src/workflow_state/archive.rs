@@ -130,6 +130,10 @@ pub struct SemanticPolicyTransitionCandidate {
     pub request_key: String,
     #[serde(default)]
     pub ledger_key: Option<String>,
+    #[serde(default)]
+    pub policy: Option<String>,
+    #[serde(default)]
+    pub policy_digest: Option<String>,
     #[serde(alias = "workflow_state")]
     pub trace_state: String,
     pub static_tier: Option<String>,
@@ -1013,6 +1017,8 @@ fn semantic_policy_transition_candidates(
                 settlement_outcome: semantic_settlement_outcome(usage),
                 request_key: decision.request_key.clone(),
                 ledger_key: decision.ledger_key.clone(),
+                policy: decision.policy.clone(),
+                policy_digest: decision.policy_digest.clone(),
                 trace_state: decision.workflow_state.clone(),
                 static_tier: decision.static_tier.clone(),
                 selected_tier: decision.selected_tier.clone(),

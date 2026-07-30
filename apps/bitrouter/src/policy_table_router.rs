@@ -579,6 +579,13 @@ impl PolicyTableRouter {
                     .state_namespace
                     .as_ref()
                     .map(|_| self.ledger_key(&decision.request_key)),
+                policy: self.eval_observer.as_ref().map(|item| item.policy.clone()),
+                policy_digest: self
+                    .eval_observer
+                    .as_ref()
+                    .map(|item| item.policy_digest.clone()),
+                preset_variant: self.eval_observer.as_ref().map(|item| item.policy.clone()),
+                baseline_tier: decision.static_tier.clone(),
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
                 workflow_identity: decision.workflow_identity.clone(),

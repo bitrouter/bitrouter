@@ -83,6 +83,9 @@ pub struct PolicyArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_digest: Option<String>,
     pub evidence_root: String,
+    /// Content-addressed admitted eval snapshot used by this compilation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_snapshot_root: Option<String>,
     pub source_snapshot_time_unix_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migration: Option<LegacyMigration>,
@@ -94,6 +97,7 @@ impl PolicyArtifact {
         Self {
             parent_digest: None,
             evidence_root: EMPTY_SHA256.to_string(),
+            eval_snapshot_root: None,
             source_snapshot_time_unix_ms: 0,
             migration: None,
             compiler: CompilerIdentity {
@@ -390,6 +394,9 @@ fn validate_v2_metadata(document: &PolicyLock) -> Result<()> {
         validate_sha256_digest(parent, "artifact.parent_digest")?;
     }
     validate_sha256_digest(&artifact.evidence_root, "artifact.evidence_root")?;
+    if let Some(root) = artifact.eval_snapshot_root.as_deref() {
+        validate_sha256_digest(root, "artifact.eval_snapshot_root")?;
+    }
     if artifact.source_snapshot_time_unix_ms < 0 {
         anyhow::bail!("artifact.source_snapshot_time_unix_ms cannot be negative");
     }
@@ -1277,6 +1284,16 @@ pub async fn compile_files(
     config_path: &Path,
     snapshot_time_unix_ms: i64,
 ) -> Result<PolicyFileUpdate> {
+    compile_files_with_eval(config_path, snapshot_time_unix_ms, None).await
+}
+
+/// Compile against an explicit immutable eval snapshot. Omitting the root
+/// preserves the legacy-only compatibility path.
+pub async fn compile_files_with_eval(
+    config_path: &Path,
+    snapshot_time_unix_ms: i64,
+    eval_evidence_root: Option<&str>,
+) -> Result<PolicyFileUpdate> {
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
@@ -1288,13 +1305,24 @@ pub async fn compile_files(
     let db = crate::db::connect(&database_url)
         .await
         .map_err(anyhow::Error::from)?;
-    let store = AdequacyStore::new(db);
+    let store = AdequacyStore::new(db.clone());
     let legacy =
         crate::policy_compile::LegacyAdequacySnapshot::load(&store, snapshot_time_unix_ms).await?;
+    let eval = match eval_evidence_root {
+        Some(root) => Some(
+            crate::eval::compiler::EvalEvidenceSnapshot::load(
+                &crate::eval::store::EvalStore::new(db),
+                root,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let compiled = crate::policy_compile::compile_candidate(crate::policy_compile::CompileInput {
         current: &loaded.document,
         parent_digest: Some(&loaded.digest),
         legacy: &legacy,
+        eval: eval.as_ref(),
     })?;
     let digest = semantic_digest(&compiled.document)?;
     let changes = compiled
@@ -1328,6 +1356,77 @@ pub async fn compile_files(
         document: compiled.document,
         changes,
         conflicts,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceVerification {
+    pub policy_digest: String,
+    pub evidence_root: String,
+    pub legacy_evidence_root: String,
+    pub eval_snapshot_root: Option<String>,
+    pub eval_results: usize,
+}
+
+/// Reconstruct the artifact-level evidence root from the local append-only
+/// ledger and content-addressed eval snapshot. This never changes the lock.
+pub async fn verify_evidence_files(config_path: &Path) -> Result<EvidenceVerification> {
+    let raw = tokio::fs::read_to_string(config_path)
+        .await
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let loaded = load_for_config(&config, Some(config_path))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+    let artifact = loaded
+        .document
+        .artifact
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("policy lock v1 has no verifiable evidence artifact"))?;
+    let database_url = readonly_database_url(&config.database.url, config_path)?;
+    let db = crate::db::connect(&database_url)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let legacy = crate::policy_compile::LegacyAdequacySnapshot::load(
+        &AdequacyStore::new(db.clone()),
+        artifact.source_snapshot_time_unix_ms,
+    )
+    .await?;
+    let legacy_evidence_root = legacy.semantic_digest()?;
+    if artifact
+        .migration
+        .as_ref()
+        .is_some_and(|migration| migration.legacy_adequacy_digest != legacy_evidence_root)
+    {
+        anyhow::bail!("local legacy evidence no longer matches the compiled migration digest");
+    }
+    let eval = match artifact.eval_snapshot_root.as_deref() {
+        Some(root) => Some(
+            crate::eval::compiler::EvalEvidenceSnapshot::load(
+                &crate::eval::store::EvalStore::new(db),
+                root,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let reconstructed = match &eval {
+        Some(eval) => crate::eval::types::canonical_digest(&(
+            "policy-evidence-v2",
+            legacy_evidence_root.as_str(),
+            eval.evidence_root.as_str(),
+        ))?,
+        None => legacy_evidence_root.clone(),
+    };
+    if reconstructed != artifact.evidence_root {
+        anyhow::bail!("policy artifact evidence_root does not match local evidence");
+    }
+    Ok(EvidenceVerification {
+        policy_digest: loaded.digest,
+        evidence_root: reconstructed,
+        legacy_evidence_root,
+        eval_snapshot_root: eval.as_ref().map(|snapshot| snapshot.evidence_root.clone()),
+        eval_results: eval.map_or(0, |snapshot| snapshot.records.len()),
     })
 }
 
@@ -1964,6 +2063,7 @@ presets:
                 current: &lock,
                 parent_digest: None,
                 legacy: &snapshot,
+                eval: None,
             })?;
         write_atomic(
             &dir.path().join("policy-lock.yaml"),

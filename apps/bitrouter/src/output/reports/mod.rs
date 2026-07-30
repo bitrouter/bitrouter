@@ -8,6 +8,7 @@ pub mod admin;
 pub mod agents;
 pub mod config;
 pub mod daemon;
+pub mod eval;
 pub mod mcp;
 pub mod observe;
 pub mod policy;

@@ -25,6 +25,18 @@ pub struct PolicyDecisionRecord {
     /// keeping `request_key` human-readable. Old records omit it.
     #[serde(default)]
     pub ledger_key: Option<String>,
+    /// Named lock policy that made the decision.
+    #[serde(default)]
+    pub policy: Option<String>,
+    /// Semantic digest of the active policy lock.
+    #[serde(default)]
+    pub policy_digest: Option<String>,
+    /// Effective preset variant, when known.
+    #[serde(default)]
+    pub preset_variant: Option<String>,
+    /// Strong/default comparison tier used by evaluators.
+    #[serde(default)]
+    pub baseline_tier: Option<String>,
     pub legacy_fingerprint: String,
     #[serde(rename = "trace_state", alias = "workflow_state")]
     pub workflow_state: String,
@@ -301,6 +313,10 @@ mod tests {
             key_strategy: "agent_trace".to_string(),
             request_key: "agent_trace/v1|tool_followup|normal".to_string(),
             ledger_key: Some("agent_trace/v1|tool_followup|normal".to_string()),
+            policy: None,
+            policy_digest: None,
+            preset_variant: None,
+            baseline_tier: Some("capable".to_string()),
             legacy_fingerprint: "after_read_file".to_string(),
             workflow_state: "tool_followup".to_string(),
             workflow_identity: WorkflowIdentity::default(),
