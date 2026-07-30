@@ -22,6 +22,7 @@ pub mod commands;
 pub mod daemon;
 pub mod db;
 pub mod error_report;
+pub mod eval;
 pub mod fleet;
 pub mod fleet_mcp;
 pub mod gateways;
