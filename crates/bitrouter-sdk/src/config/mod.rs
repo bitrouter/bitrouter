@@ -202,19 +202,20 @@ pub enum PolicyRuntimeMode {
     #[default]
     #[serde(alias = "locked")]
     Frozen,
-    /// Permit adequacy state to affect routing and validated evolution output
-    /// to atomically replace the active lock.
+    /// Permit explicit validated publication to atomically replace the active
+    /// lock. Request-time routing remains identical to frozen mode.
     #[serde(alias = "evolve")]
     Adaptive,
 }
 
 impl PolicyRuntimeMode {
-    /// Derive the effective learner switches from process mode. The lock keeps
-    /// thresholds and tier names, but cannot activate or freeze the learner.
+    /// Disable legacy request-time learning in every process mode. Thresholds
+    /// and tier names remain compiler inputs only.
     pub fn apply_to_adequacy(self, configured: &AdequacyConfig) -> AdequacyConfig {
+        let _ = self;
         let mut effective = configured.clone();
-        effective.enabled = self == Self::Adaptive;
-        effective.explore_enabled = effective.enabled && effective.explore_tier.is_some();
+        effective.enabled = false;
+        effective.explore_enabled = false;
         effective
     }
 }

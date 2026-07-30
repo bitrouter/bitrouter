@@ -567,12 +567,12 @@ fn policy_runtime_mode_controls_effective_adequacy_flags() -> crate::Result<()> 
     assert!(!frozen.explore_enabled);
 
     let adaptive = PolicyRuntimeMode::Adaptive.apply_to_adequacy(&config);
-    assert!(adaptive.enabled);
-    assert!(adaptive.explore_enabled);
+    assert!(!adaptive.enabled);
+    assert!(!adaptive.explore_enabled);
 
     let without_explore_tier =
         PolicyRuntimeMode::Adaptive.apply_to_adequacy(&AdequacyConfig::default());
-    assert!(without_explore_tier.enabled);
+    assert!(!without_explore_tier.enabled);
     assert!(!without_explore_tier.explore_enabled);
     Ok(())
 }

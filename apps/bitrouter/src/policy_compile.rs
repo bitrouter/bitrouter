@@ -55,7 +55,6 @@ impl LegacyAdequacySnapshot {
     pub fn semantic_digest(&self) -> Result<String> {
         #[derive(Serialize)]
         struct DigestInput<'a> {
-            snapshot_time_unix_ms: i64,
             pins: &'a [LegacyPin],
             exploration: &'a [PersistedExplorationState],
             semantic_successes: &'a [PersistedSemanticSuccess],
@@ -63,7 +62,6 @@ impl LegacyAdequacySnapshot {
         }
 
         let canonical = serde_json::to_vec(&DigestInput {
-            snapshot_time_unix_ms: self.snapshot_time_unix_ms,
             pins: &self.pins,
             exploration: &self.exploration,
             semantic_successes: &self.semantic_successes,

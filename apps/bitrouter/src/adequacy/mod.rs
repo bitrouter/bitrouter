@@ -23,12 +23,9 @@
 //! request. Pins and positive exploration state persist across restarts, so
 //! policy rounds keep trial cadence and learned cheap-route locks.
 
-#[cfg(test)]
-mod eval;
 pub mod observer;
 pub mod reliability;
 pub mod report;
-pub mod settlement;
 pub mod store;
 
 use std::collections::HashMap;

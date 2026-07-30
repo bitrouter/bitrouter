@@ -20,8 +20,6 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::adequacy::AdequacyLedger;
-use crate::adequacy::settlement::PendingAdequacyStore;
 use crate::adequacy::store::{AdequacyStore, PersistedExplorationState};
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
@@ -529,6 +527,30 @@ pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()>
         if !document.policies.contains_key(policy_name) {
             anyhow::bail!("preset '@{preset_name}' references missing policy '{policy_name}'");
         }
+    }
+    Ok(())
+}
+
+/// Ensure a non-empty legacy database has been sealed into the active v2 lock
+/// before an adaptive process accepts publication-capable traffic.
+pub fn verify_legacy_migration(
+    mode: PolicyRuntimeMode,
+    document: &PolicyLock,
+    snapshot: &crate::policy_compile::LegacyAdequacySnapshot,
+) -> Result<()> {
+    if mode == PolicyRuntimeMode::Frozen || snapshot.is_empty() {
+        return Ok(());
+    }
+    let actual = snapshot.semantic_digest()?;
+    let migrated = document
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.migration.as_ref())
+        .map(|migration| migration.legacy_adequacy_digest.as_str());
+    if migrated != Some(actual.as_str()) {
+        anyhow::bail!(
+            "adaptive policy startup found unsealed legacy learned state; run `bitrouter policy compile --output policy-candidate.yaml` and publish the candidate"
+        );
     }
     Ok(())
 }
@@ -1565,7 +1587,6 @@ pub(crate) struct PreparedPolicySnapshot(Arc<PolicySnapshot>);
 pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     db: DatabaseConnection,
-    pending: Arc<PendingAdequacyStore>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
 }
 
@@ -1574,13 +1595,11 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
         db: DatabaseConnection,
-        pending: Arc<PendingAdequacyStore>,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
-            pending,
             decision_recorder,
         });
         runtime.reload_for_config(config, config_path).await?;
@@ -1605,28 +1624,19 @@ impl PolicyRuntime {
         let loaded = load_for_config(config, config_path).await?;
         let mut routers = BTreeMap::new();
         if let Some(loaded) = &loaded {
+            let snapshot = crate::policy_compile::LegacyAdequacySnapshot::load(
+                &AdequacyStore::new(self.db.clone()),
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?;
+            verify_legacy_migration(config.policy.mode, &loaded.document, &snapshot)?;
             for (name, definition) in &loaded.document.policies {
                 let table_config = definition.as_table_config(config.policy.mode);
                 let table = PolicyTable::from_config(&table_config)
                     .ok_or_else(|| anyhow::anyhow!("policy '{name}' is inert"))?;
-                let ledger = if table_config.adequacy.enabled {
-                    Some(Arc::new(
-                        AdequacyLedger::load(
-                            &table_config.adequacy,
-                            AdequacyStore::new(self.db.clone()),
-                        )
-                        .await?,
-                    ))
-                } else {
-                    None
-                };
-                let mut router = PolicyTableRouter::new(table, ledger.clone())
-                    .with_state_namespace(name.clone());
+                let mut router = PolicyTableRouter::new(table).with_state_namespace(name.clone());
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
-                }
-                if ledger.is_some() {
-                    router = router.with_pending_adequacy_store(self.pending.clone());
                 }
                 routers.insert(name.clone(), Arc::new(router));
             }
@@ -1792,6 +1802,55 @@ certificates:
     }
 
     #[test]
+    fn adaptive_v1_with_nonempty_legacy_state_fails_closed() {
+        let snapshot = crate::policy_compile::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: 1_700_000_000_000,
+            pins: vec![crate::adequacy::store::LegacyPin {
+                fingerprint: "auto\0agent_trace/v1|edit|normal".into(),
+                pinned_at_unix: 1_700_000_000,
+            }],
+            exploration: Vec::new(),
+            semantic_successes: Vec::new(),
+            reliability_events: Vec::new(),
+        };
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::new(),
+            certificates: BTreeMap::new(),
+        };
+
+        let result = verify_legacy_migration(PolicyRuntimeMode::Adaptive, &lock, &snapshot);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| { error.to_string().contains("bitrouter policy compile") })
+        );
+    }
+
+    #[test]
+    fn copied_v2_lock_serves_with_an_empty_target_database() {
+        let snapshot = crate::policy_compile::LegacyAdequacySnapshot {
+            snapshot_time_unix_ms: 1_700_000_000_000,
+            pins: Vec::new(),
+            exploration: Vec::new(),
+            semantic_successes: Vec::new(),
+            reliability_events: Vec::new(),
+        };
+
+        assert!(
+            verify_legacy_migration(
+                PolicyRuntimeMode::Adaptive,
+                &PolicyLock::default(),
+                &snapshot
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn deterministic_round_trip_and_digest() {
         let lock = PolicyLock {
             lockfile_version: 1,
@@ -1812,7 +1871,7 @@ certificates:
     }
 
     #[test]
-    fn process_mode_is_authoritative_for_learning_activation() {
+    fn process_mode_never_activates_request_time_learning() {
         let mut policy = definition();
         policy.adequacy.enabled = false;
         policy.adequacy.explore_enabled = false;
@@ -1823,14 +1882,13 @@ certificates:
         assert!(!frozen.adequacy.explore_enabled);
 
         let adaptive = policy.as_table_config(PolicyRuntimeMode::Adaptive);
-        assert!(adaptive.adequacy.enabled);
-        assert!(adaptive.adequacy.explore_enabled);
+        assert!(!adaptive.adequacy.enabled);
+        assert!(!adaptive.adequacy.explore_enabled);
         assert_eq!(adaptive.adequacy.explore_tier.as_deref(), Some("economy"));
     }
 
     #[tokio::test]
-    async fn frozen_runtime_ignores_learned_db_routes_until_reloaded_as_adaptive()
-    -> anyhow::Result<()> {
+    async fn frozen_and_adaptive_modes_route_identically_from_the_lock() -> anyhow::Result<()> {
         use bitrouter_sdk::caller::CallerContext;
         use bitrouter_sdk::language_model::{
             GenerationParams, Message, PipelineRequest, Prompt, Role,
@@ -1890,18 +1948,24 @@ presets:
         store
             .record_semantic_success(ledger_key, "terminal-bench/task-a")
             .await?;
+        let snapshot =
+            crate::policy_compile::LegacyAdequacySnapshot::load(&store, 1_700_000_100_000).await?;
+        let compiled =
+            crate::policy_compile::compile_candidate(crate::policy_compile::CompileInput {
+                current: &lock,
+                parent_digest: None,
+                legacy: &snapshot,
+            })?;
+        write_atomic(
+            &dir.path().join("policy-lock.yaml"),
+            Some(&semantic_digest(&lock)?),
+            &compiled.document,
+        )?;
 
-        let runtime = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            db,
-            Arc::new(PendingAdequacyStore::default()),
-            None,
-        )
-        .await?;
+        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None).await?;
         let mut frozen = context();
         runtime.select("coding", &mut frozen)?;
-        assert_eq!(frozen.model(), "vendor:strong");
+        assert_eq!(frozen.model(), "vendor:economy");
 
         config.policy.mode = PolicyRuntimeMode::Adaptive;
         runtime
@@ -1958,14 +2022,7 @@ presets:
         let config = bitrouter_sdk::config::load(&config_path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let runtime = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            db,
-            Arc::new(PendingAdequacyStore::default()),
-            None,
-        )
-        .await?;
+        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None).await?;
 
         let mut exact = context();
         runtime.select_variant("auto", Some("cost"), &mut exact)?;
@@ -2559,15 +2616,9 @@ presets:
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
-        let runtime = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            db,
-            Arc::new(PendingAdequacyStore::default()),
-            None,
-        )
-        .await
-        .unwrap();
+        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None)
+            .await
+            .unwrap();
 
         let mut initial = context("vendor:strong");
         runtime.select("coding", &mut initial).unwrap();

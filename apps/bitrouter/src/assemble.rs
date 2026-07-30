@@ -454,10 +454,8 @@ pub async fn build_app_with_path(
         .and_then(FusionAliasConfig::from_settings)
         .map(|c| Arc::new(c) as Arc<dyn PromptTransform>);
 
-    // Config-driven per-request model routing (`policy_table:`). The shared
-    // table is read by the ingress router (below) and, when online adequacy
-    // learning is enabled, by the adequacy observe hook. The ledger persists its
-    // escalation pins in the local db and warms its in-memory cache from it.
+    // Legacy inline policy tables remain declarative and lock-only. Process
+    // mode controls publication, never request-time learned-state reads.
     let mut effective_policy_table_config = config.policy_table.clone();
     effective_policy_table_config.adequacy = config
         .policy
@@ -465,24 +463,6 @@ pub async fn build_app_with_path(
         .apply_to_adequacy(&config.policy_table.adequacy);
     let policy_table =
         crate::policy_table_router::PolicyTable::from_config(&effective_policy_table_config);
-    let adequacy_ledger = match &policy_table {
-        Some(_) if effective_policy_table_config.adequacy.enabled => {
-            let store = crate::adequacy::store::AdequacyStore::new(db.clone());
-            Some(Arc::new(
-                crate::adequacy::AdequacyLedger::load(
-                    &effective_policy_table_config.adequacy,
-                    store,
-                )
-                .await?,
-            ))
-        }
-        _ => None,
-    };
-    // The adequacy learner records the policy decision at ingress and folds it
-    // into the ledger from the always-run settlement path. That is more robust
-    // for streaming clients that drop the response body immediately after their
-    // final event: settlement still runs, so learning advances with metering.
-    let adequacy_pending = Arc::new(crate::adequacy::settlement::PendingAdequacyStore::default());
     let policy_decision_recorder =
         crate::workflow_state::decision::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
@@ -497,13 +477,11 @@ pub async fn build_app_with_path(
         config,
         config_path,
         db.clone(),
-        adequacy_pending.clone(),
         policy_decision_recorder.clone(),
     )
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
-    let adequacy_settlement_pending = adequacy_pending.clone();
     let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -533,14 +511,6 @@ pub async fn build_app_with_path(
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
-            // Online adequacy learning: use settlement as the source of truth so
-            // request completion, metering, and adequacy cannot diverge on
-            // streaming client-disconnect paths.
-            lm.settlement_recorder(
-                crate::adequacy::settlement::AdequacySettlementRecorder::new(
-                    adequacy_settlement_pending,
-                ),
-            );
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -588,14 +558,9 @@ pub async fn build_app_with_path(
     // declaration (the `bitrouter/fusion` alias's injected tool).
     let app = match policy_table {
         Some(table) => {
-            let has_adequacy = adequacy_ledger.is_some();
-            let mut router =
-                crate::policy_table_router::PolicyTableRouter::new(table, adequacy_ledger);
+            let mut router = crate::policy_table_router::PolicyTableRouter::new(table);
             if let Some(recorder) = policy_decision_recorder {
                 router = router.with_shared_decision_recorder(recorder);
-            }
-            if has_adequacy {
-                router = router.with_pending_adequacy_store(adequacy_pending);
             }
             app.prompt_transform(Arc::new(router) as Arc<dyn PromptTransform>)
         }
