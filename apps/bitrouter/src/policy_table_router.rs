@@ -31,6 +31,7 @@ use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyTableConfig};
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
+use crate::eval::settlement::{PendingEvalDecision, PendingEvalDecisionStore};
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity, WorkflowStateKind};
 use crate::workflow_state::online::OnlineWorkflowState;
@@ -336,6 +337,14 @@ pub struct PolicyTableRouter {
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
+    eval_observer: Option<EvalDecisionObserver>,
+}
+
+#[derive(Clone)]
+struct EvalDecisionObserver {
+    pending: PendingEvalDecisionStore,
+    policy: String,
+    policy_digest: String,
 }
 
 impl PolicyTableRouter {
@@ -349,6 +358,7 @@ impl PolicyTableRouter {
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
+            eval_observer: None,
         })
     }
 
@@ -359,6 +369,7 @@ impl PolicyTableRouter {
             decision_recorder: None,
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
+            eval_observer: None,
         }
     }
 
@@ -378,6 +389,20 @@ impl PolicyTableRouter {
         recorder: Arc<PolicyDecisionJsonlRecorder>,
     ) -> Self {
         self.decision_recorder = Some(recorder);
+        self
+    }
+
+    pub(crate) fn with_eval_observer(
+        mut self,
+        pending: PendingEvalDecisionStore,
+        policy: impl Into<String>,
+        policy_digest: impl Into<String>,
+    ) -> Self {
+        self.eval_observer = Some(EvalDecisionObserver {
+            pending,
+            policy: policy.into(),
+            policy_digest: policy_digest.into(),
+        });
         self
     }
 
@@ -526,6 +551,23 @@ impl PolicyTableRouter {
             trialed = decision.trialed,
             "policy routing decision"
         );
+        if let (Some(observer), Some(request_id), Some(selected_tier)) = (
+            &self.eval_observer,
+            request_id,
+            decision.selected_tier.as_deref(),
+        ) {
+            observer.pending.insert(PendingEvalDecision {
+                request_id: request_id.to_string(),
+                decision_id: format!("{request_id}:{}", observer.policy),
+                policy: observer.policy.clone(),
+                policy_digest: observer.policy_digest.clone(),
+                request_key: decision.request_key.clone(),
+                selected_tier: selected_tier.to_string(),
+                baseline_tier: decision.static_tier.clone(),
+                preset: Some(observer.policy.clone()),
+                holdout: false,
+            });
+        }
         if let Some(recorder) = &self.decision_recorder {
             let record = PolicyDecisionRecord {
                 captured_at: None,
@@ -927,6 +969,31 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn routed_request_is_correlated_for_generic_eval_settlement() {
+        let table = PolicyTable::from_config(&config()).expect("configured");
+        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let router = PolicyTableRouter::new(table).with_eval_observer(
+            pending.clone(),
+            "auto:cost",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-request-id",
+            HeaderValue::from_static("request-1"),
+        );
+        let mut routed = prompt("inbound");
+        routed.messages = vec![user("fix the bug")];
+
+        assert!(router.route_prompt(&mut routed, &headers));
+
+        let decision = pending.get("request-1").expect("pending eval decision");
+        assert_eq!(decision.policy, "auto:cost");
+        assert_eq!(decision.selected_tier, "flagship");
+        assert_eq!(decision.request_key, "agent_trace/v1|opening|normal");
     }
 
     #[test]

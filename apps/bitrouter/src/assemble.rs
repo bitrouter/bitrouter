@@ -57,6 +57,9 @@ use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
 use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
+use crate::eval::EvalService;
+use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
+use crate::eval::store::EvalStore;
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 
@@ -76,6 +79,8 @@ pub struct Assembled {
     /// Live named routing policies loaded from `policy-lock.yaml`. The model
     /// selector and daemon reloader share this last-known-good registry.
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
+    /// Generic eval exchange used by the local CLI and REST control plane.
+    pub eval_service: EvalService,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
     /// needs the concrete type to call
@@ -473,15 +478,20 @@ pub async fn build_app_with_path(
             "policy decision JSONL recording enabled"
         );
     }
+    let pending_eval_decisions = PendingEvalDecisionStore::default();
+    let eval_service = EvalService::new(EvalStore::new(db.clone()), config.eval.clone());
     let policy_runtime = crate::policy_lock::PolicyRuntime::new(
         config,
         config_path,
         db.clone(),
         policy_decision_recorder.clone(),
+        pending_eval_decisions.clone(),
     )
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
+    let eval_store_for_recorder = eval_service.store().clone();
+    let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -519,6 +529,11 @@ pub async fn build_app_with_path(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter"),
             );
+            lm.settlement_recorder(EvalSettlementRecorder::new(
+                eval_store_for_recorder,
+                pending_eval_decisions,
+                pricing_for_eval,
+            ));
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
@@ -589,6 +604,7 @@ pub async fn build_app_with_path(
         db,
         policy_store: policy_store_for_reload,
         policy_runtime,
+        eval_service,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
         observe: observe_provider,

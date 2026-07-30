@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::{AdequacyStore, PersistedExplorationState};
+use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
@@ -1588,6 +1589,7 @@ pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     db: DatabaseConnection,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+    eval_decisions: PendingEvalDecisionStore,
 }
 
 impl PolicyRuntime {
@@ -1596,11 +1598,13 @@ impl PolicyRuntime {
         config_path: Option<&Path>,
         db: DatabaseConnection,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+        eval_decisions: PendingEvalDecisionStore,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
             decision_recorder,
+            eval_decisions,
         });
         runtime.reload_for_config(config, config_path).await?;
         Ok(runtime)
@@ -1635,6 +1639,11 @@ impl PolicyRuntime {
                 let table = PolicyTable::from_config(&table_config)
                     .ok_or_else(|| anyhow::anyhow!("policy '{name}' is inert"))?;
                 let mut router = PolicyTableRouter::new(table).with_state_namespace(name.clone());
+                router = router.with_eval_observer(
+                    self.eval_decisions.clone(),
+                    name.clone(),
+                    loaded.digest.clone(),
+                );
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
                 }
@@ -1962,7 +1971,14 @@ presets:
             &compiled.document,
         )?;
 
-        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None).await?;
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+        )
+        .await?;
         let mut frozen = context();
         runtime.select("coding", &mut frozen)?;
         assert_eq!(frozen.model(), "vendor:economy");
@@ -2022,7 +2038,14 @@ presets:
         let config = bitrouter_sdk::config::load(&config_path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None).await?;
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+        )
+        .await?;
 
         let mut exact = context();
         runtime.select_variant("auto", Some("cost"), &mut exact)?;
@@ -2616,9 +2639,15 @@ presets:
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
-        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None)
-            .await
-            .unwrap();
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+        )
+        .await
+        .unwrap();
 
         let mut initial = context("vendor:strong");
         runtime.select("coding", &mut initial).unwrap();
