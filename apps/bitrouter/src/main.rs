@@ -875,6 +875,19 @@ enum PolicyAction {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
+    /// Compile a deterministic v2 candidate without changing the active lock.
+    Compile {
+        /// Candidate output path.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// Frozen evidence snapshot time in Unix milliseconds.
+        #[arg(long, value_name = "UNIX_MS")]
+        snapshot_time: Option<i64>,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
+    /// Compare explicit routes in two policy lock artifacts.
+    Diff { active: PathBuf, candidate: PathBuf },
     /// Project qualified database evidence into a deterministic policy lock.
     Evolve {
         /// Publish the candidate. Without this flag, print a dry-run report.
@@ -885,6 +898,14 @@ enum PolicyAction {
         output: Option<PathBuf>,
         #[arg(short, long)]
         config: Option<PathBuf>,
+    },
+    /// Restore an exact lock snapshot from local promotion history.
+    Rollback {
+        digest: String,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
 }
 
@@ -2914,6 +2935,65 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             output.emit(&reload(&socket).await?)?;
         }
+        PolicyAction::Compile {
+            output: candidate_path,
+            snapshot_time,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let snapshot_time =
+                snapshot_time.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let update = bitrouter::policy_lock::compile_files(config_path, snapshot_time).await?;
+            let digest = bitrouter::policy_lock::export_candidate_file(
+                &update.path,
+                &candidate_path,
+                &update.document,
+            )?;
+            let mut changes = update.changes;
+            changes.extend(
+                update
+                    .conflicts
+                    .into_iter()
+                    .map(|conflict| format!("conflict: {conflict}")),
+            );
+            let mut report =
+                routing_policy_report(config_path, "compile", false, changes, None).await?;
+            report.candidate_path = Some(candidate_path.display().to_string());
+            report.digest = Some(digest);
+            output.emit(&report)?;
+        }
+        PolicyAction::Diff { active, candidate } => {
+            let active_lock = bitrouter::policy_lock::load(&active).await?;
+            let candidate_lock = bitrouter::policy_lock::load(&candidate).await?;
+            let changes = bitrouter::policy_lock::diff_documents(
+                &active_lock.document,
+                &candidate_lock.document,
+            )
+            .into_iter()
+            .map(|difference| {
+                format!(
+                    "{}: {} {} -> {}",
+                    difference.policy,
+                    difference.request_key,
+                    difference.active_tier.as_deref().unwrap_or("default"),
+                    difference.candidate_tier.as_deref().unwrap_or("default")
+                )
+            })
+            .collect();
+            output.emit(&PolicyReport {
+                action: "diff".into(),
+                path: Some(active.display().to_string()),
+                candidate_path: Some(candidate.display().to_string()),
+                digest: Some(candidate_lock.digest),
+                mode: "n/a".into(),
+                policies: candidate_lock.document.policies.keys().cloned().collect(),
+                bindings: Default::default(),
+                changes,
+                policy: None,
+                applied: false,
+            })?;
+        }
         PolicyAction::Evolve {
             apply,
             output: candidate_output,
@@ -2929,9 +3009,19 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             } else {
                 "evolve-dry-run"
             };
-            let published = apply && !update.changes.is_empty();
+            let published = apply;
+            if published {
+                reload_published_policy_or_restore(&source, &update, None).await?;
+            }
+            let mut changes = update.changes.clone();
+            changes.extend(
+                update
+                    .conflicts
+                    .iter()
+                    .map(|conflict| format!("conflict: {conflict}")),
+            );
             let mut report =
-                routing_policy_report(config_path, action, published, update.changes, None).await?;
+                routing_policy_report(config_path, action, published, changes, None).await?;
             if let Some(candidate_path) = candidate_output {
                 report.digest = Some(bitrouter::policy_lock::export_candidate_file(
                     &update.path,
@@ -2944,6 +3034,86 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             }
             output.emit(&report)?;
         }
+        PolicyAction::Rollback {
+            digest,
+            config,
+            socket,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let cfg = config::load(config_path).await?;
+            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
+                anyhow::bail!(
+                    "policy runtime mode is frozen; use adaptive mode for policy publication"
+                );
+            }
+            let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
+            let history_dir = bitrouter::policy_lock::default_history_dir(&loaded.path);
+            let record = bitrouter::policy_lock::rollback_to_digest(
+                &loaded.path,
+                &loaded.digest,
+                &digest,
+                &history_dir,
+            )?;
+            if let Err(error) = reload_policy_if_reachable(&source, socket.as_deref()).await {
+                bitrouter::policy_lock::rollback_to_digest(
+                    &loaded.path,
+                    &record.child_digest,
+                    &record.parent_digest,
+                    &history_dir,
+                )?;
+                let _ = reload_policy_if_reachable(&source, socket.as_deref()).await;
+                return Err(error.context("daemon rejected rollback; restored previous lock"));
+            }
+            output.emit(
+                &routing_policy_report(
+                    config_path,
+                    "rollback",
+                    true,
+                    vec![format!("restored {}", record.child_digest)],
+                    None,
+                )
+                .await?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+async fn reload_policy_if_reachable(
+    source: &bitrouter::paths::ConfigSource,
+    socket_override: Option<&Path>,
+) -> Result<()> {
+    let socket = resolve_client_socket_from(source, socket_override).await?;
+    if !daemon::endpoint_in_use(&socket) {
+        return Ok(());
+    }
+    reload(&socket).await.map(|_| ())
+}
+
+async fn reload_published_policy_or_restore(
+    source: &bitrouter::paths::ConfigSource,
+    update: &bitrouter::policy_lock::PolicyFileUpdate,
+    socket_override: Option<&Path>,
+) -> Result<()> {
+    if let Err(error) = reload_policy_if_reachable(source, socket_override).await {
+        let parent_digest = update
+            .document
+            .artifact
+            .as_ref()
+            .and_then(|artifact| artifact.parent_digest.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("published policy has no parent digest"))?;
+        let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
+        bitrouter::policy_lock::rollback_to_digest(
+            &update.path,
+            &update.digest,
+            parent_digest,
+            &history_dir,
+        )?;
+        let _ = reload_policy_if_reachable(source, socket_override).await;
+        return Err(error.context("daemon rejected candidate; restored previous lock"));
     }
     Ok(())
 }
@@ -3841,6 +4011,27 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn policy_compile_diff_and_rollback_commands_parse() {
+        use clap::Parser;
+
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "compile",
+                "--output",
+                "candidate.yaml"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["bitrouter", "policy", "diff", "active.yaml", "next.yaml"])
+                .is_ok()
+        );
+        assert!(Cli::try_parse_from(["bitrouter", "policy", "rollback", "sha256:abc"]).is_ok());
     }
 
     #[test]
