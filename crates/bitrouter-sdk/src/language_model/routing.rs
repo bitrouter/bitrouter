@@ -83,6 +83,8 @@ pub struct ModelResolution {
     pub overrides: PromptOverrides,
     /// Optional app-owned policy name bound to the preset.
     pub policy: Option<String>,
+    /// Optional known preset/model variant selected in Stage 0.
+    pub variant: Option<String>,
 }
 
 impl ModelResolution {
@@ -93,6 +95,7 @@ impl ModelResolution {
             prefs: RoutingPrefs::default(),
             overrides: PromptOverrides::default(),
             policy: None,
+            variant: None,
         }
     }
 }
@@ -104,6 +107,17 @@ impl ModelResolution {
 pub trait ModelSelector: Send + Sync {
     /// Select the model for `policy`, updating `ctx.model()` when required.
     fn select(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()>;
+
+    /// Select with a known Stage-0 variant. Existing selectors remain
+    /// compatible and receive the base policy by default.
+    fn select_variant(
+        &self,
+        policy: &str,
+        _variant: Option<&str>,
+        ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        self.select(policy, ctx)
+    }
 }
 
 /// Resolves a model name into a fallback chain. v1 has no single-target

@@ -534,17 +534,27 @@ pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()>
 }
 
 pub fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.starts_with('.')
-        || name.chars().any(|c| {
-            c.is_whitespace() || !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-        })
+    let mut segments = name.split(':');
+    let base = segments.next().unwrap_or_default();
+    let variant = segments.next();
+    if segments.next().is_some()
+        || !valid_policy_name_segment(base)
+        || variant.is_some_and(|segment| !valid_policy_name_segment(segment))
     {
         anyhow::bail!(
-            "invalid policy name '{name}' (use letters, digits, '.', '_' or '-', without a leading '.')"
+            "invalid policy name '{name}' (use base or base:variant; each segment accepts letters, digits, '.', '_' or '-', without a leading '.')"
         );
     }
     Ok(())
+}
+
+fn valid_policy_name_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && !segment.starts_with('.')
+        && !segment.chars().any(|character| {
+            character.is_whitespace()
+                || !(character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+        })
 }
 
 /// Stable semantic identity. YAML comments and map presentation do not affect
@@ -1652,16 +1662,30 @@ impl PolicyRuntime {
 
 impl ModelSelector for PolicyRuntime {
     fn select(&self, policy: &str, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<()> {
+        self.select_variant(policy, None, ctx)
+    }
+
+    fn select_variant(
+        &self,
+        policy: &str,
+        variant: Option<&str>,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
         let snapshot = self
             .snapshot
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let router = snapshot.routers.get(policy).ok_or_else(|| {
-            bitrouter_sdk::BitrouterError::bad_request(format!(
-                "preset references unavailable policy '{policy}'"
-            ))
-        })?;
+        let variant_policy = variant.map(|variant| format!("{policy}:{variant}"));
+        let router = variant_policy
+            .as_deref()
+            .and_then(|name| snapshot.routers.get(name))
+            .or_else(|| snapshot.routers.get(policy))
+            .ok_or_else(|| {
+                bitrouter_sdk::BitrouterError::bad_request(format!(
+                    "preset references unavailable policy '{policy}'"
+                ))
+            })?;
         let input_model = ctx.model().to_string();
         let selected = router.select_for_bound_policy(&input_model, ctx.prompt(), ctx.headers());
         if let Some(model) = selected {
@@ -1886,6 +1910,69 @@ presets:
         let mut adaptive = context();
         runtime.select("coding", &mut adaptive)?;
         assert_eq!(adaptive.model(), "vendor:economy");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_runtime_prefers_exact_variant_then_falls_back() -> anyhow::Result<()> {
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::language_model::{
+            GenerationParams, Message, PipelineRequest, Prompt, Role,
+        };
+
+        fn context() -> PipelineContext {
+            PipelineContext::new(PipelineRequest::new(
+                "vendor:strong",
+                CallerContext::local(),
+                Prompt {
+                    model: "vendor:strong".into(),
+                    system: None,
+                    system_provider_metadata: Default::default(),
+                    messages: vec![Message::text(Role::User, "solve this")],
+                    tools: Vec::new(),
+                    params: GenerationParams::default(),
+                    response_format: None,
+                    tool_choice: None,
+                    stream: false,
+                },
+            ))
+        }
+
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            "presets:\n  auto:\n    model: vendor:strong\n    policy: auto\n",
+        )
+        .await?;
+        let mut cost = definition();
+        cost.routes.insert("opening".into(), "economy".into());
+        cost.default_tier = Some("economy".into());
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("auto".into(), definition()), ("auto:cost".into(), cost)]),
+            certificates: BTreeMap::new(),
+        };
+        write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
+        let config = bitrouter_sdk::config::load(&config_path).await?;
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            Arc::new(PendingAdequacyStore::default()),
+            None,
+        )
+        .await?;
+
+        let mut exact = context();
+        runtime.select_variant("auto", Some("cost"), &mut exact)?;
+        assert_eq!(exact.model(), "vendor:economy");
+        let mut fallback = context();
+        runtime.select_variant("auto", Some("latency"), &mut fallback)?;
+        assert_eq!(fallback.model(), "vendor:strong");
         Ok(())
     }
 
