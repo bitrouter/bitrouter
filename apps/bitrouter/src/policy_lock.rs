@@ -1698,11 +1698,26 @@ impl PolicyRuntime {
                 let table_config = definition.as_table_config(config.policy.mode);
                 let table = PolicyTable::from_config(&table_config)
                     .ok_or_else(|| anyhow::anyhow!("policy '{name}' is inert"))?;
+                let route_baselines = loaded
+                    .document
+                    .certificates
+                    .get(name)
+                    .into_iter()
+                    .flat_map(|certificates| certificates.iter())
+                    .filter_map(|(request_key, certificate)| {
+                        certificate
+                            .baseline_tier
+                            .as_ref()
+                            .map(|baseline| (request_key.clone(), baseline.clone()))
+                    })
+                    .collect();
                 let mut router = PolicyTableRouter::new(table).with_state_namespace(name.clone());
                 router = router.with_eval_observer(
                     self.eval_decisions.clone(),
                     name.clone(),
                     loaded.digest.clone(),
+                    route_baselines,
+                    definition.default_tier.clone(),
                 );
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
