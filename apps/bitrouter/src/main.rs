@@ -3243,6 +3243,9 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
                 output: path,
             } => {
                 let mut subject: EvalSubject = read_eval_file(&draft)?;
+                subject
+                    .evidence
+                    .sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
                 subject.evidence_digest =
                     bitrouter::eval::types::evidence_digest(&subject.evidence)?;
                 bitrouter::eval::types::validate_subject(&subject)?;
@@ -4044,6 +4047,7 @@ mod tests {
 
         let directory = tempfile::tempdir()?;
         let draft = directory.path().join("subject-draft.json");
+        let reversed_draft = directory.path().join("subject-draft-reversed.json");
         let sealed = directory.path().join("subject-sealed.json");
         let sealed_again = directory.path().join("subject-sealed-again.json");
         std::fs::write(
@@ -4075,6 +4079,13 @@ mod tests {
       "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "redacted": true,
       "attributes": {}
+    },
+    {
+      "evidence_id": "audit-result",
+      "kind": "task.audit",
+      "digest": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "redacted": true,
+      "attributes": {"status": "clean"}
     }
   ],
   "evidence_digest": "",
@@ -4082,6 +4093,14 @@ mod tests {
 }
 "#,
         )?;
+        let mut reversed =
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&draft)?)?;
+        let evidence = reversed
+            .get_mut("evidence")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or_else(|| anyhow::anyhow!("draft evidence must be an array"))?;
+        evidence.reverse();
+        std::fs::write(&reversed_draft, serde_json::to_string_pretty(&reversed)?)?;
 
         let cli = Cli::try_parse_from([
             "bitrouter",
@@ -4105,19 +4124,15 @@ mod tests {
         let sealed_text = std::fs::read_to_string(&sealed)?;
         let subject: bitrouter::eval::types::EvalSubject = serde_json::from_str(&sealed_text)?;
         bitrouter::eval::types::validate_subject(&subject)?;
-        assert_eq!(
-            subject.evidence_digest,
-            "sha256:5fd8e7b0957b01cd52dd770e13f0228833e5e6319c0677033c96a58466638ac6"
-        );
 
         let repeat = Cli::try_parse_from([
             "bitrouter",
             "eval",
             "subject",
             "seal",
-            draft
+            reversed_draft
                 .to_str()
-                .ok_or_else(|| anyhow::anyhow!("draft path is not UTF-8"))?,
+                .ok_or_else(|| anyhow::anyhow!("reversed draft path is not UTF-8"))?,
             "--output",
             sealed_again
                 .to_str()
@@ -4127,10 +4142,13 @@ mod tests {
             anyhow::bail!("expected repeated eval subject seal command")
         };
         eval(action, &Output::new(bitrouter::output::Format::Json)).await?;
+        let repeated_text = std::fs::read_to_string(&sealed_again)?;
+        let repeated: bitrouter::eval::types::EvalSubject = serde_json::from_str(&repeated_text)?;
+        bitrouter::eval::types::validate_subject(&repeated)?;
+        assert_eq!(subject.evidence_digest, repeated.evidence_digest);
         assert_eq!(
-            sealed_text,
-            std::fs::read_to_string(&sealed_again)?,
-            "the sealed subject must use deterministic pretty JSON"
+            sealed_text, repeated_text,
+            "equivalent evidence order must produce deterministic pretty JSON"
         );
         assert!(
             !directory.path().join("bitrouter.db").exists(),
