@@ -51,9 +51,12 @@ Choose `evaluator.kind` from the actual source:
    bitrouter eval subject seal subject-draft.json --output subject.json
    ```
 
-6. For a multi-decision subject, apply an evaluator-configured causal-credit
-   policy and name each credited metric in `decision_credit`. Leave unsupported
-   decisions uncredited. A single-decision subject may omit credit.
+6. For a multi-decision subject, derive `decision_credit` from the fixed
+   evaluator credit policy:
+   - Exact supported decision/metric mappings: emit only those mappings.
+   - No policy or no exact mapping: use `{}` or omit the serde-defaulted field.
+     The result remains a record but produces no per-route evidence.
+   Keep hypothetical or illustrative weights outside submit-ready JSON.
 
 ## Submit and hand off
 

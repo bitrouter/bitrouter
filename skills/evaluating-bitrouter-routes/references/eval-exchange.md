@@ -122,11 +122,18 @@ become route evidence. Submit only requested dimensions; absence means
 unsupported, while zero is an observed value.
 
 For one decision, omitted `decision_credit` means full credit. For two or more
-decisions, explicitly provide credit only for decisions and metrics supported
-by the evidence. `weight_ppm` is `0..1000000`; `metric_ids` must name a metric
-in `metrics`, a declared hard violation, or `quality.pass`. An empty
-`metric_ids` applies that credit to every present metric, so avoid it for
-multi-decision outcomes unless that attribution is intentional.
+decisions, use the fixed evaluator credit policy:
+
+| Policy result | Concrete `decision_credit` |
+| --- | --- |
+| Exact decision/metric mappings are supported | Emit only those configured mappings and weights. |
+| No policy or no exact mapping | Use `{}` or omit the serde-defaulted field. No decision receives credit, so the result produces no per-route evidence. |
+
+For emitted mappings, `weight_ppm` is `0..1000000`; `metric_ids` must name a
+metric in `metrics`, a declared hard violation, or `quality.pass`. An empty
+`metric_ids` applies that credit to every present metric, so use it only when
+the fixed policy intentionally attributes every present metric. Keep
+hypothetical or illustrative weights outside submit-ready JSON.
 
 ## Authority, submission, and ownership
 
@@ -197,8 +204,9 @@ compile, diff, or publish a policy.
 ## Complete multi-decision example
 
 This task-level packet records an independently verified quality outcome for
-one decision and a settled-cost observation for another. The evaluator has a
-versioned causal-credit policy that permits exactly these attributions.
+one decision and a settled-cost observation for another. Its fixed evaluator
+credit policy permits exactly the mappings below, so they belong in the
+submit-ready result.
 
 ```json
 // subject-draft.json
