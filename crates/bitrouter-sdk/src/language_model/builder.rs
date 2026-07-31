@@ -32,6 +32,7 @@ pub struct PipelineBuilder {
     executor: Option<Arc<dyn Executor>>,
     server_tool_loop: Option<Arc<ServerToolLoop>>,
     keepalive_interval: Duration,
+    fallback_backoff: Vec<Duration>,
 }
 
 impl PipelineBuilder {
@@ -50,6 +51,7 @@ impl PipelineBuilder {
             executor: None,
             server_tool_loop: None,
             keepalive_interval: DEFAULT_KEEPALIVE,
+            fallback_backoff: Vec::new(),
         }
     }
 
@@ -82,6 +84,14 @@ impl PipelineBuilder {
     /// Set the SSE keepalive interval.
     pub fn keepalive_interval(&mut self, interval: Duration) -> &mut Self {
         self.keepalive_interval = interval;
+        self
+    }
+
+    /// Set the delay schedule used before advancing after retryable upstream
+    /// failures. The last delay repeats when the fallback chain is longer than
+    /// the schedule. Empty (the default) keeps fallback immediate.
+    pub fn fallback_backoff(&mut self, schedule: impl IntoIterator<Item = Duration>) -> &mut Self {
+        self.fallback_backoff = schedule.into_iter().collect();
         self
     }
 
@@ -164,6 +174,7 @@ impl PipelineBuilder {
             executor,
             server_tool_loop: self.server_tool_loop,
             keepalive_interval: self.keepalive_interval,
+            fallback_backoff: self.fallback_backoff,
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             detached_executions: tokio_util::task::TaskTracker::new(),
         })

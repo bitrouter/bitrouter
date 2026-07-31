@@ -1194,3 +1194,23 @@ providers:
         "unset provider field stays None"
     );
 }
+
+#[test]
+fn parses_opt_in_fallback_backoff_schedule() {
+    let cfg = parse(
+        r#"
+upstream:
+  fallback_backoff_ms: [1000, 2000, 4000, 8000]
+"#,
+    )
+    .expect("parse");
+
+    assert_eq!(
+        cfg.upstream.fallback_backoff_ms,
+        vec![1000, 2000, 4000, 8000]
+    );
+    assert!(
+        Config::default().upstream.fallback_backoff_ms.is_empty(),
+        "existing deployments must retain immediate fallback by default"
+    );
+}

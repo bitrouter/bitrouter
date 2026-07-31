@@ -148,6 +148,20 @@ The result envelope:
 }
 ```
 
+Retryable route candidates advance immediately unless an operator opts into an
+upstream fallback delay schedule:
+
+```yaml
+upstream:
+  fallback_backoff_ms: [1000, 2000, 4000, 8000, 16000, 30000]
+```
+
+The first value applies before the second candidate, the second before the
+third, and the final value repeats if the configured chain is longer. The
+schedule applies only after an error the fallback policy classifies as
+retryable; it does not retry non-retryable 4xx responses and does not change
+route selection. An empty or omitted schedule preserves the existing behavior.
+
 ---
 
 ## Routing / introspection

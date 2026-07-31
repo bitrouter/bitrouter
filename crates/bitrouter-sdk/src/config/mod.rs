@@ -668,6 +668,12 @@ pub struct UpstreamConfig {
     /// Global upstream timeout defaults. A provider may override any field
     /// under `providers.<id>.timeouts:`.
     pub timeouts: TimeoutConfig,
+    /// Optional delay schedule before advancing through a retryable fallback
+    /// chain, in milliseconds. The first value applies before the second
+    /// candidate, the second before the third, and the last value repeats when
+    /// the chain is longer than the schedule. Empty (the default) preserves
+    /// immediate fallback.
+    pub fallback_backoff_ms: Vec<u64>,
 }
 
 /// Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset

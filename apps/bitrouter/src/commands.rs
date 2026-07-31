@@ -37,6 +37,12 @@ server:
   # sign` for a multi-tenant deployment.
   skip_auth: true
 
+# Retryable fallback is immediate by default. For providers that can return a
+# short overload burst, opt into a bounded delay schedule. Values apply before
+# the 2nd, 3rd, ... route candidate; the final value repeats for longer chains.
+# upstream:
+#   fallback_backoff_ms: [1000, 2000, 4000, 8000, 16000, 30000]
+
 database:
   # Relative paths are interpreted against the bitrouter home (the
   # directory containing this file) — the daemon chdirs there on

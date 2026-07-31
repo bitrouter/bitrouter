@@ -119,6 +119,9 @@ pub struct Pipeline {
     /// pipeline strictly single-shot.
     pub(crate) server_tool_loop: Option<Arc<ServerToolLoop>>,
     pub(crate) keepalive_interval: Duration,
+    /// Opt-in bounded delay schedule between retryable fallback candidates.
+    /// The final entry repeats for longer chains.
+    pub(crate) fallback_backoff: Vec<Duration>,
     /// Detached stream-finalization tasks. Every terminal stream moves its
     /// settlement here before awaiting it, so a client disconnect cannot cancel
     /// recorders after the terminal SSE frame has already been delivered.
@@ -614,7 +617,8 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
-        for target in chain {
+        for (attempt_index, target) in chain.iter().enumerate() {
+            self.wait_before_fallback(attempt_index).await;
             self.observe_hop_start(ctx, target).await;
             let outcome = self.executor.execute(target, prompt, ctx).await;
             match &outcome {
@@ -658,7 +662,8 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<StreamingExecution> {
         let mut errors = Vec::new();
-        for target in chain {
+        for (attempt_index, target) in chain.iter().enumerate() {
+            self.wait_before_fallback(attempt_index).await;
             let provider_started_at = Instant::now();
             self.observe_hop_start(ctx, target).await;
             let outcome = self
@@ -709,6 +714,23 @@ impl Pipeline {
             }
         }
         Err(aggregate_fallback_errors(errors))
+    }
+
+    async fn wait_before_fallback(&self, attempt_index: usize) {
+        if attempt_index == 0 || self.fallback_backoff.is_empty() {
+            return;
+        }
+        let schedule_index = (attempt_index - 1).min(self.fallback_backoff.len() - 1);
+        let delay = self.fallback_backoff[schedule_index];
+        if delay.is_zero() {
+            return;
+        }
+        tracing::debug!(
+            attempt = attempt_index + 1,
+            delay_ms = delay.as_millis(),
+            "waiting before retryable fallback candidate"
+        );
+        tokio::time::sleep(delay).await;
     }
 
     /// Decide fallback after an upstream failure. Any registered execution hook
