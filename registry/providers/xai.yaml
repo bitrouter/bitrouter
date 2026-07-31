@@ -22,7 +22,7 @@ models:
     pricing:
       input_tokens:
         no_cache: 2
-        cache_read: 0.5
+        cache_read: 0.3
       output_tokens:
         text: 6
     capabilities:

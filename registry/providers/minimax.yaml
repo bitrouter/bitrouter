@@ -44,10 +44,10 @@ models:
     provider_model_id: MiniMax-M3
     pricing:
       input_tokens:
-        no_cache: 0.6
-        cache_read: 0.12
+        no_cache: 0.3
+        cache_read: 0.06
       output_tokens:
-        text: 2.4
+        text: 1.2
 status: active
 weight: 1
 submitted_at: 2026-05-25

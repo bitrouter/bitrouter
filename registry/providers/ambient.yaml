@@ -38,9 +38,10 @@ models:
     provider_model_id: moonshotai/kimi-k2.7-code
     pricing:
       input_tokens:
-        no_cache: 0.84
+        no_cache: 0.73
+        cache_read: 0.15
       output_tokens:
-        text: 3.99
+        text: 3.5
     capabilities:
       - reasoning
       - tools
@@ -58,8 +59,8 @@ models:
     provider_model_id: z-ai/glm-5.2
     pricing:
       input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
+        no_cache: 1.05
+        cache_read: 0.2
         cache_write: 0
       output_tokens:
         text: 4.4
@@ -67,11 +68,11 @@ models:
     provider_model_id: stepfun/step-3.7-flash
     pricing:
       input_tokens:
-        no_cache: 0.2
-        cache_read: 0.04
+        no_cache: 0.19
+        cache_read: 0.03
         cache_write: 0
       output_tokens:
-        text: 1.15
+        text: 1.14
   - id: deepseek/deepseek-v4-flash
     provider_model_id: deepseek/deepseek-v4-flash
     pricing:
