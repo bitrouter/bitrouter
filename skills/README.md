@@ -40,9 +40,21 @@ Harbor, Terminus 2, a centralized EC2 daemon, and ephemeral EC2 sandboxes. It
 keeps AWS identity, models, provider secrets, source revisions, task/trial scale,
 and prices configurable while fixing the experimental and evidence method.
 
+### `/evaluating-bitrouter-routes`, at [`evaluating-bitrouter-routes/`](evaluating-bitrouter-routes/)
+
+```
+skills/evaluating-bitrouter-routes/
+├── SKILL.md          # evaluator workflow and hard stop at admission
+└── references/       # Eval Exchange wire contract and examples
+```
+
+Builds redacted, evidence-bound request, episode, and task evaluations for the
+generic Eval Exchange. It teaches evaluator work only: an operator owns
+snapshots, candidate compilation, and publication.
+
 ## Install
 
-Both skills are installable directly from this repository; select the benchmark
+All three skills are installable directly from this repository; select the benchmark
 skill explicitly because the source now exposes more than one `SKILL.md`.
 
 ```bash
@@ -63,6 +75,15 @@ npx skills add bitrouter/bitrouter --skill run-bitrouter-benchmark
 
 # Reproducible Terminal-Bench runner skill (Claude Code manual)
 cp -r skills/run-bitrouter-benchmark ~/.claude/skills/
+
+# Generic Eval Exchange evaluator skill (BitRouter installer)
+bitrouter skills add bitrouter/bitrouter --skill evaluating-bitrouter-routes
+
+# Generic Eval Exchange evaluator skill (generic skills CLI)
+npx skills add bitrouter/bitrouter --skill evaluating-bitrouter-routes
+
+# Generic Eval Exchange evaluator skill (Claude Code manual)
+cp -r skills/evaluating-bitrouter-routes ~/.claude/skills/
 ```
 
 ## Editing conventions
@@ -72,4 +93,4 @@ cp -r skills/run-bitrouter-benchmark ~/.claude/skills/
 - When you change a CLI flag, port, env var, or harness step in the code, update
   the matching fact here in the same change. See the "Facts that are easy to get
   wrong" section in the repo's agent guidance.
-- Validate with the [skills-ref](https://github.com/agentskills/agentskills/tree/main/skills-ref) library: `skills-ref validate ./skills/bitrouter` and `skills-ref validate ./skills/run-bitrouter-benchmark`.
+- Validate with the [skills-ref](https://github.com/agentskills/agentskills/tree/main/skills-ref) library: `skills-ref validate ./skills/bitrouter`, `skills-ref validate ./skills/run-bitrouter-benchmark`, and `skills-ref validate ./skills/evaluating-bitrouter-routes`.

@@ -40,6 +40,7 @@ edit or publish `policy-lock.yaml`.
 
 | Command | Effect |
 |---|---|
+| `bitrouter eval subject seal <DRAFT> --output <SEALED>` | Calculate the canonical digest of redacted evidence, validate the completed subject, and write deterministic JSON. This local file operation never opens the evidence ledger. |
 | `bitrouter eval subject put <FILE> [--config PATH]` | Insert an immutable JSON/YAML request, episode, or task subject. |
 | `bitrouter eval subject get <EVAL_ID> [--config PATH]` | Read one subject. |
 | `bitrouter eval subject list [--config PATH]` | List subjects, including automatically observed routed requests. |

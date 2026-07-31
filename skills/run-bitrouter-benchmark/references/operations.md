@@ -315,12 +315,18 @@ Inspect `bitrouter workflow-state --help` at the pinned source revision. The est
   --run-label "$RUN_LABEL" \
   --traces "$TRACE_FILE" \
   --cloud-usage "$USAGE_FILE" \
-  --outcomes "$OUTCOMES_FILE" \
   --policy-decisions "$DECISION_FILE" \
   --output-dir "$ARTIFACT_DIR"
 ```
 
 Use the exact options supported by the pinned binary. A broad time window may locate candidates, but final membership is the manifest's exact request ID set. Require set equality and uniqueness; reject missing, duplicate, or extra usage.
+
+Pass `--outcomes "$OUTCOMES_FILE"` only when those outcomes are genuinely
+request-scoped and carry the same exact request-ID set. For task- or
+episode-scoped verifier outcomes, omit `--outcomes`, preserve a separate
+manifest-bound scope join, and submit explicit decision credit through the Eval
+Exchange. Never copy one terminal reward onto every request merely to satisfy
+the archival bundle join.
 
 For timeout or client-disconnect paths, use the pinned reconciliation interface to query authoritative receipts with the same stable request ID. Poll only within the frozen grace/attempt budget. Accept `computed` or authoritative `not_charged`; retain `pending` or `unknown` as a rejection, never as zero.
 

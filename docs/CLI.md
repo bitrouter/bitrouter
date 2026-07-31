@@ -460,7 +460,7 @@ bitrouter workflow-state harbor-outcomes --harbor-run-dir <DIR> --output <JSONL>
 bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
 bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME> | --credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
 bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
-bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> [--policy-decisions <JSONL>] --output-dir <DIR>
+bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
 bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
 
@@ -472,8 +472,11 @@ putting a bearer in the environment. Price specs use
 
 `bundle` is fail-closed: every non-empty trace set needs an exact request-ID
 usage join and computed auditable charge; supplied policy decisions and outcomes
-must each cover that same request-ID set exactly once. Session/trial metadata
-and timestamps are benchmark diagnostics, not strict join keys. Reward-feedback
+must each cover that same request-ID set exactly once. Omit `--outcomes` when
+the terminal evidence is task- or episode-scoped and will be attributed through
+the Eval Exchange. Omitting it records zero request-scoped outcomes; it never
+broadcasts a task reward across the request set. Session/trial metadata and
+timestamps are benchmark diagnostics, not strict join keys. Reward-feedback
 admission also requires completed requests and authoritative settlement; it
 does not use diagnostic identity fields for learning.
 

@@ -210,6 +210,8 @@ struct EvalDecisionObserver {
     pending: PendingEvalDecisionStore,
     policy: String,
     policy_digest: String,
+    route_baselines: HashMap<String, String>,
+    default_baseline: Option<String>,
 }
 
 impl PolicyTableRouter {
@@ -262,11 +264,15 @@ impl PolicyTableRouter {
         pending: PendingEvalDecisionStore,
         policy: impl Into<String>,
         policy_digest: impl Into<String>,
+        route_baselines: HashMap<String, String>,
+        default_baseline: Option<String>,
     ) -> Self {
         self.eval_observer = Some(EvalDecisionObserver {
             pending,
             policy: policy.into(),
             policy_digest: policy_digest.into(),
+            route_baselines,
+            default_baseline,
         });
         self
     }
@@ -387,6 +393,17 @@ impl PolicyTableRouter {
         decision: PolicyDecision,
         headers: &HeaderMap,
     ) -> Option<String> {
+        let baseline_tier = self
+            .eval_observer
+            .as_ref()
+            .and_then(|observer| {
+                observer
+                    .route_baselines
+                    .get(&decision.request_key)
+                    .cloned()
+                    .or_else(|| observer.default_baseline.clone())
+            })
+            .or_else(|| decision.static_tier.clone());
         let request_id = headers
             .get("x-bitrouter-request-id")
             .and_then(|value| value.to_str().ok())
@@ -428,7 +445,7 @@ impl PolicyTableRouter {
                 policy_digest: observer.policy_digest.clone(),
                 request_key: decision.request_key.clone(),
                 selected_tier: selected_tier.to_string(),
-                baseline_tier: decision.static_tier.clone(),
+                baseline_tier: baseline_tier.clone(),
                 preset: Some(observer.policy.clone()),
                 holdout: false,
             });
@@ -450,7 +467,7 @@ impl PolicyTableRouter {
                     .as_ref()
                     .map(|item| item.policy_digest.clone()),
                 preset_variant: self.eval_observer.as_ref().map(|item| item.policy.clone()),
-                baseline_tier: decision.static_tier.clone(),
+                baseline_tier,
                 legacy_fingerprint: decision.legacy_fingerprint.clone(),
                 workflow_state: decision.workflow_state_kind.clone(),
                 workflow_identity: decision.workflow_identity.clone(),
@@ -552,6 +569,30 @@ mod tests {
             default_tier: Some("flagship".to_string()),
             tool_use_tier: Some("flagship".to_string()),
             tool_safe_tiers: vec!["flagship".to_string()],
+            adequacy: Default::default(),
+        }
+    }
+
+    fn comparator_config() -> PolicyTableConfig {
+        PolicyTableConfig {
+            key_strategy: PolicyKeyStrategy::AgentTrace,
+            tiers: HashMap::from([
+                ("economy".to_string(), "vendor/economy".to_string()),
+                ("strong".to_string(), "vendor/strong".to_string()),
+            ]),
+            fingerprints: HashMap::from([
+                (
+                    "agent_trace/v1|opening|normal".to_string(),
+                    "strong".to_string(),
+                ),
+                (
+                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "economy".to_string(),
+                ),
+            ]),
+            default_tier: Some("strong".to_string()),
+            tool_use_tier: Some("strong".to_string()),
+            tool_safe_tiers: vec!["strong".to_string()],
             adequacy: Default::default(),
         }
     }
@@ -844,13 +885,15 @@ mod tests {
     }
 
     #[test]
-    fn routed_request_is_correlated_for_generic_eval_settlement() {
-        let table = PolicyTable::from_config(&config()).expect("configured");
+    fn explicit_economy_route_uses_strong_baseline_for_pending_eval_decision() {
+        let table = PolicyTable::from_config(&comparator_config()).expect("configured");
         let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto:cost",
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            HashMap::new(),
+            Some("strong".to_string()),
         );
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -858,14 +901,60 @@ mod tests {
             HeaderValue::from_static("request-1"),
         );
         let mut routed = prompt("inbound");
-        routed.messages = vec![user("fix the bug")];
+        routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
 
         assert!(router.route_prompt(&mut routed, &headers));
 
         let decision = pending.get("request-1").expect("pending eval decision");
         assert_eq!(decision.policy, "auto:cost");
-        assert_eq!(decision.selected_tier, "flagship");
-        assert_eq!(decision.request_key, "agent_trace/v1|opening|normal");
+        assert_eq!(decision.selected_tier, "economy");
+        assert_eq!(decision.baseline_tier.as_deref(), Some("strong"));
+        assert_eq!(decision.request_key, "agent_trace/v1|tool_followup|normal");
+    }
+
+    #[test]
+    fn certificate_baseline_overrides_policy_default_in_eval_outputs() {
+        let mut table_config = comparator_config();
+        table_config
+            .tiers
+            .insert("reference".to_string(), "vendor/reference".to_string());
+        let table = PolicyTable::from_config(&table_config).expect("configured");
+        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let path = temp_path("certificate-baseline-decisions.jsonl");
+        let recorder = PolicyDecisionJsonlRecorder::new(path.clone()).expect("recorder");
+        let router = PolicyTableRouter::new(table)
+            .with_decision_recorder(recorder)
+            .with_eval_observer(
+                pending.clone(),
+                "auto:cost",
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                HashMap::from([(
+                    "agent_trace/v1|tool_followup|normal".to_string(),
+                    "reference".to_string(),
+                )]),
+                Some("strong".to_string()),
+            );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-request-id",
+            HeaderValue::from_static("request-2"),
+        );
+        let mut routed = prompt("inbound");
+        routed.messages = vec![user("fix the bug"), assistant_calls("read_file")];
+
+        assert!(router.route_prompt(&mut routed, &headers));
+        assert_eq!(routed.model, "vendor/economy");
+
+        let pending_decision = pending.get("request-2").expect("pending eval decision");
+        assert_eq!(pending_decision.selected_tier, "economy");
+        assert_eq!(pending_decision.baseline_tier.as_deref(), Some("reference"));
+        let records = PolicyDecisionRecord::load_jsonl(&path).expect("decision record");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].static_tier.as_deref(), Some("economy"));
+        assert_eq!(records[0].selected_tier.as_deref(), Some("economy"));
+        assert_eq!(records[0].baseline_tier.as_deref(), Some("reference"));
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

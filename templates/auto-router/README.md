@@ -30,7 +30,11 @@ and capability constraints permit it.
 
 This policy was migrated from a same-scenario evaluation. Cross-agent quality
 has not been validated; evaluate it against your own traffic before broadening
-the economy routes.
+the economy routes. The three starter routes are migrated learned routes, so
+their certificates are compiler-owned with `legacy_adequacy_v1` source metadata
+and admitted evidence can promote or demote them. Routes explicitly authored as
+operator-owned remain pinned: conflicting evidence is reported rather than
+overriding the operator's route.
 
 The daemon creates redacted request subjects automatically. External evaluators
 submit results through `bitrouter eval result submit` or `POST /v1/evals/results`.
@@ -44,6 +48,9 @@ bitrouter policy publish candidate.yaml --config bitrouter.yaml
 ```
 
 `publish` requires `policy.mode: adaptive` and rejects stale parent digests.
+The runtime's `policy.mode`, rather than lockfile contents, owns publication
+authority: frozen mode never replaces the active lock, while adaptive mode only
+permits this explicit publish step.
 After explicit publication, `bitrouter policy verify --evidence --config
 bitrouter.yaml` reconstructs the active lock's evidence root from the local
 ledger.

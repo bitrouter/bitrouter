@@ -705,7 +705,8 @@ mod tests {
         EvaluatorKind, evidence_digest,
     };
     use crate::policy_lock::{
-        CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, deterministic_yaml,
+        CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner,
+        deterministic_yaml,
     };
 
     const EDIT_KEY: &str = "agent_trace/v1|edit|normal";
@@ -865,6 +866,93 @@ mod tests {
             result.document.certificates["auto"][EDIT_KEY].source,
             CertificateSource::Operator
         );
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_negative_evidence_demotes_pretrained_economy_route() -> anyhow::Result<()> {
+        let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("templates/auto-router/policy-lock.yaml");
+        let template_raw = std::fs::read_to_string(template_path)?;
+        let current: PolicyLock = serde_saphyr::from_str(&template_raw)?;
+        let evidence = Vec::new();
+        let evidence_digest = evidence_digest(&evidence)?;
+        let subject = EvalSubject {
+            schema_version: 1,
+            eval_id: "eval-pretrained-demotion".into(),
+            scope: EvalScope::Task,
+            subject_id: "task-pretrained-demotion".into(),
+            policy_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            preset: Some("auto".into()),
+            cohort: None,
+            holdout: false,
+            decisions: vec![EvalDecisionRef {
+                decision_id: "decision-pretrained-demotion".into(),
+                policy: "auto".into(),
+                request_key: EDIT_KEY.into(),
+                selected_tier: "economy".into(),
+                baseline_tier: Some("strong".into()),
+                policy_digest:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            }],
+            requested_dimensions: BTreeSet::from(["quality.pass".into()]),
+            evidence,
+            evidence_digest: evidence_digest.clone(),
+            observed_at: "2026-07-30T00:00:00Z".into(),
+        };
+        let result = EvaluationResult {
+            schema_version: 1,
+            eval_id: subject.eval_id.clone(),
+            evidence_digest,
+            evaluator: EvaluatorIdentity {
+                authority_id: "task-native".into(),
+                evaluator_id: "suite".into(),
+                kind: EvaluatorKind::TaskNative,
+                version: "1".into(),
+                config_digest:
+                    "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            },
+            verdict: EvalVerdict::Fail,
+            metrics: BTreeMap::new(),
+            hard_violations: Vec::new(),
+            confidence_ppm: Some(1_000_000),
+            evidence_refs: Vec::new(),
+            decision_credit: BTreeMap::new(),
+            idempotency_key: "result-pretrained-demotion".into(),
+            submitted_at: "2026-07-30T00:01:00Z".into(),
+        };
+        let eval = EvalEvidenceSnapshot {
+            evidence_root:
+                "sha256:2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            frozen_at: "2026-07-30T00:02:00Z".into(),
+            records: vec![EvalEvidenceRecord {
+                result_id:
+                    "sha256:3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                content_digest:
+                    "sha256:3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                subject,
+                result,
+            }],
+        };
+
+        let compiled = super::compile_candidate(super::CompileInput {
+            current: &current,
+            parent_digest: None,
+            legacy: &snapshot(false, None),
+            eval: Some(&eval),
+        })?;
+
+        assert_eq!(
+            compiled.document.policies["auto"].routes[EDIT_KEY],
+            "strong"
+        );
+        assert!(compiled.conflicts.is_empty());
+        let certificate = &compiled.document.certificates["auto"][EDIT_KEY];
+        assert_eq!(certificate.owner, RouteOwner::Compiler);
+        assert_eq!(certificate.source, CertificateSource::TaskNative);
+        assert_eq!(certificate.verdict, PromotionVerdict::Demote);
         Ok(())
     }
 

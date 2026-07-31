@@ -513,9 +513,10 @@ enum WorkflowStateAction {
         /// BitRouter Cloud usage snapshot JSONL.
         #[arg(long)]
         cloud_usage: PathBuf,
-        /// Benchmark outcome JSONL.
+        /// Optional request-scoped benchmark outcome JSONL. Omit when task or
+        /// episode outcomes will be submitted through the Eval Exchange.
         #[arg(long)]
-        outcomes: PathBuf,
+        outcomes: Option<PathBuf>,
         /// Optional policy routing decision JSONL from BITROUTER_POLICY_DECISION_JSONL.
         #[arg(long)]
         policy_decisions: Option<PathBuf>,
@@ -959,6 +960,14 @@ enum EvalAction {
 
 #[derive(Subcommand)]
 enum EvalSubjectAction {
+    /// Calculate the canonical evidence digest and write a validated JSON subject.
+    Seal {
+        /// Draft JSON or YAML subject with redacted evidence items.
+        draft: PathBuf,
+        /// Destination for the deterministic sealed JSON subject.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+    },
     /// Insert an immutable subject from JSON or YAML.
     Put {
         file: PathBuf,
@@ -1578,8 +1587,11 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
             let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
                 .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
-            let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
-                .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
+            let outcomes = match outcomes {
+                Some(path) => BenchmarkOutcomeRecord::load_jsonl(&path)
+                    .with_context(|| format!("read benchmark outcomes {}", path.display()))?,
+                None => Vec::new(),
+            };
             let decisions = match policy_decisions {
                 Some(path) => PolicyDecisionRecord::load_jsonl(&path)
                     .with_context(|| format!("read policy decisions {}", path.display()))?,
@@ -3230,6 +3242,29 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
 
     let (action_name, data) = match action {
         EvalAction::Subject { action } => match action {
+            EvalSubjectAction::Seal {
+                draft,
+                output: path,
+            } => {
+                let mut subject: EvalSubject = read_eval_file(&draft)?;
+                subject
+                    .evidence
+                    .sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
+                subject.evidence_digest =
+                    bitrouter::eval::types::evidence_digest(&subject.evidence)?;
+                bitrouter::eval::types::validate_subject(&subject)?;
+                let sealed = serde_json::to_string_pretty(&subject)? + "\n";
+                std::fs::write(&path, sealed)
+                    .with_context(|| format!("writing sealed eval subject {}", path.display()))?;
+                (
+                    "subject-seal",
+                    serde_json::json!({
+                        "eval_id": subject.eval_id,
+                        "evidence_digest": subject.evidence_digest,
+                        "output": path,
+                    }),
+                )
+            }
             EvalSubjectAction::Put { file, config } => {
                 let subject: EvalSubject = read_eval_file(&file)?;
                 let service = local_eval_service(config.as_deref()).await?;
@@ -4008,6 +4043,149 @@ mod tests {
                 }
             })
         ));
+    }
+
+    #[test]
+    fn workflow_bundle_allows_eval_exchange_to_own_task_outcomes() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "bundle",
+            "--run-label",
+            "generic-eval-run",
+            "--traces",
+            "traces.jsonl",
+            "--cloud-usage",
+            "usage.jsonl",
+            "--output-dir",
+            "artifact",
+        ])
+        .expect("parse workflow bundle without request-scoped outcomes");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::WorkflowState {
+                action: WorkflowStateAction::Bundle { outcomes: None, .. }
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn eval_subject_seal_derives_a_digest_without_the_ledger() -> Result<()> {
+        use clap::Parser;
+
+        let directory = tempfile::tempdir()?;
+        let draft = directory.path().join("subject-draft.json");
+        let reversed_draft = directory.path().join("subject-draft-reversed.json");
+        let sealed = directory.path().join("subject-sealed.json");
+        let sealed_again = directory.path().join("subject-sealed-again.json");
+        std::fs::write(
+            &draft,
+            r#"{
+  "schema_version": 1,
+  "eval_id": "eval-generic-1",
+  "scope": "task",
+  "subject_id": "task-generic-1",
+  "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "preset": null,
+  "cohort": null,
+  "holdout": false,
+  "decisions": [
+    {
+      "decision_id": "decision-1",
+      "policy": "auto",
+      "request_key": "agent_trace/v1|edit|normal",
+      "selected_tier": "economy",
+      "baseline_tier": "strong",
+      "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "requested_dimensions": ["quality.pass"],
+  "evidence": [
+    {
+      "evidence_id": "verifier-result",
+      "kind": "task.verifier",
+      "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "redacted": true,
+      "attributes": {}
+    },
+    {
+      "evidence_id": "audit-result",
+      "kind": "task.audit",
+      "digest": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "redacted": true,
+      "attributes": {"status": "clean"}
+    }
+  ],
+  "evidence_digest": "",
+  "observed_at": "2026-07-31T00:00:00Z"
+}
+"#,
+        )?;
+        let mut reversed =
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&draft)?)?;
+        let evidence = reversed
+            .get_mut("evidence")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or_else(|| anyhow::anyhow!("draft evidence must be an array"))?;
+        evidence.reverse();
+        std::fs::write(&reversed_draft, serde_json::to_string_pretty(&reversed)?)?;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "eval",
+            "subject",
+            "seal",
+            draft
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("draft path is not UTF-8"))?,
+            "--output",
+            sealed
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("sealed path is not UTF-8"))?,
+        ])?;
+        let Some(Command::Eval { action }) = cli.command else {
+            anyhow::bail!("expected eval subject seal command")
+        };
+
+        eval(action, &Output::new(bitrouter::output::Format::Json)).await?;
+
+        let sealed_text = std::fs::read_to_string(&sealed)?;
+        let subject: bitrouter::eval::types::EvalSubject = serde_json::from_str(&sealed_text)?;
+        bitrouter::eval::types::validate_subject(&subject)?;
+
+        let repeat = Cli::try_parse_from([
+            "bitrouter",
+            "eval",
+            "subject",
+            "seal",
+            reversed_draft
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("reversed draft path is not UTF-8"))?,
+            "--output",
+            sealed_again
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("repeat output path is not UTF-8"))?,
+        ])?;
+        let Some(Command::Eval { action }) = repeat.command else {
+            anyhow::bail!("expected repeated eval subject seal command")
+        };
+        eval(action, &Output::new(bitrouter::output::Format::Json)).await?;
+        let repeated_text = std::fs::read_to_string(&sealed_again)?;
+        let repeated: bitrouter::eval::types::EvalSubject = serde_json::from_str(&repeated_text)?;
+        bitrouter::eval::types::validate_subject(&repeated)?;
+        assert_eq!(subject.evidence_digest, repeated.evidence_digest);
+        assert_eq!(
+            sealed_text, repeated_text,
+            "equivalent evidence order must produce deterministic pretty JSON"
+        );
+        assert!(
+            !directory.path().join("bitrouter.db").exists(),
+            "sealing must not initialize a ledger"
+        );
+        Ok(())
     }
 
     #[test]
