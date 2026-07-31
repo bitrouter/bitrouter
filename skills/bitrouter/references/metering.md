@@ -147,3 +147,24 @@ not participate in learning.
 The in-memory analytical `build*` APIs may omit usage and decisions for
 extractor development. The `workflow-state bundle` command is benchmark-grade
 and fails closed when traces exist without usage evidence.
+
+## Rank a candidate policy by settled baseline cost
+
+```bash
+bitrouter workflow-state policy-oracle \
+  --traces artifacts/traces.jsonl \
+  --cloud-usage artifacts/cloud-usage.jsonl \
+  --policy-lock policy-lock.yaml \
+  --policy auto \
+  --effective-cost-factor 0.24 \
+  --target-savings 0.30 \
+  --target-savings 0.40 \
+  --output artifacts/policy-oracle.json
+```
+
+The oracle requires an exact trace/usage request-ID set. Its effective cost
+factor must include expected token, retry, and turn inflation. The JSON output
+ranks eligible requests by baseline charge, identifies the highest-cost routes
+still left on the default tier, and reports whether each savings target is
+attainable under the candidate lock. Treat it as a cost-only upper bound;
+quality and trajectory effects still require live eval evidence.

@@ -12,6 +12,7 @@ pub struct OnlineWorkflowState {
     pub ir: WorkflowStateIR,
     legacy_fingerprint: String,
     routing_key: String,
+    compatibility_routing_key_v1: String,
     legacy_routing_key: String,
 }
 
@@ -66,17 +67,23 @@ impl OnlineWorkflowState {
         ir.identity = resolve_workflow_identity(&input, tracker);
         let legacy_fingerprint = PolicyTable::fingerprint(prompt);
         let routing_key = ir.route_projection().key();
+        let compatibility_routing_key_v1 = ir.compatibility_route_projection_v1().key();
         let legacy_routing_key = ir.legacy_routing_key();
         Self {
             ir,
             legacy_fingerprint,
             routing_key,
+            compatibility_routing_key_v1,
             legacy_routing_key,
         }
     }
 
     pub fn routing_key(&self) -> &str {
         &self.routing_key
+    }
+
+    pub fn compatibility_routing_key_v1(&self) -> &str {
+        &self.compatibility_routing_key_v1
     }
 
     pub fn legacy_routing_key(&self) -> &str {
@@ -185,7 +192,11 @@ mod tests {
         );
 
         assert_eq!(state.legacy_fingerprint(), "after_Bash");
-        assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
+        assert_eq!(state.routing_key(), "agent_trace/v2|tool_followup|normal");
+        assert_eq!(
+            state.compatibility_routing_key_v1(),
+            "agent_trace/v1|tool_followup|normal"
+        );
         assert_eq!(state.ir.last_tool_name.as_deref(), Some("Bash"));
     }
 
@@ -200,7 +211,7 @@ mod tests {
 
         assert_eq!(state.ir.harness_id, HarnessId::Generic);
         assert_eq!(state.ir.protocol, ProtocolKind::Responses);
-        assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
+        assert_eq!(state.routing_key(), "agent_trace/v2|tool_followup|normal");
         assert!(state.ir.evidence.iter().any(|e| {
             e.kind == "trace_adapter" && e.value == "compatibility_harness_hint:Codex"
         }));
@@ -221,7 +232,7 @@ mod tests {
         assert_eq!(state.ir.harness_id, HarnessId::Smithers);
         assert_eq!(state.ir.active_workflow.as_deref(), Some("release-review"));
         assert_eq!(state.ir.subagent_role.as_deref(), Some("analyze-risk"));
-        assert_eq!(state.routing_key(), "agent_trace/v1|tool_followup|normal");
+        assert_eq!(state.routing_key(), "agent_trace/v2|tool_followup|normal");
         assert!(
             state.legacy_routing_key().starts_with(
                 "smithers|chat_completions|tool_followup|release-review|analyze-risk|"

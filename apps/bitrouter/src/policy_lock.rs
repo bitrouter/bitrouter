@@ -2194,15 +2194,25 @@ policies:
         assert!(!lock_raw.contains("explore_enabled:"));
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
-        assert_eq!(policy.routes["agent_trace/v1|edit|normal"], "economy");
-        assert_eq!(policy.routes["agent_trace/v1|test|normal"], "economy");
+        assert_eq!(policy.tiers["balanced"], "bitrouter:z-ai/glm-5.2");
+        assert_eq!(policy.routes["agent_trace/v2|edit|normal"], "economy");
+        assert_eq!(policy.routes["agent_trace/v2|test|normal"], "economy");
         assert_eq!(
-            policy.routes["agent_trace/v1|tool_followup|normal"],
+            policy.routes["agent_trace/v2|tool_followup|normal"],
             "economy"
         );
+        for key in [
+            "agent_trace/v2|review|normal",
+            "agent_trace/v2|review|context",
+            "agent_trace/v2|edit|context",
+            "agent_trace/v2|test|context",
+            "agent_trace/v2|tool_followup|context",
+        ] {
+            assert_eq!(policy.routes[key], "balanced", "{key}");
+        }
         assert_eq!(policy.default_tier.as_deref(), Some("strong"));
         assert_eq!(policy.tool_use_tier.as_deref(), Some("strong"));
-        assert_eq!(policy.tool_safe_tiers, ["strong", "economy"]);
+        assert_eq!(policy.tool_safe_tiers, ["strong", "balanced", "economy"]);
 
         let rendered = deterministic_yaml(&lock).unwrap();
         assert!(rendered.contains("key_strategy: agent_trace"));
@@ -2210,7 +2220,7 @@ policies:
     }
 
     #[test]
-    fn auto_router_template_migrated_routes_are_compiler_owned() -> anyhow::Result<()> {
+    fn auto_router_template_experiments_are_compiler_owned() -> anyhow::Result<()> {
         let template_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("templates/auto-router");
@@ -2222,10 +2232,11 @@ policies:
             .certificates
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("auto template is missing route certificates"))?;
-        assert_eq!(certificates.len(), 3);
+        assert_eq!(certificates.len(), 8);
         for certificate in certificates.values() {
             assert_eq!(certificate.owner, RouteOwner::Compiler);
-            assert_eq!(certificate.source, CertificateSource::LegacyAdequacyV1);
+            assert_eq!(certificate.source, CertificateSource::Mixed);
+            assert_eq!(certificate.verdict, PromotionVerdict::Experiment);
         }
         Ok(())
     }

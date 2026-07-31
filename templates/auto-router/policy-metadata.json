@@ -1,7 +1,8 @@
 {
   "schemaVersion": 1,
-  "migration": "This policy was migrated from a same-scenario evaluation.",
+  "migration": "This v2 policy adds a context band and a canary-validated balanced tier.",
   "crossAgentQuality": "unvalidated",
   "strongModel": "openai-codex:gpt-5.6-sol",
+  "balancedModel": "bitrouter:z-ai/glm-5.2",
   "economyModel": "bitrouter:deepseek/deepseek-v4-pro"
 }

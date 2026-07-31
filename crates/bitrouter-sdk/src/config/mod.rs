@@ -1412,7 +1412,7 @@ fn validate_policy_table(config: &Config) -> Result<()> {
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     if policy.key_strategy == PolicyKeyStrategy::LegacyFingerprint {
         return Err(BitrouterError::bad_request(
-            "policy_table.key_strategy: 'legacy_fingerprint' is no longer supported; use 'agent_trace' with agent_trace/v1 projection routes"
+            "policy_table.key_strategy: 'legacy_fingerprint' is no longer supported; use 'agent_trace' projection routes"
                 .to_string(),
         ));
     }

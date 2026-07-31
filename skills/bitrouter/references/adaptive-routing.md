@@ -36,7 +36,9 @@ are required for routing. Existing `workflow_state` lock configuration remains
 readable as a compatibility alias, but deterministic lock output is canonical
 `agent_trace`. `agent_trace` is the only active strategy:
 `key_strategy: legacy_fingerprint` is rejected, so migrate its routes to
-`agent_trace/v1|<state>|<risk>`. `adequacy.explore_opening: true` opts
+`agent_trace/v2|<state>|<risk>`, where risk is `normal`, `context`, or
+`guarded`. Published v1 routes remain compatible through exact fallback.
+`adequacy.explore_opening: true` opts
 source-neutral opening projections into exploration. Do not configure the
 removed `adequacy.max_downgraded_requests_per_session`; session identity is
 diagnostic-only and the parser rejects that setting.

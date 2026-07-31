@@ -23,6 +23,7 @@ const PRIVATE_IDENTITY_HEADERS: &[&str] = &[
 static DECISION_RECORDER_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 const MOCK_STRONG_MODEL: &str = "mock-strong:gpt-5.6-sol";
+const MOCK_BALANCED_MODEL: &str = "mock-economy:z-ai/glm-5.2";
 const MOCK_ECONOMY_MODEL: &str = "mock-economy:deepseek/deepseek-v4-pro";
 
 struct NativeCase {
@@ -71,7 +72,7 @@ async fn native_http_matrix_routes_without_private_workflow_headers() {
     assert_eq!(decisions.len(), 7, "each HTTP request emits one decision");
     for decision in &decisions {
         assert_eq!(decision.key_strategy, "agent_trace");
-        assert_eq!(decision.request_key, "agent_trace/v1|opening|normal");
+        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
         assert_eq!(
             decision.selected_tier.as_deref(),
             Some("strong"),
@@ -178,6 +179,19 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         .json(&json!({
             "model": "@auto",
             "messages": [
+                {"role": "system", "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with commands and task_complete."},
+                {"role": "user", "content": "continue"},
+                {"role": "assistant", "content": "{\"commands\":[{\"keystrokes\":\"git diff\"}],\"task_complete\":false}"}
+            ]
+        }))
+        .await
+        .assert_status_ok();
+
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "@auto",
+            "messages": [
                 {"role": "user", "content": "continue"},
                 {"role": "assistant", "tool_calls": [{
                     "id": "call_failed", "type": "function",
@@ -191,21 +205,27 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
 
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("HTTP traffic emits readable policy decisions");
-    assert_eq!(decisions.len(), 6);
+    assert_eq!(decisions.len(), 7);
     for (decision, key) in decisions[..5].iter().zip([
-        "agent_trace/v1|edit|normal",
-        "agent_trace/v1|test|normal",
-        "agent_trace/v1|tool_followup|normal",
-        "agent_trace/v1|tool_followup|normal",
-        "agent_trace/v1|tool_followup|normal",
+        "agent_trace/v2|edit|normal",
+        "agent_trace/v2|test|normal",
+        "agent_trace/v2|tool_followup|normal",
+        "agent_trace/v2|tool_followup|normal",
+        "agent_trace/v2|tool_followup|normal",
     ]) {
         assert_eq!(decision.request_key, key);
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
     }
-    assert_eq!(decisions[5].request_key, "agent_trace/v1|recovery|guarded");
-    assert_eq!(decisions[5].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[5].request_key, "agent_trace/v2|review|normal");
+    assert_eq!(decisions[5].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
         decisions[5].selected_model.as_deref(),
+        Some(MOCK_BALANCED_MODEL)
+    );
+    assert_eq!(decisions[6].request_key, "agent_trace/v2|recovery|guarded");
+    assert_eq!(decisions[6].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(
+        decisions[6].selected_model.as_deref(),
         Some(MOCK_STRONG_MODEL)
     );
 }
@@ -222,7 +242,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     let scenarios = [
         (
             "edit",
-            "agent_trace/v1|edit|normal",
+            "agent_trace/v2|edit|normal",
             terminus_action_case("@auto", "apply_patch <<'PATCH'\nPATCH"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Edit, None),
             "economy",
@@ -230,7 +250,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
         ),
         (
             "test",
-            "agent_trace/v1|test|normal",
+            "agent_trace/v2|test|normal",
             terminus_action_case("@auto", "cargo test -p bitrouter"),
             claude_fixture_case("@auto:cost", ClaudeFixture::Test, None),
             "economy",
@@ -238,7 +258,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
         ),
         (
             "tool followup",
-            "agent_trace/v1|tool_followup|normal",
+            "agent_trace/v2|tool_followup|normal",
             terminus_tool_case("@auto", None),
             claude_fixture_case("@auto:cost", ClaudeFixture::ToolFollowup, None),
             "economy",
@@ -246,7 +266,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
         ),
         (
             "recovery",
-            "agent_trace/v1|recovery|guarded",
+            "agent_trace/v2|recovery|guarded",
             terminus_tool_case("@auto", Some("error: cargo test failed")),
             claude_fixture_case(
                 "@auto:cost",
@@ -540,6 +560,8 @@ fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf, TempDi
         .expect("template auto policy exists");
     auto.tiers
         .insert("strong".to_string(), MOCK_STRONG_MODEL.to_string());
+    auto.tiers
+        .insert("balanced".to_string(), MOCK_BALANCED_MODEL.to_string());
     auto.tiers
         .insert("economy".to_string(), MOCK_ECONOMY_MODEL.to_string());
     let mock_lock_path = config_dir.path().join("policy-lock.yaml");

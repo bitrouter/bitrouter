@@ -925,7 +925,7 @@ fn evaluators_merge_equivalent_generic_and_native_terminus_projections() {
             .iter()
             .map(|decision| decision.ir_key.as_str())
             .collect::<Vec<_>>(),
-        vec!["agent_trace/v1|opening|normal"; 2]
+        vec!["agent_trace/v2|opening|normal"; 2]
     );
     assert_ne!(
         shadow.decisions[0].legacy_evidence_key, shadow.decisions[1].legacy_evidence_key,
