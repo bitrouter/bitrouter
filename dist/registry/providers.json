@@ -4849,6 +4849,11 @@
           "api_protocol": "openai",
           "id": "tencent/hy3",
           "provider_model_id": "hy3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-5.6-luna",
+          "provider_model_id": "gpt-5.6-luna"
         }
       ],
       "name": "opencode-go",
