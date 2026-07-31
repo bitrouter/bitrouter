@@ -120,10 +120,15 @@ bitrouter workflow-state bundle \
   --run-label short13-fixed-strong \
   --traces artifacts/traces.jsonl \
   --cloud-usage artifacts/cloud-usage.jsonl \
-  --outcomes artifacts/benchmark-outcomes.jsonl \
   --policy-decisions artifacts/policy-decisions.jsonl \
   --output-dir artifacts/bundle
 ```
+
+This example leaves terminal outcomes to the Eval Exchange. Add
+`--outcomes artifacts/benchmark-outcomes.jsonl` only for genuinely
+request-scoped outcomes whose request-ID set exactly matches the traces. Task-
+or episode-scoped outcomes need a separate scope join and explicit evaluator
+decision credit; do not broadcast them into request-scoped rows.
 
 For any non-empty trace set, bundle creation requires an exact one-to-one
 trace/usage request-id join, provider-reported raw usage, consistent normalized

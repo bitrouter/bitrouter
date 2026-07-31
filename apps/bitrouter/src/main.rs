@@ -513,9 +513,10 @@ enum WorkflowStateAction {
         /// BitRouter Cloud usage snapshot JSONL.
         #[arg(long)]
         cloud_usage: PathBuf,
-        /// Benchmark outcome JSONL.
+        /// Optional request-scoped benchmark outcome JSONL. Omit when task or
+        /// episode outcomes will be submitted through the Eval Exchange.
         #[arg(long)]
-        outcomes: PathBuf,
+        outcomes: Option<PathBuf>,
         /// Optional policy routing decision JSONL from BITROUTER_POLICY_DECISION_JSONL.
         #[arg(long)]
         policy_decisions: Option<PathBuf>,
@@ -1586,8 +1587,11 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .with_context(|| format!("read workflow traces {}", traces.display()))?;
             let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
                 .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
-            let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
-                .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
+            let outcomes = match outcomes {
+                Some(path) => BenchmarkOutcomeRecord::load_jsonl(&path)
+                    .with_context(|| format!("read benchmark outcomes {}", path.display()))?,
+                None => Vec::new(),
+            };
             let decisions = match policy_decisions {
                 Some(path) => PolicyDecisionRecord::load_jsonl(&path)
                     .with_context(|| format!("read policy decisions {}", path.display()))?,
@@ -4037,6 +4041,33 @@ mod tests {
                 action: EvalAction::Snapshot {
                     action: EvalSnapshotAction::Freeze { .. }
                 }
+            })
+        ));
+    }
+
+    #[test]
+    fn workflow_bundle_allows_eval_exchange_to_own_task_outcomes() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "workflow-state",
+            "bundle",
+            "--run-label",
+            "generic-eval-run",
+            "--traces",
+            "traces.jsonl",
+            "--cloud-usage",
+            "usage.jsonl",
+            "--output-dir",
+            "artifact",
+        ])
+        .expect("parse workflow bundle without request-scoped outcomes");
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::WorkflowState {
+                action: WorkflowStateAction::Bundle { outcomes: None, .. }
             })
         ));
     }
