@@ -1,4 +1,4 @@
-# Verified 2026-07-11 against Baidu Qianfan international docs and the public
+# Verified 2026-08-01 against Baidu Qianfan international docs and the public
 # `GET https://api.baiduqianfan.ai/v1/models` catalog. The endpoint is
 # OpenAI-compatible and uses Bearer API keys (`bce-v3/ALTAK-...`). Prices below
 # are the live catalog's per-token prices converted to USD per 1M tokens.
@@ -36,18 +36,18 @@ models:
     provider_model_id: deepseek-v4-flash
     pricing:
       input_tokens:
-        no_cache: 0.0983
-        cache_read: 0.0197
+        no_cache: 0.14
+        cache_read: 0.028
       output_tokens:
-        text: 0.1966
+        text: 0.28
   - id: moonshotai/kimi-k2.6
     provider_model_id: kimi-k2.6
     pricing:
       input_tokens:
-        no_cache: 0.684
-        cache_read: 0.144
+        no_cache: 0.95
+        cache_read: 0.16
       output_tokens:
-        text: 3.42
+        text: 4
   - id: z-ai/glm-5
     provider_model_id: glm-5
     pricing:
@@ -60,18 +60,18 @@ models:
     provider_model_id: glm-5.1
     pricing:
       input_tokens:
-        no_cache: 0.98
-        cache_read: 0.182
+        no_cache: 1.4
+        cache_read: 0.26
       output_tokens:
-        text: 3.08
+        text: 4.4
   - id: z-ai/glm-5.2
     provider_model_id: glm-5.2
     pricing:
       input_tokens:
-        no_cache: 0.97
-        cache_read: 0.181
+        no_cache: 1.4
+        cache_read: 0.26
       output_tokens:
-        text: 3.07
+        text: 4.4
   - id: tencent/hy3
     provider_model_id: hy3-preview
     pricing:
