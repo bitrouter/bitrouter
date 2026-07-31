@@ -147,7 +147,9 @@ append-only run ID on the benchmark controller.
 3. Run all 13 `r1` trials against `@auto:cost` and the pretrained lock.
 4. Accept or reject `r1` using the same strict gate.
 5. Assemble one redacted task eval packet per accepted trial and use the new
-   skill to submit task-native and agentic results with explicit decision credit.
+   skill to submit the task-native result with control-differential, explicit
+   decision credit. Run an agentic evaluator only for a separately requested
+   rubric or attribution question, and preserve its actual evaluator kind.
 6. Freeze the admitted snapshot, compile `r2` candidate, inspect the diff and
    certificates, then publish the exact candidate under adaptive mode.
 

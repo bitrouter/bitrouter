@@ -38,8 +38,10 @@ is generic: Terminal-Bench is its first real use, not part of its contract.
 ### 1. Task-level eval packet plus generic skill (selected)
 
 Construct one immutable task/episode subject from exact decision IDs and
-redacted evidence digests, have an agent judge only the requested dimensions,
-submit explicit per-decision credit, then verify admission.
+redacted evidence digests, have the actual evaluator judge only the requested
+dimensions, submit explicit per-decision credit, then verify admission. The
+evaluator may be task-native, human, enterprise, or agentic; using the skill
+does not by itself make the evidence agentic.
 
 This preserves task-level outcome semantics without broadcasting one reward to
 every turn. It also works for human and private evaluators because only the
@@ -173,11 +175,20 @@ For each accepted trial, assemble a task subject from:
 - active policy and model identities;
 - actual cost and latency evidence when settled.
 
-The agentic judge consumes the redacted task packet locally. The task-native
-verifier remains authoritative for `quality.pass`; agentic evaluation may add
-rubric dimensions or confidence but cannot overturn a task-native hard failure.
-The submitted result explicitly attributes each metric to the decisions it can
-support. Ambiguous decisions receive no credit.
+The task-native verifier remains authoritative for `quality.pass`. In this
+lineage, the accepted fixed-strong control is an observed counterfactual for the
+same task: a candidate failure is negative route evidence only when control
+passed; shared failure is inconclusive. Credit is limited to one changed route
+family, otherwise it is withheld. This does not infer an unexecuted baseline or
+broadcast a task reward across requests.
+
+An agentic judge is optional and consumes a redacted task packet locally only
+when an additional rubric dimension or ambiguous-decision analysis is actually
+requested. It cannot overturn a task-native hard failure and must identify
+itself as `agentic`; the deterministic counterfactual adapter identifies itself
+as `task_native`. The submitted result explicitly attributes each metric to the
+decisions it can support. Ambiguous decisions receive no positive-weight
+credit.
 
 ### Acceptance and lineage
 
