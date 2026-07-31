@@ -312,6 +312,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_zero_credit_withholds_single_decision_attribution() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let service = EvalService::new(store.clone(), EvalConfig::default());
+        let subject = subject()?;
+        store.insert_subject(&subject).await?;
+        let mut result = result(&subject);
+        result.verdict = EvalVerdict::Inconclusive;
+        result.decision_credit.insert(
+            "decision-a".into(),
+            DecisionCredit {
+                weight_ppm: 0,
+                metric_ids: BTreeSet::from(["quality.pass".into()]),
+            },
+        );
+        service
+            .submit(result, SubmissionPrincipal::LocalOperator)
+            .await?;
+        let frozen = store.freeze_snapshot("2026-07-30T00:02:00Z").await?;
+
+        let routes = EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
+            .await?
+            .route_evidence()?;
+        assert!(routes.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn explicit_credit_never_broadcasts_metrics_between_decisions() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;

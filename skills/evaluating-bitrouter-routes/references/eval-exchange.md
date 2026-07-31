@@ -121,8 +121,10 @@ hard violations. Other requested metrics remain immutable records but do not
 become route evidence. Submit only requested dimensions; absence means
 unsupported, while zero is an observed value.
 
-For one decision, omitted `decision_credit` means full credit. For two or more
-decisions, use the fixed evaluator credit policy:
+For one decision, omitted `decision_credit` means full credit. To deliberately
+withhold attribution from a one-decision inconclusive result, include that
+decision with `weight_ppm: 0`; an empty map would activate implicit full credit.
+For two or more decisions, use the fixed evaluator credit policy:
 
 | Policy result | Concrete `decision_credit` |
 | --- | --- |
@@ -134,6 +136,13 @@ metric in `metrics`, a declared hard violation, or `quality.pass`. An empty
 `metric_ids` applies that credit to every present metric, so use it only when
 the fixed policy intentionally attributes every present metric. Keep
 hypothetical or illustrative weights outside submit-ready JSON.
+
+A task- or episode-level terminal score is not automatically request-level
+evidence. Do not duplicate it across the subject's decisions. A fixed
+counterfactual policy may credit a route family when a matched baseline differs
+only on that family; shared candidate/baseline failure is inconclusive, not
+negative evidence. If several route families changed and the evaluator cannot
+separate their effects, submit no positive-weight decision credit.
 
 ## Authority, submission, and ownership
 

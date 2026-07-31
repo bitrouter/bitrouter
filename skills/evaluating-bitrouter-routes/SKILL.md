@@ -56,6 +56,9 @@ Choose `evaluator.kind` from the actual source:
    - Exact supported decision/metric mappings: emit only those mappings.
    - No policy or no exact mapping: use `{}` or omit the serde-defaulted field.
      The result remains a record but produces no per-route evidence.
+   For a one-decision subject, empty credit means implicit full credit. When an
+   inconclusive evaluator intentionally withholds attribution, emit that
+   decision with `weight_ppm: 0` instead.
    Keep hypothetical or illustrative weights outside submit-ready JSON.
 
 ## Submit and hand off
@@ -77,6 +80,9 @@ Choose `evaluator.kind` from the actual source:
 
 - Use `subject seal` for canonical evidence hashing and JSON.
 - Attribute metrics only to evidence-supported decisions.
+- Never copy a task- or episode-level reward onto each request. Use a fixed
+  causal policy (for example, a matched control plus one changed route family)
+  or withhold credit.
 - Preserve the router-authored baseline and selected tiers.
 - Keep evaluator identity, rubric/config digest, evidence references,
   confidence, and idempotency key stable for an equivalent retry.
