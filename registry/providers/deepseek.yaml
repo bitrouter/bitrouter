@@ -22,10 +22,10 @@ models:
     provider_model_id: deepseek-v4-pro
     pricing:
       input_tokens:
-        no_cache: 1.74
-        cache_read: 0.145
+        no_cache: 0.435
+        cache_read: 0.003625
       output_tokens:
-        text: 3.48
+        text: 0.87
     capabilities:
       - reasoning
       - tools
@@ -34,7 +34,7 @@ models:
     pricing:
       input_tokens:
         no_cache: 0.14
-        cache_read: 0.028
+        cache_read: 0.0028
       output_tokens:
         text: 0.28
     capabilities:

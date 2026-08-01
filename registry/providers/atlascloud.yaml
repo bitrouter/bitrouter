@@ -1,4 +1,4 @@
-# Verified 2026-07-08 against the public
+# Verified 2026-08-01 against the public
 # `GET https://api.atlascloud.ai/v1/models` catalog and Atlas Cloud docs.
 # Atlas exposes an OpenAI-compatible LLM endpoint; catalog pricing is per token,
 # converted below to USD per 1M tokens. `openai/gpt-oss-120b` was removed because
@@ -144,6 +144,14 @@ models:
             cache_read: 0.4
           output_tokens:
             text: 5
+  - id: anthropic/claude-opus-5
+    provider_model_id: anthropic/claude-opus-5-ccmax
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+      output_tokens:
+        text: 25
 status: active
 weight: 1
 submitted_at: 2026-07-07

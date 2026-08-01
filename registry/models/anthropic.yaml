@@ -62,6 +62,20 @@
   release_date: 2026-05-28
   open_weights: false
   family: claude-opus
+- id: anthropic/claude-opus-5
+  name: 'Anthropic: Claude Opus 5'
+  description: Anthropic's Claude Opus 5.
+  input_modalities:
+  - text
+  - image
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-07-24
+  knowledge_cutoff: 2026-05-31
+  open_weights: false
+  family: claude-opus
 - id: anthropic/claude-sonnet-5
   name: 'Anthropic: Claude Sonnet 5'
   description: Anthropic's Claude Sonnet 5.
