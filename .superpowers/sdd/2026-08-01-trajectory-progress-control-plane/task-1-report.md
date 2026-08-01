@@ -179,3 +179,105 @@ doc tests, with the same 9 documented real-agent tests ignored.
   to the SHA-256 event digest function as raw prompt/message content.
 - `git diff --check`, formatting, Clippy, focused tests, migration tests, and
   the relevant package suite are clean.
+
+## Fix round 1 — review corrections
+
+Addressed the Critical and Important review findings without taking on Task 2's
+HMAC/key-lifecycle work. Opaque digest values are now format-validated
+`hmac-sha256:<key-id>:<64-lowercase-hex>` values; this validates the wire
+contract only and does not compute or rotate keys.
+
+### RED — persistence-boundary contracts
+
+Command:
+
+```text
+cargo test -p bitrouter --all-features trajectory::types::tests:: --lib
+```
+
+Output (expected before implementation):
+
+```text
+error[E0433]: failed to resolve: use of undeclared type `KeyedDigest`
+error[E0422]: cannot find struct, variant or union type `OutboxPayload` in this scope
+error[E0425]: cannot find function `validate_outbox_payload` in this scope
+```
+
+Implemented a typed `OutboxPayload` containing only bounded structural
+numeric fields and SHA-256 digest fields. The former free-form JSON payload is
+no longer persistable. Added sensitive-key rejection for structural and
+evidence attributes, bounded evidence key lengths, and keyed-digest wire
+validation for correlation and full-input values.
+
+### GREEN — persistence-boundary contracts
+
+Command:
+
+```text
+cargo test -p bitrouter --all-features trajectory::types::tests:: --lib
+```
+
+Output:
+
+```text
+running 5 tests
+test result: ok. 5 passed; 0 failed
+```
+
+### RED — idempotency, ownership, and reconciliation
+
+Command:
+
+```text
+cargo test -p bitrouter --all-features trajectory::store::tests:: --lib
+```
+
+Output (expected before implementation):
+
+```text
+duplicate_start_requires_identical_event_and_episode_inputs ... FAILED
+duplicate_settlement_rejects_changed_outbox_or_started_status ... FAILED
+event_history_rejects_corrupt_index_columns_and_sequence_gaps ... FAILED
+native_parent_cannot_reference_another_owners_request ... FAILED
+```
+
+The separate Started-status test also failed before the change:
+
+```text
+cargo test -p bitrouter --all-features trajectory::store::tests::settlement_rejects_started_status --lib -- --exact
+```
+
+Implemented exact duplicate-start comparison (request, episode, and initial
+event), canonical outbox comparison for duplicate settlement, owner-scoped
+native-parent checks with global collision detection, owner-first event lookup,
+stored-row/index reconciliation with contiguous sequence validation, and
+rejection of settlement from `Started`.
+
+### GREEN — focused review suite
+
+```text
+cargo fmt --all
+cargo test -p bitrouter --all-features trajectory::types::tests:: --lib
+cargo test -p bitrouter --all-features trajectory::store::tests:: --lib
+cargo test -p bitrouter --all-features db::migration::tests::trajectory_ledger_migration_creates_and_removes_only_its_objects -- --exact
+```
+
+Output:
+
+```text
+types: 5 passed; 0 failed
+store: 9 passed; 0 failed
+migration: 1 passed; 0 failed
+```
+
+### Final verification
+
+```text
+cargo fmt --all -- --check
+cargo clippy -q -p bitrouter --all-features --all-targets -- -D warnings
+cargo test -p bitrouter --all-features -- --test-threads=1
+```
+
+All commands exited 0. The serial package suite passed 777 library tests, 20
+binary tests, integration tests, and doc tests; the existing 9 documented
+real-agent tests remained ignored.

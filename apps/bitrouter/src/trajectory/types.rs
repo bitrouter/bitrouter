@@ -55,12 +55,73 @@ pub struct TrajectoryEvent {
     pub content_digest: String,
 }
 
+/// An already-keyed, HMAC-shaped correlation token.
+///
+/// This constructor validates a Task-2-compatible wire shape without ever
+/// accepting or hashing message content in the Task 1 ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct KeyedDigest {
+    value: String,
+    key_id: String,
+}
+
+impl KeyedDigest {
+    pub fn parse(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        let Some((algorithm, remainder)) = value.split_once(':') else {
+            anyhow::bail!("keyed digest must include its algorithm and key id")
+        };
+        if algorithm != "hmac-sha256" {
+            anyhow::bail!("keyed digest must use hmac-sha256")
+        }
+        let Some((key_id, hex_digest)) = remainder.split_once(':') else {
+            anyhow::bail!("keyed digest must include its key id and digest")
+        };
+        if remainder.matches(':').count() != 1 {
+            anyhow::bail!("keyed digest must contain exactly one key id")
+        }
+        validate_keyed_component(key_id, "keyed digest key id")?;
+        if hex_digest.len() != 64
+            || !hex_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            anyhow::bail!("keyed digest must contain 64 lowercase hexadecimal digits")
+        }
+        let key_id = key_id.to_owned();
+        Ok(Self { value, key_id })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+}
+
+impl TryFrom<String> for KeyedDigest {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::parse(value)
+    }
+}
+
+impl From<KeyedDigest> for String {
+    fn from(value: KeyedDigest) -> Self {
+        value.value
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EpisodeStart {
     pub episode_id: String,
     /// Opaque, already-keyed correlation material. Task 1 never hashes it.
-    pub correlation_digest: String,
+    pub correlation_digest: KeyedDigest,
     pub correlation_key_id: String,
     pub correlation_source: String,
     pub completeness: HistoryCompleteness,
@@ -80,21 +141,30 @@ pub struct BeginRequest {
     pub episode: EpisodeStart,
     pub event: TrajectoryEvent,
     /// Opaque, already-keyed full-input correlation value.
-    pub full_input_digest: String,
+    pub full_input_digest: KeyedDigest,
     pub native_parent_id: Option<String>,
     pub protocol: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboxPayload {
+    #[serde(default)]
+    pub structural: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub digests: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutboxWrite {
     pub outbox_id: String,
     pub topic: String,
-    pub payload: serde_json::Value,
+    pub payload: OutboxPayload,
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settlement {
     pub event: TrajectoryEvent,
@@ -108,7 +178,7 @@ pub struct StoredRequest {
     pub episode_id: String,
     pub start_event_id: String,
     pub settlement_event_id: Option<String>,
-    pub full_input_digest: String,
+    pub full_input_digest: KeyedDigest,
     pub native_parent_id: Option<String>,
     pub protocol: String,
     pub status: RequestStatus,
@@ -183,30 +253,59 @@ pub fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
 }
 
 fn validate_evidence(evidence: &TrajectoryEvidence) -> Result<()> {
-    if evidence.structural.len() > 64
-        || evidence.categorical.len() > 64
-        || evidence.digests.len() > 64
-    {
-        anyhow::bail!("trajectory evidence has too many attributes")
+    validate_structured_attributes(
+        &evidence.structural,
+        &evidence.categorical,
+        &evidence.digests,
+        "trajectory evidence",
+    )
+}
+
+pub fn validate_outbox_payload(payload: &OutboxPayload) -> Result<()> {
+    if payload.structural.len() > 64 || payload.digests.len() > 64 {
+        anyhow::bail!("trajectory outbox payload has too many attributes")
     }
-    for key in evidence
-        .structural
+    for key in payload.structural.keys().chain(payload.digests.keys()) {
+        validate_attribute_key(key)?;
+        if attribute_key_looks_sensitive(key) {
+            anyhow::bail!("trajectory outbox payload contains credential-shaped attribute material")
+        }
+    }
+    for (key, digest) in &payload.digests {
+        validate_digest(digest, &format!("trajectory outbox payload digest '{key}'"))?;
+    }
+    Ok(())
+}
+
+fn validate_structured_attributes(
+    structural: &BTreeMap<String, u64>,
+    categorical: &BTreeMap<String, String>,
+    digests: &BTreeMap<String, String>,
+    field: &str,
+) -> Result<()> {
+    if structural.len() > 64 || categorical.len() > 64 || digests.len() > 64 {
+        anyhow::bail!("{field} has too many attributes")
+    }
+    for key in structural
         .keys()
-        .chain(evidence.categorical.keys())
-        .chain(evidence.digests.keys())
+        .chain(categorical.keys())
+        .chain(digests.keys())
     {
         validate_attribute_key(key)?;
+        if attribute_key_looks_sensitive(key) {
+            anyhow::bail!("{field} contains credential-shaped attribute material")
+        }
     }
-    for (key, value) in &evidence.categorical {
+    for (key, value) in categorical {
         if value.trim().is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
-            anyhow::bail!("trajectory categorical attribute '{key}' must be bounded")
+            anyhow::bail!("{field} categorical attribute '{key}' must be bounded")
         }
         if attribute_looks_sensitive(key, value) {
-            anyhow::bail!("trajectory evidence contains credential-shaped attribute material")
+            anyhow::bail!("{field} contains credential-shaped attribute material")
         }
     }
-    for (key, digest) in &evidence.digests {
-        validate_digest(digest, &format!("trajectory evidence digest '{key}'"))?;
+    for (key, digest) in digests {
+        validate_digest(digest, &format!("{field} digest '{key}'"))?;
     }
     Ok(())
 }
@@ -219,7 +318,8 @@ fn validate_identifier(value: &str, field: &str) -> Result<()> {
 }
 
 fn validate_attribute_key(value: &str) -> Result<()> {
-    if !value.contains('.')
+    if value.len() > 128
+        || !value.contains('.')
         || value.starts_with('.')
         || value.ends_with('.')
         || value.chars().any(|character| {
@@ -229,6 +329,21 @@ fn validate_attribute_key(value: &str) -> Result<()> {
         })
     {
         anyhow::bail!("trajectory evidence attribute '{value}' must be a lowercase namespaced id")
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_keyed_component(value: &str, field: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.chars().any(|character| {
+            !(character.is_ascii_lowercase()
+                || character.is_ascii_uppercase()
+                || character.is_ascii_digit()
+                || matches!(character, '_' | '-'))
+        })
+    {
+        anyhow::bail!("{field} must be a bounded token")
     }
     Ok(())
 }
@@ -248,8 +363,18 @@ pub(crate) fn validate_digest(value: &str, field: &str) -> Result<()> {
 }
 
 fn attribute_looks_sensitive(key: &str, value: &str) -> bool {
-    let normalized_key = key.to_ascii_lowercase().replace('-', "_");
-    let sensitive_key = matches!(
+    attribute_key_looks_sensitive(key)
+        || value.to_ascii_lowercase().starts_with("bearer ")
+        || value.to_ascii_lowercase().contains("brvk_")
+        || value.to_ascii_lowercase().starts_with("sk-")
+        || value
+            .to_ascii_lowercase()
+            .contains("-----begin private key-----")
+}
+
+fn attribute_key_looks_sensitive(key: &str) -> bool {
+    let normalized_key = key.to_ascii_lowercase().replace(['-', '.'], "_");
+    matches!(
         normalized_key.as_str(),
         "authorization"
             | "proxy_authorization"
@@ -263,13 +388,7 @@ fn attribute_looks_sensitive(key: &str, value: &str) -> bool {
     ) || normalized_key.ends_with("_secret")
         || normalized_key.ends_with("_api_key")
         || normalized_key.ends_with("_access_token")
-        || normalized_key.ends_with("_refresh_token");
-    let normalized_value = value.to_ascii_lowercase();
-    sensitive_key
-        || normalized_value.starts_with("bearer ")
-        || normalized_value.contains("brvk_")
-        || normalized_value.starts_with("sk-")
-        || normalized_value.contains("-----begin private key-----")
+        || normalized_key.ends_with("_refresh_token")
 }
 
 #[cfg(test)]
@@ -320,6 +439,41 @@ mod tests {
         event.content_digest = event.semantic_digest().unwrap_or_default();
 
         assert!(validate_event(&event).is_err());
+    }
+
+    #[test]
+    fn keyed_correlation_and_outbox_payload_reject_raw_or_sensitive_material() {
+        assert!(KeyedDigest::parse("a raw user prompt").is_err());
+        assert!(KeyedDigest::parse("hmac-sha256:key-1:short").is_err());
+        assert!(
+            KeyedDigest::parse(
+                "hmac-sha256:key-1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            .is_ok()
+        );
+
+        let payload = OutboxPayload {
+            structural: BTreeMap::from([("trajectory.request_count".into(), 1)]),
+            digests: BTreeMap::from([(
+                "trajectory.event".into(),
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            )]),
+        };
+        assert!(validate_outbox_payload(&payload).is_ok());
+
+        let mut sensitive = payload;
+        sensitive.structural.insert("trajectory.api_key".into(), 1);
+        assert!(validate_outbox_payload(&sensitive).is_err());
+    }
+
+    #[test]
+    fn evidence_rejects_unbounded_attribute_keys() {
+        let mut evidence = event_fixture().evidence;
+        evidence
+            .structural
+            .insert(format!("{}.count", "x".repeat(128)), 1);
+
+        assert!(validate_evidence(&evidence).is_err());
     }
 
     fn event_fixture() -> TrajectoryEvent {
