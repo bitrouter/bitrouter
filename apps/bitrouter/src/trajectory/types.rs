@@ -194,6 +194,53 @@ pub struct PendingOutbox {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrajectoryHealth {
+    pub completeness: HistoryCompleteness,
+    pub request_count: u64,
+    pub settled_request_count: u64,
+    pub unsettled_request_count: u64,
+    pub elapsed_ms: u64,
+    pub same_projection_streak: u64,
+    pub same_selected_tier_streak: u64,
+    pub consecutive_unprotected_requests: u64,
+    pub recovery_count: u64,
+    pub requests_since_recovery: Option<u64>,
+    pub context_growth_ppm: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub settled_cost_micro_usd: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrajectorySnapshot {
+    pub episode_id: String,
+    pub through_sequence: u64,
+    pub health: TrajectoryHealth,
+    pub active_hold_remaining: u64,
+    pub evidence_digest: String,
+}
+
+impl TrajectorySnapshot {
+    pub fn semantic_digest(&self) -> Result<String> {
+        canonical_digest(&TrajectorySnapshotDigestInput {
+            episode_id: &self.episode_id,
+            through_sequence: self.through_sequence,
+            health: &self.health,
+            active_hold_remaining: self.active_hold_remaining,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct TrajectorySnapshotDigestInput<'a> {
+    episode_id: &'a str,
+    through_sequence: u64,
+    health: &'a TrajectoryHealth,
+    active_hold_remaining: u64,
+}
+
 impl TrajectoryEvent {
     pub fn semantic_digest(&self) -> Result<String> {
         let input = EventDigestInput {
@@ -435,6 +482,37 @@ mod tests {
         let event = event_fixture();
         let digest = event.semantic_digest()?;
         assert_eq!(digest, event.content_digest);
+        assert!(digest.starts_with("sha256:"));
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_snapshot_digest_excludes_its_own_digest() -> anyhow::Result<()> {
+        let mut snapshot = TrajectorySnapshot {
+            episode_id: "episode-1".to_owned(),
+            through_sequence: 3,
+            health: TrajectoryHealth {
+                completeness: HistoryCompleteness::Complete,
+                request_count: 1,
+                settled_request_count: 1,
+                unsettled_request_count: 0,
+                elapsed_ms: 2_000,
+                same_projection_streak: 1,
+                same_selected_tier_streak: 1,
+                consecutive_unprotected_requests: 1,
+                recovery_count: 0,
+                requests_since_recovery: None,
+                context_growth_ppm: Some(0),
+                total_tokens: Some(0),
+                settled_cost_micro_usd: Some(0),
+            },
+            active_hold_remaining: 0,
+            evidence_digest: String::new(),
+        };
+        let digest = snapshot.semantic_digest()?;
+        snapshot.evidence_digest = format!("sha256:{}", "f".repeat(64));
+
+        assert_eq!(snapshot.semantic_digest()?, digest);
         assert!(digest.starts_with("sha256:"));
         Ok(())
     }
