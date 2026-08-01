@@ -32,6 +32,8 @@ use bitrouter_sdk::language_model::types::{Content, Prompt, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::eval::settlement::{PendingEvalDecision, PendingEvalDecisionStore};
+use crate::trajectory::guard::ProgressGuardPolicy;
+use crate::trajectory::types::HistoryCompleteness;
 use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
 use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
 use crate::workflow_state::online::OnlineWorkflowState;
@@ -41,6 +43,8 @@ use crate::workflow_state::session::WorkflowIdentityTracker;
 pub enum PolicyDecisionReason {
     StaticTable,
     ToolGuardrail,
+    ProgressGuard,
+    ProgressGuardToolGuardrail,
     NoMatch,
 }
 
@@ -49,6 +53,8 @@ impl PolicyDecisionReason {
         match self {
             Self::StaticTable => "static_table",
             Self::ToolGuardrail => "tool_guardrail",
+            Self::ProgressGuard => "progress_guard",
+            Self::ProgressGuardToolGuardrail => "progress_guard_tool_guardrail",
             Self::NoMatch => "no_match",
         }
     }
@@ -64,6 +70,7 @@ impl fmt::Display for PolicyDecisionReason {
 pub struct PolicyDecision {
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
+    pub route_projection: String,
     pub legacy_fingerprint: String,
     pub workflow_state_kind: String,
     pub harness_id: HarnessId,
@@ -79,6 +86,12 @@ pub struct PolicyDecision {
     pub semantic_success_threshold: u32,
     pub locked: bool,
     pub trialed: bool,
+    pub trajectory_episode_id: Option<String>,
+    pub trajectory_sequence: Option<u64>,
+    pub trajectory_completeness: Option<HistoryCompleteness>,
+    pub trajectory_health_digest: Option<String>,
+    pub progress_candidate_tier: Option<String>,
+    pub progress_clause_ids: Vec<String>,
 }
 
 impl PolicyDecision {
@@ -211,6 +224,7 @@ pub struct PolicyTableRouter {
     state_namespace: Option<String>,
     identity_tracker: WorkflowIdentityTracker,
     eval_observer: Option<EvalDecisionObserver>,
+    progress_guard: Option<ProgressGuardPolicy>,
 }
 
 #[derive(Clone)]
@@ -234,6 +248,7 @@ impl PolicyTableRouter {
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
             eval_observer: None,
+            progress_guard: None,
         })
     }
 
@@ -245,6 +260,7 @@ impl PolicyTableRouter {
             state_namespace: None,
             identity_tracker: WorkflowIdentityTracker::default(),
             eval_observer: None,
+            progress_guard: None,
         }
     }
 
@@ -285,6 +301,23 @@ impl PolicyTableRouter {
         self
     }
 
+    pub(crate) fn with_progress_guard(mut self, guard: Option<ProgressGuardPolicy>) -> Self {
+        self.progress_guard = guard;
+        self
+    }
+
+    pub(crate) fn progress_guard(&self) -> Option<&ProgressGuardPolicy> {
+        self.progress_guard.as_ref()
+    }
+
+    pub(crate) fn tool_use_tier(&self) -> Option<&str> {
+        self.table.tool_use_tier.as_deref()
+    }
+
+    pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
+        self.table.tool_safe_tiers.iter().cloned().collect()
+    }
+
     fn ledger_key(&self, request_key: &str) -> String {
         self.state_namespace.as_ref().map_or_else(
             || request_key.to_string(),
@@ -302,7 +335,7 @@ impl PolicyTableRouter {
     }
 
     pub fn decision_for(&self, prompt: &Prompt, headers: &HeaderMap) -> PolicyDecision {
-        self.decision_for_inner(prompt, headers, true, true)
+        self.decision_for_inner(prompt, headers, true, true, true)
     }
 
     fn decision_for_inner(
@@ -311,6 +344,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         respect_explicit_route: bool,
         use_shared_identity_tracker: bool,
+        apply_tool_floor: bool,
     ) -> PolicyDecision {
         let online = if use_shared_identity_tracker {
             OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker)
@@ -322,6 +356,7 @@ impl PolicyTableRouter {
         let mut decision = PolicyDecision {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             request_key: primary_request_key.clone(),
+            route_projection: primary_request_key.clone(),
             legacy_fingerprint,
             workflow_state_kind: online.ir.state_kind.to_string(),
             harness_id: online.ir.harness_id.clone(),
@@ -337,6 +372,12 @@ impl PolicyTableRouter {
             semantic_success_threshold: 0,
             locked: false,
             trialed: false,
+            trajectory_episode_id: None,
+            trajectory_sequence: None,
+            trajectory_completeness: None,
+            trajectory_health_digest: None,
+            progress_candidate_tier: None,
+            progress_clause_ids: Vec::new(),
         };
 
         if (respect_explicit_route && is_explicitly_routed(&prompt.model))
@@ -357,8 +398,11 @@ impl PolicyTableRouter {
             .table
             .model_of_tier(raw_static_tier)
             .map(ToString::to_string);
-        let (selected_tier, static_clamped) =
-            self.table.guardrail_with_status(raw_static_tier, prompt);
+        let (selected_tier, static_clamped) = if apply_tool_floor {
+            self.table.guardrail_with_status(raw_static_tier, prompt)
+        } else {
+            (raw_static_tier, false)
+        };
         decision.reason = if static_clamped {
             PolicyDecisionReason::ToolGuardrail
         } else {
@@ -398,7 +442,37 @@ impl PolicyTableRouter {
         prompt: &Prompt,
         headers: &HeaderMap,
     ) -> PolicyDecision {
-        self.decision_for_inner(prompt, headers, false, false)
+        self.decision_for_inner(prompt, headers, false, false, true)
+    }
+
+    pub(crate) fn candidate_for_guarded_policy(
+        &self,
+        prompt: &Prompt,
+        headers: &HeaderMap,
+    ) -> PolicyDecision {
+        self.decision_for_inner(prompt, headers, false, false, false)
+    }
+
+    pub(crate) fn apply_guarded_route(
+        &self,
+        decision: &mut PolicyDecision,
+        selected_tier: Option<&str>,
+        guard_applied: bool,
+        tool_floor_applied: bool,
+    ) {
+        decision.selected_tier = selected_tier.map(ToOwned::to_owned);
+        decision.selected_model = selected_tier
+            .and_then(|tier| self.table.model_of_tier(tier))
+            .map(ToOwned::to_owned);
+        decision.reason = match (guard_applied, tool_floor_applied) {
+            (true, true) => PolicyDecisionReason::ProgressGuardToolGuardrail,
+            (true, false) => PolicyDecisionReason::ProgressGuard,
+            (false, true) => PolicyDecisionReason::ToolGuardrail,
+            (false, false) if decision.selected_model.is_some() => {
+                PolicyDecisionReason::StaticTable
+            }
+            (false, false) => PolicyDecisionReason::NoMatch,
+        };
     }
 
     pub(crate) fn record_bound_policy_decision(
@@ -451,6 +525,12 @@ impl PolicyTableRouter {
             static_model = ?decision.static_model,
             selected_tier = ?decision.selected_tier,
             selected_model = ?decision.selected_model,
+            trajectory_episode_id = ?decision.trajectory_episode_id,
+            trajectory_sequence = ?decision.trajectory_sequence,
+            trajectory_completeness = ?decision.trajectory_completeness,
+            trajectory_health_digest = ?decision.trajectory_health_digest,
+            progress_candidate_tier = ?decision.progress_candidate_tier,
+            progress_clause_ids = ?decision.progress_clause_ids,
             reason = %decision.reason,
             pinned = decision.pinned,
             request_qualified = decision.request_qualified,
@@ -502,6 +582,19 @@ impl PolicyTableRouter {
                 static_model: decision.static_model.clone(),
                 selected_tier: decision.selected_tier.clone(),
                 selected_model: decision.selected_model.clone(),
+                trajectory_episode_id: decision.trajectory_episode_id.clone(),
+                trajectory_sequence: decision.trajectory_sequence,
+                trajectory_completeness: decision
+                    .trajectory_completeness
+                    .map(|value| match value {
+                        HistoryCompleteness::Complete => "complete",
+                        HistoryCompleteness::Incomplete => "incomplete",
+                        HistoryCompleteness::Unknown => "unknown",
+                    })
+                    .map(ToOwned::to_owned),
+                trajectory_health_digest: decision.trajectory_health_digest.clone(),
+                candidate_tier: decision.progress_candidate_tier.clone(),
+                progress_clause_ids: decision.progress_clause_ids.clone(),
                 reason: decision.reason.to_string(),
                 pinned: decision.pinned,
                 request_qualified: decision.request_qualified,
@@ -1208,6 +1301,22 @@ mod tests {
         assert_eq!(decision.reason, PolicyDecisionReason::ToolGuardrail);
         assert_eq!(decision.static_tier.as_deref(), Some("cheap"));
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+    }
+
+    #[test]
+    fn decision_reason_records_progress_guard_before_tool_floor() {
+        let router = router();
+        let mut decision =
+            router.candidate_for_guarded_policy(&prompt("inbound"), &HeaderMap::new());
+
+        router.apply_guarded_route(&mut decision, Some("flagship"), true, true);
+
+        assert_eq!(
+            decision.reason,
+            PolicyDecisionReason::ProgressGuardToolGuardrail
+        );
+        assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
+        assert_eq!(decision.selected_model.as_deref(), Some("vendor/flagship"));
     }
 
     #[test]

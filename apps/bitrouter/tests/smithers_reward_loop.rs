@@ -139,6 +139,12 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         static_model: Some("local/strong".to_string()),
         selected_tier: Some("economy".to_string()),
         selected_model: Some("local/economy".to_string()),
+        trajectory_episode_id: None,
+        trajectory_sequence: None,
+        trajectory_completeness: None,
+        trajectory_health_digest: None,
+        candidate_tier: None,
+        progress_clause_ids: Vec::new(),
         reason: "exploration_trial".to_string(),
         pinned: false,
         request_qualified: true,
@@ -195,6 +201,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         parent_digest: Some(&parent_digest),
         legacy: &legacy,
         eval: Some(&evidence),
+        proposed_progress_guards: None,
     })?
     .document;
     assert_eq!(evolved.policies["smithers"].routes[target_key], "economy");
@@ -205,6 +212,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         parent_digest: Some(&parent_digest),
         legacy: &legacy,
         eval: Some(&evidence),
+        proposed_progress_guards: None,
     })?
     .document;
     assert_eq!(

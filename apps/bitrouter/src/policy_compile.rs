@@ -19,6 +19,7 @@ use crate::policy_lock::{
     PolicyArtifact, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
     QualitySummary, RouteOwner, semantic_digest, validate_document,
 };
+use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 
 /// A point-in-time, ordered view of every pre-v2 learned-state table.
@@ -90,6 +91,9 @@ pub struct CompileInput<'a> {
     pub parent_digest: Option<&'a str>,
     pub legacy: &'a LegacyAdequacySnapshot,
     pub eval: Option<&'a EvalEvidenceSnapshot>,
+    /// Explicit operator/compiler input for guard proposals. `None` preserves
+    /// the active lock exactly; admitted L1 evidence never mutates guards.
+    pub proposed_progress_guards: Option<&'a BTreeMap<String, Option<ProgressGuardPolicy>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -123,6 +127,7 @@ struct CompilerConfigDigest {
     version: u32,
     precedence: &'static str,
     minimum_quality_ppm: i64,
+    progress_guard_proposals_digest: String,
 }
 
 #[derive(Default)]
@@ -153,6 +158,7 @@ pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
         version: POLICY_COMPILER_VERSION,
         precedence: "guardrail>operator>eval_negative>eval_positive>legacy_negative>legacy_positive>inherited",
         minimum_quality_ppm: 900_000,
+        progress_guard_proposals_digest: canonical_digest(&input.proposed_progress_guards)?,
     })?;
     let parent_digest = match input.parent_digest {
         Some(digest) => digest.to_string(),
@@ -177,6 +183,14 @@ pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
         policies: input.current.policies.clone(),
         certificates: BTreeMap::new(),
     };
+    if let Some(proposals) = input.proposed_progress_guards {
+        for (policy_name, proposal) in proposals {
+            let policy = document.policies.get_mut(policy_name).ok_or_else(|| {
+                anyhow::anyhow!("progress guard proposal references missing policy '{policy_name}'")
+            })?;
+            policy.progress_guard = proposal.clone();
+        }
+    }
     let mut changes = Vec::new();
     let mut conflicts = Vec::new();
 
@@ -842,12 +856,14 @@ mod tests {
             parent_digest: None,
             legacy: &snapshot(true, None),
             eval: None,
+            proposed_progress_guards: None,
         })?;
         let corrected = super::compile_candidate(super::CompileInput {
             current: &learned.document,
             parent_digest: None,
             legacy: &snapshot(true, Some(1_700_000_000)),
             eval: None,
+            proposed_progress_guards: None,
         })?;
 
         assert_eq!(
@@ -869,6 +885,7 @@ mod tests {
             parent_digest: None,
             legacy: &snapshot(false, Some(1_700_000_000)),
             eval: None,
+            proposed_progress_guards: None,
         })?;
 
         assert_eq!(result.document.policies["auto"].routes[EDIT_KEY], "economy");
@@ -953,6 +970,7 @@ mod tests {
             parent_digest: None,
             legacy: &snapshot(false, None),
             eval: Some(&eval),
+            proposed_progress_guards: None,
         })?;
 
         assert_eq!(
@@ -976,12 +994,14 @@ mod tests {
             parent_digest: None,
             legacy: &evidence,
             eval: None,
+            proposed_progress_guards: None,
         })?;
         let right = super::compile_candidate(super::CompileInput {
             current: &current,
             parent_digest: None,
             legacy: &evidence,
             eval: None,
+            proposed_progress_guards: None,
         })?;
 
         assert_eq!(left.document, right.document);
@@ -1026,6 +1046,7 @@ mod tests {
             parent_digest: None,
             legacy: &evidence,
             eval: None,
+            proposed_progress_guards: None,
         })?;
 
         assert!(
@@ -1104,6 +1125,7 @@ mod tests {
             parent_digest: None,
             legacy: &snapshot(false, None),
             eval: Some(&eval),
+            proposed_progress_guards: None,
         })?;
 
         assert_eq!(
@@ -1205,11 +1227,62 @@ mod tests {
             parent_digest: None,
             legacy: &snapshot(false, None),
             eval: Some(&eval),
+            proposed_progress_guards: None,
         })?;
 
         assert_eq!(
             compiled.document.policies["auto"].routes[EDIT_KEY],
             "economy"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compiler_preserves_guards_unless_explicit_input_proposes_change() -> anyhow::Result<()> {
+        use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+
+        let guard = ProgressGuardPolicy {
+            escalation_tier: "strong".into(),
+            protected_tiers: BTreeSet::from(["strong".into()]),
+            max_consecutive_unprotected: Some(3),
+            max_same_projection_unprotected: Some(4),
+            max_recovery_count: Some(1),
+            max_episode_requests: Some(8),
+            max_episode_elapsed_ms: None,
+            max_episode_cost_micro_usd: Some(50_000),
+            hold_for_requests: 2,
+            incomplete_history: IncompleteHistoryAction::Observe,
+        };
+        let mut current = PolicyLock::default();
+        let mut definition = policy(None);
+        definition.progress_guard = Some(guard.clone());
+        current.policies.insert("auto".into(), definition);
+
+        let preserved = super::compile_candidate(super::CompileInput {
+            current: &current,
+            parent_digest: None,
+            legacy: &snapshot(false, None),
+            eval: None,
+            proposed_progress_guards: None,
+        })?;
+        assert_eq!(
+            preserved.document.policies["auto"].progress_guard,
+            Some(guard.clone())
+        );
+
+        let mut proposed = guard.clone();
+        proposed.max_episode_requests = Some(12);
+        let proposals = BTreeMap::from([("auto".to_string(), Some(proposed.clone()))]);
+        let changed = super::compile_candidate(super::CompileInput {
+            current: &current,
+            parent_digest: None,
+            legacy: &snapshot(false, None),
+            eval: None,
+            proposed_progress_guards: Some(&proposals),
+        })?;
+        assert_eq!(
+            changed.document.policies["auto"].progress_guard,
+            Some(proposed)
         );
         Ok(())
     }

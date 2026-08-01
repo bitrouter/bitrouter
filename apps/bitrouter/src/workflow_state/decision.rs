@@ -50,6 +50,18 @@ pub struct PolicyDecisionRecord {
     pub selected_tier: Option<String>,
     #[serde(default)]
     pub selected_model: Option<String>,
+    #[serde(default)]
+    pub trajectory_episode_id: Option<String>,
+    #[serde(default)]
+    pub trajectory_sequence: Option<u64>,
+    #[serde(default)]
+    pub trajectory_completeness: Option<String>,
+    #[serde(default)]
+    pub trajectory_health_digest: Option<String>,
+    #[serde(default)]
+    pub candidate_tier: Option<String>,
+    #[serde(default)]
+    pub progress_clause_ids: Vec<String>,
     pub reason: String,
     pub pinned: bool,
     #[serde(default)]
@@ -324,6 +336,12 @@ mod tests {
             static_model: Some("vendor/capable".to_string()),
             selected_tier: Some("cheap".to_string()),
             selected_model: Some("vendor/cheap".to_string()),
+            trajectory_episode_id: None,
+            trajectory_sequence: None,
+            trajectory_completeness: None,
+            trajectory_health_digest: None,
+            candidate_tier: None,
+            progress_clause_ids: Vec::new(),
             reason: "static_table".to_string(),
             pinned: false,
             request_qualified: true,
