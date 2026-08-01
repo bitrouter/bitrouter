@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum_test::TestServer;
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
@@ -75,6 +76,17 @@ struct HttpHarness {
 
 impl HttpHarness {
     async fn new(progress_guard: bool) -> anyhow::Result<Self> {
+        Self::new_with_upstream(progress_guard, InboundProtocol::Chat).await
+    }
+
+    async fn streaming_responses() -> anyhow::Result<Self> {
+        Self::new_with_upstream(true, InboundProtocol::Responses).await
+    }
+
+    async fn new_with_upstream(
+        progress_guard: bool,
+        upstream_protocol: InboundProtocol,
+    ) -> anyhow::Result<Self> {
         let policy = PolicyDefinition {
             tiers: BTreeMap::from([
                 ("economy".into(), "economy:economy-model".into()),
@@ -99,13 +111,20 @@ impl HttpHarness {
         };
         let mut lock = PolicyLock::default();
         lock.policies.insert("auto".into(), policy);
-        Self::with_lock(lock).await
+        Self::with_lock_and_upstream(lock, upstream_protocol).await
     }
 
     async fn with_lock(lock: PolicyLock) -> anyhow::Result<Self> {
+        Self::with_lock_and_upstream(lock, InboundProtocol::Chat).await
+    }
+
+    async fn with_lock_and_upstream(
+        lock: PolicyLock,
+        upstream_protocol: InboundProtocol,
+    ) -> anyhow::Result<Self> {
         let home = tempfile::tempdir()?;
-        let strong = mock_upstream("strong-model").await;
-        let economy = mock_upstream("economy-model").await;
+        let strong = mock_upstream("strong-model", upstream_protocol).await;
+        let economy = mock_upstream("economy-model", upstream_protocol).await;
         let database_url = format!(
             "sqlite://{}?mode=rwc",
             home.path().join("trajectory.db").display()
@@ -129,21 +148,21 @@ providers:
     api_base: "{strong_uri}"
     api_key: test-key
     api_protocol:
-      - "*": chat_completions
+      - "*": {upstream_protocol}
     models:
       - id: strong-model
   economy:
     api_base: "{economy_uri}"
     api_key: test-key
     api_protocol:
-      - "*": chat_completions
+      - "*": {upstream_protocol}
     models:
       - id: economy-model
   balanced:
     api_base: "{economy_uri}"
     api_key: test-key
     api_protocol:
-      - "*": chat_completions
+      - "*": {upstream_protocol}
     models:
       - id: balanced-model
 presets:
@@ -156,6 +175,7 @@ presets:
 "#,
             strong_uri = strong.uri(),
             economy_uri = economy.uri(),
+            upstream_protocol = upstream_protocol.persisted_name(),
         );
         let config = config::parse_with(&yaml, |_| None)?;
         write_policy_lock(home.path(), &lock).await?;
@@ -199,15 +219,29 @@ presets:
     }
 }
 
-async fn mock_upstream(model: &str) -> MockServer {
+async fn mock_upstream(model: &str, protocol: InboundProtocol) -> MockServer {
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(NativeIdResponse {
-            model: model.to_owned(),
-        })
-        .mount(&server)
-        .await;
+    match protocol {
+        InboundProtocol::Responses => {
+            Mock::given(method("POST"))
+                .and(path("/responses"))
+                .respond_with(NativeResponsesStream {
+                    model: model.to_owned(),
+                    next_id: AtomicUsize::new(0),
+                })
+                .mount(&server)
+                .await;
+        }
+        InboundProtocol::Chat | InboundProtocol::Messages => {
+            Mock::given(method("POST"))
+                .and(path("/chat/completions"))
+                .respond_with(NativeIdResponse {
+                    model: model.to_owned(),
+                })
+                .mount(&server)
+                .await;
+        }
+    }
     server
 }
 
@@ -233,6 +267,114 @@ impl Respond for NativeIdResponse {
             }],
             "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
         }))
+    }
+}
+
+struct NativeResponsesStream {
+    model: String,
+    next_id: AtomicUsize,
+}
+
+impl Respond for NativeResponsesStream {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let upstream_id = format!(
+            "provider-only-response-{}-{}",
+            self.model,
+            self.next_id.fetch_add(1, Ordering::SeqCst)
+        );
+        let item = json!({
+            "id": format!("provider-item-{upstream_id}"),
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": ASSISTANT_REVIEW_ACTION}]
+        });
+        let response = json!({
+            "id": upstream_id,
+            "object": "response",
+            "status": "completed",
+            "model": self.model,
+            "output": [item],
+            "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
+        });
+        let events = [
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": upstream_id,
+                    "object": "response",
+                    "status": "in_progress",
+                    "model": self.model,
+                    "output": []
+                }
+            }),
+            json!({
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {
+                    "id": format!("provider-item-{upstream_id}"),
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                }
+            }),
+            json!({
+                "type": "response.content_part.added",
+                "sequence_number": 2,
+                "item_id": format!("provider-item-{upstream_id}"),
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": ""}
+            }),
+            json!({
+                "type": "response.output_text.delta",
+                "sequence_number": 3,
+                "item_id": format!("provider-item-{upstream_id}"),
+                "output_index": 0,
+                "content_index": 0,
+                "delta": ASSISTANT_REVIEW_ACTION
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "sequence_number": 4,
+                "item_id": format!("provider-item-{upstream_id}"),
+                "output_index": 0,
+                "content_index": 0,
+                "text": ASSISTANT_REVIEW_ACTION
+            }),
+            json!({
+                "type": "response.content_part.done",
+                "sequence_number": 5,
+                "item_id": format!("provider-item-{upstream_id}"),
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": ASSISTANT_REVIEW_ACTION}
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "sequence_number": 6,
+                "output_index": 0,
+                "item": item
+            }),
+            json!({
+                "type": "response.completed",
+                "sequence_number": 7,
+                "response": response
+            }),
+        ];
+        let body = events
+            .iter()
+            .map(|event| {
+                let event_type = event["type"].as_str().unwrap_or("message");
+                format!("event: {event_type}\ndata: {event}\n\n")
+            })
+            .collect::<String>();
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(body)
     }
 }
 
@@ -324,6 +466,85 @@ async fn post_body(
         .as_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| anyhow::anyhow!("{stage} response has no native id"))
+}
+
+async fn post_streaming_responses(
+    server: &TestServer,
+    bearer: &str,
+    input: &str,
+    previous_response_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut body = json!({"model": "@auto", "stream": true, "input": input});
+    if let Some(previous_response_id) = previous_response_id {
+        body["previous_response_id"] = Value::String(previous_response_id.to_owned());
+    }
+    let response = server
+        .post(InboundProtocol::Responses.endpoint())
+        .add_header("authorization", format!("Bearer {bearer}"))
+        .json(&body)
+        .await;
+    assert_eq!(
+        response.status_code().as_u16(),
+        200,
+        "streaming Responses request failed: {}",
+        response.text()
+    );
+    let body = response.text();
+    let events = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let terminal = events
+        .iter()
+        .find(|event| event["type"] == "response.completed")
+        .ok_or_else(|| anyhow::anyhow!("stream omitted response.completed: {body}"))?;
+    let terminal_id = terminal["response"]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("terminal response omitted id: {terminal}"))?;
+    let response_ids = events
+        .iter()
+        .filter_map(|event| event["response"]["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !response_ids.is_empty(),
+        "stream omitted lifecycle response ids"
+    );
+    assert!(
+        response_ids.iter().all(|id| *id == terminal_id),
+        "one stream exposed multiple continuation identities: {response_ids:?}"
+    );
+    Ok(terminal_id.to_owned())
+}
+
+async fn trajectory_durable_surfaces(
+    db: &DatabaseConnection,
+    owner: &str,
+) -> anyhow::Result<Vec<String>> {
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT event_json AS value FROM trajectory_events WHERE owner_user_id = ? \
+             UNION ALL SELECT payload_json AS value FROM trajectory_outbox WHERE owner_user_id = ? \
+             UNION ALL SELECT request_id AS value FROM trajectory_requests WHERE owner_user_id = ? \
+             UNION ALL SELECT COALESCE(native_parent_id, '') AS value FROM trajectory_requests WHERE owner_user_id = ? \
+             UNION ALL SELECT COALESCE(latest_request_id, '') AS value FROM trajectory_episodes WHERE owner_user_id = ? \
+             UNION ALL SELECT subject_json AS value FROM eval_subjects WHERE owner_user_id = ? \
+             UNION ALL SELECT result_json AS value FROM eval_results WHERE owner_user_id = ?",
+            [
+                owner.into(),
+                owner.into(),
+                owner.into(),
+                owner.into(),
+                owner.into(),
+                owner.into(),
+                owner.into(),
+            ],
+        ))
+        .await?;
+    rows.into_iter()
+        .map(|row| row.try_get("", "value").map_err(Into::into))
+        .collect()
 }
 
 async fn owner_episode_ids(db: &DatabaseConnection, owner: &str) -> anyhow::Result<Vec<String>> {
@@ -894,6 +1115,105 @@ async fn header_free_chat_messages_and_responses_have_equivalent_progress() -> a
     assert_eq!(chat.settled_request_count, 3);
     assert_eq!(chat.recovery_count, 1);
     assert_eq!(chat.active_hold_remaining, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn streaming_responses_terminal_id_continues_episode_across_restart() -> anyhow::Result<()> {
+    let harness = HttpHarness::streaming_responses().await?;
+    let first_app = harness.assemble().await?;
+    let first_server = server(&first_app);
+    let owner = "streaming-responses-owner";
+    let bearer = add_owner(&first_app.db, owner).await?;
+
+    let first_id =
+        post_streaming_responses(&first_server, &bearer, "inspect the repository", None).await?;
+    let second_id = post_streaming_responses(
+        &first_server,
+        &bearer,
+        "continue the implementation",
+        Some(&first_id),
+    )
+    .await?;
+    assert_ne!(first_id, second_id);
+
+    let episode_ids = owner_episode_ids(&first_app.db, owner).await?;
+    assert_eq!(episode_ids.len(), 1, "both turns must share one episode");
+    let diagnostics = request_diagnostics(&first_app.db, owner).await?;
+    assert_eq!(diagnostics.len(), 2);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|(protocol, _)| protocol == "responses")
+    );
+    assert_eq!(diagnostics[0].1, None);
+    assert!(
+        diagnostics[1]
+            .1
+            .as_deref()
+            .is_some_and(|parent| parent.starts_with("trajectory-request-")),
+        "second turn must persist an opaque native parent"
+    );
+    let before_restart = normalized_outcome(&first_app.db, owner).await?;
+    assert_eq!(
+        before_restart.correlation_sources,
+        ["explicit_root", "native_parent_id"]
+    );
+    assert_eq!(before_restart.completeness, HistoryCompleteness::Complete);
+    assert_eq!(before_restart.request_count, 2);
+    assert_eq!(before_restart.settled_request_count, 2);
+    let published = first_app
+        .trajectory_outbox_publisher
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("trajectory publisher missing"))?
+        .drain_after_active_worker()
+        .await?;
+    assert_eq!(published.failed, 0);
+    for surface in trajectory_durable_surfaces(&first_app.db, owner).await? {
+        assert!(
+            !surface.contains("provider-only-response-"),
+            "raw upstream response id escaped into trajectory storage"
+        );
+    }
+
+    drop(first_server);
+    drop(first_app);
+
+    let restarted_app = harness.assemble().await?;
+    let restarted_server = server(&restarted_app);
+    let third_id = post_streaming_responses(
+        &restarted_server,
+        &bearer,
+        "review the completed change",
+        Some(&second_id),
+    )
+    .await?;
+    assert_ne!(second_id, third_id);
+    assert_eq!(
+        owner_episode_ids(&restarted_app.db, owner).await?,
+        episode_ids
+    );
+    let after_restart = normalized_outcome(&restarted_app.db, owner).await?;
+    assert_eq!(
+        after_restart.correlation_sources,
+        ["explicit_root", "native_parent_id", "native_parent_id"]
+    );
+    assert_eq!(after_restart.completeness, HistoryCompleteness::Complete);
+    assert_eq!(after_restart.request_count, 3);
+    assert_eq!(after_restart.settled_request_count, 3);
+    let published = restarted_app
+        .trajectory_outbox_publisher
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("restarted trajectory publisher missing"))?
+        .drain_after_active_worker()
+        .await?;
+    assert_eq!(published.failed, 0);
+    for surface in trajectory_durable_surfaces(&restarted_app.db, owner).await? {
+        assert!(
+            !surface.contains("provider-only-response-"),
+            "raw upstream response id escaped after restart"
+        );
+    }
     Ok(())
 }
 

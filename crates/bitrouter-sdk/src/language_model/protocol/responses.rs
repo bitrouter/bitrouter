@@ -3048,15 +3048,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 };
                 self.emit_terminal(&mut frames, status, &self.request_id.clone(), None);
             }
-            StreamPart::ResponseCompleted { id, status, usage } => {
-                // A native Responses terminal part — use the carried id/status
-                //, falling back to our request id if absent.
-                let response_id = if id.is_empty() {
-                    self.request_id.clone()
-                } else {
-                    id.clone()
-                };
-                self.emit_terminal(&mut frames, status, &response_id, usage.clone());
+            StreamPart::ResponseCompleted { status, usage, .. } => {
+                // The carried id identifies the upstream provider response. The
+                // client continuation identity is the gateway request id used by
+                // non-streaming Responses and trajectory correlation.
+                self.emit_terminal(&mut frames, status, &self.request_id.clone(), usage.clone());
             }
         }
         Ok(frames)
