@@ -9,6 +9,7 @@ use chrono::{DateTime, SecondsFormat, TimeDelta};
 use crate::metering::MeteringSettlementEvent;
 
 use super::{
+    canonical::CorrelationKey,
     evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation},
     publisher::TrajectoryOutboxPublisher,
     store::TrajectoryStore,
@@ -22,11 +23,20 @@ use super::{
 pub(crate) struct TrajectorySettlementRecorder {
     store: TrajectoryStore,
     publisher: TrajectoryOutboxPublisher,
+    identity_key: CorrelationKey,
 }
 
 impl TrajectorySettlementRecorder {
-    pub(crate) fn new(store: TrajectoryStore, publisher: TrajectoryOutboxPublisher) -> Self {
-        Self { store, publisher }
+    pub(crate) fn new(
+        store: TrajectoryStore,
+        publisher: TrajectoryOutboxPublisher,
+        identity_key: CorrelationKey,
+    ) -> Self {
+        Self {
+            store,
+            publisher,
+            identity_key,
+        }
     }
 
     /// Returns `true` when the request belongs to the durable trajectory ledger.
@@ -34,9 +44,12 @@ impl TrajectorySettlementRecorder {
     /// left unsettled; absence is never converted into zero-valued evidence.
     pub(crate) async fn record_if_tracked(&self, context: &SettlementContext) -> Result<bool> {
         let owner_user_id = context.caller.user_id();
+        let request_id = self
+            .identity_key
+            .request_identity(owner_user_id, &context.request_id)?;
         if self
             .store
-            .request(owner_user_id, &context.request_id)
+            .request(owner_user_id, &request_id)
             .await?
             .is_none()
         {
@@ -49,7 +62,6 @@ impl TrajectorySettlementRecorder {
             anyhow::bail!("metering settlement identity does not match trajectory request")
         }
         let owner = owner_user_id.to_owned();
-        let request_id = context.request_id.clone();
         self.store
             .settle_request_from_current_head(&owner, &request_id, |request, events, sequence| {
                 build_settlement(&owner, request, events, sequence, &metering)
@@ -320,19 +332,21 @@ mod tests {
     #[tokio::test]
     async fn tracked_request_without_metering_proof_remains_unsettled() -> anyhow::Result<()> {
         let (db, store) = store().await?;
-        begin_guarded(&store, "request-1", "episode-1").await?;
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let request_id = identity_key.request_identity("owner-a", "request-1")?;
+        begin_guarded(&store, &request_id, "episode-1").await?;
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             EvalStore::new(db),
             EvalConfig::default(),
             10,
         )?;
-        let recorder = TrajectorySettlementRecorder::new(store.clone(), publisher);
+        let recorder = TrajectorySettlementRecorder::new(store.clone(), publisher, identity_key);
 
         assert!(recorder.record_if_tracked(&context("request-1")).await?);
         assert_eq!(
             store
-                .request("owner-a", "request-1")
+                .request("owner-a", &request_id)
                 .await?
                 .map(|request| request.status),
             Some(RequestStatus::Started)
@@ -402,44 +416,72 @@ mod tests {
     #[tokio::test]
     async fn adversarial_input_never_reaches_ledger_outbox_eval_or_operator_reports()
     -> anyhow::Result<()> {
-        const SENTINELS: [&str; 6] = [
+        const SENTINELS: [&str; 8] = [
             "sk-live-API-KEY-SENTINEL",
             "Bearer AUTHORIZATION-SENTINEL",
             "private-prompt-SENTINEL",
             "private-tool-arguments-SENTINEL",
             "private-file-body-SENTINEL",
             "private-provider-metadata-SENTINEL",
+            "private-native-parent-SECRET-task-label-SENTINEL",
+            "private-request-header-SECRET-task-label-SENTINEL",
         ];
         let (db, store) = store().await?;
-        let runtime = TrajectoryRuntime::new(
-            store.clone(),
-            Canonicalizer::new(CorrelationKey::from_bytes([41; 32])?),
-        );
-        let input = correlate_input("request-private", "unused-episode");
-        let guarded_route = input
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let runtime =
+            TrajectoryRuntime::new(store.clone(), Canonicalizer::new(identity_key.clone()));
+        let first_input = correlate_input("privacy-first", "unused-episode");
+        let first_guarded_route = first_input
             .guarded_route
             .ok_or_else(|| anyhow::anyhow!("privacy fixture lost its guarded route"))?;
         let prompt = adversarial_prompt(&SENTINELS);
+        let (first, _) = runtime
+            .begin_guarded_request(
+                "owner-a",
+                SENTINELS[6],
+                ApiProtocol::Responses,
+                &prompt,
+                "2026-08-01T00:00:00Z",
+                first_guarded_route,
+            )
+            .await?;
+        let mut continuation_prompt = adversarial_prompt(&SENTINELS);
+        continuation_prompt.params.extra.insert(
+            "previous_response_id".into(),
+            serde_json::json!(SENTINELS[6]),
+        );
+        let second_input = correlate_input("privacy-second", "unused-episode");
+        let second_guarded_route = second_input
+            .guarded_route
+            .ok_or_else(|| anyhow::anyhow!("privacy continuation lost its guarded route"))?;
         let (correlated, _) = runtime
             .begin_guarded_request(
                 "owner-a",
-                "request-private",
-                ApiProtocol::ChatCompletions,
-                &prompt,
-                "2026-08-01T00:00:00Z",
-                guarded_route,
+                SENTINELS[7],
+                ApiProtocol::Responses,
+                &continuation_prompt,
+                "2026-08-01T00:00:01Z",
+                second_guarded_route,
             )
             .await?;
-        let metering = metering("request-private");
-        store
-            .settle_request_from_current_head(
-                "owner-a",
-                "request-private",
-                |request, events, sequence| {
-                    build_settlement("owner-a", request, events, sequence, &metering)
-                },
-            )
-            .await?;
+        assert_eq!(correlated.episode_id, first.episode_id);
+        assert_eq!(
+            correlated.evidence.native_parent_id.as_deref(),
+            Some(first.request_id.as_str())
+        );
+        let eval_store = EvalStore::new(db.clone());
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            eval_store.clone(),
+            EvalConfig::default(),
+            10,
+        )?;
+        let recorder =
+            TrajectorySettlementRecorder::new(store.clone(), publisher.clone(), identity_key);
+        let mut settlement_context = context(SENTINELS[7]);
+        settlement_context.emit(metering(SENTINELS[7]));
+        assert!(recorder.record_if_tracked(&settlement_context).await?);
+        publisher.wait_for_idle().await;
 
         let mut surfaces = Vec::new();
         surfaces.extend(
@@ -458,6 +500,28 @@ mod tests {
             )
             .await?,
         );
+        for column in ["request_id", "native_parent_id"] {
+            surfaces.extend(
+                raw_json_column(
+                    &db,
+                    &format!(
+                        "SELECT COALESCE({column}, '') AS value \
+                         FROM trajectory_requests ORDER BY request_id"
+                    ),
+                    "value",
+                )
+                .await?,
+            );
+        }
+        surfaces.extend(
+            raw_json_column(
+                &db,
+                "SELECT COALESCE(latest_request_id, '') AS value \
+                 FROM trajectory_episodes ORDER BY episode_id",
+                "value",
+            )
+            .await?,
+        );
 
         let inspect = inspect_report(&store, &correlated.episode_id).await?;
         let replay = replay_report(&store, &correlated.episode_id).await?;
@@ -470,10 +534,7 @@ mod tests {
             )?);
         }
 
-        let eval_store = EvalStore::new(db.clone());
-        let publisher =
-            TrajectoryOutboxPublisher::new(store, eval_store, EvalConfig::default(), 10)?;
-        assert_eq!(publisher.drain_pending().await?.delivered, 1);
+        assert!(publisher.drain_pending().await?.failed == 0);
         surfaces.extend(
             raw_json_column(
                 &db,
@@ -684,7 +745,7 @@ mod tests {
             .collect()
     }
 
-    fn adversarial_prompt(sentinels: &[&str; 6]) -> Prompt {
+    fn adversarial_prompt(sentinels: &[&str; 8]) -> Prompt {
         let mut params = GenerationParams {
             extra_protocol: Some(ApiProtocol::ChatCompletions),
             ..GenerationParams::default()

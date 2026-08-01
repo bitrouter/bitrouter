@@ -10,7 +10,7 @@ use super::guard::{
     ProgressGuardInput, ProgressGuardPolicy, RouteIntent, RouteIntentClause,
     RouteIntentClauseDisposition, evaluate, validate_persisted_route_intent,
 };
-use super::health::reduce;
+use super::health::{PrefixReduction, reduce, reduce_prefix};
 use super::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxWrite, PendingOutbox,
     RequestStatus, Settlement, StoredEpisode, StoredRequest, TRAJECTORY_SCHEMA_VERSION,
@@ -2631,20 +2631,13 @@ fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode> {
 
 fn first_reducer_failure(events: &[TrajectoryEvent]) -> Option<(Option<String>, Option<u64>)> {
     for end in 1..=events.len() {
-        if reduce(&events[..end], &std::collections::BTreeSet::new()).is_ok() {
-            continue;
+        match reduce_prefix(&events[..end], &std::collections::BTreeSet::new()) {
+            Ok(PrefixReduction::Complete(_) | PrefixReduction::AwaitingGuardActivation) => {
+                continue;
+            }
+            Err(_) => {}
         }
         let event = events.get(end.saturating_sub(1));
-        let is_pending_guard_prefix = event.is_some_and(|event| {
-            event.kind == TrajectoryEventKind::RouteIntentRecorded
-                && events.get(end).is_some_and(|next| {
-                    next.kind == TrajectoryEventKind::GuardActivated
-                        && next.request_id == event.request_id
-                })
-        });
-        if is_pending_guard_prefix {
-            continue;
-        }
         return Some((
             event.map(|event| event.event_id.clone()),
             event.map(|event| event.sequence),
@@ -4433,6 +4426,110 @@ mod tests {
                 anyhow::bail!("secret-corrupt episode audited as valid")
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guarded_audit_attributes_intrinsic_route_corruption_before_guard_corruption()
+    -> anyhow::Result<()> {
+        async fn guarded_episode(
+            store: &TrajectoryStore,
+            label: &str,
+        ) -> anyhow::Result<Vec<TrajectoryEvent>> {
+            let result = store
+                .correlate_and_begin(
+                    "owner-a",
+                    correlate_input(
+                        &format!("request-{label}"),
+                        &format!("episode-{label}"),
+                        &format!("start-{label}"),
+                        guarded_route_input(&format!("route-{label}"), &format!("guard-{label}")),
+                    ),
+                )
+                .await?;
+            let events = store
+                .events_for_episode("owner-a", &result.episode_id)
+                .await?;
+            assert_eq!(events.len(), 3, "fixture must include route and guard");
+            Ok(events)
+        }
+
+        async fn replace_event(
+            store: &TrajectoryStore,
+            event: &TrajectoryEvent,
+        ) -> anyhow::Result<()> {
+            event_entity::Entity::update_many()
+                .col_expr(
+                    event_entity::Column::EventJson,
+                    Expr::value(serde_json::to_string(event)?),
+                )
+                .col_expr(
+                    event_entity::Column::ContentDigest,
+                    Expr::value(event.content_digest.clone()),
+                )
+                .filter(event_entity::Column::OwnerUserId.eq("owner-a"))
+                .filter(event_entity::Column::EventId.eq(&event.event_id))
+                .exec(&store.db)
+                .await?;
+            Ok(())
+        }
+
+        async fn assert_first_corrupt(
+            store: &TrajectoryStore,
+            episode_id: &str,
+            expected_event_id: &str,
+            expected_sequence: u64,
+        ) -> anyhow::Result<()> {
+            match store.audit_episode("owner-a", episode_id).await? {
+                EpisodeAudit::Corrupt {
+                    event_id,
+                    sequence,
+                    reason,
+                    ..
+                } => {
+                    assert_eq!(event_id.as_deref(), Some(expected_event_id));
+                    assert_eq!(sequence, Some(expected_sequence));
+                    assert_eq!(reason, "reducer_rejected_prefix");
+                }
+                EpisodeAudit::Valid { .. } => anyhow::bail!("corrupt fixture audited as valid"),
+            }
+            Ok(())
+        }
+
+        let store = store().await?;
+
+        let mut projection = guarded_episode(&store, "invalid-projection").await?;
+        projection[1].evidence.categorical.insert(
+            "route.projection".into(),
+            "not-a-canonical-projection".into(),
+        );
+        projection[1].content_digest = projection[1].semantic_digest()?;
+        replace_event(&store, &projection[1]).await?;
+        assert_first_corrupt(
+            &store,
+            "episode-invalid-projection",
+            "route-invalid-projection",
+            2,
+        )
+        .await?;
+
+        let mut health = guarded_episode(&store, "invalid-health").await?;
+        health[1].evidence.digests.insert(
+            "route.health_snapshot".into(),
+            format!("sha256:{}", "1".repeat(64)),
+        );
+        health[1].content_digest = health[1].semantic_digest()?;
+        replace_event(&store, &health[1]).await?;
+        assert_first_corrupt(&store, "episode-invalid-health", "route-invalid-health", 2).await?;
+
+        let mut guard = guarded_episode(&store, "invalid-guard").await?;
+        guard[2]
+            .evidence
+            .structural
+            .insert("guard.hold_for_requests".into(), 0);
+        guard[2].content_digest = guard[2].semantic_digest()?;
+        replace_event(&store, &guard[2]).await?;
+        assert_first_corrupt(&store, "episode-invalid-guard", "guard-invalid-guard", 3).await?;
         Ok(())
     }
 

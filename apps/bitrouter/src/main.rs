@@ -259,6 +259,10 @@ enum Command {
     },
     /// Inspect, replay, and retain durable trajectory history in the local database.
     Trajectory {
+        /// Path to `bitrouter.yaml`. Uses the standard config resolution chain
+        /// when omitted.
+        #[arg(short, long, global = true)]
+        config: Option<PathBuf>,
         #[command(subcommand)]
         action: TrajectoryAction,
     },
@@ -1451,7 +1455,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Observe { action } => observe(action, output).await,
         Command::Policy { action } => policy(action, output).await,
         Command::Eval { action } => eval(action, output).await,
-        Command::Trajectory { action } => trajectory(action, output).await,
+        Command::Trajectory { config, action } => {
+            trajectory(config.as_deref(), action, output).await
+        }
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::Launch {
@@ -3524,12 +3530,13 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
     Ok(())
 }
 
-async fn trajectory(action: TrajectoryAction, output: &Output) -> Result<()> {
-    let source = bitrouter::paths::resolve_config(None)?;
-    let config = bitrouter::paths::load_config(&source).await?;
-    let db = bitrouter::db::connect(&config.database.url).await?;
-    bitrouter::db::run_migrations(&db).await?;
-    let store = bitrouter::trajectory::store::TrajectoryStore::new(db);
+async fn trajectory(
+    config_path: Option<&Path>,
+    action: TrajectoryAction,
+    output: &Output,
+) -> Result<()> {
+    let source = bitrouter::paths::resolve_config(config_path)?;
+    let (config, store) = local_trajectory_store(&source).await?;
     match action {
         TrajectoryAction::Inspect { episode_id } => {
             output.emit(&trajectory_inspect_report(&store, &episode_id).await?)?;
@@ -3545,6 +3552,22 @@ async fn trajectory(action: TrajectoryAction, output: &Output) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn local_trajectory_store(
+    source: &bitrouter::paths::ConfigSource,
+) -> Result<(
+    bitrouter_sdk::config::Config,
+    bitrouter::trajectory::store::TrajectoryStore,
+)> {
+    let config = bitrouter::paths::load_config(source).await?;
+    let database_url = bitrouter::db::anchor_url(&config.database.url, source.home());
+    let db = bitrouter::db::connect(&database_url).await?;
+    bitrouter::db::run_migrations(&db).await?;
+    Ok((
+        config,
+        bitrouter::trajectory::store::TrajectoryStore::new(db),
+    ))
 }
 
 async fn local_eval_service(config_path: Option<&Path>) -> Result<bitrouter::eval::EvalService> {
@@ -4148,26 +4171,42 @@ mod tests {
     fn trajectory_inspect_replay_and_prune_flags_parse() {
         use clap::Parser;
 
-        let inspect =
-            Cli::try_parse_from(["bitrouter", "trajectory", "inspect", "episode-1", "--json"])
-                .expect("parse trajectory inspect");
+        let inspect = Cli::try_parse_from([
+            "bitrouter",
+            "trajectory",
+            "--config",
+            "/tmp/custom-bitrouter.yaml",
+            "inspect",
+            "episode-1",
+            "--json",
+        ])
+        .expect("parse trajectory inspect");
         assert!(inspect.json);
         assert!(matches!(
             inspect.command,
             Some(Command::Trajectory {
-                action: TrajectoryAction::Inspect { episode_id }
-            }) if episode_id == "episode-1"
+                config: Some(config),
+                action: TrajectoryAction::Inspect { episode_id },
+            }) if episode_id == "episode-1" && config == Path::new("/tmp/custom-bitrouter.yaml")
         ));
 
-        let replay =
-            Cli::try_parse_from(["bitrouter", "trajectory", "replay", "episode-2", "--human"])
-                .expect("parse trajectory replay");
+        let replay = Cli::try_parse_from([
+            "bitrouter",
+            "trajectory",
+            "replay",
+            "episode-2",
+            "--config",
+            "/tmp/custom-bitrouter.yaml",
+            "--human",
+        ])
+        .expect("parse trajectory replay");
         assert!(replay.human);
         assert!(matches!(
             replay.command,
             Some(Command::Trajectory {
-                action: TrajectoryAction::Replay { episode_id }
-            }) if episode_id == "episode-2"
+                config: Some(config),
+                action: TrajectoryAction::Replay { episode_id },
+            }) if episode_id == "episode-2" && config == Path::new("/tmp/custom-bitrouter.yaml")
         ));
 
         let prune = Cli::try_parse_from([
@@ -4182,7 +4221,8 @@ mod tests {
         assert!(matches!(
             prune.command,
             Some(Command::Trajectory {
-                action: TrajectoryAction::Prune { before, dry_run: true }
+                config: None,
+                action: TrajectoryAction::Prune { before, dry_run: true },
             }) if before == "2026-08-01T00:00:00Z"
         ));
         assert!(
@@ -4195,6 +4235,84 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn trajectory_store_anchors_file_and_zero_config_databases_to_daemon_home()
+    -> anyhow::Result<()> {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+        async fn seed_episode(database_url: &str, episode_id: &str) -> anyhow::Result<()> {
+            let db = bitrouter::db::connect(database_url).await?;
+            bitrouter::db::run_migrations(&db).await?;
+            db.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO trajectory_episodes \
+                 (episode_id, owner_user_id, correlation_source, correlation_key_id, \
+                  correlation_digest, history_completeness, next_sequence, first_captured_at, \
+                  last_captured_at, closed_at, latest_request_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    episode_id.into(),
+                    "owner-home".into(),
+                    "explicit_root".into(),
+                    "key-home".into(),
+                    format!("hmac-sha256:key-home:{}", "0".repeat(64)).into(),
+                    "complete".into(),
+                    1_i64.into(),
+                    "2026-08-01T00:00:00Z".into(),
+                    "2026-08-01T00:00:00Z".into(),
+                    Option::<String>::None.into(),
+                    Option::<String>::None.into(),
+                ],
+            ))
+            .await?;
+            Ok(())
+        }
+
+        let file_home = tempfile::tempdir()?;
+        let config_path = file_home.path().join("bitrouter.yaml");
+        std::fs::write(
+            &config_path,
+            "inherit_defaults: false\ndatabase:\n  url: sqlite://./daemon.db\n",
+        )?;
+        let file_db = file_home.path().join("daemon.db");
+        seed_episode(
+            &format!("sqlite://{}?mode=rwc", file_db.display()),
+            "episode-file-home",
+        )
+        .await?;
+        assert_ne!(std::env::current_dir()?, file_home.path());
+        let file_source = bitrouter::paths::ConfigSource::File(config_path);
+        let (_, file_store) = local_trajectory_store(&file_source).await?;
+        assert_eq!(
+            file_store
+                .resolve_episode_owner("episode-file-home")
+                .await?
+                .as_deref(),
+            Some("owner-home")
+        );
+
+        let zero_home = tempfile::tempdir()?;
+        let zero_db = zero_home.path().join("bitrouter.db");
+        seed_episode(
+            &format!("sqlite://{}?mode=rwc", zero_db.display()),
+            "episode-zero-home",
+        )
+        .await?;
+        assert_ne!(std::env::current_dir()?, zero_home.path());
+        let zero_source = bitrouter::paths::ConfigSource::Default {
+            home: zero_home.path().to_path_buf(),
+        };
+        let (_, zero_store) = local_trajectory_store(&zero_source).await?;
+        assert_eq!(
+            zero_store
+                .resolve_episode_owner("episode-zero-home")
+                .await?
+                .as_deref(),
+            Some("owner-home")
+        );
+        Ok(())
     }
 
     #[test]

@@ -12,6 +12,7 @@ use super::types::KeyedDigest;
 const CANONICAL_PROMPT_VERSION: u32 = 1;
 const CORRELATION_KEY_ID_DOMAIN: &[u8] = b"bitrouter.trajectory.correlation.key-id.v1";
 const NATIVE_PARENT_DIGEST_DOMAIN: &[u8] = b"bitrouter.trajectory.correlation.native-parent.v1";
+const REQUEST_IDENTITY_DOMAIN: &[u8] = b"bitrouter.trajectory.request-identity.v1";
 
 #[derive(Clone)]
 pub struct CorrelationKey {
@@ -33,6 +34,24 @@ impl CorrelationKey {
 
     pub fn key_id(&self) -> &str {
         &self.key_id
+    }
+
+    pub(crate) fn request_identity(
+        &self,
+        owner_user_id: &str,
+        external_request_id: &str,
+    ) -> Result<String> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)
+            .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
+        mac.update(REQUEST_IDENTITY_DOMAIN);
+        mac.update(&[0]);
+        mac.update(owner_user_id.as_bytes());
+        mac.update(&[0]);
+        mac.update(external_request_id.as_bytes());
+        Ok(format!(
+            "trajectory-request-{}",
+            hex::encode(mac.finalize().into_bytes())
+        ))
     }
 }
 
@@ -159,6 +178,15 @@ impl Canonicalizer {
 
     pub fn key_id(&self) -> &str {
         self.key.key_id()
+    }
+
+    pub(crate) fn request_identity(
+        &self,
+        owner_user_id: &str,
+        external_request_id: &str,
+    ) -> Result<String> {
+        self.key
+            .request_identity(owner_user_id, external_request_id)
     }
 
     pub(crate) fn native_parent_digest(&self, native_parent_id: &str) -> Result<KeyedDigest> {
@@ -687,6 +715,24 @@ mod tests {
         assert_eq!(digest.key_id(), canonicalizer.key_id());
         assert!(digest.as_str().starts_with("hmac-sha256:"));
         assert!(!digest.as_str().contains("response-parent"));
+        Ok(())
+    }
+
+    #[test]
+    fn request_identity_is_stable_install_keyed_owner_bound_and_opaque() -> anyhow::Result<()> {
+        let raw = "SECRET-task-label-request-header";
+        let key = CorrelationKey::from_bytes([27; 32])?;
+        let stable = key.request_identity("owner-a", raw)?;
+        assert_eq!(stable, key.request_identity("owner-a", raw)?);
+        assert_ne!(stable, key.request_identity("owner-b", raw)?);
+        assert_ne!(
+            stable,
+            CorrelationKey::from_bytes([28; 32])?.request_identity("owner-a", raw)?
+        );
+        assert!(stable.starts_with("trajectory-request-"));
+        assert!(!stable.contains(raw));
+        assert!(!stable.contains("SECRET"));
+        assert!(!stable.contains("task-label"));
         Ok(())
     }
 

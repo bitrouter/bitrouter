@@ -55,17 +55,24 @@ disabled, it creates no correlation key and writes no trajectory ledger rows.
 
 | Command | Effect |
 |---|---|
-| `bitrouter trajectory inspect <EPISODE_ID>` | Resolve the globally unique episode, then report owner-scoped correlation/completeness, structural health, active hold, typed route clauses, and event digests. |
-| `bitrouter trajectory replay <EPISODE_ID>` | Audit a stable snapshot and compare the newest persisted route checkpoint digest with replay. Corruption output uses a stable reason code and first event id/sequence only. |
-| `bitrouter trajectory prune --before <RFC3339> --dry-run` | Return exact global eligible counts without mutation. |
-| `bitrouter trajectory prune --before <RFC3339>` | Transactionally prune delivered old outbox rows and eligible terminal episode history in configured batches. |
+| `bitrouter trajectory [--config <PATH>] inspect <EPISODE_ID>` | Resolve the globally unique episode, then report owner-scoped correlation/completeness, structural health, active hold, typed route clauses, and event digests. |
+| `bitrouter trajectory [--config <PATH>] replay <EPISODE_ID>` | Audit a stable snapshot and compare the newest persisted route checkpoint digest with replay. Corruption output uses a stable reason code and the first intrinsically invalid event id/sequence only. |
+| `bitrouter trajectory [--config <PATH>] prune --before <RFC3339> --dry-run` | Return exact global eligible counts without mutation. |
+| `bitrouter trajectory [--config <PATH>] prune --before <RFC3339>` | Transactionally prune delivered old outbox rows and eligible terminal episode history in configured batches. |
 
-All commands use the standard config/database resolution and support the global
-`--json` / `--human` flags before or after the subcommand; none takes an owner
-argument. Inspect/replay resolve the owner once and keep all subsequent reads
-owner-filtered. Audit retries a bounded head→events→head stable read, so a
-concurrent append yields a valid before/after snapshot or a contention error,
-never false corruption.
+`--config <PATH>` is optional and may appear before or after the trajectory leaf
+command. Without it, all commands use the standard config resolution chain.
+They open the selected source's database: a relative SQLite URL is anchored to
+the config file's directory, or to the implicit BitRouter home (normally
+`~/.bitrouter`) for zero-config. Resolution neither depends on nor changes the
+caller's working directory; absolute/memory SQLite and server URLs are left
+unchanged. The global `--json` / `--human` flags work before or after the
+subcommand, and no operation takes an owner argument. Inspect/replay resolve the
+owner once and keep all subsequent reads owner-filtered. Audit retries a bounded
+head→events→head stable read, so a concurrent append yields a valid before/after
+snapshot or a contention error, never false corruption. Its prefix reducer
+distinguishes a valid route awaiting guard activation from intrinsic route or
+guard corruption, so the reported first bad event is exact.
 
 Retention uses an exclusive cutoff. An episode is eligible only when its last
 capture is older, every request is settled or failed, and no request points at a
@@ -78,7 +85,10 @@ Privacy is write-time, not display-time redaction: durable event JSON, outbox
 payloads, Eval evidence, logs, and both report formats contain structural facts,
 fixed categories/reason codes, counters, and digests only. They exclude
 API/Bearer secrets, prompts, system instructions, tool arguments, file bodies,
-and private provider metadata.
+and private provider metadata. Trajectory request IDs and Responses native-parent
+IDs use the same installation-keyed, owner-bound opaque identity domain. This
+does not change external request IDs carried on the wire, sent upstream, or used
+for metering joins.
 
 Built-in operational Eval results are always `inconclusive`: metrics describe
 counts, streaks, elapsed time, and optional authoritative token/cost facts—not

@@ -147,11 +147,15 @@ and preserves last-known-good state. The ledger stores structural facts, fixed
 categories, counters, and digests—not prompts, credentials, tool arguments,
 file bodies, or private provider metadata.
 
-Operators use `bitrouter trajectory inspect <EPISODE_ID>`, `replay
-<EPISODE_ID>`, and `prune --before <RFC3339> [--dry-run]`. A pending outbox row
-or non-terminal request preserves its episode; a continuation whose parent was
-already removed starts a new incomplete episode. Read `references/cli.md` →
-*Durable trajectory operations* before pruning or recovery.
+Operators use `bitrouter trajectory [--config <PATH>] inspect <EPISODE_ID>`,
+`replay <EPISODE_ID>`, and `prune --before <RFC3339> [--dry-run]`. Omitting
+`--config` uses the standard resolution chain; relative SQLite URLs are anchored
+to the selected config's home, never the caller's working directory. Persisted
+request/native-parent IDs are installation-keyed and owner-bound, while external
+wire/upstream/metering IDs are unchanged. A pending outbox row or non-terminal
+request preserves its episode; a continuation whose parent was already removed
+starts a new incomplete episode. Read `references/cli.md` → *Durable trajectory
+operations* before pruning or recovery.
 
 **Subscription / OAuth providers.** Different — local login, not env vars:
 

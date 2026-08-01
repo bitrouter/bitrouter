@@ -53,14 +53,20 @@ mod tests {
             .store()
             .append_route_intent(
                 "owner-a",
-                intent(&correlated.episode_id, "request-1", 2, "economy", "opening")?,
+                intent(
+                    &correlated.episode_id,
+                    &correlated.request_id,
+                    2,
+                    "economy",
+                    "opening",
+                )?,
             )
             .await?;
         runtime
             .store()
             .settle_request(
                 "owner-a",
-                settlement(&correlated.episode_id, "request-1", 3, 7, 9)?,
+                settlement(&correlated.episode_id, &correlated.request_id, 3, 7, 9)?,
             )
             .await?;
         let protected_tiers = BTreeSet::from(["protected".to_owned()]);
@@ -125,14 +131,20 @@ mod tests {
             .store()
             .append_route_intent(
                 "owner-a",
-                intent(&first.episode_id, "request-1", 2, "economy", "opening")?,
+                intent(
+                    &first.episode_id,
+                    &first.request_id,
+                    2,
+                    "economy",
+                    "opening",
+                )?,
             )
             .await?;
         runtime
             .store()
             .settle_request(
                 "owner-a",
-                settlement(&first.episode_id, "request-1", 3, 11, 3)?,
+                settlement(&first.episode_id, &first.request_id, 3, 11, 3)?,
             )
             .await?;
 
@@ -153,10 +165,16 @@ mod tests {
             .store()
             .append_route_intent(
                 "owner-a",
-                intent(&first.episode_id, "request-2", 5, "protected", "recovery")?,
+                intent(
+                    &first.episode_id,
+                    &second.request_id,
+                    5,
+                    "protected",
+                    "recovery",
+                )?,
             )
             .await?;
-        let guard = guard(&first.episode_id, "request-2", 6, 2)?;
+        let guard = guard(&first.episode_id, &second.request_id, 6, 2)?;
         runtime
             .store()
             .append_guard_activation("owner-a", guard.clone())
@@ -169,7 +187,7 @@ mod tests {
             .store()
             .settle_request(
                 "owner-a",
-                settlement(&first.episode_id, "request-2", 7, 13, 5)?,
+                settlement(&first.episode_id, &second.request_id, 7, 13, 5)?,
             )
             .await?;
 

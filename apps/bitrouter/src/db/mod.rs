@@ -51,6 +51,38 @@ pub async fn run_migrations(db: &DatabaseConnection) -> Result<()> {
     Ok(())
 }
 
+/// Anchor a relative SQLite file URL to the resolved config home without
+/// changing the process working directory. Server URLs, absolute SQLite URLs,
+/// and in-memory SQLite URLs are returned unchanged; query parameters are
+/// preserved exactly.
+pub fn anchor_url(url: &str, home: &std::path::Path) -> String {
+    let Some(after_scheme) = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+    else {
+        return url.to_owned();
+    };
+    let (path_part, query) = after_scheme
+        .split_once('?')
+        .map_or((after_scheme, None), |(path, query)| (path, Some(query)));
+    if path_part.is_empty()
+        || path_part == ":memory:"
+        || query.is_some_and(|query| query.split('&').any(|parameter| parameter == "mode=memory"))
+    {
+        return url.to_owned();
+    }
+    let path = std::path::Path::new(path_part);
+    if path.is_absolute() {
+        return url.to_owned();
+    }
+    let relative = path_part.strip_prefix("./").unwrap_or(path_part);
+    let anchored = home.join(relative);
+    match query {
+        Some(query) => format!("sqlite://{}?{query}", anchored.display()),
+        None => format!("sqlite://{}", anchored.display()),
+    }
+}
+
 /// Whether `url` names an in-memory SQLite database.
 fn is_sqlite_memory(url: &str) -> bool {
     url.starts_with("sqlite:") && url.contains(":memory:")
@@ -109,5 +141,33 @@ mod tests {
         assert!(is_sqlite_memory("sqlite://:memory:"));
         assert!(!is_sqlite_memory("sqlite://./bitrouter.db"));
         assert!(!is_sqlite_memory("postgres://host/db"));
+    }
+
+    #[test]
+    fn relative_sqlite_urls_anchor_to_config_home_and_preserve_queries() {
+        let home = std::path::Path::new("/srv/bitrouter");
+        assert_eq!(
+            anchor_url("sqlite://./bitrouter.db", home),
+            "sqlite:///srv/bitrouter/bitrouter.db"
+        );
+        assert_eq!(
+            anchor_url("sqlite:history.db?cache=shared&mode=rwc", home),
+            "sqlite:///srv/bitrouter/history.db?cache=shared&mode=rwc"
+        );
+    }
+
+    #[test]
+    fn non_file_or_already_anchored_database_urls_are_unchanged() {
+        let home = std::path::Path::new("/srv/bitrouter");
+        for url in [
+            "postgres://db.internal/bitrouter?sslmode=require",
+            "mysql://db.internal/bitrouter",
+            "sqlite:///var/lib/bitrouter.db?mode=ro",
+            "sqlite::memory:",
+            "sqlite://:memory:",
+            "sqlite://named-memory?mode=memory&cache=shared",
+        ] {
+            assert_eq!(anchor_url(url, home), url);
+        }
     }
 }
