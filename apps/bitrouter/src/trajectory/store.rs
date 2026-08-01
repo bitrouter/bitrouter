@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait, sea_query::Expr,
 };
 
 use super::correlation::CorrelationSource;
@@ -131,6 +131,19 @@ pub(crate) struct CorrelateAndBeginResult {
     pub prior_events: Vec<TrajectoryEvent>,
 }
 
+enum CorrelateAttempt {
+    Complete(CorrelateAndBeginResult),
+    RetrySequenceReservation,
+}
+
+enum PrefixResolution {
+    None,
+    Unique(Box<episode_entity::Model>),
+    Ambiguous,
+}
+
+const MAX_SEQUENCE_RESERVATION_ATTEMPTS: usize = 32;
+
 impl TrajectoryStore {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
@@ -168,9 +181,50 @@ impl TrajectoryStore {
             anyhow::bail!("ancestor prefix digest uses a different correlation key")
         }
 
+        for _ in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
+            match self.correlate_and_begin_once(owner_user_id, &input).await {
+                Ok(CorrelateAttempt::Complete(result)) => return Ok(result),
+                Ok(CorrelateAttempt::RetrySequenceReservation) => {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) if retryable_sequence_contention(&error) => {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        anyhow::bail!(
+            "trajectory episode sequence contention exhausted after {MAX_SEQUENCE_RESERVATION_ATTEMPTS} attempts"
+        )
+    }
+
+    async fn correlate_and_begin_once(
+        &self,
+        owner_user_id: &str,
+        input: &CorrelateAndBegin,
+    ) -> Result<CorrelateAttempt> {
         let txn = self.db.begin().await?;
+        if let Some(existing) = request_entity::Entity::find()
+            .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(request_entity::Column::RequestId.eq(&input.request_id))
+            .one(&txn)
+            .await?
+        {
+            let result = exact_retry_result(&txn, owner_user_id, &existing, input).await?;
+            txn.commit().await?;
+            return Ok(CorrelateAttempt::Complete(result));
+        }
+        if request_entity::Entity::find_by_id(&input.request_id)
+            .one(&txn)
+            .await?
+            .is_some()
+        {
+            anyhow::bail!("trajectory request id is already owned by another user")
+        }
+
         let mut trusted_native_parent_id = None;
         let mut resolved_episode = None;
+        let mut prefix_conflict = false;
         let (source, completeness) = if let Some(native_parent_id) = &input.native_parent_id {
             match request_entity::Entity::find_by_id(native_parent_id)
                 .one(&txn)
@@ -188,30 +242,44 @@ impl TrajectoryStore {
                     HistoryCompleteness::Incomplete,
                 ),
             }
-        } else if let Some(episode) =
-            find_prefix_episode(&txn, owner_user_id, &input.ancestor_prefix_digests).await?
-        {
-            let completeness = parse_completeness(&episode.history_completeness)?;
-            resolved_episode = Some(episode);
-            (CorrelationSource::CanonicalPrefix, completeness)
-        } else if input.starts_with_prior_turns {
-            (
-                CorrelationSource::Unresolved,
-                HistoryCompleteness::Incomplete,
-            )
         } else {
-            (
-                CorrelationSource::ExplicitRoot,
-                HistoryCompleteness::Complete,
-            )
+            match find_prefix_episode(&txn, owner_user_id, &input.ancestor_prefix_digests).await? {
+                PrefixResolution::Unique(episode) => {
+                    let completeness = parse_completeness(&episode.history_completeness)?;
+                    resolved_episode = Some(*episode);
+                    (CorrelationSource::CanonicalPrefix, completeness)
+                }
+                PrefixResolution::Ambiguous => {
+                    prefix_conflict = true;
+                    (
+                        CorrelationSource::Unresolved,
+                        HistoryCompleteness::Incomplete,
+                    )
+                }
+                PrefixResolution::None if input.starts_with_prior_turns => (
+                    CorrelationSource::Unresolved,
+                    HistoryCompleteness::Incomplete,
+                ),
+                PrefixResolution::None => (
+                    CorrelationSource::ExplicitRoot,
+                    HistoryCompleteness::Complete,
+                ),
+            }
         };
 
         let prior_events = match &resolved_episode {
             Some(episode) => {
-                events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?
+                let events =
+                    events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
+                validate_episode_head(episode, &events)?;
+                if episode.closed_at.is_some() {
+                    anyhow::bail!("trajectory episode is closed and cannot accept new events")
+                }
+                events
             }
             None => Vec::new(),
         };
+        let extends_existing_episode = resolved_episode.is_some();
         let (episode_id, episode_start, sequence) = match resolved_episode {
             Some(episode) => {
                 let episode_id = episode.episode_id.clone();
@@ -240,7 +308,7 @@ impl TrajectoryStore {
         };
         let mut event = TrajectoryEvent {
             schema_version: TRAJECTORY_SCHEMA_VERSION,
-            event_id: input.event_id,
+            event_id: input.event_id.clone(),
             owner_user_id: owner_user_id.to_owned(),
             episode_id: episode_id.clone(),
             request_id: Some(input.request_id.clone()),
@@ -257,6 +325,10 @@ impl TrajectoryStore {
                         "correlation.starts_with_prior_turns".to_owned(),
                         u64::from(input.starts_with_prior_turns),
                     ),
+                    (
+                        "correlation.prefix_conflict".to_owned(),
+                        u64::from(prefix_conflict),
+                    ),
                 ]),
                 categorical: std::collections::BTreeMap::from([
                     ("correlation.source".to_owned(), source.as_str().to_owned()),
@@ -267,26 +339,44 @@ impl TrajectoryStore {
                 ]),
                 digests: std::collections::BTreeMap::new(),
             },
-            captured_at: input.captured_at,
+            captured_at: input.captured_at.clone(),
             content_digest: String::new(),
         };
         event.content_digest = event.semantic_digest()?;
         let begin = BeginRequest {
             episode: episode_start,
             event,
-            full_input_digest: input.full_input_digest,
+            full_input_digest: input.full_input_digest.clone(),
             native_parent_id: trusted_native_parent_id,
-            protocol: input.protocol,
+            protocol: input.protocol.clone(),
         };
         validate_begin(owner_user_id, &begin)?;
-        begin_request_in_tx(&txn, owner_user_id, &input.request_id, begin).await?;
+        if extends_existing_episode {
+            let reserved = reserve_episode_head(
+                &txn,
+                owner_user_id,
+                &episode_id,
+                sequence,
+                &input.request_id,
+                &input.captured_at,
+            )
+            .await?;
+            if !reserved {
+                txn.rollback().await?;
+                return Ok(CorrelateAttempt::RetrySequenceReservation);
+            }
+            append_event(&txn, &begin.event).await?;
+            insert_request(&txn, owner_user_id, &input.request_id, begin).await?;
+        } else {
+            begin_request_in_tx(&txn, owner_user_id, &input.request_id, begin).await?;
+        }
         txn.commit().await?;
-        Ok(CorrelateAndBeginResult {
+        Ok(CorrelateAttempt::Complete(CorrelateAndBeginResult {
             episode_id,
             source,
             completeness,
             prior_events,
-        })
+        }))
     }
 
     pub async fn append_route_intent(
@@ -307,6 +397,11 @@ impl TrajectoryStore {
             return Ok(());
         }
         let episode = owned_episode(&txn, owner_user_id, &event.episode_id).await?;
+        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
+        validate_episode_head(&episode, &events)?;
+        if episode.closed_at.is_some() {
+            anyhow::bail!("trajectory episode is closed and cannot accept new events")
+        }
         validate_sequence(&episode, &event)?;
         validate_event_request(&txn, owner_user_id, &event).await?;
         append_event(&txn, &event).await?;
@@ -349,6 +444,11 @@ impl TrajectoryStore {
             anyhow::bail!("settlement event belongs to a different episode")
         }
         let episode = owned_episode(&txn, owner_user_id, &settlement.event.episode_id).await?;
+        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
+        validate_episode_head(&episode, &events)?;
+        if episode.closed_at.is_some() {
+            anyhow::bail!("trajectory episode is closed and cannot accept new events")
+        }
         validate_sequence(&episode, &settlement.event)?;
         append_event(&txn, &settlement.event).await?;
 
@@ -490,6 +590,11 @@ async fn begin_request_in_tx(
         .await?;
     match episode {
         Some(existing) => {
+            let events = events_for_episode_in_tx(txn, owner_user_id, &existing.episode_id).await?;
+            validate_episode_head(&existing, &events)?;
+            if existing.closed_at.is_some() {
+                anyhow::bail!("trajectory episode is closed and cannot accept new events")
+            }
             validate_existing_episode(&existing, &input.episode, &input.event)?;
             append_event(txn, &input.event).await?;
             update_episode_head(txn, existing, &input.event, input.event.request_id.clone())
@@ -524,6 +629,15 @@ async fn begin_request_in_tx(
             .await?;
         }
     }
+    insert_request(txn, owner_user_id, request_id, input).await
+}
+
+async fn insert_request(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    request_id: &str,
+    input: BeginRequest,
+) -> Result<()> {
     request_entity::ActiveModel {
         request_id: Set(request_id.to_owned()),
         owner_user_id: Set(owner_user_id.to_owned()),
@@ -545,21 +659,202 @@ async fn find_prefix_episode(
     txn: &DatabaseTransaction,
     owner_user_id: &str,
     ancestor_prefix_digests: &[KeyedDigest],
-) -> Result<Option<episode_entity::Model>> {
+) -> Result<PrefixResolution> {
     for digest in ancestor_prefix_digests.iter().rev() {
-        let request = request_entity::Entity::find()
+        let requests = request_entity::Entity::find()
             .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(request_entity::Column::FullInputDigest.eq(digest.as_str()))
-            .order_by_desc(request_entity::Column::RequestId)
-            .one(txn)
+            .all(txn)
             .await?;
-        if let Some(request) = request {
-            return owned_episode(txn, owner_user_id, &request.episode_id)
-                .await
-                .map(Some);
+        if requests.is_empty() {
+            continue;
         }
+        let mut episode_ids = requests
+            .into_iter()
+            .map(|request| request.episode_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if episode_ids.len() != 1 {
+            return Ok(PrefixResolution::Ambiguous);
+        }
+        let episode_id = episode_ids
+            .pop_first()
+            .ok_or_else(|| anyhow::anyhow!("prefix resolution lost its only episode"))?;
+        return owned_episode(txn, owner_user_id, &episode_id)
+            .await
+            .map(Box::new)
+            .map(PrefixResolution::Unique);
     }
-    Ok(None)
+    Ok(PrefixResolution::None)
+}
+
+async fn exact_retry_result(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    existing: &request_entity::Model,
+    input: &CorrelateAndBegin,
+) -> Result<CorrelateAndBeginResult> {
+    let episode = owned_episode(txn, owner_user_id, &existing.episode_id).await?;
+    let events = events_for_episode_in_tx(txn, owner_user_id, &episode.episode_id).await?;
+    validate_episode_head(&episode, &events)?;
+    let start = events
+        .iter()
+        .find(|event| event.event_id == existing.start_event_id)
+        .ok_or_else(|| anyhow::anyhow!("trajectory retry is missing its original start event"))?;
+    let trusted_native_parent_id =
+        trusted_native_parent_id(txn, owner_user_id, input.native_parent_id.as_deref()).await?;
+    let ancestor_count = start
+        .evidence
+        .structural
+        .get("correlation.ancestor_prefix_count")
+        .copied();
+    let starts_with_prior_turns = start
+        .evidence
+        .structural
+        .get("correlation.starts_with_prior_turns")
+        .copied();
+    if existing.start_event_id != input.event_id
+        || existing.full_input_digest != input.full_input_digest.as_str()
+        || existing.native_parent_id != trusted_native_parent_id
+        || existing.protocol != input.protocol
+        || ancestor_count
+            != Some(
+                u64::try_from(input.ancestor_prefix_digests.len())
+                    .context("too many ancestor prefix digests")?,
+            )
+        || starts_with_prior_turns != Some(u64::from(input.starts_with_prior_turns))
+        || start.owner_user_id != owner_user_id
+        || start.request_id.as_deref() != Some(input.request_id.as_str())
+        || start.kind != TrajectoryEventKind::RequestStarted
+    {
+        anyhow::bail!(
+            "trajectory request '{}' already exists with different content",
+            existing.request_id
+        )
+    }
+    let source = start
+        .evidence
+        .categorical
+        .get("correlation.source")
+        .ok_or_else(|| anyhow::anyhow!("trajectory retry has no correlation source"))?;
+    let completeness = start
+        .evidence
+        .categorical
+        .get("history.completeness")
+        .ok_or_else(|| anyhow::anyhow!("trajectory retry has no history completeness"))?;
+    let source = parse_correlation_source(source)?;
+    let completeness = parse_completeness(completeness)?;
+    let start_sequence = start.sequence;
+    let prior_events = events
+        .into_iter()
+        .take_while(|event| event.sequence < start_sequence)
+        .collect();
+    Ok(CorrelateAndBeginResult {
+        episode_id: existing.episode_id.clone(),
+        source,
+        completeness,
+        prior_events,
+    })
+}
+
+async fn trusted_native_parent_id(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    native_parent_id: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(native_parent_id) = native_parent_id else {
+        return Ok(None);
+    };
+    Ok(request_entity::Entity::find_by_id(native_parent_id)
+        .one(txn)
+        .await?
+        .filter(|request| request.owner_user_id == owner_user_id)
+        .map(|_| native_parent_id.to_owned()))
+}
+
+fn validate_episode_head(
+    episode: &episode_entity::Model,
+    events: &[TrajectoryEvent],
+) -> Result<()> {
+    let last = events
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("trajectory episode head has no event history"))?;
+    let expected_next = last
+        .sequence
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("trajectory episode head sequence overflow"))?;
+    if u64::try_from(episode.next_sequence)
+        .context("trajectory episode head sequence is negative")?
+        != expected_next
+    {
+        anyhow::bail!("trajectory episode head next_sequence disagrees with event history")
+    }
+    let latest_request_id = events
+        .iter()
+        .rev()
+        .find(|event| event.kind == TrajectoryEventKind::RequestStarted)
+        .and_then(|event| event.request_id.as_deref());
+    if episode.latest_request_id.as_deref() != latest_request_id {
+        anyhow::bail!("trajectory episode head latest_request_id disagrees with event history")
+    }
+    match (
+        last.kind == TrajectoryEventKind::EpisodeClosed,
+        &episode.closed_at,
+    ) {
+        (false, None) => {}
+        (true, Some(closed_at)) if closed_at == &last.captured_at => {}
+        _ => anyhow::bail!("trajectory episode head closed state disagrees with event history"),
+    }
+    Ok(())
+}
+
+async fn reserve_episode_head(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    episode_id: &str,
+    expected_sequence: u64,
+    request_id: &str,
+    captured_at: &str,
+) -> Result<bool> {
+    let expected =
+        i64::try_from(expected_sequence).context("trajectory sequence exceeds database range")?;
+    let next = expected
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("trajectory sequence overflow"))?;
+    let result = episode_entity::Entity::update_many()
+        .col_expr(episode_entity::Column::NextSequence, Expr::value(next))
+        .col_expr(
+            episode_entity::Column::LastCapturedAt,
+            Expr::value(captured_at.to_owned()),
+        )
+        .col_expr(
+            episode_entity::Column::LatestRequestId,
+            Expr::value(request_id.to_owned()),
+        )
+        .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(episode_entity::Column::EpisodeId.eq(episode_id))
+        .filter(episode_entity::Column::NextSequence.eq(expected))
+        .filter(episode_entity::Column::ClosedAt.is_null())
+        .exec(txn)
+        .await?;
+    Ok(result.rows_affected == 1)
+}
+
+fn retryable_sequence_contention(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("database is locked")
+        || message.contains("deadlock detected")
+        || message.contains("serialization failure")
+        || message.contains("could not serialize access")
+}
+
+fn parse_correlation_source(value: &str) -> Result<CorrelationSource> {
+    match value {
+        "native_parent_id" => Ok(CorrelationSource::NativeParentId),
+        "canonical_prefix" => Ok(CorrelationSource::CanonicalPrefix),
+        "explicit_root" => Ok(CorrelationSource::ExplicitRoot),
+        "unresolved" => Ok(CorrelationSource::Unresolved),
+        _ => anyhow::bail!("stored trajectory event has invalid correlation source"),
+    }
 }
 
 async fn events_for_episode_in_tx(
@@ -1272,6 +1567,43 @@ mod tests {
                 .await
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn conditional_head_reservation_rejects_a_stale_sequence() -> anyhow::Result<()> {
+        let store = store().await?;
+        store
+            .begin_request("owner-a", begin("episode-1", "request-1"))
+            .await?;
+
+        let first = store.db.begin().await?;
+        assert!(
+            reserve_episode_head(
+                &first,
+                "owner-a",
+                "episode-1",
+                2,
+                "request-2",
+                "2026-08-01T00:01:00Z",
+            )
+            .await?
+        );
+        first.commit().await?;
+
+        let stale = store.db.begin().await?;
+        assert!(
+            !reserve_episode_head(
+                &stale,
+                "owner-a",
+                "episode-1",
+                2,
+                "request-stale",
+                "2026-08-01T00:01:01Z",
+            )
+            .await?
+        );
+        stale.rollback().await?;
         Ok(())
     }
 

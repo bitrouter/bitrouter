@@ -1804,9 +1804,17 @@ impl ModelSelector for PolicyRuntime {
                 )
                 .await
                 .map_err(|error| {
-                    bitrouter_sdk::BitrouterError::internal(format!(
-                        "trajectory correlation failed: {error}"
-                    ))
+                    if error
+                        .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>(
+                        )
+                        .is_some()
+                    {
+                        bitrouter_sdk::BitrouterError::bad_request(error.to_string())
+                    } else {
+                        bitrouter_sdk::BitrouterError::internal(format!(
+                            "trajectory correlation failed: {error}"
+                        ))
+                    }
                 })?;
             ctx.insert_extension(Arc::new(correlated));
         }
@@ -2209,13 +2217,19 @@ presets:
             ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
         };
         use http::HeaderValue;
+        use sea_orm::ConnectionTrait;
 
         use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
         use crate::trajectory::correlation::{CorrelatedRequest, TrajectoryRuntime};
         use crate::trajectory::store::TrajectoryStore;
 
-        fn context(headers: http::HeaderMap) -> PipelineContext {
-            let prompt = Prompt {
+        fn context_with_previous_response_id(
+            headers: http::HeaderMap,
+            request_id: &str,
+            previous_response_id: Option<serde_json::Value>,
+        ) -> PipelineContext {
+            let is_responses = previous_response_id.is_some();
+            let mut prompt = Prompt {
                 model: "vendor:strong".into(),
                 system: None,
                 system_provider_metadata: Default::default(),
@@ -2226,15 +2240,29 @@ presets:
                 tool_choice: None,
                 stream: false,
             };
+            if let Some(previous_response_id) = previous_response_id {
+                prompt
+                    .params
+                    .extra
+                    .insert("previous_response_id".into(), previous_response_id);
+            }
             let mut request = PipelineRequest::new(
                 "vendor:strong",
                 CallerContext::new("key-a", "owner-a"),
                 prompt,
             );
-            request.request_id = "request-stable".into();
+            request.request_id = request_id.into();
             request.headers = headers;
-            request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
+            request.inbound_protocol = Some(if is_responses {
+                ApiProtocol::Responses
+            } else {
+                ApiProtocol::ChatCompletions
+            });
             PipelineContext::new(request)
+        }
+
+        fn context(headers: http::HeaderMap) -> PipelineContext {
+            context_with_previous_response_id(headers, "request-stable", None)
         }
 
         fn trajectory(db: sea_orm::DatabaseConnection) -> anyhow::Result<Arc<TrajectoryRuntime>> {
@@ -2360,6 +2388,53 @@ presets:
                 .request("owner-a", "request-stable")
                 .await?
                 .is_some()
+        );
+
+        for (index, malformed) in [
+            serde_json::json!(42),
+            serde_json::Value::Null,
+            serde_json::json!(" \n"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let request_id = format!("request-malformed-{index}");
+            let mut malformed_context = context_with_previous_response_id(
+                http::HeaderMap::new(),
+                &request_id,
+                Some(malformed),
+            );
+            let error = baseline
+                .select_variant("coding", None, &mut malformed_context)
+                .await
+                .expect_err("malformed previous_response_id must fail");
+            assert_eq!(error.status(), http::StatusCode::BAD_REQUEST);
+            assert!(
+                TrajectoryStore::new(baseline_db.clone())
+                    .request("owner-a", &request_id)
+                    .await?
+                    .is_none()
+            );
+        }
+
+        baseline_db
+            .execute(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE trajectory_episodes SET next_sequence = 99".to_owned(),
+            ))
+            .await?;
+        let mut corrupt_context = context_with_previous_response_id(
+            http::HeaderMap::new(),
+            "request-corrupt-storage",
+            Some(serde_json::json!("request-stable")),
+        );
+        let storage_error = baseline
+            .select_variant("coding", None, &mut corrupt_context)
+            .await
+            .expect_err("storage corruption must remain an internal error");
+        assert_eq!(
+            storage_error.status(),
+            http::StatusCode::INTERNAL_SERVER_ERROR
         );
         Ok(())
     }

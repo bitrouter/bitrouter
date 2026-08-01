@@ -240,6 +240,7 @@ pub fn ensure_home_directory(home: &Path) -> Result<()> {
 /// Filename of the persisted anonymous install identifier inside the home.
 const INSTALL_ID_FILENAME: &str = "installation.id";
 const CORRELATION_KEY_FILENAME: &str = "correlation.key";
+const INSTALL_LOCK_FILENAME: &str = ".installation.lock";
 
 /// Read the stable anonymous install id from `<home>/installation.id`,
 /// generating and persisting a fresh UUID v4 on first call. The id is
@@ -249,98 +250,138 @@ const CORRELATION_KEY_FILENAME: &str = "correlation.key";
 ///
 /// A malformed/empty existing file is treated as missing and rewritten.
 pub fn get_or_create_install_id(home: &Path) -> Result<String> {
-    let path = home.join(INSTALL_ID_FILENAME);
-    let mut rewrite_empty = false;
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        let trimmed = contents.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-        rewrite_empty = true;
-    }
     ensure_home_directory(home)?;
+    with_install_lock(home, || get_or_create_install_id_locked(home))
+}
+
+fn get_or_create_install_id_locked(home: &Path) -> Result<String> {
+    let path = home.join(INSTALL_ID_FILENAME);
+    if let Some(contents) = read_private_text(&path)? {
+        let trimmed = contents.trim();
+        if uuid::Uuid::parse_str(trimmed).is_ok() {
+            return Ok(trimmed.to_owned());
+        }
+    }
     let id = uuid::Uuid::new_v4().to_string();
-    if rewrite_empty {
+    if path.exists() {
         replace_private_file(&path, id.as_bytes())
             .with_context(|| format!("rewriting {}", path.display()))?;
-        return Ok(id);
+    } else {
+        create_private_file(&path, id.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
     }
-    match create_private_file(&path, id.as_bytes()) {
-        Ok(()) => return Ok(id),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            for _ in 0..100 {
-                if let Ok(contents) = std::fs::read_to_string(&path) {
-                    let trimmed = contents.trim();
-                    if !trimmed.is_empty() {
-                        return Ok(trimmed.to_owned());
-                    }
-                }
-                std::thread::yield_now();
-            }
-        }
-        Err(error) => {
-            return Err(error).with_context(|| format!("writing {}", path.display()));
-        }
-    }
-    anyhow::bail!("installation id was concurrently created but could not be read")
+    Ok(id)
 }
 
 /// Load the installation-private HMAC key used only for trajectory correlation,
 /// atomically creating it on the first process start.
 pub fn get_or_create_correlation_key(home: &Path) -> Result<CorrelationKey> {
     ensure_home_directory(home)?;
-    let installation_id = get_or_create_install_id(home)?;
-    let path = home.join(CORRELATION_KEY_FILENAME);
-    if let Some(secret) = read_correlation_secret(&path)? {
-        return CorrelationKey::from_bytes(&installation_id, secret);
-    }
-
-    let mut secret = [0_u8; 32];
-    rand::rng().fill_bytes(&mut secret);
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
-    match create_private_file(&path, encoded.as_bytes()) {
-        Ok(()) => CorrelationKey::from_bytes(&installation_id, secret),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            for _ in 0..100 {
-                match read_correlation_secret(&path) {
-                    Ok(Some(secret)) => {
-                        return CorrelationKey::from_bytes(&installation_id, secret);
-                    }
-                    Ok(None) | Err(_) => std::thread::yield_now(),
-                }
-            }
-            let secret = read_correlation_secret(&path)?.ok_or_else(|| {
-                anyhow::anyhow!("correlation key was concurrently created but could not be read")
-            })?;
-            CorrelationKey::from_bytes(&installation_id, secret)
+    with_install_lock(home, || {
+        let installation_id = get_or_create_install_id_locked(home)?;
+        let path = home.join(CORRELATION_KEY_FILENAME);
+        if let Some(secret) = read_correlation_secret(&path)? {
+            return CorrelationKey::from_bytes(&installation_id, secret);
         }
-        Err(error) => Err(error).with_context(|| format!("writing {}", path.display())),
-    }
+
+        let mut secret = [0_u8; 32];
+        rand::rng().fill_bytes(&mut secret);
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
+        if path.exists() {
+            replace_private_file(&path, encoded.as_bytes())
+                .with_context(|| format!("rewriting {}", path.display()))?;
+        } else {
+            create_private_file(&path, encoded.as_bytes())
+                .with_context(|| format!("writing {}", path.display()))?;
+        }
+        CorrelationKey::from_bytes(&installation_id, secret)
+    })
 }
 
 fn read_correlation_secret(path: &Path) -> Result<Option<[u8; 32]>> {
-    let encoded = match std::fs::read_to_string(path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("reading {}", path.display()));
-        }
+    let Some(encoded) = read_private_text(path)? else {
+        return Ok(None);
     };
     if encoded.trim().is_empty() {
         return Ok(None);
     }
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(encoded.trim())
-        .with_context(|| format!("decoding {}", path.display()))?;
-    let secret: [u8; 32] = decoded
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("correlation key must contain exactly 32 bytes"))?;
-    Ok(Some(secret))
+    let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded.trim())
+    else {
+        return Ok(None);
+    };
+    Ok(decoded.try_into().ok())
+}
+
+fn with_install_lock<T>(home: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let lock_path = home.join(INSTALL_LOCK_FILENAME);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock_file = options
+        .open(&lock_path)
+        .with_context(|| format!("opening {}", lock_path.display()))?;
+    repair_private_permissions(&lock_path)?;
+    lock_file
+        .lock()
+        .with_context(|| format!("locking {}", lock_path.display()))?;
+    operation()
+}
+
+fn read_private_text(path: &Path) -> Result<Option<String>> {
+    if path.exists() {
+        repair_private_permissions(path)?;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+fn repair_private_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("repairing permissions on {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn create_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    if path.exists() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    publish_private_file(path, contents, false)
+}
+
+fn replace_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    publish_private_file(path, contents, true)
+}
+
+fn publish_private_file(path: &Path, contents: &[u8], replace: bool) -> std::io::Result<()> {
     use std::io::Write;
 
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "private file requires a parent directory",
+        )
+    })?;
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "private file requires a UTF-8 filename",
+            )
+        })?;
+    let temporary = parent.join(format!(".{filename}.{}.tmp", uuid::Uuid::new_v4()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -348,24 +389,21 @@ fn create_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
+    let mut file = options.open(&temporary)?;
     file.write_all(contents)?;
-    file.sync_all()
-}
-
-fn replace_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).truncate(true);
-    let mut file = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.sync_all()?;
+    drop(file);
+    if !replace && path.exists() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
     }
-    file.write_all(contents)?;
-    file.sync_all()
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 /// Resolve the bitrouter home the same way the daemon's runtime artefacts do
@@ -477,6 +515,117 @@ mod tests {
         assert_eq!(key_ids.len(), 1);
         let encoded = std::fs::read_to_string(home.join(CORRELATION_KEY_FILENAME)).unwrap();
         assert!(!encoded.trim().is_empty());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_install_and_key_permissions_are_repaired_on_read() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = unique_tmp("private-file-repair");
+        let install_path = home.join(INSTALL_ID_FILENAME);
+        let key_path = home.join(CORRELATION_KEY_FILENAME);
+        std::fs::write(&install_path, uuid::Uuid::new_v4().to_string()).unwrap();
+        std::fs::write(
+            &key_path,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([23_u8; 32]),
+        )
+        .unwrap();
+        std::fs::set_permissions(&install_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        get_or_create_correlation_key(&home).unwrap();
+
+        for path in [install_path, key_path] {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn empty_or_partial_private_files_are_recovered_atomically() {
+        let home = unique_tmp("private-file-partial");
+        std::fs::write(home.join(INSTALL_ID_FILENAME), "partial-id").unwrap();
+        std::fs::write(home.join(CORRELATION_KEY_FILENAME), "partial-key").unwrap();
+
+        let first = get_or_create_correlation_key(&home).unwrap();
+        let second = get_or_create_correlation_key(&home).unwrap();
+
+        assert_eq!(first.key_id(), second.key_id());
+        let install = std::fs::read_to_string(home.join(INSTALL_ID_FILENAME)).unwrap();
+        assert!(uuid::Uuid::parse_str(install.trim()).is_ok());
+        let encoded = std::fs::read_to_string(home.join(CORRELATION_KEY_FILENAME)).unwrap();
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.trim())
+            .unwrap();
+        assert_eq!(decoded.len(), 32);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn concurrent_recovery_of_empty_install_id_returns_one_stable_id() {
+        let home = unique_tmp("install-id-empty-race");
+        std::fs::write(home.join(INSTALL_ID_FILENAME), "").unwrap();
+        let handles = (0..16)
+            .map(|_| {
+                let home = home.clone();
+                std::thread::spawn(move || get_or_create_install_id(&home).unwrap())
+            })
+            .collect::<Vec<_>>();
+        let mut ids = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(home.join(INSTALL_ID_FILENAME))
+                .unwrap()
+                .trim(),
+            ids[0]
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn private_file_creation_never_publishes_partial_final_contents() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        let home = unique_tmp("private-file-publication");
+        let path = home.join("large.private");
+        let contents = vec![37_u8; 64 * 1024 * 1024];
+        let expected_len = u64::try_from(contents.len()).unwrap();
+        let started = Arc::new(Barrier::new(2));
+        let finished = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let path = path.clone();
+            let started = Arc::clone(&started);
+            let finished = Arc::clone(&finished);
+            std::thread::spawn(move || {
+                started.wait();
+                let result = create_private_file(&path, &contents);
+                finished.store(true, Ordering::Release);
+                result
+            })
+        };
+        started.wait();
+        let mut observed_partial = false;
+        while !finished.load(Ordering::Acquire) {
+            if let Ok(metadata) = std::fs::metadata(&path)
+                && metadata.len() != expected_len
+            {
+                observed_partial = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        writer.join().unwrap().unwrap();
+        assert!(!observed_partial, "final path exposed a partial write");
+        assert_eq!(std::fs::metadata(path).unwrap().len(), expected_len);
         let _ = std::fs::remove_dir_all(&home);
     }
 

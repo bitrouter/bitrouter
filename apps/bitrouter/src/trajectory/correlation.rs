@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bitrouter_sdk::language_model::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
@@ -46,6 +46,10 @@ pub struct TrajectoryRuntime {
     store: TrajectoryStore,
     canonicalizer: Canonicalizer,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("Responses previous_response_id must be a non-empty bounded string")]
+pub(crate) struct InvalidCorrelationEvidence;
 
 impl TrajectoryRuntime {
     pub fn new(store: TrajectoryStore, canonicalizer: Canonicalizer) -> Self {
@@ -114,19 +118,22 @@ fn correlation_evidence(
     }
 }
 
-fn native_parent_id(protocol: &ApiProtocol, prompt: &Prompt) -> Result<Option<String>> {
+fn native_parent_id(
+    protocol: &ApiProtocol,
+    prompt: &Prompt,
+) -> std::result::Result<Option<String>, InvalidCorrelationEvidence> {
     if protocol != &ApiProtocol::Responses {
         return Ok(None);
     }
     let Some(value) = prompt.params.extra.get("previous_response_id") else {
         return Ok(None);
     };
-    let native_parent_id = value
-        .as_str()
-        .context("Responses previous_response_id must be a string")?
-        .trim();
-    if native_parent_id.is_empty() {
-        return Ok(None);
+    let native_parent_id = value.as_str().ok_or(InvalidCorrelationEvidence)?.trim();
+    if native_parent_id.is_empty()
+        || native_parent_id.len() > 512
+        || native_parent_id.chars().any(char::is_control)
+    {
+        return Err(InvalidCorrelationEvidence);
     }
     Ok(Some(native_parent_id.to_owned()))
 }
@@ -153,13 +160,18 @@ fn stable_id(kind: &str, owner_user_id: &str, request_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use bitrouter_sdk::language_model::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{CorrelationSource, TrajectoryRuntime};
     use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
     use crate::trajectory::store::TrajectoryStore;
-    use crate::trajectory::types::HistoryCompleteness;
+    use crate::trajectory::types::{
+        HistoryCompleteness, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent,
+        TrajectoryEventKind, TrajectoryEvidence,
+    };
 
     fn prompt(messages: Vec<Message>) -> Prompt {
         Prompt {
@@ -192,6 +204,29 @@ mod tests {
         Ok((
             TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), canonicalizer),
             db,
+        ))
+    }
+
+    async fn file_runtime() -> anyhow::Result<(
+        Arc<TrajectoryRuntime>,
+        sea_orm::DatabaseConnection,
+        tempfile::TempDir,
+    )> {
+        let dir = tempfile::tempdir()?;
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("trajectory.db").display()
+        );
+        let db = crate::db::connect(&url).await?;
+        crate::db::run_migrations(&db).await?;
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [21; 32])?);
+        Ok((
+            Arc::new(TrajectoryRuntime::new(
+                TrajectoryStore::new(db.clone()),
+                canonicalizer,
+            )),
+            db,
+            dir,
         ))
     }
 
@@ -282,6 +317,38 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing local request"))?;
         assert_eq!(stored.native_parent_id, None);
+        let unknown = runtime
+            .begin_request(
+                "owner-c",
+                "request-unknown-parent",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![Message::text(Role::User, "new owner")],
+                    "request-does-not-exist",
+                ),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        assert_eq!(unknown.source, rejected.source);
+        assert_eq!(unknown.completeness, rejected.completeness);
+        let rejected_event = runtime
+            .store()
+            .events_for_episode("owner-b", &rejected.episode_id)
+            .await?
+            .remove(0);
+        let unknown_event = runtime
+            .store()
+            .events_for_episode("owner-c", &unknown.episode_id)
+            .await?
+            .remove(0);
+        assert_eq!(rejected_event.evidence, unknown_event.evidence);
+        assert!(
+            runtime
+                .store()
+                .request("owner-c", "request-unknown-parent")
+                .await?
+                .is_some_and(|request| request.native_parent_id.is_none())
+        );
         Ok(())
     }
 
@@ -409,6 +476,333 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("missing count row"))?;
             assert_eq!(row.try_get::<i64>("", "count")?, 1, "table {table}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exact_retry_ignores_captured_at_and_returns_original_correlation() -> anyhow::Result<()>
+    {
+        let (runtime, _) = runtime().await?;
+        let prompt = prompt(vec![Message::text(Role::User, "root")]);
+        let first = runtime
+            .begin_request(
+                "owner-a",
+                "request-retry",
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let retry = runtime
+            .begin_request(
+                "owner-a",
+                "request-retry",
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                "2026-08-01T00:05:00Z",
+            )
+            .await?;
+
+        assert_eq!(retry.episode_id, first.episode_id);
+        assert_eq!(retry.source, first.source);
+        assert_eq!(retry.completeness, first.completeness);
+        assert_eq!(retry.prior_events, first.prior_events);
+        assert!(retry.prior_events.is_empty());
+        assert_eq!(
+            runtime
+                .store()
+                .events_for_episode("owner-a", &first.episode_id)
+                .await?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exact_retry_after_settlement_returns_original_prior_events() -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let prompt = prompt(vec![Message::text(Role::User, "root")]);
+        let first = runtime
+            .begin_request(
+                "owner-a",
+                "request-settled-retry",
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let mut event = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: "event-settled-retry".into(),
+            owner_user_id: "owner-a".into(),
+            episode_id: first.episode_id.clone(),
+            request_id: Some("request-settled-retry".into()),
+            sequence: 2,
+            kind: TrajectoryEventKind::RequestSettled,
+            evidence: TrajectoryEvidence {
+                structural: Default::default(),
+                categorical: Default::default(),
+                digests: Default::default(),
+            },
+            captured_at: "2026-08-01T00:01:00Z".into(),
+            content_digest: String::new(),
+        };
+        event.content_digest = event.semantic_digest()?;
+        runtime
+            .store()
+            .settle_request(
+                "owner-a",
+                Settlement {
+                    event,
+                    status: RequestStatus::Settled,
+                    outbox: None,
+                },
+            )
+            .await?;
+
+        let retry = runtime
+            .begin_request(
+                "owner-a",
+                "request-settled-retry",
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                "2026-08-01T00:02:00Z",
+            )
+            .await?;
+        assert_eq!(retry.source, first.source);
+        assert_eq!(retry.completeness, first.completeness);
+        assert_eq!(retry.prior_events, first.prior_events);
+        assert!(retry.prior_events.is_empty());
+        assert_eq!(
+            runtime
+                .store()
+                .events_for_episode("owner-a", &first.episode_id)
+                .await?
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_native_children_allocate_contiguous_unique_sequences() -> anyhow::Result<()>
+    {
+        let (runtime, _, _dir) = file_runtime().await?;
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-concurrent-root",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let barrier = Arc::new(tokio::sync::Barrier::new(33));
+        let tasks = (0..32)
+            .map(|index| {
+                let runtime = Arc::clone(&runtime);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    runtime
+                        .begin_request(
+                            "owner-a",
+                            &format!("request-child-{index}"),
+                            ApiProtocol::Responses,
+                            &responses_prompt(
+                                vec![Message::text(Role::User, format!("child {index}"))],
+                                "request-concurrent-root",
+                            ),
+                            "2026-08-01T00:00:01Z",
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait().await;
+        for task in tasks {
+            task.await??;
+        }
+
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &root.episode_id)
+            .await?;
+        assert_eq!(events.len(), 33);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            (1..=33).collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn corrupted_episode_heads_reject_append_without_mutation() -> anyhow::Result<()> {
+        for (label, mutation) in [
+            (
+                "next-sequence",
+                "UPDATE trajectory_episodes SET next_sequence = 99",
+            ),
+            (
+                "latest-request",
+                "UPDATE trajectory_episodes SET latest_request_id = 'wrong-request'",
+            ),
+            (
+                "closed-state",
+                "UPDATE trajectory_episodes SET closed_at = '2026-08-01T00:00:30Z'",
+            ),
+        ] {
+            let (runtime, db) = runtime().await?;
+            let root = runtime
+                .begin_request(
+                    "owner-a",
+                    "request-root",
+                    ApiProtocol::Responses,
+                    &prompt(vec![Message::text(Role::User, "root")]),
+                    "2026-08-01T00:00:00Z",
+                )
+                .await?;
+            db.execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                mutation.to_owned(),
+            ))
+            .await?;
+
+            let error = runtime
+                .begin_request(
+                    "owner-a",
+                    &format!("request-{label}"),
+                    ApiProtocol::Responses,
+                    &responses_prompt(vec![Message::text(Role::User, "child")], "request-root"),
+                    "2026-08-01T00:01:00Z",
+                )
+                .await
+                .expect_err("corrupt episode head must reject append");
+            assert!(
+                error.to_string().contains("episode head"),
+                "{label}: {error}"
+            );
+            assert_eq!(
+                runtime
+                    .store()
+                    .events_for_episode("owner-a", &root.episode_id)
+                    .await?
+                    .len(),
+                1,
+                "{label}"
+            );
+            assert!(
+                runtime
+                    .store()
+                    .request("owner-a", &format!("request-{label}"))
+                    .await?
+                    .is_none(),
+                "{label}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ambiguous_longest_prefix_starts_incomplete_episode_with_generic_evidence()
+    -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let shared = prompt(vec![Message::text(Role::User, "same root")]);
+        let first = runtime
+            .begin_request(
+                "owner-a",
+                "request-root-a",
+                ApiProtocol::ChatCompletions,
+                &shared,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let second = runtime
+            .begin_request(
+                "owner-a",
+                "request-root-b",
+                ApiProtocol::ChatCompletions,
+                &shared,
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        assert_ne!(first.episode_id, second.episode_id);
+
+        let child = runtime
+            .begin_request(
+                "owner-a",
+                "request-ambiguous-child",
+                ApiProtocol::Messages,
+                &prompt(vec![
+                    Message::text(Role::User, "same root"),
+                    Message::text(Role::Assistant, "answer"),
+                    Message::text(Role::User, "continue"),
+                ]),
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+
+        assert_eq!(child.source, CorrelationSource::Unresolved);
+        assert_eq!(child.completeness, HistoryCompleteness::Incomplete);
+        assert_ne!(child.episode_id, first.episode_id);
+        assert_ne!(child.episode_id, second.episode_id);
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &child.episode_id)
+            .await?;
+        assert_eq!(
+            events[0]
+                .evidence
+                .structural
+                .get("correlation.prefix_conflict"),
+            Some(&1)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_prefix_matches_within_one_episode_remain_unambiguous() -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let shared = prompt(vec![Message::text(Role::User, "same root")]);
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-root",
+                ApiProtocol::Responses,
+                &shared,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let duplicate_digest = runtime
+            .begin_request(
+                "owner-a",
+                "request-same-episode",
+                ApiProtocol::Responses,
+                &responses_prompt(vec![Message::text(Role::User, "same root")], "request-root"),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        assert_eq!(duplicate_digest.episode_id, root.episode_id);
+
+        let child = runtime
+            .begin_request(
+                "owner-a",
+                "request-unambiguous-child",
+                ApiProtocol::Messages,
+                &prompt(vec![
+                    Message::text(Role::User, "same root"),
+                    Message::text(Role::Assistant, "answer"),
+                    Message::text(Role::User, "continue"),
+                ]),
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+        assert_eq!(child.source, CorrelationSource::CanonicalPrefix);
+        assert_eq!(child.episode_id, root.episode_id);
         Ok(())
     }
 }

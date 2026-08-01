@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
-use bitrouter_sdk::language_model::{Content, Prompt, Role};
+use bitrouter_sdk::language_model::{
+    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
+};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use super::types::KeyedDigest;
 
@@ -50,13 +53,98 @@ pub struct CanonicalPromptDigests {
 struct CanonicalPrefix<'a> {
     version: u32,
     system: Option<&'a str>,
-    messages: &'a [CanonicalMessage],
+    turns: &'a [CanonicalTurn],
 }
 
 #[derive(Serialize)]
-struct CanonicalMessage {
+struct CanonicalTurn {
     role: Role,
-    content: Vec<serde_json::Value>,
+    content: Vec<CanonicalContent>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CanonicalContent {
+    Text {
+        text: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    File {
+        media_type: String,
+        data: serde_json::Value,
+        filename: Option<String>,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: CanonicalJsonText,
+        provider_executed: bool,
+        dynamic: bool,
+    },
+    ToolResult {
+        call_id: String,
+        output: CanonicalToolResult,
+        dynamic: bool,
+    },
+    Source {
+        source: serde_json::Value,
+    },
+    ToolApprovalRequest {
+        approval_id: String,
+        tool_call_id: String,
+    },
+    ToolApprovalResponse {
+        approval_id: String,
+        approved: bool,
+        reason: Option<String>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+enum CanonicalJsonText {
+    Json(CanonicalJson),
+    Text(String),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+enum CanonicalToolResult {
+    Text(String),
+    Json(CanonicalJson),
+    ErrorText(String),
+    ErrorJson(CanonicalJson),
+    Content(Vec<CanonicalToolResultPart>),
+    ExecutionDenied(Option<String>),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CanonicalToolResultPart {
+    Text {
+        text: String,
+    },
+    Media {
+        media_type: String,
+        data: serde_json::Value,
+    },
+    FileId {
+        media_type: Option<String>,
+        id: String,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum CanonicalJson {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<CanonicalJson>),
+    Object(BTreeMap<String, CanonicalJson>),
 }
 
 impl Canonicalizer {
@@ -69,45 +157,30 @@ impl Canonicalizer {
     }
 
     pub fn canonicalize(&self, prompt: &Prompt) -> Result<CanonicalPromptDigests> {
-        let messages = prompt
-            .messages
-            .iter()
-            .map(|message| {
-                let content = message
-                    .content
-                    .iter()
-                    .map(canonical_content)
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(CanonicalMessage {
-                    role: message.role,
-                    content,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let turns = canonical_turns(prompt)?;
 
-        let mut prefix_digests = Vec::with_capacity(messages.len());
-        if messages.is_empty() {
+        let mut prefix_digests = Vec::with_capacity(turns.len());
+        if turns.is_empty() {
             prefix_digests.push(self.digest(&CanonicalPrefix {
                 version: CANONICAL_PROMPT_VERSION,
                 system: prompt.system.as_deref(),
-                messages: &[],
+                turns: &[],
             })?);
         } else {
-            for end in 1..=messages.len() {
+            for end in 1..=turns.len() {
                 prefix_digests.push(self.digest(&CanonicalPrefix {
                     version: CANONICAL_PROMPT_VERSION,
                     system: prompt.system.as_deref(),
-                    messages: &messages[..end],
+                    turns: &turns[..end],
                 })?);
             }
         }
         let full_input_digest = prefix_digests
             .pop()
             .ok_or_else(|| anyhow::anyhow!("canonical prompt produced no full digest"))?;
-        let starts_with_prior_turns = prompt
-            .messages
+        let starts_with_prior_turns = turns
             .iter()
-            .any(|message| matches!(message.role, Role::Assistant | Role::Tool));
+            .any(|turn| matches!(turn.role, Role::Assistant | Role::Tool));
         Ok(CanonicalPromptDigests {
             full_input_digest,
             ancestor_prefix_digests: prefix_digests,
@@ -129,32 +202,180 @@ impl Canonicalizer {
     }
 }
 
-fn canonical_content(content: &Content) -> Result<serde_json::Value> {
-    let mut value = serde_json::to_value(content).context("canonicalizing prompt content")?;
-    remove_provider_metadata(&mut value);
-    Ok(value)
+fn canonical_turns(prompt: &Prompt) -> Result<Vec<CanonicalTurn>> {
+    let mut turns: Vec<CanonicalTurn> = Vec::new();
+    for message in &prompt.messages {
+        let has_nonempty_sibling = message.content.len() > 1;
+        for content in &message.content {
+            if has_nonempty_sibling
+                && matches!(content, Content::Text { text, .. } if text.is_empty())
+            {
+                continue;
+            }
+            let role = canonical_role(message.role, content);
+            let content = canonical_content(content)?;
+            if let Some(turn) = turns.last_mut()
+                && turn.role == role
+            {
+                turn.content.push(content);
+            } else {
+                turns.push(CanonicalTurn {
+                    role,
+                    content: vec![content],
+                });
+            }
+        }
+    }
+    Ok(turns)
 }
 
-fn remove_provider_metadata(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            object.remove("provider_metadata");
-            for child in object.values_mut() {
-                remove_provider_metadata(child);
-            }
+fn canonical_role(message_role: Role, content: &Content) -> Role {
+    match content {
+        Content::ToolCall { .. }
+        | Content::Reasoning { .. }
+        | Content::ToolApprovalRequest { .. } => Role::Assistant,
+        Content::ToolResult { .. } | Content::ToolApprovalResponse { .. } => Role::Tool,
+        _ => message_role,
+    }
+}
+
+fn canonical_content(content: &Content) -> Result<CanonicalContent> {
+    Ok(match content {
+        Content::Text { text, .. } => CanonicalContent::Text { text: text.clone() },
+        Content::Reasoning { text, .. } => CanonicalContent::Reasoning { text: text.clone() },
+        Content::File {
+            media_type,
+            data,
+            filename,
+            ..
+        } => CanonicalContent::File {
+            media_type: media_type.clone(),
+            data: serde_json::to_value(data).context("canonicalizing file data")?,
+            filename: filename.clone(),
+        },
+        Content::ToolCall {
+            id,
+            name,
+            arguments,
+            provider_executed,
+            dynamic,
+            ..
+        } => CanonicalContent::ToolCall {
+            id: id.clone(),
+            name: name.clone(),
+            arguments: canonical_json_text(arguments),
+            provider_executed: *provider_executed,
+            dynamic: *dynamic,
+        },
+        Content::ToolResult {
+            call_id,
+            output,
+            dynamic,
+            ..
+        } => CanonicalContent::ToolResult {
+            call_id: call_id.clone(),
+            output: canonical_tool_result(output)?,
+            dynamic: *dynamic,
+        },
+        Content::Source { source, .. } => CanonicalContent::Source {
+            source: serde_json::to_value(source).context("canonicalizing source")?,
+        },
+        Content::ToolApprovalRequest {
+            approval_id,
+            tool_call_id,
+            ..
+        } => CanonicalContent::ToolApprovalRequest {
+            approval_id: approval_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+        },
+        Content::ToolApprovalResponse {
+            approval_id,
+            approved,
+            reason,
+            ..
+        } => CanonicalContent::ToolApprovalResponse {
+            approval_id: approval_id.clone(),
+            approved: *approved,
+            reason: reason.clone(),
+        },
+    })
+}
+
+fn canonical_json_text(value: &str) -> CanonicalJsonText {
+    serde_json::from_str::<serde_json::Value>(value)
+        .map(CanonicalJson::from)
+        .map(CanonicalJsonText::Json)
+        .unwrap_or_else(|_| CanonicalJsonText::Text(value.to_owned()))
+}
+
+fn canonical_tool_result(output: &ToolResultOutput) -> Result<CanonicalToolResult> {
+    Ok(match output {
+        ToolResultOutput::Text { value } => match canonical_json_text(value) {
+            CanonicalJsonText::Json(value) => CanonicalToolResult::Json(value),
+            CanonicalJsonText::Text(value) => CanonicalToolResult::Text(value),
+        },
+        ToolResultOutput::Json { value } => CanonicalToolResult::Json(value.clone().into()),
+        ToolResultOutput::ErrorText { value } => match canonical_json_text(value) {
+            CanonicalJsonText::Json(value) => CanonicalToolResult::ErrorJson(value),
+            CanonicalJsonText::Text(value) => CanonicalToolResult::ErrorText(value),
+        },
+        ToolResultOutput::ErrorJson { value } => {
+            CanonicalToolResult::ErrorJson(value.clone().into())
         }
-        serde_json::Value::Array(array) => {
-            for child in array {
-                remove_provider_metadata(child);
-            }
+        ToolResultOutput::Content { value } => CanonicalToolResult::Content(
+            value
+                .iter()
+                .map(|part| match part {
+                    ToolResultContentPart::Text { text } => {
+                        Ok(CanonicalToolResultPart::Text { text: text.clone() })
+                    }
+                    ToolResultContentPart::Media { media_type, data } => {
+                        Ok(CanonicalToolResultPart::Media {
+                            media_type: media_type.clone(),
+                            data: serde_json::to_value(data)
+                                .context("canonicalizing tool result media")?,
+                        })
+                    }
+                    ToolResultContentPart::FileId { media_type, id } => {
+                        Ok(CanonicalToolResultPart::FileId {
+                            media_type: media_type.clone(),
+                            id: id.clone(),
+                        })
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        ToolResultOutput::ExecutionDenied { reason } => {
+            CanonicalToolResult::ExecutionDenied(reason.clone())
         }
-        _ => {}
+    })
+}
+
+impl From<serde_json::Value> for CanonicalJson {
+    fn from(value: serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => Self::Null,
+            serde_json::Value::Bool(value) => Self::Bool(value),
+            serde_json::Value::Number(value) => Self::Number(value),
+            serde_json::Value::String(value) => Self::String(value),
+            serde_json::Value::Array(values) => {
+                Self::Array(values.into_iter().map(Self::from).collect())
+            }
+            serde_json::Value::Object(values) => Self::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::from(value)))
+                    .collect(),
+            ),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_sdk::language_model::{ApiProtocol, Prompt, inbound_adapter_for};
+    use bitrouter_sdk::language_model::{
+        ApiProtocol, Content, Prompt, ToolResultOutput, inbound_adapter_for,
+    };
 
     use super::{Canonicalizer, CorrelationKey};
 
@@ -205,6 +426,60 @@ mod tests {
                 ],
                 "metadata": {"task": "ignored"},
                 "include": ["reasoning.encrypted_content"]
+            }),
+        )?;
+        Ok([chat, messages, responses])
+    }
+
+    fn equivalent_tool_histories() -> anyhow::Result<[Prompt; 3]> {
+        let chat = parse(
+            ApiProtocol::ChatCompletions,
+            serde_json::json!({
+                "model": "chat-model",
+                "messages": [
+                    {"role": "user", "content": "Weather?"},
+                    {"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "weather", "arguments": "{ \"units\" : \"c\", \"city\":\"Paris\" }"}
+                    }]},
+                    {"role": "tool", "tool_call_id": "call-1", "content": "{\"provider_metadata\":{\"source\":\"sensor\"},\"temp\":21}"},
+                    {"role": "user", "content": "And tomorrow?"}
+                ]
+            }),
+        )?;
+        let messages = parse(
+            ApiProtocol::Messages,
+            serde_json::json!({
+                "model": "messages-model",
+                "max_tokens": 128,
+                "messages": [
+                    {"role": "user", "content": "Weather?"},
+                    {"role": "assistant", "content": [{
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "weather",
+                        "input": {"city": "Paris", "units": "c"}
+                    }]},
+                    {"role": "user", "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "call-1",
+                        "content": {"temp": 21, "provider_metadata": {"source": "sensor"}}
+                    }]},
+                    {"role": "user", "content": "And tomorrow?"}
+                ]
+            }),
+        )?;
+        let responses = parse(
+            ApiProtocol::Responses,
+            serde_json::json!({
+                "model": "responses-model",
+                "input": [
+                    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Weather?"}]},
+                    {"type": "function_call", "call_id": "call-1", "name": "weather", "arguments": "{\"city\":\"Paris\",\"units\":\"c\"}"},
+                    {"type": "function_call_output", "call_id": "call-1", "output": "{ \"temp\" : 21, \"provider_metadata\" : { \"source\" : \"sensor\" } }"},
+                    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "And tomorrow?"}]}
+                ]
             }),
         )?;
         Ok([chat, messages, responses])
@@ -291,6 +566,81 @@ mod tests {
             first.canonicalize(&prompt)?.full_input_digest,
             other.canonicalize(&prompt)?.full_input_digest
         );
+        Ok(())
+    }
+
+    #[test]
+    fn equivalent_cross_protocol_tool_histories_share_digests() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [13; 32])?);
+        let [chat, messages, responses] = equivalent_tool_histories()?;
+
+        let chat = canonicalizer.canonicalize(&chat)?;
+        assert_eq!(chat, canonicalizer.canonicalize(&messages)?);
+        assert_eq!(chat, canonicalizer.canonicalize(&responses)?);
+        Ok(())
+    }
+
+    #[test]
+    fn parseable_tool_json_ignores_key_order_and_whitespace() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [15; 32])?);
+        let [mut baseline, _, _] = equivalent_tool_histories()?;
+        let mut reordered = baseline.clone();
+        for content in &mut reordered.messages[1].content {
+            if let Content::ToolCall { arguments, .. } = content {
+                *arguments = "{\n  \"city\" : \"Paris\", \"units\": \"c\"\n}".into();
+            }
+        }
+        if let Content::ToolResult { output, .. } = &mut baseline.messages[2].content[0] {
+            *output = ToolResultOutput::Text {
+                value: "{\"temp\":21,\"provider_metadata\":{\"source\":\"sensor\"}}".into(),
+            };
+        }
+        if let Content::ToolResult { output, .. } = &mut reordered.messages[2].content[0] {
+            *output = ToolResultOutput::Text {
+                value: "{ \"provider_metadata\": { \"source\": \"sensor\" }, \"temp\" : 21 }"
+                    .into(),
+            };
+        }
+
+        assert_eq!(
+            canonicalizer.canonicalize(&baseline)?,
+            canonicalizer.canonicalize(&reordered)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn user_and_tool_json_provider_metadata_keys_are_semantic() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [17; 32])?);
+        let [mut baseline, _, _] = equivalent_tool_histories()?;
+        if let Content::ToolResult { output, .. } = &mut baseline.messages[2].content[0] {
+            *output = ToolResultOutput::Json {
+                value: serde_json::json!({
+                    "temp": 21,
+                    "provider_metadata": {"source": "sensor"}
+                }),
+            };
+        }
+        if let Content::Text { text, .. } = &mut baseline.messages[0].content[0] {
+            *text = "{\"provider_metadata\":{\"user\":\"baseline\"}}".into();
+        }
+        let mut changed_tool_json = baseline.clone();
+        if let Content::ToolResult { output, .. } = &mut changed_tool_json.messages[2].content[0] {
+            *output = ToolResultOutput::Json {
+                value: serde_json::json!({
+                    "temp": 21,
+                    "provider_metadata": {"source": "different"}
+                }),
+            };
+        }
+        let mut changed_user_json = baseline.clone();
+        if let Content::Text { text, .. } = &mut changed_user_json.messages[0].content[0] {
+            *text = "{\"provider_metadata\":{\"user\":\"changed\"}}".into();
+        }
+
+        let baseline = canonicalizer.canonicalize(&baseline)?;
+        assert_ne!(baseline, canonicalizer.canonicalize(&changed_tool_json)?);
+        assert_ne!(baseline, canonicalizer.canonicalize(&changed_user_json)?);
         Ok(())
     }
 }
