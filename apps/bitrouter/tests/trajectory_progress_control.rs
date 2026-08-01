@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use axum_test::TestServer;
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
 use bitrouter::eval::store::EvalStore;
-use bitrouter::metering::{ChargeStatus, MeteringStore, TimeWindow};
+use bitrouter::metering::{ChargeStatus, MeteringStore, PricingSource, TimeWindow};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
 use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
 use bitrouter::trajectory::health::reduce;
@@ -552,6 +552,23 @@ async fn trajectory_outbox_state(
     Ok((row.try_get("", "total")?, row.try_get("", "delivered")?))
 }
 
+fn assert_json_keys_absent(value: &Value, forbidden: &[&str]) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                assert!(!forbidden.contains(&key.as_str()), "unexpected key {key}");
+                assert_json_keys_absent(value, forbidden);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                assert_json_keys_absent(value, forbidden);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[tokio::test]
 async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow::Result<()> {
     let harness = HttpHarness::with_guarded_missing_route().await?;
@@ -629,10 +646,36 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
     }
     assert_eq!(trajectory_outbox_state(&assembled.db, owner).await?, (1, 1));
     assert!(store.pending_outbox(owner).await?.is_empty());
+    let outbox_payload: String = assembled
+        .db
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT payload_json FROM trajectory_outbox WHERE owner_user_id = ?",
+            [owner.into()],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("trajectory outbox payload row missing"))?
+        .try_get("", "payload_json")?;
+    assert_json_keys_absent(
+        &serde_json::from_str(&outbox_payload)?,
+        &[
+            "provider",
+            "model",
+            "prompt_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "total_tokens",
+            "cost_micro_usd",
+            "cost.usd_micros",
+            "trajectory.total_tokens",
+            "trajectory.cost.usd_micros",
+        ],
+    );
 
-    let usage = MeteringStore::new(assembled.db.clone())
-        .export_usage(TimeWindow::ThisMonth)
-        .await?;
+    let metering_store = MeteringStore::new(assembled.db.clone());
+    let usage = metering_store.export_usage(TimeWindow::ThisMonth).await?;
     assert_eq!(usage.len(), 1);
     assert_eq!(usage[0].status.as_deref(), Some("failed"));
     assert_eq!(
@@ -644,6 +687,30 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
     assert_eq!(usage[0].charge_status, ChargeStatus::Unknown);
     assert!(usage[0].provider_id.is_empty());
     assert!(usage[0].model_id.is_empty());
+    assert_eq!(usage[0].prompt_tokens, 0);
+    assert_eq!(usage[0].completion_tokens, 0);
+    assert_eq!(usage[0].reasoning_tokens, 0);
+    assert_eq!(usage[0].uncached_input_tokens, 0);
+    assert_eq!(usage[0].cache_read_tokens, 0);
+    assert_eq!(usage[0].cache_write_tokens, 0);
+    assert_eq!(usage[0].output_tokens, 0);
+    let charge_evidence = usage[0]
+        .charge_evidence
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("unknown charge evidence missing"))?;
+    assert_eq!(charge_evidence.status, ChargeStatus::Unknown);
+    assert_eq!(charge_evidence.charge_micro_usd, None);
+    assert_eq!(charge_evidence.pricing_source, PricingSource::Unknown);
+    assert_eq!(
+        charge_evidence.unknown_reason.as_deref(),
+        Some("usage_unavailable")
+    );
+    assert_eq!(
+        metering_store
+            .get_enforceable_spend(&format!("key-{owner}"), TimeWindow::ThisMonth)
+            .await?,
+        None
+    );
 
     let eval_store = EvalStore::new(assembled.db.clone());
     assert_eq!(eval_store.list_subjects_for_owner(owner).await?.len(), 1);
@@ -657,6 +724,20 @@ async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow:
         .result(result_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("trajectory evaluation result missing"))?;
+    assert_json_keys_absent(
+        &serde_json::to_value(&evaluation)?,
+        &[
+            "provider",
+            "model",
+            "prompt_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "total_tokens",
+            "cost_micro_usd",
+        ],
+    );
     assert!(
         !evaluation
             .result

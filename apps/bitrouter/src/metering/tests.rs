@@ -100,20 +100,70 @@ async fn recorder_emits_authoritative_content_free_settlement_after_persisting()
 }
 
 #[tokio::test]
-async fn recorder_event_keeps_unknown_usage_and_price_absent() -> Result<()> {
+async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool);
-    let recorder = MeteringRecorder::new(store, Arc::new(PricingTable::new()));
+    let recorder = MeteringRecorder::new(store.clone(), Arc::new(PricingTable::new()));
     let mut settlement = ctx("unknown", 0, 0);
+    settlement.provider_id.clear();
+    settlement.model_id.clear();
     settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+    settlement.error = Some(bitrouter_sdk::BitrouterError::NotFound(
+        "no active provider declares the selected model".into(),
+    ));
 
     recorder.record(&mut settlement).await?;
 
     let event = settlement
         .get_event::<MeteringSettlementEvent>()
         .expect("metering settlement event");
+    assert_eq!(event.provider_id, "");
+    assert_eq!(event.model_id, "");
+    assert_eq!(
+        event.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::Unknown
+    );
+    assert_eq!(event.prompt_tokens, None);
+    assert_eq!(event.completion_tokens, None);
+    assert_eq!(event.reasoning_tokens, None);
+    assert_eq!(event.cache_read_tokens, None);
+    assert_eq!(event.cache_write_tokens, None);
     assert_eq!(event.total_tokens, None);
     assert_eq!(event.cost_micro_usd, None);
+    assert_eq!(event.error_code.as_deref(), Some("not_found"));
+
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let record = records.first().expect("one routing failure row");
+    assert_eq!(
+        record.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::Unknown
+    );
+    assert_eq!(record.raw_usage, None);
+    assert_eq!(record.charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(record.final_charge_micro_usd, None);
+    let evidence = record
+        .charge_evidence
+        .as_ref()
+        .expect("unknown charge evidence");
+    assert_eq!(evidence.status, super::ChargeStatus::Unknown);
+    assert_eq!(evidence.charge_micro_usd, None);
+    assert_eq!(evidence.pricing_source, super::PricingSource::Unknown);
+    assert_eq!(
+        evidence.unknown_reason.as_deref(),
+        Some("usage_unavailable")
+    );
+    assert_eq!(
+        store
+            .get_enforceable_spend("unknown", TimeWindow::ThisMonth)
+            .await?,
+        None
+    );
+    assert_eq!(
+        store
+            .get_enforceable_total_spend(TimeWindow::ThisMonth)
+            .await?,
+        None
+    );
     Ok(())
 }
 
@@ -884,6 +934,12 @@ async fn spend_aggregates_across_requests() -> Result<()> {
     recorder.record(&mut ctx("k1", 0, 50)).await?; // 500
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 70 + 200 + 500);
+    assert_eq!(
+        store
+            .get_enforceable_total_spend(TimeWindow::ThisMonth)
+            .await?,
+        Some(70 + 200 + 500)
+    );
     Ok(())
 }
 
