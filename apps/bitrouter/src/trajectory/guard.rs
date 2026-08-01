@@ -89,8 +89,6 @@ pub fn evaluate(
     let candidate_is_protected = input
         .candidate_tier
         .is_some_and(|tier| policy.protected_tiers.contains(tier));
-    let candidate_accepts_escalation =
-        !candidate_is_protected || input.candidate_tier == Some(policy.escalation_tier.as_str());
     let prior_health = input.prior_snapshot.map(|snapshot| &snapshot.health);
     let hold_active = input
         .prior_snapshot
@@ -132,7 +130,6 @@ pub fn evaluate(
     clauses.push(clause(
         "progress_guard.active_hold",
         hold_active,
-        candidate_accepts_escalation,
         "persisted hold is active for this request",
         "no persisted hold applies to this request",
     ));
@@ -143,7 +140,6 @@ pub fn evaluate(
     clauses.push(clause(
         "progress_guard.incomplete_history",
         incomplete_trigger,
-        candidate_accepts_escalation,
         "causal history is not complete and policy requires escalation",
         if incomplete {
             "causal history is not complete and policy observes only"
@@ -156,42 +152,36 @@ pub fn evaluate(
         "progress_guard.max_consecutive_unprotected",
         policy.max_consecutive_unprotected,
         Some(prospective_unprotected),
-        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_same_projection_unprotected",
         policy.max_same_projection_unprotected,
         Some(prospective_same_projection_unprotected),
-        candidate_accepts_escalation,
     );
     recovery_threshold_clause(
         &mut clauses,
         policy.max_recovery_count,
         prospective_recovery_count,
         current_is_recovery,
-        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_episode_requests",
         policy.max_episode_requests,
         Some(input.pre_intent_snapshot.health.request_count),
-        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_episode_elapsed_ms",
         policy.max_episode_elapsed_ms,
         Some(input.pre_intent_snapshot.health.elapsed_ms),
-        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_episode_cost_micro_usd",
         policy.max_episode_cost_micro_usd,
         input.pre_intent_snapshot.health.settled_cost_micro_usd,
-        candidate_accepts_escalation,
     );
 
     if hold_active {
@@ -204,7 +194,7 @@ pub fn evaluate(
         }
     }
 
-    let escalated = clauses
+    let guard_applied = clauses
         .iter()
         .any(|clause| clause.disposition == RouteIntentClauseDisposition::Applied);
     let activated = !hold_active
@@ -212,12 +202,14 @@ pub fn evaluate(
             clause.disposition == RouteIntentClauseDisposition::Applied
                 && clause.clause_id != "progress_guard.active_hold"
         });
-    let selected_tier = if escalated {
+    let selected_tier = if guard_applied && candidate_is_protected {
+        input.candidate_tier.map(ToOwned::to_owned)
+    } else if guard_applied {
         Some(policy.escalation_tier.clone())
     } else {
         input.candidate_tier.map(ToOwned::to_owned)
     };
-    if escalated
+    if guard_applied
         && !selected_tier
             .as_ref()
             .is_some_and(|tier| policy.protected_tiers.contains(tier))
@@ -288,7 +280,6 @@ fn threshold_clause(
     clause_id: &str,
     threshold: Option<u64>,
     observed: Option<u64>,
-    candidate_accepts_escalation: bool,
 ) {
     let (triggered, skipped) = match (threshold, observed) {
         (Some(threshold), Some(observed)) => (
@@ -301,7 +292,6 @@ fn threshold_clause(
     clauses.push(clause(
         clause_id,
         triggered,
-        candidate_accepts_escalation,
         "configured threshold is reached",
         &skipped,
     ));
@@ -312,7 +302,6 @@ fn recovery_threshold_clause(
     threshold: Option<u64>,
     prospective_recovery_count: u64,
     current_is_recovery: bool,
-    candidate_accepts_escalation: bool,
 ) {
     if threshold.is_none() {
         threshold_clause(
@@ -320,7 +309,6 @@ fn recovery_threshold_clause(
             "progress_guard.max_recovery_count",
             threshold,
             Some(prospective_recovery_count),
-            candidate_accepts_escalation,
         );
         return;
     }
@@ -328,7 +316,6 @@ fn recovery_threshold_clause(
         clauses.push(clause(
             "progress_guard.max_recovery_count",
             false,
-            candidate_accepts_escalation,
             "current recovery reaches the configured recurrence threshold",
             &format!(
                 "current projection is not recovery; cumulative recovery count is {prospective_recovery_count}"
@@ -341,28 +328,23 @@ fn recovery_threshold_clause(
         "progress_guard.max_recovery_count",
         threshold,
         Some(prospective_recovery_count),
-        candidate_accepts_escalation,
     );
 }
 
 fn clause(
     clause_id: &str,
     triggered: bool,
-    candidate_accepts_escalation: bool,
     applied_explanation: &str,
     skipped_explanation: &str,
 ) -> RouteIntentClause {
-    let applied = triggered && candidate_accepts_escalation;
     RouteIntentClause {
         clause_id: clause_id.to_owned(),
-        disposition: if applied {
+        disposition: if triggered {
             RouteIntentClauseDisposition::Applied
         } else {
             RouteIntentClauseDisposition::Skipped
         },
-        explanation: if triggered && !candidate_accepts_escalation {
-            "candidate is already protected; guard cannot downgrade it".to_string()
-        } else if applied {
+        explanation: if triggered {
             applied_explanation.to_string()
         } else {
             skipped_explanation.to_string()
@@ -826,8 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_at_escalation_tier_activates_hold_without_downgrading_other_protected_tiers()
-    -> Result<()> {
+    fn triggers_activate_hold_independently_of_protected_selection() -> Result<()> {
         let edit = projection("agent_trace/v2|edit|normal")?;
         let recovery = projection("agent_trace/v2|recovery|guarded")?;
         let current = snapshot();
@@ -886,7 +867,70 @@ mod tests {
             incomparable_protected.intent.selected_tier.as_deref(),
             Some("tool-safe")
         );
-        assert!(!incomparable_protected.activated);
+        assert!(
+            incomparable_protected.activated,
+            "a recovery edge must activate hold while preserving another protected candidate"
+        );
+        assert!(incomparable_protected.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.max_recovery_count"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+
+        let mut conservative = policy();
+        conservative.incomplete_history = IncompleteHistoryAction::Escalate;
+        let incomplete = evaluate(
+            &conservative,
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("tool-safe"),
+                HistoryCompleteness::Incomplete,
+            ),
+        )?;
+        assert_eq!(
+            incomplete.intent.selected_tier.as_deref(),
+            Some("tool-safe")
+        );
+        assert!(incomplete.activated);
+
+        let mut monotonic_snapshot = current.clone();
+        monotonic_snapshot.health.request_count = policy()
+            .max_episode_requests
+            .ok_or_else(|| anyhow::anyhow!("test policy requires a request threshold"))?;
+        let monotonic = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &monotonic_snapshot,
+                &edit,
+                Some("tool-safe"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(monotonic.intent.selected_tier.as_deref(), Some("tool-safe"));
+        assert!(monotonic.activated);
+
+        prior.active_hold_remaining = policy().hold_for_requests;
+        let protected_during_hold = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("tool-safe"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(
+            protected_during_hold.intent.selected_tier.as_deref(),
+            Some("tool-safe")
+        );
+        assert!(!protected_during_hold.activated);
+        assert!(protected_during_hold.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.active_hold"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
         Ok(())
     }
 
