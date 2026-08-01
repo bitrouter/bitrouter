@@ -169,6 +169,7 @@ pub trait ModelSelector: Send + Sync {
 - [x] **Step 8: Commit `refactor(policy): make selection trajectory-aware`.**
 - [x] **Review fix round 1/5:** replace representation-level metadata stripping with typed canonicalization, harden installation identity/key publication, make exact retries immutable and correlation appends CAS-safe, validate episode heads before mutation, treat ambiguous prefixes as unresolved, and map only malformed native-parent evidence to HTTP 400.
 - [x] **Review fix round 2/5:** preserve semantic message boundaries while normalizing homogeneous tool artifacts, fail closed on corrupt key material with secret-derived key identity, persist keyed native-parent evidence for exact retries, reload deterministic concurrent start winners, keep `latest_request_id` tied to `RequestStarted`, and classify retryable database errors by typed codes with bounded backoff.
+- [x] **Review fix round 3/5:** emit native-parent evidence as a key-bound `hmac-sha256:<key-id>:<digest>` token while retaining SHA-only outbox payloads, split trusted native links across correlation-key epochs without copying prior history, make exact retries depend only on immutable persisted evidence, and remove the remaining production `expect` from canonical turn merging.
 
 ## Task 3: Reduce deterministic trajectory health and replay it
 

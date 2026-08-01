@@ -174,8 +174,8 @@ mod tests {
     use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
     use crate::trajectory::store::TrajectoryStore;
     use crate::trajectory::types::{
-        HistoryCompleteness, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent,
-        TrajectoryEventKind, TrajectoryEvidence,
+        HistoryCompleteness, KeyedDigest, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION,
+        TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence,
     };
 
     fn prompt(messages: Vec<Message>) -> Prompt {
@@ -210,6 +210,13 @@ mod tests {
             TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), canonicalizer),
             db,
         ))
+    }
+
+    fn runtime_with_key(
+        db: &sea_orm::DatabaseConnection,
+        key: CorrelationKey,
+    ) -> TrajectoryRuntime {
+        TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), Canonicalizer::new(key))
     }
 
     async fn file_runtime() -> anyhow::Result<(
@@ -371,7 +378,11 @@ mod tests {
                 .digests
                 .get("correlation.native_parent")
                 .ok_or_else(|| anyhow::anyhow!("missing native parent digest"))?;
-            assert!(digest.starts_with("sha256:"));
+            let digest = KeyedDigest::parse(digest.clone())?;
+            assert_eq!(
+                digest.key_id(),
+                CorrelationKey::from_bytes([21; 32])?.key_id()
+            );
         }
         let rejected_json = serde_json::to_string(&rejected_event)?;
         let unknown_json = serde_json::to_string(&unknown_event)?;
@@ -384,6 +395,153 @@ mod tests {
                 .await?
                 .is_some_and(|request| request.native_parent_id.is_none())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_parent_does_not_cross_correlation_key_epochs() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let key_a = CorrelationKey::from_bytes([21; 32])?;
+        let key_b = CorrelationKey::from_bytes([22; 32])?;
+        let key_b_id = key_b.key_id().to_owned();
+        let runtime_a = runtime_with_key(&db, key_a);
+        let runtime_b = runtime_with_key(&db, key_b);
+
+        let root = runtime_a
+            .begin_request(
+                "owner-a",
+                "request-key-a",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let child = runtime_b
+            .begin_request(
+                "owner-a",
+                "request-key-b",
+                ApiProtocol::Responses,
+                &responses_prompt(vec![Message::text(Role::User, "child")], "request-key-a"),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        assert_eq!(child.source, CorrelationSource::NativeParentId);
+        assert_eq!(child.completeness, HistoryCompleteness::Incomplete);
+        assert_ne!(child.episode_id, root.episode_id);
+        assert!(child.prior_events.is_empty());
+        assert_eq!(
+            runtime_b
+                .store()
+                .request("owner-a", "request-key-b")
+                .await?
+                .and_then(|request| request.native_parent_id),
+            Some("request-key-a".into())
+        );
+        let event = runtime_b
+            .store()
+            .events_for_episode("owner-a", &child.episode_id)
+            .await?
+            .remove(0);
+        assert_eq!(
+            event
+                .evidence
+                .structural
+                .get("correlation.key_epoch_conflict"),
+            Some(&1)
+        );
+        let native_digest = event
+            .evidence
+            .digests
+            .get("correlation.native_parent")
+            .ok_or_else(|| anyhow::anyhow!("missing native parent digest"))?;
+        assert_eq!(
+            KeyedDigest::parse(native_digest.clone())?.key_id(),
+            key_b_id
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unresolved_native_parent_retry_does_not_re_resolve_mutable_state() -> anyhow::Result<()>
+    {
+        let (runtime, _) = runtime().await?;
+        let child_prompt = responses_prompt(
+            vec![Message::text(Role::User, "child")],
+            "request-late-parent",
+        );
+        let original = runtime
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        runtime
+            .begin_request(
+                "owner-a",
+                "request-late-parent",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "late parent")]),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        let retry = runtime
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+
+        assert_eq!(retry.episode_id, original.episode_id);
+        assert_eq!(retry.source, CorrelationSource::Unresolved);
+        assert_eq!(retry.completeness, HistoryCompleteness::Incomplete);
+        assert!(retry.prior_events.is_empty());
+        assert_eq!(retry.evidence, original.evidence);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trusted_native_parent_retry_remains_exact() -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        runtime
+            .begin_request(
+                "owner-a",
+                "request-parent",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "parent")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let child_prompt =
+            responses_prompt(vec![Message::text(Role::User, "child")], "request-parent");
+        let original = runtime
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        let retry = runtime
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+
+        assert_eq!(retry, original);
         Ok(())
     }
 
