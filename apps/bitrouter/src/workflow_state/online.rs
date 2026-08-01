@@ -18,6 +18,13 @@ pub struct OnlineWorkflowState {
 
 impl OnlineWorkflowState {
     pub fn from_headers(headers: &HeaderMap, prompt: &Prompt) -> Self {
+        Self::for_named_policy(headers, prompt)
+    }
+
+    /// Build the named-policy projection without sharing process-local identity
+    /// tracker state across requests. Adapter identity remains available on the
+    /// returned IR for diagnostics, but cannot become causal routing state.
+    pub fn for_named_policy(headers: &HeaderMap, prompt: &Prompt) -> Self {
         let tracker = WorkflowIdentityTracker::default();
         Self::from_headers_with_tracker(headers, prompt, &tracker)
     }

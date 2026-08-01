@@ -123,6 +123,7 @@ sea-orm-migration = { version = "1", default-features = false, features = [
 
 # crypto / encoding
 sha2 = "0.11"
+hmac = "0.13"
 base64 = "0.22"
 rand = "0.10"
 hex = "0.4"

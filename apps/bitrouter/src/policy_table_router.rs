@@ -302,7 +302,7 @@ impl PolicyTableRouter {
     }
 
     pub fn decision_for(&self, prompt: &Prompt, headers: &HeaderMap) -> PolicyDecision {
-        self.decision_for_inner(prompt, headers, true)
+        self.decision_for_inner(prompt, headers, true, true)
     }
 
     fn decision_for_inner(
@@ -310,9 +310,13 @@ impl PolicyTableRouter {
         prompt: &Prompt,
         headers: &HeaderMap,
         respect_explicit_route: bool,
+        use_shared_identity_tracker: bool,
     ) -> PolicyDecision {
-        let online =
-            OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker);
+        let online = if use_shared_identity_tracker {
+            OnlineWorkflowState::from_headers_with_tracker(headers, prompt, &self.identity_tracker)
+        } else {
+            OnlineWorkflowState::for_named_policy(headers, prompt)
+        };
         let legacy_fingerprint = online.legacy_fingerprint().to_string();
         let primary_request_key = online.routing_key().to_string();
         let mut decision = PolicyDecision {
@@ -375,7 +379,7 @@ impl PolicyTableRouter {
     fn route_prompt(&self, prompt: &mut Prompt, headers: &HeaderMap) -> bool {
         let input_model = prompt.model.clone();
         let decision = self.decision_for(prompt, headers);
-        let selected = self.record_decision(input_model, decision, headers);
+        let selected = self.record_decision(input_model, decision, headers, None);
         let Some(model) = selected else {
             return false;
         };
@@ -389,14 +393,22 @@ impl PolicyTableRouter {
     /// Select a model for a preset that explicitly owns this policy. Unlike the
     /// legacy global transform, a provider-qualified preset base does not opt
     /// out: the preset binding itself is the caller's explicit routing intent.
-    pub(crate) fn select_for_bound_policy(
+    pub(crate) fn decision_for_bound_policy(
         &self,
-        input_model: &str,
         prompt: &Prompt,
         headers: &HeaderMap,
+    ) -> PolicyDecision {
+        self.decision_for_inner(prompt, headers, false, false)
+    }
+
+    pub(crate) fn record_bound_policy_decision(
+        &self,
+        request_id: &str,
+        input_model: String,
+        decision: PolicyDecision,
+        headers: &HeaderMap,
     ) -> Option<String> {
-        let decision = self.decision_for_inner(prompt, headers, false);
-        self.record_decision(input_model.to_string(), decision, headers)
+        self.record_decision(input_model, decision, headers, Some(request_id))
     }
 
     fn record_decision(
@@ -404,6 +416,7 @@ impl PolicyTableRouter {
         input_model: String,
         decision: PolicyDecision,
         headers: &HeaderMap,
+        request_id_override: Option<&str>,
     ) -> Option<String> {
         let baseline_tier = self
             .eval_observer
@@ -416,11 +429,13 @@ impl PolicyTableRouter {
                     .or_else(|| observer.default_baseline.clone())
             })
             .or_else(|| decision.static_tier.clone());
-        let request_id = headers
-            .get("x-bitrouter-request-id")
-            .and_then(|value| value.to_str().ok())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let request_id = request_id_override.or_else(|| {
+            headers
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
         let request_id_for_log = request_id.unwrap_or("-");
         tracing::info!(
             request_id = request_id_for_log,

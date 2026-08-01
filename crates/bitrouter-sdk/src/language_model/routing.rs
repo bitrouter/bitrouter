@@ -104,20 +104,15 @@ impl ModelResolution {
 /// before the normal Strategy 1/2/3 routing table. Implementations may inspect
 /// the canonical prompt and authenticated caller, but only run for a preset
 /// carrying an explicit policy binding.
+#[async_trait]
 pub trait ModelSelector: Send + Sync {
-    /// Select the model for `policy`, updating `ctx.model()` when required.
-    fn select(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()>;
-
-    /// Select with a known Stage-0 variant. Existing selectors remain
-    /// compatible and receive the base policy by default.
-    fn select_variant(
+    /// Select the model for a named policy and known Stage-0 variant.
+    async fn select_variant(
         &self,
         policy: &str,
-        _variant: Option<&str>,
+        variant: Option<&str>,
         ctx: &mut PipelineContext,
-    ) -> Result<()> {
-        self.select(policy, ctx)
-    }
+    ) -> Result<()>;
 }
 
 /// Resolves a model name into a fallback chain. v1 has no single-target

@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 use crate::adequacy::store::AdequacyStore;
 use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
+use crate::trajectory::correlation::TrajectoryRuntime;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
@@ -1650,6 +1651,7 @@ pub struct PolicyRuntime {
     db: DatabaseConnection,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     eval_decisions: PendingEvalDecisionStore,
+    trajectory: Option<Arc<TrajectoryRuntime>>,
 }
 
 impl PolicyRuntime {
@@ -1659,12 +1661,14 @@ impl PolicyRuntime {
         db: DatabaseConnection,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
         eval_decisions: PendingEvalDecisionStore,
+        trajectory: Option<Arc<TrajectoryRuntime>>,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
             decision_recorder,
             eval_decisions,
+            trajectory,
         });
         runtime.reload_for_config(config, config_path).await?;
         Ok(runtime)
@@ -1754,12 +1758,9 @@ impl PolicyRuntime {
     }
 }
 
+#[async_trait::async_trait]
 impl ModelSelector for PolicyRuntime {
-    fn select(&self, policy: &str, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<()> {
-        self.select_variant(policy, None, ctx)
-    }
-
-    fn select_variant(
+    async fn select_variant(
         &self,
         policy: &str,
         variant: Option<&str>,
@@ -1780,8 +1781,43 @@ impl ModelSelector for PolicyRuntime {
                     "preset references unavailable policy '{policy}'"
                 ))
             })?;
+        if let Some(trajectory) = &self.trajectory {
+            if ctx.caller().is_anonymous() {
+                return Err(bitrouter_sdk::BitrouterError::Unauthorized(
+                    "trajectory correlation requires an authenticated caller".into(),
+                ));
+            }
+            let inbound_protocol = ctx.inbound_protocol().ok_or_else(|| {
+                bitrouter_sdk::BitrouterError::bad_request(
+                    "trajectory correlation requires an inbound protocol",
+                )
+            })?;
+            let captured_at =
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let correlated = trajectory
+                .begin_request(
+                    ctx.caller().user_id(),
+                    ctx.request_id(),
+                    inbound_protocol,
+                    ctx.prompt(),
+                    &captured_at,
+                )
+                .await
+                .map_err(|error| {
+                    bitrouter_sdk::BitrouterError::internal(format!(
+                        "trajectory correlation failed: {error}"
+                    ))
+                })?;
+            ctx.insert_extension(Arc::new(correlated));
+        }
         let input_model = ctx.model().to_string();
-        let selected = router.select_for_bound_policy(&input_model, ctx.prompt(), ctx.headers());
+        let decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
+        let selected = router.record_bound_policy_decision(
+            ctx.request_id(),
+            input_model,
+            decision,
+            ctx.headers(),
+        );
         if let Some(model) = selected {
             ctx.set_model(model);
         }
@@ -2053,10 +2089,11 @@ presets:
             db,
             None,
             PendingEvalDecisionStore::default(),
+            None,
         )
         .await?;
         let mut frozen = context();
-        runtime.select("coding", &mut frozen)?;
+        runtime.select_variant("coding", None, &mut frozen).await?;
         assert_eq!(frozen.model(), "vendor:economy");
 
         let empty_target_db = crate::db::connect("sqlite::memory:").await?;
@@ -2067,10 +2104,13 @@ presets:
             empty_target_db,
             None,
             PendingEvalDecisionStore::default(),
+            None,
         )
         .await?;
         let mut copied = context();
-        empty_target.select("coding", &mut copied)?;
+        empty_target
+            .select_variant("coding", None, &mut copied)
+            .await?;
         assert_eq!(copied.model(), frozen.model());
 
         config.policy.mode = PolicyRuntimeMode::Adaptive;
@@ -2078,13 +2118,17 @@ presets:
             .reload_for_config(&config, Some(&config_path))
             .await?;
         let mut adaptive = context();
-        runtime.select("coding", &mut adaptive)?;
+        runtime
+            .select_variant("coding", None, &mut adaptive)
+            .await?;
         assert_eq!(adaptive.model(), "vendor:economy");
 
         store.upsert_pin(ledger_key, 1_700_000_200).await?;
         store.upsert_exploration(ledger_key, 99, 0, false).await?;
         let mut after_database_mutation = context();
-        runtime.select("coding", &mut after_database_mutation)?;
+        runtime
+            .select_variant("coding", None, &mut after_database_mutation)
+            .await?;
         assert_eq!(after_database_mutation.model(), adaptive.model());
         Ok(())
     }
@@ -2140,15 +2184,183 @@ presets:
             db,
             None,
             PendingEvalDecisionStore::default(),
+            None,
         )
         .await?;
 
         let mut exact = context();
-        runtime.select_variant("auto", Some("cost"), &mut exact)?;
+        runtime
+            .select_variant("auto", Some("cost"), &mut exact)
+            .await?;
         assert_eq!(exact.model(), "vendor:economy");
         let mut fallback = context();
-        runtime.select_variant("auto", Some("latency"), &mut fallback)?;
+        runtime
+            .select_variant("auto", Some("latency"), &mut fallback)
+            .await?;
         assert_eq!(fallback.model(), "vendor:strong");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_runtime_trajectory_is_optional_and_metadata_is_noncausal() -> anyhow::Result<()>
+    {
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::language_model::{
+            ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
+        };
+        use http::HeaderValue;
+
+        use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
+        use crate::trajectory::correlation::{CorrelatedRequest, TrajectoryRuntime};
+        use crate::trajectory::store::TrajectoryStore;
+
+        fn context(headers: http::HeaderMap) -> PipelineContext {
+            let prompt = Prompt {
+                model: "vendor:strong".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages: vec![Message::text(Role::User, "solve this")],
+                tools: Vec::new(),
+                params: GenerationParams::default(),
+                response_format: None,
+                tool_choice: None,
+                stream: false,
+            };
+            let mut request = PipelineRequest::new(
+                "vendor:strong",
+                CallerContext::new("key-a", "owner-a"),
+                prompt,
+            );
+            request.request_id = "request-stable".into();
+            request.headers = headers;
+            request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
+            PipelineContext::new(request)
+        }
+
+        fn trajectory(db: sea_orm::DatabaseConnection) -> anyhow::Result<Arc<TrajectoryRuntime>> {
+            Ok(Arc::new(TrajectoryRuntime::new(
+                TrajectoryStore::new(db),
+                Canonicalizer::new(CorrelationKey::from_bytes("install-test", [31; 32])?),
+            )))
+        }
+
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            "presets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
+        )
+        .await?;
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
+        };
+        write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
+        let config = bitrouter_sdk::config::load(&config_path).await?;
+
+        let disabled_db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&disabled_db).await?;
+        let disabled = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            disabled_db.clone(),
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await?;
+        let mut disabled_context = context(http::HeaderMap::new());
+        disabled
+            .select_variant("coding", None, &mut disabled_context)
+            .await?;
+        assert!(
+            TrajectoryStore::new(disabled_db)
+                .request("owner-a", "request-stable")
+                .await?
+                .is_none()
+        );
+        assert!(disabled_context.extension::<CorrelatedRequest>().is_none());
+
+        let baseline_db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&baseline_db).await?;
+        let baseline_pending = PendingEvalDecisionStore::default();
+        let baseline = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            baseline_db.clone(),
+            None,
+            baseline_pending.clone(),
+            Some(trajectory(baseline_db.clone())?),
+        )
+        .await?;
+        let mut preauth_context = context(http::HeaderMap::new());
+        preauth_context.set_caller(CallerContext::anonymous());
+        let preauth_error = baseline
+            .select_variant("coding", None, &mut preauth_context)
+            .await
+            .expect_err("trajectory runtime must not run before authentication");
+        assert_eq!(preauth_error.status(), http::StatusCode::UNAUTHORIZED);
+        assert!(
+            TrajectoryStore::new(baseline_db.clone())
+                .request("anonymous", "request-stable")
+                .await?
+                .is_none()
+        );
+        let mut baseline_context = context(http::HeaderMap::new());
+        baseline
+            .select_variant("coding", None, &mut baseline_context)
+            .await?;
+        let baseline_correlation = baseline_context
+            .extension::<CorrelatedRequest>()
+            .ok_or_else(|| anyhow::anyhow!("missing baseline correlation"))?;
+        assert!(baseline_pending.get("request-stable").is_some());
+
+        let metadata_db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&metadata_db).await?;
+        let metadata = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            metadata_db.clone(),
+            None,
+            PendingEvalDecisionStore::default(),
+            Some(trajectory(metadata_db.clone())?),
+        )
+        .await?;
+        let mut headers = http::HeaderMap::new();
+        for (name, value) in [
+            ("x-bitrouter-benchmark-id", "benchmark-other"),
+            ("x-bitrouter-trial-id", "trial-other"),
+            ("x-bitrouter-workflow", "workflow-other"),
+            ("x-bitrouter-agent-role", "role-other"),
+            ("x-superpowers-workflow", "superpowers-other"),
+        ] {
+            headers.insert(
+                http::HeaderName::from_bytes(name.as_bytes())?,
+                HeaderValue::from_str(value)?,
+            );
+        }
+        let mut metadata_context = context(headers);
+        metadata
+            .select_variant("coding", None, &mut metadata_context)
+            .await?;
+        let metadata_correlation = metadata_context
+            .extension::<CorrelatedRequest>()
+            .ok_or_else(|| anyhow::anyhow!("missing metadata correlation"))?;
+
+        assert_eq!(baseline_context.model(), metadata_context.model());
+        assert_eq!(
+            baseline_correlation.episode_id,
+            metadata_correlation.episode_id
+        );
+        assert_eq!(baseline_correlation.evidence, metadata_correlation.evidence);
+        assert!(
+            TrajectoryStore::new(metadata_db)
+                .request("owner-a", "request-stable")
+                .await?
+                .is_some()
+        );
         Ok(())
     }
 
@@ -2633,12 +2845,16 @@ presets:
             db,
             None,
             PendingEvalDecisionStore::default(),
+            None,
         )
         .await
         .unwrap();
 
         let mut initial = context("vendor:strong");
-        runtime.select("coding", &mut initial).unwrap();
+        runtime
+            .select_variant("coding", None, &mut initial)
+            .await
+            .unwrap();
         assert_eq!(initial.model(), "vendor:strong");
 
         lock.policies
@@ -2652,7 +2868,10 @@ presets:
             .await
             .unwrap();
         let mut reloaded = context("vendor:strong");
-        runtime.select("coding", &mut reloaded).unwrap();
+        runtime
+            .select_variant("coding", None, &mut reloaded)
+            .await
+            .unwrap();
         assert_eq!(reloaded.model(), "vendor:economy");
 
         tokio::fs::write(&lock_path, "lockfileVersion: invalid\n")
@@ -2665,7 +2884,10 @@ presets:
                 .is_err()
         );
         let mut last_known_good = context("vendor:strong");
-        runtime.select("coding", &mut last_known_good).unwrap();
+        runtime
+            .select_variant("coding", None, &mut last_known_good)
+            .await
+            .unwrap();
         assert_eq!(last_known_good.model(), "vendor:economy");
     }
 

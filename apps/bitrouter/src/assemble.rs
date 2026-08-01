@@ -488,6 +488,7 @@ pub async fn build_app_with_path(
         db.clone(),
         policy_decision_recorder.clone(),
         pending_eval_decisions.clone(),
+        None,
     )
     .await
     .context("loading policy-lock.yaml")?;
