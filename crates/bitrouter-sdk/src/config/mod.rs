@@ -52,6 +52,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     /// Generic evaluation exchange authorities and admission scopes.
     pub eval: EvalConfig,
+    /// Durable trajectory progress-control and local operations settings.
+    pub trajectory: TrajectoryConfig,
     /// Upstream providers, keyed by provider id.
     pub providers: HashMap<String, ProviderConfig>,
     /// Explicit virtual-model definitions (Strategy 2.2). Optional —
@@ -110,6 +112,7 @@ impl Default for Config {
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
             eval: EvalConfig::default(),
+            trajectory: TrajectoryConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
             presets: HashMap::new(),
@@ -125,6 +128,31 @@ impl Default for Config {
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
+        }
+    }
+}
+
+/// Largest accepted durable evaluation publication batch.
+pub const MAX_TRAJECTORY_OUTBOX_BATCH_SIZE: usize = 1_000;
+
+/// Durable trajectory progress-control settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TrajectoryConfig {
+    /// Explicit opt-in for durable trajectory routing and settlement.
+    pub enabled: bool,
+    /// Age boundary used by startup retention, in whole days.
+    pub retention_days: u32,
+    /// Maximum durable outbox rows attempted in one publication batch.
+    pub outbox_batch_size: usize,
+}
+
+impl Default for TrajectoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: 30,
+            outbox_batch_size: 100,
         }
     }
 }
@@ -1431,6 +1459,7 @@ where
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
     validate_policy_table(&config)?;
+    validate_trajectory_config(&config.trajectory)?;
     // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
     // route at a loopback / private / metadata URL. A typo or a malicious
     // YAML otherwise has the executor send every upstream request — and
@@ -1462,6 +1491,21 @@ where
         }
     }
     Ok(config)
+}
+
+fn validate_trajectory_config(config: &TrajectoryConfig) -> Result<()> {
+    if config.retention_days == 0 {
+        return Err(BitrouterError::bad_request(
+            "trajectory.retention_days must be positive".to_owned(),
+        ));
+    }
+    if config.outbox_batch_size == 0 || config.outbox_batch_size > MAX_TRAJECTORY_OUTBOX_BATCH_SIZE
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "trajectory.outbox_batch_size must be between 1 and {MAX_TRAJECTORY_OUTBOX_BATCH_SIZE}"
+        )));
+    }
+    Ok(())
 }
 
 /// Validate the `policy_table:` section: every tier a fingerprint maps to, the

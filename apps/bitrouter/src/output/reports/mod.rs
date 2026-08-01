@@ -15,4 +15,5 @@ pub mod policy;
 pub mod routing;
 pub mod skills;
 pub mod tools;
+pub mod trajectory;
 pub mod update;

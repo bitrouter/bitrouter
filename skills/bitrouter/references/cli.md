@@ -33,6 +33,65 @@ Bare `bitrouter` (no subcommand) is the onboarding front door: it runs the netwo
 | `bitrouter agents install <id>` | Print a paste-ready YAML stub for `<id>` — resolved from the bundled catalog first, then the ACP registry (`npx`/`uvx` distributions, version-pinned, `env` included). Binary-only registry entries are refused with a manual-install pointer (the registry has no checksums). |
 | `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: wired / endpoint / sampler / cardinality usage / in-flight spans. JSON output for tooling. |
 
+## Durable trajectory operations
+
+Trajectory capture is a local, explicit opt-in and is generic across tasks and
+protocols. It never requires task datasets or private routing headers.
+
+```yaml
+trajectory:
+  enabled: true
+  retention_days: 30       # positive; default 30
+  outbox_batch_size: 100   # 1..=1000; default 100
+```
+
+BitRouter fails closed if a signed lock contains any `progress_guard` while
+`trajectory.enabled` is false. Every trajectory setting is restart-only:
+reload rejects changes to `enabled`, `retention_days`, or `outbox_batch_size`
+and preserves the live last-known-good state. Restart the daemon to apply any
+of them. When enabled, capture uses the existing local correlation-key
+lifecycle and starts durable outbox publication and startup retention. When
+disabled, it creates no correlation key and writes no trajectory ledger rows.
+
+| Command | Effect |
+|---|---|
+| `bitrouter trajectory inspect <EPISODE_ID>` | Resolve the globally unique episode, then report owner-scoped correlation/completeness, structural health, active hold, typed route clauses, and event digests. |
+| `bitrouter trajectory replay <EPISODE_ID>` | Audit a stable snapshot and compare the newest persisted route checkpoint digest with replay. Corruption output uses a stable reason code and first event id/sequence only. |
+| `bitrouter trajectory prune --before <RFC3339> --dry-run` | Return exact global eligible counts without mutation. |
+| `bitrouter trajectory prune --before <RFC3339>` | Transactionally prune delivered old outbox rows and eligible terminal episode history in configured batches. |
+
+All commands use the standard config/database resolution and support the global
+`--json` / `--human` flags before or after the subcommand; none takes an owner
+argument. Inspect/replay resolve the owner once and keep all subsequent reads
+owner-filtered. Audit retries a bounded head→events→head stable read, so a
+concurrent append yields a valid before/after snapshot or a contention error,
+never false corruption.
+
+Retention uses an exclusive cutoff. An episode is eligible only when its last
+capture is older, every request is settled or failed, and no request points at a
+pending outbox row. Explicitly closed episodes must also have an old close time.
+Deletion is owner/identity guarded and transactional; no synthetic close event
+is written. Startup applies the same rules from `retention_days`. A late native
+continuation after pruning becomes a new `unresolved` / `incomplete` episode.
+
+Privacy is write-time, not display-time redaction: durable event JSON, outbox
+payloads, Eval evidence, logs, and both report formats contain structural facts,
+fixed categories/reason codes, counters, and digests only. They exclude
+API/Bearer secrets, prompts, system instructions, tool arguments, file bodies,
+and private provider metadata.
+
+Built-in operational Eval results are always `inconclusive`: metrics describe
+counts, streaks, elapsed time, and optional authoritative token/cost facts—not
+task quality. Missing metering remains absent instead of becoming zero.
+`trajectory.history_complete` is true only for a proven complete prefix;
+incomplete/unknown history is not treated as complete and follows the guard's
+configured incomplete-history behavior.
+
+Recovery sequence: back up the configured DB → run prune `--dry-run` → inspect
+valuable episodes → replay them → run real prune. Retry ordinary audit
+contention after traffic quiets. Investigate stable corruption codes or restore
+from backup.
+
 ## Generic eval exchange
 
 These commands operate on the local append-only evidence ledger. They never

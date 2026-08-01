@@ -366,6 +366,71 @@ is part of the candidate lineage.
 
 The lock contains deterministic routes, tiers, and learning thresholds, but no activation or freeze switch. Older `policy.writeback: locked|evolve` input remains readable as `frozen|adaptive`; newly written configuration uses `policy.mode`. The old `policy lock`, `policy unlock`, and `policy evolve --freeze` surfaces have been removed.
 
+### `bitrouter trajectory`
+
+Durable trajectory progress control is an explicit local opt-in:
+
+```yaml
+trajectory:
+  enabled: true
+  retention_days: 30
+  outbox_batch_size: 100
+```
+
+`enabled` defaults to `false`; `retention_days` defaults to `30` and must be
+positive; `outbox_batch_size` defaults to `100` and must be between 1 and 1000.
+A signed policy lock containing any `progress_guard` is rejected unless
+trajectory capture is enabled. Every trajectory setting is restart-only:
+changing `enabled`, `retention_days`, or `outbox_batch_size` during reload is
+rejected while the last-known-good runtime remains active. Restart the daemon
+to apply any trajectory setting change.
+
+The feature is source- and task-neutral. It stores event structure, bounded
+categorical routing facts, exact counters, and keyed/content digests. It does
+not store API keys, bearer credentials, prompts, system instructions, tool
+arguments, file bodies, or provider-private metadata. Operational Eval records
+are redacted digest/count evidence and an `inconclusive` verdict; they are not a
+quality score and do not infer task identity or capability from private data.
+
+```text
+bitrouter trajectory inspect EPISODE_ID
+bitrouter trajectory replay EPISODE_ID
+bitrouter trajectory prune --before RFC3339 [--dry-run]
+```
+
+These commands use the standard config resolution chain and its local database;
+they do not accept an owner argument. `inspect` first resolves the globally
+unique episode, then performs every read inside its owner scope. It reports
+correlation source, history completeness, current structural health, typed
+route clauses, and event digests. `replay` validates a stable episode snapshot
+and compares the newest persisted route checkpoint digest with a fresh replay.
+Corrupt histories expose only the first event id/sequence and a stable reason
+code; concurrent appends are retried and are never reported as corruption.
+Use global `--json` or `--human` for either view.
+
+`prune --dry-run` returns exact eligible counts without mutation. A real prune
+removes delivered outbox rows older than the exclusive cutoff, then terminal
+episode history whose last capture is older than the cutoff. Every request in
+an episode must be settled or failed, and any associated pending outbox row
+preserves the entire episode. Deletes are bounded by `outbox_batch_size`,
+owner-scoped, identity-checked, and transactional. The daemon applies the same
+rules at startup using `retention_days`; it never fabricates an
+`episode_closed` event. If a client later cites a native parent that retention
+already removed, BitRouter starts a new `unresolved` / `incomplete` episode
+rather than pretending the lost prefix is complete.
+
+For recovery, back up the configured database, run `prune --dry-run`, inspect
+important episodes, and run `replay` before destructive pruning. A replay
+contention error means the episode kept changing during the bounded read; retry
+after traffic quiets. Stable corruption reason codes mean the durable history
+needs operator investigation or restoration from backup.
+
+Progress metrics are descriptive: request/settlement counts, elapsed time,
+projection/tier/unprotected streaks, recovery/hold counters, and optional
+authoritative token/cost totals. Missing metering stays absent rather than
+becoming zero. `history_complete=false` means the visible prefix is not proven
+complete and guards follow their configured incomplete-history behavior.
+
 ### `bitrouter eval`
 
 ```text

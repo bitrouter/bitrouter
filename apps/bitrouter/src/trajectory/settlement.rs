@@ -198,16 +198,24 @@ fn digest_hex(digest: &str) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::EvalConfig;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, UsageOrigin};
+    use bitrouter_sdk::language_model::{
+        ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role,
+        SettlementContext, UsageOrigin,
+    };
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{TrajectorySettlementRecorder, build_settlement};
     use crate::eval::{EvalService, admission::SubmissionPrincipal, store::EvalStore};
     use crate::metering::MeteringSettlementEvent;
+    use crate::output::reports::trajectory::{inspect_report, replay_report};
+    use crate::output::{Format, Output};
+    use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
+    use crate::trajectory::correlation::TrajectoryRuntime;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::publisher::TrajectoryOutboxPublisher;
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
@@ -392,6 +400,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adversarial_input_never_reaches_ledger_outbox_eval_or_operator_reports()
+    -> anyhow::Result<()> {
+        const SENTINELS: [&str; 6] = [
+            "sk-live-API-KEY-SENTINEL",
+            "Bearer AUTHORIZATION-SENTINEL",
+            "private-prompt-SENTINEL",
+            "private-tool-arguments-SENTINEL",
+            "private-file-body-SENTINEL",
+            "private-provider-metadata-SENTINEL",
+        ];
+        let (db, store) = store().await?;
+        let runtime = TrajectoryRuntime::new(
+            store.clone(),
+            Canonicalizer::new(CorrelationKey::from_bytes([41; 32])?),
+        );
+        let input = correlate_input("request-private", "unused-episode");
+        let guarded_route = input
+            .guarded_route
+            .ok_or_else(|| anyhow::anyhow!("privacy fixture lost its guarded route"))?;
+        let prompt = adversarial_prompt(&SENTINELS);
+        let (correlated, _) = runtime
+            .begin_guarded_request(
+                "owner-a",
+                "request-private",
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                "2026-08-01T00:00:00Z",
+                guarded_route,
+            )
+            .await?;
+        let metering = metering("request-private");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-private",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &metering)
+                },
+            )
+            .await?;
+
+        let mut surfaces = Vec::new();
+        surfaces.extend(
+            raw_json_column(
+                &db,
+                "SELECT event_json FROM trajectory_events ORDER BY sequence",
+                "event_json",
+            )
+            .await?,
+        );
+        surfaces.extend(
+            raw_json_column(
+                &db,
+                "SELECT payload_json FROM trajectory_outbox ORDER BY outbox_id",
+                "payload_json",
+            )
+            .await?,
+        );
+
+        let inspect = inspect_report(&store, &correlated.episode_id).await?;
+        let replay = replay_report(&store, &correlated.episode_id).await?;
+        for report in [&inspect as &dyn crate::output::CliReport, &replay] {
+            surfaces.push(String::from_utf8(
+                Output::new(Format::Json).render_to_vec(report),
+            )?);
+            surfaces.push(String::from_utf8(
+                Output::new(Format::Human).render_to_vec(report),
+            )?);
+        }
+
+        let eval_store = EvalStore::new(db.clone());
+        let publisher =
+            TrajectoryOutboxPublisher::new(store, eval_store, EvalConfig::default(), 10)?;
+        assert_eq!(publisher.drain_pending().await?.delivered, 1);
+        surfaces.extend(
+            raw_json_column(
+                &db,
+                "SELECT subject_json FROM eval_subjects ORDER BY eval_id",
+                "subject_json",
+            )
+            .await?,
+        );
+        surfaces.extend(
+            raw_json_column(
+                &db,
+                "SELECT result_json FROM eval_results ORDER BY result_id",
+                "result_json",
+            )
+            .await?,
+        );
+
+        assert!(!surfaces.is_empty());
+        for surface in &surfaces {
+            for sentinel in SENTINELS {
+                assert!(
+                    !surface.contains(sentinel),
+                    "private sentinel escaped into a durable or operator surface"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn poison_outbox_does_not_block_later_item_or_shutdown_drain() -> anyhow::Result<()> {
         let (db, store) = store().await?;
         begin_guarded(&store, "request-poison", "episode-poison").await?;
@@ -558,6 +670,75 @@ mod tests {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         Ok((db.clone(), TrajectoryStore::new(db)))
+    }
+
+    async fn raw_json_column(
+        db: &sea_orm::DatabaseConnection,
+        query: &str,
+        column: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        db.query_all(Statement::from_string(DatabaseBackend::Sqlite, query))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get("", column).map_err(Into::into))
+            .collect()
+    }
+
+    fn adversarial_prompt(sentinels: &[&str; 6]) -> Prompt {
+        let mut params = GenerationParams {
+            extra_protocol: Some(ApiProtocol::ChatCompletions),
+            ..GenerationParams::default()
+        };
+        params
+            .extra
+            .insert("api_key".into(), serde_json::json!(sentinels[0]));
+        params
+            .extra
+            .insert("authorization".into(), serde_json::json!(sentinels[1]));
+        Prompt {
+            model: "inbound-private-model".into(),
+            system: Some(sentinels[2].into()),
+            system_provider_metadata: BTreeMap::from([(
+                "provider".into(),
+                serde_json::json!({"private": sentinels[5]}),
+            )]),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text {
+                        text: sentinels[2].into(),
+                        provider_metadata: BTreeMap::new(),
+                    },
+                    Content::ToolCall {
+                        id: "call-private".into(),
+                        name: "private-tool".into(),
+                        arguments: format!("{{\"value\":\"{}\"}}", sentinels[3]),
+                        provider_executed: false,
+                        dynamic: false,
+                        provider_metadata: BTreeMap::from([(
+                            "provider".into(),
+                            serde_json::json!({"private": sentinels[5]}),
+                        )]),
+                    },
+                    Content::File {
+                        media_type: "application/octet-stream".into(),
+                        data: DataContent::Base64 {
+                            data: sentinels[4].into(),
+                        },
+                        filename: Some("private.bin".into()),
+                        provider_metadata: BTreeMap::from([(
+                            "provider".into(),
+                            serde_json::json!({"private": sentinels[5]}),
+                        )]),
+                    },
+                ],
+            }],
+            tools: Vec::new(),
+            params,
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        }
     }
 
     async fn begin_guarded(

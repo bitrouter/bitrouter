@@ -13,9 +13,9 @@ use super::guard::{
 use super::health::reduce;
 use super::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxWrite, PendingOutbox,
-    RequestStatus, Settlement, StoredRequest, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent,
-    TrajectoryEventKind, TrajectoryEvidence, canonical_digest, validate_event,
-    validate_keyed_component, validate_outbox_payload,
+    RequestStatus, Settlement, StoredEpisode, StoredRequest, TRAJECTORY_SCHEMA_VERSION,
+    TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
+    validate_event, validate_keyed_component, validate_outbox_payload,
 };
 use crate::workflow_state::ir::RouteProjection;
 
@@ -150,6 +150,29 @@ pub(crate) struct OutboxBatchItem {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PruneSummary {
+    pub delivered_outbox_rows: u64,
+    pub episode_rows: u64,
+    pub event_rows: u64,
+    pub request_rows: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpisodeAudit {
+    Valid {
+        episode: StoredEpisode,
+        events: Vec<TrajectoryEvent>,
+        snapshot: TrajectorySnapshot,
+    },
+    Corrupt {
+        episode: StoredEpisode,
+        event_id: Option<String>,
+        sequence: Option<u64>,
+        reason: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GuardedRouteInput {
     pub route_event_id: String,
@@ -197,7 +220,19 @@ enum PrefixResolution {
 
 const MAX_SEQUENCE_RESERVATION_ATTEMPTS: usize = 32;
 const MAX_LEDGER_MUTATION_ATTEMPTS: usize = 32;
-pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize = 1_000;
+const MAX_AUDIT_READ_ATTEMPTS: usize = 32;
+pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize =
+    bitrouter_sdk::config::MAX_TRAJECTORY_OUTBOX_BATCH_SIZE;
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct AuditReadProbe {
+    first_read_barriers: Option<(
+        std::sync::Arc<tokio::sync::Barrier>,
+        std::sync::Arc<tokio::sync::Barrier>,
+    )>,
+    force_contention: bool,
+}
 
 impl TrajectoryStore {
     pub fn new(db: DatabaseConnection) -> Self {
@@ -937,6 +972,516 @@ impl TrajectoryStore {
         active.update(&self.db).await?;
         Ok(())
     }
+
+    /// Resolve the owner of a globally unique episode for the local operator
+    /// CLI. All subsequent reads remain owner-filtered.
+    pub async fn resolve_episode_owner(&self, episode_id: &str) -> Result<Option<String>> {
+        validate_opaque(episode_id, "episode_id")?;
+        Ok(episode_entity::Entity::find_by_id(episode_id)
+            .one(&self.db)
+            .await?
+            .map(|episode| episode.owner_user_id))
+    }
+
+    pub async fn episode(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+    ) -> Result<Option<StoredEpisode>> {
+        validate_owner(owner_user_id)?;
+        validate_opaque(episode_id, "episode_id")?;
+        episode_entity::Entity::find()
+            .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(episode_entity::Column::EpisodeId.eq(episode_id))
+            .one(&self.db)
+            .await?
+            .map(stored_episode)
+            .transpose()
+    }
+
+    pub async fn audit_episode(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+    ) -> Result<EpisodeAudit> {
+        #[cfg(test)]
+        {
+            return self
+                .audit_episode_inner(owner_user_id, episode_id, None)
+                .await;
+        }
+        #[cfg(not(test))]
+        self.audit_episode_inner(owner_user_id, episode_id).await
+    }
+
+    #[cfg(test)]
+    async fn audit_episode_with_probe(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+        probe: &AuditReadProbe,
+    ) -> Result<EpisodeAudit> {
+        self.audit_episode_inner(owner_user_id, episode_id, Some(probe))
+            .await
+    }
+
+    async fn audit_episode_inner(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+        #[cfg(test)] probe: Option<&AuditReadProbe>,
+    ) -> Result<EpisodeAudit> {
+        validate_owner(owner_user_id)?;
+        validate_opaque(episode_id, "episode_id")?;
+        for attempt in 0..MAX_AUDIT_READ_ATTEMPTS {
+            let episode_row = self
+                .owned_episode_row(owner_user_id, episode_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unknown owner-scoped trajectory episode '{episode_id}'")
+                })?;
+            #[cfg(test)]
+            if attempt == 0
+                && let Some((head_read, writer_done)) =
+                    probe.and_then(|probe| probe.first_read_barriers.as_ref())
+            {
+                head_read.wait().await;
+                writer_done.wait().await;
+            }
+            let rows = self.raw_event_rows(owner_user_id, episode_id).await?;
+            let second_episode_row = self.owned_episode_row(owner_user_id, episode_id).await?;
+            #[cfg(test)]
+            let force_contention = probe.is_some_and(|probe| probe.force_contention);
+            #[cfg(not(test))]
+            let force_contention = false;
+            if second_episode_row.as_ref() == Some(&episode_row) && !force_contention {
+                return audit_stable_episode(episode_row, rows);
+            }
+            tokio::time::sleep(contention_backoff(attempt)).await;
+        }
+        anyhow::bail!(
+            "trajectory episode audit contention exhausted after {MAX_AUDIT_READ_ATTEMPTS} attempts"
+        )
+    }
+
+    async fn owned_episode_row(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+    ) -> Result<Option<episode_entity::Model>> {
+        episode_entity::Entity::find()
+            .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(episode_entity::Column::EpisodeId.eq(episode_id))
+            .one(&self.db)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn raw_event_rows(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+    ) -> Result<Vec<event_entity::Model>> {
+        event_entity::Entity::find()
+            .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(event_entity::Column::EpisodeId.eq(episode_id))
+            .order_by_asc(event_entity::Column::Sequence)
+            .all(&self.db)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Prune delivered publication rows and retention-expired episode history.
+    /// Open episodes are eligible only when every indexed request is terminal;
+    /// an associated pending outbox row always preserves the whole episode.
+    pub async fn prune_before(
+        &self,
+        before: &str,
+        dry_run: bool,
+        batch_size: usize,
+    ) -> Result<PruneSummary> {
+        validate_timestamp(before, "trajectory prune cutoff")?;
+        if batch_size == 0 || batch_size > MAX_OUTBOX_BATCH_SIZE {
+            anyhow::bail!(
+                "trajectory prune batch size must be between 1 and {MAX_OUTBOX_BATCH_SIZE}"
+            )
+        }
+        let before = chrono::DateTime::parse_from_rfc3339(before)?;
+        if dry_run {
+            return self.prune_dry_run(before).await;
+        }
+
+        let mut summary = self.prune_delivered_outbox(before, batch_size).await?;
+        let episodes = self.prune_expired_episodes(before, batch_size).await?;
+        merge_prune_summary(&mut summary, episodes)?;
+        Ok(summary)
+    }
+
+    async fn prune_dry_run(
+        &self,
+        before: chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<PruneSummary> {
+        let txn = self.db.begin().await?;
+        let delivered = outbox_entity::Entity::find()
+            .filter(outbox_entity::Column::DeliveredAt.is_not_null())
+            .all(&txn)
+            .await?;
+        let delivered_outbox_rows = count_before(
+            delivered
+                .iter()
+                .filter_map(|row| row.delivered_at.as_deref()),
+            before,
+            "stored trajectory outbox delivered_at",
+        )?;
+        let episodes = episode_entity::Entity::find().all(&txn).await?;
+        let mut summary = PruneSummary {
+            delivered_outbox_rows,
+            ..PruneSummary::default()
+        };
+        for episode in episodes {
+            if let Some((request_rows, event_rows)) =
+                prunable_episode_counts(&txn, &episode, before).await?
+            {
+                summary.episode_rows = checked_prune_add(summary.episode_rows, 1)?;
+                summary.request_rows = checked_prune_add(summary.request_rows, request_rows)?;
+                summary.event_rows = checked_prune_add(summary.event_rows, event_rows)?;
+            }
+        }
+        txn.commit().await?;
+        Ok(summary)
+    }
+
+    async fn prune_delivered_outbox(
+        &self,
+        before: chrono::DateTime<chrono::FixedOffset>,
+        batch_size: usize,
+    ) -> Result<PruneSummary> {
+        let mut cursor: Option<String> = None;
+        let mut summary = PruneSummary::default();
+        loop {
+            let txn = self.db.begin().await?;
+            let mut query = outbox_entity::Entity::find()
+                .filter(outbox_entity::Column::DeliveredAt.is_not_null())
+                .order_by_asc(outbox_entity::Column::OutboxId)
+                .limit(u64::try_from(batch_size).context("prune batch size exceeds u64")?);
+            if let Some(cursor) = cursor.as_deref() {
+                query = query.filter(outbox_entity::Column::OutboxId.gt(cursor));
+            }
+            let rows = query.all(&txn).await?;
+            if rows.is_empty() {
+                txn.commit().await?;
+                break;
+            }
+            for row in &rows {
+                let delivered_at = row.delivered_at.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("delivered trajectory outbox row lost delivered_at")
+                })?;
+                if timestamp_is_before(
+                    delivered_at,
+                    before,
+                    "stored trajectory outbox delivered_at",
+                )? {
+                    let deleted = outbox_entity::Entity::delete_many()
+                        .filter(outbox_entity::Column::OwnerUserId.eq(&row.owner_user_id))
+                        .filter(outbox_entity::Column::OutboxId.eq(&row.outbox_id))
+                        .filter(outbox_entity::Column::DeliveredAt.eq(delivered_at))
+                        .exec(&txn)
+                        .await?;
+                    summary.delivered_outbox_rows =
+                        checked_prune_add(summary.delivered_outbox_rows, deleted.rows_affected)?;
+                }
+            }
+            cursor = rows.last().map(|row| row.outbox_id.clone());
+            txn.commit().await?;
+        }
+        Ok(summary)
+    }
+
+    async fn prune_expired_episodes(
+        &self,
+        before: chrono::DateTime<chrono::FixedOffset>,
+        batch_size: usize,
+    ) -> Result<PruneSummary> {
+        let mut cursor: Option<String> = None;
+        let mut summary = PruneSummary::default();
+        loop {
+            let mut query = episode_entity::Entity::find()
+                .order_by_asc(episode_entity::Column::EpisodeId)
+                .limit(u64::try_from(batch_size).context("prune batch size exceeds u64")?);
+            if let Some(cursor) = cursor.as_deref() {
+                query = query.filter(episode_entity::Column::EpisodeId.gt(cursor));
+            }
+            let rows = query.all(&self.db).await?;
+            if rows.is_empty() {
+                break;
+            }
+            for episode in &rows {
+                let deleted = self.prune_expired_episode(episode, before).await?;
+                merge_prune_summary(&mut summary, deleted)?;
+            }
+            cursor = rows.last().map(|episode| episode.episode_id.clone());
+        }
+        Ok(summary)
+    }
+
+    async fn prune_expired_episode(
+        &self,
+        candidate: &episode_entity::Model,
+        before: chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<PruneSummary> {
+        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
+            let txn = self.db.begin().await?;
+            let current = episode_entity::Entity::find()
+                .filter(episode_entity::Column::OwnerUserId.eq(&candidate.owner_user_id))
+                .filter(episode_entity::Column::EpisodeId.eq(&candidate.episode_id))
+                .one(&txn)
+                .await?;
+            let Some(current) = current else {
+                txn.commit().await?;
+                return Ok(PruneSummary::default());
+            };
+            let Some((request_rows, event_rows)) =
+                prunable_episode_counts(&txn, &current, before).await?
+            else {
+                txn.commit().await?;
+                return Ok(PruneSummary::default());
+            };
+            match delete_prunable_episode_in_tx(&txn, &current, request_rows, event_rows).await {
+                Ok(summary) => {
+                    txn.commit().await?;
+                    return Ok(summary);
+                }
+                Err(error) if error.downcast_ref::<PruneRace>().is_some() => {
+                    txn.rollback().await?;
+                    tokio::time::sleep(contention_backoff(attempt)).await;
+                }
+                Err(error) if classify_database_error(&error).retryable_contention => {
+                    txn.rollback().await?;
+                    tokio::time::sleep(contention_backoff(attempt)).await;
+                }
+                Err(error) => {
+                    txn.rollback().await?;
+                    return Err(error);
+                }
+            }
+        }
+        anyhow::bail!(
+            "trajectory episode prune contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
+        )
+    }
+}
+
+fn audit_stable_episode(
+    episode_row: episode_entity::Model,
+    rows: Vec<event_entity::Model>,
+) -> Result<EpisodeAudit> {
+    let episode = stored_episode(episode_row.clone())?;
+    let mut events = Vec::with_capacity(rows.len());
+    for (index, row) in rows.into_iter().enumerate() {
+        let event_id = row.event_id.clone();
+        let indexed_sequence = u64::try_from(row.sequence).ok();
+        let event = match stored_event(row) {
+            Ok(event) => event,
+            Err(_) => {
+                return Ok(EpisodeAudit::Corrupt {
+                    episode,
+                    event_id: Some(event_id),
+                    sequence: indexed_sequence,
+                    reason: "stored_event_invalid".to_owned(),
+                });
+            }
+        };
+        let expected = u64::try_from(index)
+            .context("trajectory event count exceeds sequence range")?
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("trajectory event sequence overflow"))?;
+        if event.sequence != expected {
+            return Ok(EpisodeAudit::Corrupt {
+                episode,
+                event_id: Some(event.event_id),
+                sequence: Some(event.sequence),
+                reason: "sequence_gap".to_owned(),
+            });
+        }
+        events.push(event);
+    }
+    let snapshot = match reduce(&events, &std::collections::BTreeSet::new()) {
+        Ok(snapshot) => snapshot,
+        Err(_) => {
+            let fallback = (
+                events.last().map(|event| event.event_id.clone()),
+                events.last().map(|event| event.sequence),
+            );
+            let (event_id, sequence) = match first_reducer_failure(&events) {
+                Some(failure) => failure,
+                None => fallback,
+            };
+            return Ok(EpisodeAudit::Corrupt {
+                episode,
+                event_id,
+                sequence,
+                reason: "reducer_rejected_prefix".to_owned(),
+            });
+        }
+    };
+    if validate_episode_head(&episode_row, &events).is_err() {
+        return Ok(EpisodeAudit::Corrupt {
+            episode,
+            event_id: events.last().map(|event| event.event_id.clone()),
+            sequence: events.last().map(|event| event.sequence),
+            reason: "episode_head_mismatch".to_owned(),
+        });
+    }
+    Ok(EpisodeAudit::Valid {
+        episode,
+        events,
+        snapshot,
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("trajectory episode changed during prune")]
+struct PruneRace;
+
+async fn delete_prunable_episode_in_tx(
+    txn: &DatabaseTransaction,
+    episode: &episode_entity::Model,
+    expected_request_rows: u64,
+    expected_event_rows: u64,
+) -> Result<PruneSummary> {
+    let deleted_requests = request_entity::Entity::delete_many()
+        .filter(request_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
+        .filter(request_entity::Column::EpisodeId.eq(&episode.episode_id))
+        .exec(txn)
+        .await?;
+    let deleted_events = event_entity::Entity::delete_many()
+        .filter(event_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
+        .filter(event_entity::Column::EpisodeId.eq(&episode.episode_id))
+        .exec(txn)
+        .await?;
+    if deleted_requests.rows_affected != expected_request_rows
+        || deleted_events.rows_affected != expected_event_rows
+    {
+        return Err(PruneRace.into());
+    }
+
+    let mut delete_episode = episode_entity::Entity::delete_many()
+        .filter(episode_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
+        .filter(episode_entity::Column::EpisodeId.eq(&episode.episode_id))
+        .filter(episode_entity::Column::NextSequence.eq(episode.next_sequence))
+        .filter(episode_entity::Column::LastCapturedAt.eq(&episode.last_captured_at));
+    delete_episode = match episode.closed_at.as_deref() {
+        Some(closed_at) => delete_episode.filter(episode_entity::Column::ClosedAt.eq(closed_at)),
+        None => delete_episode.filter(episode_entity::Column::ClosedAt.is_null()),
+    };
+    let deleted_episode = delete_episode.exec(txn).await?;
+    if deleted_episode.rows_affected != 1 {
+        return Err(PruneRace.into());
+    }
+    Ok(PruneSummary {
+        delivered_outbox_rows: 0,
+        episode_rows: 1,
+        event_rows: deleted_events.rows_affected,
+        request_rows: deleted_requests.rows_affected,
+    })
+}
+
+async fn prunable_episode_counts(
+    txn: &DatabaseTransaction,
+    episode: &episode_entity::Model,
+    before: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<Option<(u64, u64)>> {
+    let last_is_old = timestamp_is_before(
+        &episode.last_captured_at,
+        before,
+        "stored trajectory episode last_captured_at",
+    )?;
+    let closed_is_old = episode
+        .closed_at
+        .as_deref()
+        .map(|closed_at| {
+            timestamp_is_before(closed_at, before, "stored trajectory episode closed_at")
+        })
+        .transpose()?;
+    let closed_is_old = closed_is_old == Some(true);
+    if !last_is_old || (episode.closed_at.is_some() && !closed_is_old) {
+        return Ok(None);
+    }
+
+    let requests = request_entity::Entity::find()
+        .filter(request_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
+        .filter(request_entity::Column::EpisodeId.eq(&episode.episode_id))
+        .all(txn)
+        .await?;
+    if requests.is_empty() {
+        return Ok(None);
+    }
+    if requests
+        .iter()
+        .any(|request| !matches!(request.status.as_str(), "settled" | "failed"))
+    {
+        return Ok(None);
+    }
+    let outbox_ids = requests
+        .iter()
+        .filter_map(|request| request.settlement_outbox_id.clone())
+        .collect::<Vec<_>>();
+    if !outbox_ids.is_empty()
+        && outbox_entity::Entity::find()
+            .filter(outbox_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
+            .filter(outbox_entity::Column::OutboxId.is_in(outbox_ids))
+            .filter(outbox_entity::Column::DeliveredAt.is_null())
+            .one(txn)
+            .await?
+            .is_some()
+    {
+        return Ok(None);
+    }
+    let request_rows = u64::try_from(requests.len()).context("too many trajectory requests")?;
+    let event_rows = event_entity::Entity::find()
+        .filter(event_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
+        .filter(event_entity::Column::EpisodeId.eq(&episode.episode_id))
+        .count(txn)
+        .await?;
+    Ok(Some((request_rows, event_rows)))
+}
+
+fn timestamp_is_before(
+    value: &str,
+    before: chrono::DateTime<chrono::FixedOffset>,
+    field: &str,
+) -> Result<bool> {
+    Ok(chrono::DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("{field} must be RFC3339"))?
+        < before)
+}
+
+fn count_before<'a>(
+    values: impl Iterator<Item = &'a str>,
+    before: chrono::DateTime<chrono::FixedOffset>,
+    field: &str,
+) -> Result<u64> {
+    let mut count = 0_u64;
+    for value in values {
+        if timestamp_is_before(value, before, field)? {
+            count = checked_prune_add(count, 1)?;
+        }
+    }
+    Ok(count)
+}
+
+fn merge_prune_summary(target: &mut PruneSummary, other: PruneSummary) -> Result<()> {
+    target.delivered_outbox_rows =
+        checked_prune_add(target.delivered_outbox_rows, other.delivered_outbox_rows)?;
+    target.episode_rows = checked_prune_add(target.episode_rows, other.episode_rows)?;
+    target.event_rows = checked_prune_add(target.event_rows, other.event_rows)?;
+    target.request_rows = checked_prune_add(target.request_rows, other.request_rows)?;
+    Ok(())
+}
+
+fn checked_prune_add(left: u64, right: u64) -> Result<u64> {
+    left.checked_add(right)
+        .ok_or_else(|| anyhow::anyhow!("trajectory prune count overflow"))
 }
 
 async fn begin_request_in_tx(
@@ -2066,6 +2611,46 @@ fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
         protocol: row.protocol,
         status: parse_request_status(&row.status)?,
     })
+}
+
+fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode> {
+    Ok(StoredEpisode {
+        episode_id: row.episode_id,
+        owner_user_id: row.owner_user_id,
+        correlation_source: row.correlation_source,
+        correlation_key_id: row.correlation_key_id,
+        completeness: parse_completeness(&row.history_completeness)?,
+        next_sequence: u64::try_from(row.next_sequence)
+            .context("stored trajectory episode next_sequence is negative")?,
+        first_captured_at: row.first_captured_at,
+        last_captured_at: row.last_captured_at,
+        closed_at: row.closed_at,
+        latest_request_id: row.latest_request_id,
+    })
+}
+
+fn first_reducer_failure(events: &[TrajectoryEvent]) -> Option<(Option<String>, Option<u64>)> {
+    for end in 1..=events.len() {
+        if reduce(&events[..end], &std::collections::BTreeSet::new()).is_ok() {
+            continue;
+        }
+        let event = events.get(end.saturating_sub(1));
+        let is_pending_guard_prefix = event.is_some_and(|event| {
+            event.kind == TrajectoryEventKind::RouteIntentRecorded
+                && events.get(end).is_some_and(|next| {
+                    next.kind == TrajectoryEventKind::GuardActivated
+                        && next.request_id == event.request_id
+                })
+        });
+        if is_pending_guard_prefix {
+            continue;
+        }
+        return Some((
+            event.map(|event| event.event_id.clone()),
+            event.map(|event| event.sequence),
+        ));
+    }
+    None
 }
 
 fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
@@ -3543,6 +4128,390 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pruning_is_owner_safe_bounded_dry_run_exact_and_pending_safe() -> anyhow::Result<()> {
+        let store = store().await?;
+        let delivered = seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-a",
+            "request-a",
+            "2026-08-01T00:00:00Z",
+            true,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing delivered outbox fixture"))?;
+        store
+            .mark_outbox_delivered("owner-a", &delivered, "2026-08-01T00:05:00Z")
+            .await?;
+        seed_terminal_episode(
+            &store,
+            "owner-b",
+            "episode-b",
+            "request-b",
+            "2026-08-01T00:00:00Z",
+            false,
+        )
+        .await?;
+        let pending = seed_terminal_episode(
+            &store,
+            "owner-c",
+            "episode-pending",
+            "request-pending",
+            "2026-08-01T00:00:00Z",
+            true,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing pending outbox fixture"))?;
+        seed_started_episode(
+            &store,
+            "owner-d",
+            "episode-active",
+            "request-active",
+            "2026-08-01T00:00:00Z",
+        )
+        .await?;
+        seed_started_episode(
+            &store,
+            "owner-f",
+            "episode-closed-active",
+            "request-closed-active",
+            "2026-08-01T00:00:00Z",
+        )
+        .await?;
+        store
+            .db
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "UPDATE trajectory_episodes SET closed_at = '2026-08-01T00:00:00Z' \
+                 WHERE owner_user_id = 'owner-f' AND episode_id = 'episode-closed-active'",
+            ))
+            .await?;
+        seed_terminal_episode(
+            &store,
+            "owner-e",
+            "episode-fresh",
+            "request-fresh",
+            "2026-08-03T00:00:00Z",
+            false,
+        )
+        .await?;
+
+        let dry = store.prune_before("2026-08-02T00:00:00Z", true, 1).await?;
+        assert_eq!(
+            dry,
+            PruneSummary {
+                delivered_outbox_rows: 1,
+                episode_rows: 2,
+                event_rows: 6,
+                request_rows: 2,
+            }
+        );
+        assert_eq!(
+            store.resolve_episode_owner("episode-a").await?.as_deref(),
+            Some("owner-a")
+        );
+
+        let deleted = store.prune_before("2026-08-02T00:00:00Z", false, 1).await?;
+        assert_eq!(deleted, dry);
+        assert!(store.resolve_episode_owner("episode-a").await?.is_none());
+        assert!(store.resolve_episode_owner("episode-b").await?.is_none());
+        assert_eq!(
+            store
+                .resolve_episode_owner("episode-pending")
+                .await?
+                .as_deref(),
+            Some("owner-c")
+        );
+        assert_eq!(
+            store
+                .resolve_episode_owner("episode-active")
+                .await?
+                .as_deref(),
+            Some("owner-d")
+        );
+        assert_eq!(
+            store
+                .resolve_episode_owner("episode-fresh")
+                .await?
+                .as_deref(),
+            Some("owner-e")
+        );
+        assert_eq!(
+            store
+                .resolve_episode_owner("episode-closed-active")
+                .await?
+                .as_deref(),
+            Some("owner-f")
+        );
+        assert_eq!(
+            store
+                .pending_outbox("owner-c")
+                .await?
+                .into_iter()
+                .map(|row| row.outbox_id)
+                .collect::<Vec<_>>(),
+            vec![pending]
+        );
+        assert_eq!(
+            store.prune_before("2026-08-02T00:00:00Z", false, 1).await?,
+            PruneSummary::default()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_parent_cas_rolls_back_child_deletes() -> anyhow::Result<()> {
+        let store = store().await?;
+        seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-cas",
+            "request-cas",
+            "2026-08-01T00:00:00Z",
+            false,
+        )
+        .await?;
+        let stale = episode_entity::Entity::find_by_id("episode-cas")
+            .one(&store.db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing CAS fixture"))?;
+        store
+            .db
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "UPDATE trajectory_episodes SET next_sequence = 99 \
+                 WHERE owner_user_id = 'owner-a' AND episode_id = 'episode-cas'",
+            ))
+            .await?;
+
+        let txn = store.db.begin().await?;
+        let error = delete_prunable_episode_in_tx(&txn, &stale, 1, 3)
+            .await
+            .expect_err("stale parent head must fail its final CAS");
+        assert!(error.to_string().contains("changed during prune"));
+        txn.rollback().await?;
+
+        assert!(store.request("owner-a", "request-cas").await?.is_some());
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-cas")
+                .await?
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prune_count_mismatch_rolls_back_every_child_delete() -> anyhow::Result<()> {
+        let store = store().await?;
+        seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-count",
+            "request-count",
+            "2026-08-01T00:00:00Z",
+            false,
+        )
+        .await?;
+        let episode = episode_entity::Entity::find_by_id("episode-count")
+            .one(&store.db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing count fixture"))?;
+        let txn = store.db.begin().await?;
+        let error = delete_prunable_episode_in_tx(&txn, &episode, 2, 3)
+            .await
+            .expect_err("pre-read/delete count mismatch must fail closed");
+        assert!(error.to_string().contains("changed during prune"));
+        txn.rollback().await?;
+
+        assert!(store.request("owner-a", "request-count").await?.is_some());
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-count")
+                .await?
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn episode_audit_is_owner_scoped_and_names_the_first_corrupt_event() -> anyhow::Result<()>
+    {
+        let store = store().await?;
+        seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-audit",
+            "request-audit",
+            "2026-08-01T00:00:00Z",
+            false,
+        )
+        .await?;
+
+        let metadata = store
+            .episode("owner-a", "episode-audit")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing episode metadata"))?;
+        assert_eq!(metadata.correlation_source, "explicit_root");
+        assert_eq!(metadata.completeness, HistoryCompleteness::Complete);
+        assert!(store.episode("owner-b", "episode-audit").await?.is_none());
+        match store.audit_episode("owner-a", "episode-audit").await? {
+            EpisodeAudit::Valid {
+                snapshot, events, ..
+            } => {
+                assert_eq!(snapshot.through_sequence, 3);
+                assert_eq!(events.len(), 3);
+            }
+            EpisodeAudit::Corrupt { .. } => anyhow::bail!("valid episode audited as corrupt"),
+        }
+
+        store
+            .db
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "UPDATE trajectory_events SET event_json = '{\"invalid\":true}' \
+                 WHERE owner_user_id = 'owner-a' AND event_id = 'route-request-audit'",
+            ))
+            .await?;
+        match store.audit_episode("owner-a", "episode-audit").await? {
+            EpisodeAudit::Corrupt {
+                event_id,
+                sequence,
+                reason,
+                ..
+            } => {
+                assert_eq!(event_id.as_deref(), Some("route-request-audit"));
+                assert_eq!(sequence, Some(2));
+                assert_eq!(reason, "stored_event_invalid");
+                assert!(!reason.contains("invalid\":true"));
+            }
+            EpisodeAudit::Valid { .. } => anyhow::bail!("corrupt episode audited as valid"),
+        }
+
+        seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-secret",
+            "request-secret",
+            "2026-08-01T00:00:00Z",
+            false,
+        )
+        .await?;
+        let mut start = store
+            .events_for_episode("owner-a", "episode-secret")
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing secret fixture start"))?;
+        let sentinel = "private-metadata-SUPER-SECRET-sentinel";
+        start
+            .evidence
+            .categorical
+            .insert("correlation.source".into(), sentinel.into());
+        start.content_digest = start.semantic_digest()?;
+        event_entity::Entity::update_many()
+            .col_expr(
+                event_entity::Column::EventJson,
+                Expr::value(serde_json::to_string(&start)?),
+            )
+            .col_expr(
+                event_entity::Column::ContentDigest,
+                Expr::value(start.content_digest.clone()),
+            )
+            .filter(event_entity::Column::OwnerUserId.eq("owner-a"))
+            .filter(event_entity::Column::EventId.eq(&start.event_id))
+            .exec(&store.db)
+            .await?;
+        match store.audit_episode("owner-a", "episode-secret").await? {
+            EpisodeAudit::Corrupt { reason, .. } => {
+                assert_eq!(reason, "reducer_rejected_prefix");
+                assert!(!reason.contains(sentinel));
+            }
+            EpisodeAudit::Valid { .. } => {
+                anyhow::bail!("secret-corrupt episode audited as valid")
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn file_sqlite_audit_retries_a_concurrent_append_without_false_corruption()
+    -> anyhow::Result<()> {
+        let (store, _directory) = file_store().await?;
+        store
+            .begin_request("owner-a", begin("episode-audit-race", "request-audit-race"))
+            .await?;
+        let first_head_read = Arc::new(tokio::sync::Barrier::new(2));
+        let writer_done = Arc::new(tokio::sync::Barrier::new(2));
+        let probe = AuditReadProbe {
+            first_read_barriers: Some((first_head_read.clone(), writer_done.clone())),
+            force_contention: false,
+        };
+        let auditing_store = store.clone();
+        let audit = tokio::spawn(async move {
+            auditing_store
+                .audit_episode_with_probe("owner-a", "episode-audit-race", &probe)
+                .await
+        });
+
+        first_head_read.wait().await;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event(
+                    "episode-audit-race",
+                    "request-audit-race",
+                    2,
+                    "route-audit-race",
+                ),
+            )
+            .await?;
+        writer_done.wait().await;
+
+        match audit.await?? {
+            EpisodeAudit::Valid {
+                episode,
+                events,
+                snapshot,
+            } => {
+                assert_eq!(episode.next_sequence, 3);
+                assert_eq!(events.len(), 2);
+                assert_eq!(snapshot.through_sequence, 2);
+            }
+            EpisodeAudit::Corrupt { reason, .. } => {
+                anyhow::bail!("concurrent append was misreported as corrupt: {reason}")
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn audit_contention_exhaustion_is_an_error_not_a_corrupt_report() -> anyhow::Result<()> {
+        let (store, _directory) = file_store().await?;
+        store
+            .begin_request(
+                "owner-a",
+                begin("episode-audit-contention", "request-audit-contention"),
+            )
+            .await?;
+        let error = store
+            .audit_episode_with_probe(
+                "owner-a",
+                "episode-audit-contention",
+                &AuditReadProbe {
+                    first_read_barriers: None,
+                    force_contention: true,
+                },
+            )
+            .await
+            .expect_err("permanent audit contention must not become a corrupt report");
+        assert!(error.to_string().contains("audit contention exhausted"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn transactional_settlement_builder_rebases_concurrent_episode_heads()
     -> anyhow::Result<()> {
         let store = store().await?;
@@ -3675,6 +4644,58 @@ mod tests {
         let db = crate::db::connect(&url).await?;
         crate::db::run_migrations(&db).await?;
         Ok((TrajectoryStore::new(db), directory))
+    }
+
+    async fn seed_started_episode(
+        store: &TrajectoryStore,
+        owner: &str,
+        episode_id: &str,
+        request_id: &str,
+        captured_at: &str,
+    ) -> anyhow::Result<()> {
+        let mut input = begin(episode_id, request_id);
+        input.event.owner_user_id = owner.to_owned();
+        input.event.captured_at = captured_at.to_owned();
+        input.event.content_digest = input.event.semantic_digest()?;
+        store.begin_request(owner, input).await?;
+
+        let mut route = route_event(episode_id, request_id, 2, &format!("route-{request_id}"));
+        route.owner_user_id = owner.to_owned();
+        route.captured_at = captured_at.to_owned();
+        route.content_digest = route.semantic_digest()?;
+        store.append_route_intent(owner, route).await
+    }
+
+    async fn seed_terminal_episode(
+        store: &TrajectoryStore,
+        owner: &str,
+        episode_id: &str,
+        request_id: &str,
+        captured_at: &str,
+        with_outbox: bool,
+    ) -> anyhow::Result<Option<String>> {
+        seed_started_episode(store, owner, episode_id, request_id, captured_at).await?;
+        let mut settlement =
+            settlement_at(episode_id, request_id, 3, &format!("settle-{request_id}"));
+        settlement.event.owner_user_id = owner.to_owned();
+        settlement.event.captured_at = captured_at.to_owned();
+        settlement.event.content_digest = settlement.event.semantic_digest()?;
+        let outbox_id = with_outbox.then(|| format!("outbox-{request_id}"));
+        settlement.outbox = outbox_id.as_ref().map(|outbox_id| OutboxWrite {
+            outbox_id: outbox_id.clone(),
+            topic: "trajectory.settled".into(),
+            payload: OutboxPayload {
+                structural: BTreeMap::from([("trajectory.event_count".into(), 3)]),
+                digests: BTreeMap::from([(
+                    "trajectory.event".into(),
+                    settlement.event.content_digest.clone(),
+                )]),
+                evaluation: None,
+            },
+            created_at: captured_at.to_owned(),
+        });
+        store.settle_request(owner, settlement).await?;
+        Ok(outbox_id)
     }
 
     fn begin(episode_id: &str, request_id: &str) -> BeginRequest {

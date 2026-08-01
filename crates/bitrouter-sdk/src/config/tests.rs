@@ -12,6 +12,56 @@ fn defaults_are_sane() {
         "skip_auth code default must be false"
     );
     assert!(cfg.inherit_defaults);
+    assert!(!cfg.trajectory.enabled);
+    assert_eq!(cfg.trajectory.retention_days, 30);
+    assert_eq!(cfg.trajectory.outbox_batch_size, 100);
+}
+
+#[test]
+fn trajectory_config_is_opt_in_round_trippable_and_schema_visible() {
+    let legacy = parse_with("server:\n  listen: 127.0.0.1:4356\n", |_| None).unwrap();
+    assert!(!legacy.trajectory.enabled);
+
+    let config = parse_with(
+        "trajectory:\n  enabled: true\n  retention_days: 45\n  outbox_batch_size: 250\n",
+        |_| None,
+    )
+    .unwrap();
+    assert!(config.trajectory.enabled);
+    assert_eq!(config.trajectory.retention_days, 45);
+    assert_eq!(config.trajectory.outbox_batch_size, 250);
+
+    let encoded = serde_saphyr::to_string(&config.trajectory).unwrap();
+    let decoded: TrajectoryConfig = serde_saphyr::from_str(&encoded).unwrap();
+    assert_eq!(decoded, config.trajectory);
+
+    let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+    let trajectory = &schema["properties"]["trajectory"];
+    assert!(!trajectory.is_null());
+    let rendered = serde_json::to_string(trajectory).unwrap();
+    assert!(rendered.contains("retention_days"));
+    assert!(rendered.contains("outbox_batch_size"));
+}
+
+#[test]
+fn trajectory_config_rejects_zero_and_oversized_operational_bounds() {
+    for (yaml, expected) in [
+        (
+            "trajectory:\n  enabled: true\n  retention_days: 0\n",
+            "trajectory.retention_days must be positive",
+        ),
+        (
+            "trajectory:\n  enabled: true\n  outbox_batch_size: 0\n",
+            "trajectory.outbox_batch_size must be between 1 and 1000",
+        ),
+        (
+            "trajectory:\n  enabled: true\n  outbox_batch_size: 1001\n",
+            "trajectory.outbox_batch_size must be between 1 and 1000",
+        ),
+    ] {
+        let error = parse_with(yaml, |_| None).unwrap_err();
+        assert!(error.to_string().contains(expected), "got: {error}");
+    }
 }
 
 #[test]
