@@ -46,6 +46,7 @@ pub mod skills_query;
 pub mod spawn;
 pub mod style;
 pub mod tools;
+pub mod trajectory;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod update;
