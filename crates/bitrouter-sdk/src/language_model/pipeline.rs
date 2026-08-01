@@ -336,6 +336,8 @@ impl Pipeline {
             Ok(chain) => chain,
             Err(e) => {
                 log_request_resolve_failed(&ctx, &e);
+                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
+                self.observe_after(Phase::Settlement, &ctx).await;
                 self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
                     .await;
                 return Err(e);
@@ -402,6 +404,8 @@ impl Pipeline {
             Ok(chain) => chain,
             Err(e) => {
                 log_request_resolve_failed(&ctx, &e);
+                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
+                self.observe_after(Phase::Settlement, &ctx).await;
                 self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
                     .await;
                 return Err(e);

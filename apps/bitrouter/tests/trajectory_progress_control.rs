@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 
 use axum_test::TestServer;
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+use bitrouter::eval::store::EvalStore;
+use bitrouter::metering::{ChargeStatus, MeteringStore, TimeWindow};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
 use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
 use bitrouter::trajectory::health::reduce;
 use bitrouter::trajectory::replay::replay_episode;
 use bitrouter::trajectory::store::{EpisodeAudit, TrajectoryStore};
-use bitrouter::trajectory::types::{HistoryCompleteness, TrajectoryEventKind};
+use bitrouter::trajectory::types::{HistoryCompleteness, RequestStatus, TrajectoryEventKind};
 use bitrouter_sdk::config;
 use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
@@ -164,6 +166,32 @@ presets:
             strong,
             economy,
         })
+    }
+
+    async fn with_guarded_missing_route() -> anyhow::Result<Self> {
+        let policy = PolicyDefinition {
+            tiers: BTreeMap::from([
+                ("economy".into(), "missing:absent-model".into()),
+                ("strong".into(), "strong:strong-model".into()),
+            ]),
+            default_tier: Some("economy".into()),
+            progress_guard: Some(ProgressGuardPolicy {
+                escalation_tier: "strong".into(),
+                protected_tiers: BTreeSet::from(["strong".into()]),
+                max_consecutive_unprotected: Some(3),
+                max_same_projection_unprotected: None,
+                max_recovery_count: Some(1),
+                max_episode_requests: None,
+                max_episode_elapsed_ms: None,
+                max_episode_cost_micro_usd: None,
+                hold_for_requests: 2,
+                incomplete_history: IncompleteHistoryAction::Observe,
+            }),
+            ..PolicyDefinition::default()
+        };
+        let mut lock = PolicyLock::default();
+        lock.policies.insert("auto".into(), policy);
+        Self::with_lock(lock).await
     }
 
     async fn assemble(&self) -> anyhow::Result<bitrouter::Assembled> {
@@ -470,6 +498,242 @@ async fn events_for_only_episode(
     TrajectoryStore::new(db.clone())
         .events_for_episode(owner, &episodes[0])
         .await
+}
+
+async fn trajectory_request_statuses(
+    db: &DatabaseConnection,
+    owner: &str,
+) -> anyhow::Result<Vec<String>> {
+    db.query_all(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "SELECT status FROM trajectory_requests WHERE owner_user_id = ? ORDER BY request_id",
+        [owner.into()],
+    ))
+    .await?
+    .into_iter()
+    .map(|row| row.try_get("", "status").map_err(Into::into))
+    .collect()
+}
+
+async fn post_guarded_missing_route(server: &TestServer, bearer: &str) -> anyhow::Result<()> {
+    let response = server
+        .post(InboundProtocol::Chat.endpoint())
+        .add_header("authorization", format!("Bearer {bearer}"))
+        .add_header("x-bitrouter-request-id", "missing-route-request")
+        .json(&json!({
+            "model": "@auto",
+            "messages": [{"role": "user", "content": "inspect the repository"}]
+        }))
+        .await;
+    assert_eq!(response.status_code().as_u16(), 404);
+    let body: Value = response.json();
+    assert_eq!(body["error"]["code"], "not_found");
+    assert_eq!(
+        body["error"]["message"],
+        "not found: no active provider declares model 'missing:absent-model'"
+    );
+    Ok(())
+}
+
+async fn trajectory_outbox_state(
+    db: &DatabaseConnection,
+    owner: &str,
+) -> anyhow::Result<(i64, i64)> {
+    let row = db
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS total, \
+             COALESCE(SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS delivered \
+             FROM trajectory_outbox WHERE owner_user_id = ?",
+            [owner.into()],
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("trajectory outbox count row missing"))?;
+    Ok((row.try_get("", "total")?, row.try_get("", "delivered")?))
+}
+
+#[tokio::test]
+async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow::Result<()> {
+    let harness = HttpHarness::with_guarded_missing_route().await?;
+    let assembled = harness.assemble().await?;
+    let first_server = server(&assembled);
+    let owner = "missing-route-owner";
+    let bearer = add_owner(&assembled.db, owner).await?;
+
+    post_guarded_missing_route(&first_server, &bearer).await?;
+    let publisher = assembled
+        .trajectory_outbox_publisher
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("trajectory publisher missing"))?;
+    assert_eq!(publisher.drain_after_active_worker().await?.failed, 0);
+    assert_eq!(publisher.drain_after_active_worker().await?.attempted, 0);
+
+    let store = TrajectoryStore::new(assembled.db.clone());
+    let events = events_for_only_episode(&assembled.db, owner).await?;
+    let trajectory_request_id = events
+        .iter()
+        .find_map(|event| event.request_id.clone())
+        .ok_or_else(|| anyhow::anyhow!("trajectory request identity missing"))?;
+    assert_eq!(
+        store
+            .request(owner, &trajectory_request_id)
+            .await?
+            .map(|request| request.status),
+        Some(RequestStatus::Failed)
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == TrajectoryEventKind::RequestSettled)
+            .count(),
+        1
+    );
+    let terminal = events
+        .iter()
+        .find(|event| event.kind == TrajectoryEventKind::RequestSettled)
+        .ok_or_else(|| anyhow::anyhow!("terminal trajectory event missing"))?;
+    assert_eq!(
+        terminal.evidence.categorical.get("settlement.outcome"),
+        Some(&"failed".to_owned())
+    );
+    assert_eq!(
+        terminal.evidence.categorical.get("settlement.usage_origin"),
+        Some(&"unknown".to_owned())
+    );
+    assert_eq!(
+        terminal.evidence.categorical.get("settlement.error_code"),
+        Some(&"not_found".to_owned())
+    );
+    assert!(
+        !terminal
+            .evidence
+            .categorical
+            .contains_key("settlement.provider")
+    );
+    assert!(
+        !terminal
+            .evidence
+            .categorical
+            .contains_key("settlement.model")
+    );
+    for key in [
+        "settlement.prompt_tokens",
+        "settlement.completion_tokens",
+        "settlement.reasoning_tokens",
+        "settlement.cache_read_tokens",
+        "settlement.cache_write_tokens",
+        "settlement.total_tokens",
+        "settlement.cost_micro_usd",
+    ] {
+        assert!(!terminal.evidence.structural.contains_key(key));
+    }
+    assert_eq!(trajectory_outbox_state(&assembled.db, owner).await?, (1, 1));
+    assert!(store.pending_outbox(owner).await?.is_empty());
+
+    let usage = MeteringStore::new(assembled.db.clone())
+        .export_usage(TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].status.as_deref(), Some("failed"));
+    assert_eq!(
+        usage[0].usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::Unknown
+    );
+    assert_eq!(usage[0].raw_usage, None);
+    assert_eq!(usage[0].final_charge_micro_usd, None);
+    assert_eq!(usage[0].charge_status, ChargeStatus::Unknown);
+    assert!(usage[0].provider_id.is_empty());
+    assert!(usage[0].model_id.is_empty());
+
+    let eval_store = EvalStore::new(assembled.db.clone());
+    assert_eq!(eval_store.list_subjects_for_owner(owner).await?.len(), 1);
+    let admissions = eval_store.latest_admissions_for_owner(owner).await?;
+    assert_eq!(admissions.len(), 1);
+    let result_id = admissions
+        .keys()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("trajectory evaluation admission missing"))?;
+    let evaluation = eval_store
+        .result(result_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("trajectory evaluation result missing"))?;
+    assert!(
+        !evaluation
+            .result
+            .metrics
+            .contains_key("trajectory.total_tokens")
+    );
+    assert!(
+        !evaluation
+            .result
+            .metrics
+            .contains_key("trajectory.cost.usd_micros")
+    );
+    assert!(!evaluation.result.metrics.contains_key("cost.usd_micros"));
+    let event_count = u64::try_from(events.len())?;
+
+    drop(first_server);
+    drop(assembled);
+
+    let restarted = harness.assemble().await?;
+    let restarted_server = server(&restarted);
+    post_guarded_missing_route(&restarted_server, &bearer).await?;
+    let restarted_publisher = restarted
+        .trajectory_outbox_publisher
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("restarted trajectory publisher missing"))?;
+    assert_eq!(
+        restarted_publisher
+            .drain_after_active_worker()
+            .await?
+            .attempted,
+        0
+    );
+    assert_eq!(
+        restarted_publisher
+            .drain_after_active_worker()
+            .await?
+            .attempted,
+        0
+    );
+    assert_eq!(
+        trajectory_request_statuses(&restarted.db, owner).await?,
+        ["failed"]
+    );
+    let restarted_events = events_for_only_episode(&restarted.db, owner).await?;
+    assert_eq!(restarted_events.len(), events.len());
+    assert_eq!(trajectory_outbox_state(&restarted.db, owner).await?, (1, 1));
+    assert_eq!(
+        EvalStore::new(restarted.db.clone())
+            .list_subjects_for_owner(owner)
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(
+        MeteringStore::new(restarted.db.clone())
+            .export_usage(TimeWindow::ThisMonth)
+            .await?
+            .len(),
+        1
+    );
+
+    let restarted_store = TrajectoryStore::new(restarted.db.clone());
+    let pruned = restarted_store
+        .prune_before("2999-01-01T00:00:00Z", false, 10)
+        .await?;
+    assert_eq!(pruned.delivered_outbox_rows, 1);
+    assert_eq!(pruned.episode_rows, 1);
+    assert_eq!(pruned.request_rows, 1);
+    assert_eq!(pruned.event_rows, event_count);
+    assert!(owner_episode_ids(&restarted.db, owner).await?.is_empty());
+    assert!(
+        trajectory_request_statuses(&restarted.db, owner)
+            .await?
+            .is_empty()
+    );
+    assert_eq!(trajectory_outbox_state(&restarted.db, owner).await?, (0, 0));
+    Ok(())
 }
 
 #[tokio::test]
