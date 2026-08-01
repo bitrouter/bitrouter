@@ -167,6 +167,7 @@ pub trait ModelSelector: Send + Sync {
 - [x] **Step 6: Stop using `WorkflowIdentityTracker` as causal state for named-policy decisions.** Existing adapter identity remains diagnostic in decision records; trajectory episode identity comes only from the correlation resolver. Add a negative test mutating benchmark, trial, workflow, agent-role, and Superpowers headers with no change in episode or route intent.
 - [x] **Step 7: Run focused SDK pipeline, policy-runtime, online-state, and correlation tests until GREEN.**
 - [x] **Step 8: Commit `refactor(policy): make selection trajectory-aware`.**
+- [x] **Review fix round 1/5:** replace representation-level metadata stripping with typed canonicalization, harden installation identity/key publication, make exact retries immutable and correlation appends CAS-safe, validate episode heads before mutation, treat ambiguous prefixes as unresolved, and map only malformed native-parent evidence to HTTP 400.
 
 ## Task 3: Reduce deterministic trajectory health and replay it
 
