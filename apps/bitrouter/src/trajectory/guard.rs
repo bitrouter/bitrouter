@@ -89,6 +89,8 @@ pub fn evaluate(
     let candidate_is_protected = input
         .candidate_tier
         .is_some_and(|tier| policy.protected_tiers.contains(tier));
+    let candidate_accepts_escalation =
+        !candidate_is_protected || input.candidate_tier == Some(policy.escalation_tier.as_str());
     let prior_health = input.prior_snapshot.map(|snapshot| &snapshot.health);
     let hold_active = input
         .prior_snapshot
@@ -116,11 +118,10 @@ pub fn evaluate(
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("consecutive unprotected streak overflow"))?
     };
+    let current_is_recovery = input.current_projection.state_kind == WorkflowStateKind::Recovery;
     let prospective_recovery_count = prior_health
         .map_or(0, |health| health.recovery_count)
-        .checked_add(u64::from(
-            input.current_projection.state_kind == WorkflowStateKind::Recovery,
-        ))
+        .checked_add(u64::from(current_is_recovery))
         .ok_or_else(|| anyhow::anyhow!("recovery count overflow"))?;
     let causal_completeness = merge_completeness(
         prior_health.map_or(HistoryCompleteness::Complete, |health| health.completeness),
@@ -131,7 +132,7 @@ pub fn evaluate(
     clauses.push(clause(
         "progress_guard.active_hold",
         hold_active,
-        candidate_is_protected,
+        candidate_accepts_escalation,
         "persisted hold is active for this request",
         "no persisted hold applies to this request",
     ));
@@ -142,7 +143,7 @@ pub fn evaluate(
     clauses.push(clause(
         "progress_guard.incomplete_history",
         incomplete_trigger,
-        candidate_is_protected,
+        candidate_accepts_escalation,
         "causal history is not complete and policy requires escalation",
         if incomplete {
             "causal history is not complete and policy observes only"
@@ -155,42 +156,42 @@ pub fn evaluate(
         "progress_guard.max_consecutive_unprotected",
         policy.max_consecutive_unprotected,
         Some(prospective_unprotected),
-        candidate_is_protected,
+        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_same_projection_unprotected",
         policy.max_same_projection_unprotected,
         Some(prospective_same_projection_unprotected),
-        candidate_is_protected,
+        candidate_accepts_escalation,
     );
-    threshold_clause(
+    recovery_threshold_clause(
         &mut clauses,
-        "progress_guard.max_recovery_count",
         policy.max_recovery_count,
-        Some(prospective_recovery_count),
-        candidate_is_protected,
+        prospective_recovery_count,
+        current_is_recovery,
+        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_episode_requests",
         policy.max_episode_requests,
         Some(input.pre_intent_snapshot.health.request_count),
-        candidate_is_protected,
+        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_episode_elapsed_ms",
         policy.max_episode_elapsed_ms,
         Some(input.pre_intent_snapshot.health.elapsed_ms),
-        candidate_is_protected,
+        candidate_accepts_escalation,
     );
     threshold_clause(
         &mut clauses,
         "progress_guard.max_episode_cost_micro_usd",
         policy.max_episode_cost_micro_usd,
         input.pre_intent_snapshot.health.settled_cost_micro_usd,
-        candidate_is_protected,
+        candidate_accepts_escalation,
     );
 
     if hold_active {
@@ -287,7 +288,7 @@ fn threshold_clause(
     clause_id: &str,
     threshold: Option<u64>,
     observed: Option<u64>,
-    candidate_is_protected: bool,
+    candidate_accepts_escalation: bool,
 ) {
     let (triggered, skipped) = match (threshold, observed) {
         (Some(threshold), Some(observed)) => (
@@ -300,20 +301,58 @@ fn threshold_clause(
     clauses.push(clause(
         clause_id,
         triggered,
-        candidate_is_protected,
+        candidate_accepts_escalation,
         "configured threshold is reached",
         &skipped,
     ));
 }
 
+fn recovery_threshold_clause(
+    clauses: &mut Vec<RouteIntentClause>,
+    threshold: Option<u64>,
+    prospective_recovery_count: u64,
+    current_is_recovery: bool,
+    candidate_accepts_escalation: bool,
+) {
+    if threshold.is_none() {
+        threshold_clause(
+            clauses,
+            "progress_guard.max_recovery_count",
+            threshold,
+            Some(prospective_recovery_count),
+            candidate_accepts_escalation,
+        );
+        return;
+    }
+    if !current_is_recovery {
+        clauses.push(clause(
+            "progress_guard.max_recovery_count",
+            false,
+            candidate_accepts_escalation,
+            "current recovery reaches the configured recurrence threshold",
+            &format!(
+                "current projection is not recovery; cumulative recovery count is {prospective_recovery_count}"
+            ),
+        ));
+        return;
+    }
+    threshold_clause(
+        clauses,
+        "progress_guard.max_recovery_count",
+        threshold,
+        Some(prospective_recovery_count),
+        candidate_accepts_escalation,
+    );
+}
+
 fn clause(
     clause_id: &str,
     triggered: bool,
-    candidate_is_protected: bool,
+    candidate_accepts_escalation: bool,
     applied_explanation: &str,
     skipped_explanation: &str,
 ) -> RouteIntentClause {
-    let applied = triggered && !candidate_is_protected;
+    let applied = triggered && candidate_accepts_escalation;
     RouteIntentClause {
         clause_id: clause_id.to_owned(),
         disposition: if applied {
@@ -321,7 +360,7 @@ fn clause(
         } else {
             RouteIntentClauseDisposition::Skipped
         },
-        explanation: if triggered && candidate_is_protected {
+        explanation: if triggered && !candidate_accepts_escalation {
             "candidate is already protected; guard cannot downgrade it".to_string()
         } else if applied {
             applied_explanation.to_string()
@@ -693,6 +732,161 @@ mod tests {
             held.intent.trajectory_snapshot_digest,
             current.evidence_digest
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_threshold_edges_on_recovery_and_releases_after_hold() -> Result<()> {
+        let edit = projection("agent_trace/v2|edit|normal")?;
+        let recovery = projection("agent_trace/v2|recovery|guarded")?;
+        let current = snapshot();
+
+        let no_prior_recovery = snapshot();
+        let ordinary = evaluate(
+            &policy(),
+            input(
+                Some(&no_prior_recovery),
+                &current,
+                &edit,
+                Some("economy"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(ordinary.intent.selected_tier.as_deref(), Some("economy"));
+        assert!(!ordinary.activated);
+
+        let first_recovery = evaluate(
+            &policy(),
+            input(
+                Some(&no_prior_recovery),
+                &current,
+                &recovery,
+                Some("economy"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(
+            first_recovery.intent.selected_tier.as_deref(),
+            Some("protected")
+        );
+        assert!(first_recovery.activated);
+
+        let mut prior = snapshot();
+        prior.health.recovery_count = 1;
+        prior.active_hold_remaining = 0;
+        let released = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("economy"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+
+        assert_eq!(released.intent.selected_tier.as_deref(), Some("economy"));
+        assert!(!released.activated);
+
+        let mut second_recovery_policy = policy();
+        second_recovery_policy.max_recovery_count = Some(2);
+        let second_recovery = evaluate(
+            &second_recovery_policy,
+            input(
+                Some(&prior),
+                &current,
+                &recovery,
+                Some("economy"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(
+            second_recovery.intent.selected_tier.as_deref(),
+            Some("protected")
+        );
+        assert!(second_recovery.activated);
+
+        prior.active_hold_remaining = 2;
+        let recovery_during_hold = evaluate(
+            &second_recovery_policy,
+            input(
+                Some(&prior),
+                &current,
+                &recovery,
+                Some("economy"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(
+            recovery_during_hold.intent.selected_tier.as_deref(),
+            Some("protected")
+        );
+        assert!(!recovery_during_hold.activated);
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_at_escalation_tier_activates_hold_without_downgrading_other_protected_tiers()
+    -> Result<()> {
+        let edit = projection("agent_trace/v2|edit|normal")?;
+        let recovery = projection("agent_trace/v2|recovery|guarded")?;
+        let current = snapshot();
+        let mut prior = snapshot();
+
+        let already_escalated = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &current,
+                &recovery,
+                Some("protected"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(
+            already_escalated.intent.selected_tier.as_deref(),
+            Some("protected")
+        );
+        assert!(
+            already_escalated.activated,
+            "a recovery edge must activate hold even when its static candidate is the escalation tier"
+        );
+        assert!(already_escalated.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.max_recovery_count"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+
+        prior.health.recovery_count = 1;
+        prior.active_hold_remaining = policy().hold_for_requests;
+        let held_next = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &current,
+                &edit,
+                Some("economy"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(held_next.intent.selected_tier.as_deref(), Some("protected"));
+        assert!(!held_next.activated, "an active hold must not reset itself");
+
+        prior.active_hold_remaining = 0;
+        let incomparable_protected = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &current,
+                &recovery,
+                Some("tool-safe"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+        assert_eq!(
+            incomparable_protected.intent.selected_tier.as_deref(),
+            Some("tool-safe")
+        );
+        assert!(!incomparable_protected.activated);
         Ok(())
     }
 

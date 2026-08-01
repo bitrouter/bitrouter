@@ -37,6 +37,28 @@ Both signals are reconstructed from inbound message history. Ordinary long
 conversations without agent actions are unaffected; protocols that hide prior
 turns retain explicit visibility-gap evidence instead of inventing state.
 
+This template explicitly enables local trajectory persistence and carries a
+conservative `progress_guard` example in its signed policy. These settings are
+template policy, not hidden runtime defaults: trajectory remains disabled by
+default for existing configurations, and existing locks are unchanged. All
+three `trajectory` settings are restart-only.
+
+The example immediately selects `strong` for incomplete history, a recovery
+edge, or a configured structural bound, then holds that protected tier for the
+next two requests. `max_recovery_count` is edge-triggered: its prospective
+cumulative count is compared only when the current projection is `recovery`.
+The edge activates hold even when the recovery's static candidate is already
+`strong`; another protected tier is preserved rather than downgraded.
+After the hold expires, an ordinary projection can return to its static route
+unless another clause fires. Episode request and elapsed-time limits are
+monotonic once reached; consecutive and same-projection limits bound repeated
+unprotected routing. The example omits a cost limit because unknown cost must
+remain unknown rather than act like zero or trigger a fabricated threshold.
+
+Neither raw task content nor task, tool, model, harness, workflow, case, or
+benchmark labels are progress-control inputs. The ledger persists structural
+ancestry, categorical projections and risk, exact counters, and keyed digests.
+
 The eight starter routes are compiler-owned experiments informed by settled
 trace analysis, model protocol canaries, and synthetic long-context action
 qualification. Cross-agent quality has not been validated; evaluate the policy

@@ -17,6 +17,10 @@ inherit_defaults: true
 policy:
   path: "./policy-lock.yaml"
   mode: frozen
+trajectory:
+  enabled: true
+  retention_days: 30
+  outbox_batch_size: 100
 presets:
   auto:
     model: "openai-codex:gpt-5.6-sol"
