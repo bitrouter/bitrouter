@@ -633,6 +633,51 @@ mod tests {
     }
 
     #[test]
+    fn prefix_conflict_completeness_is_observed_or_escalated_by_policy() -> Result<()> {
+        let edit = projection("agent_trace/v2|edit|normal")?;
+        let mut current = snapshot();
+        current.health.completeness = HistoryCompleteness::Incomplete;
+
+        let observed = evaluate(
+            &policy(),
+            input(
+                None,
+                &current,
+                &edit,
+                Some("economy"),
+                HistoryCompleteness::Incomplete,
+            ),
+        )?;
+        assert_eq!(observed.intent.selected_tier.as_deref(), Some("economy"));
+        assert!(!observed.activated);
+        assert!(observed.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.incomplete_history"
+                && clause.disposition == RouteIntentClauseDisposition::Skipped
+                && clause.explanation == "causal history is not complete and policy observes only"
+        }));
+
+        let mut escalating = policy();
+        escalating.incomplete_history = IncompleteHistoryAction::Escalate;
+        let protected = evaluate(
+            &escalating,
+            input(
+                None,
+                &current,
+                &edit,
+                Some("economy"),
+                HistoryCompleteness::Incomplete,
+            ),
+        )?;
+        assert_eq!(protected.intent.selected_tier.as_deref(), Some("protected"));
+        assert!(protected.activated);
+        assert!(protected.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.incomplete_history"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+        Ok(())
+    }
+
+    #[test]
     fn current_recovery_incomplete_cost_and_hold_have_exact_semantics() -> Result<()> {
         let edit = projection("agent_trace/v2|edit|normal")?;
         let recovery = projection("agent_trace/v2|recovery|guarded")?;

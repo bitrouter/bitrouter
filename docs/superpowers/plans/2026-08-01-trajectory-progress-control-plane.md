@@ -431,12 +431,12 @@ the general progress invariant depend on external agent installations.
 
 **Interfaces:** Native parent identity remains authoritative for episode selection. Canonical-prefix resolution is nevertheless evaluated independently; a unique different episode or ambiguous prefix sets `correlation.prefix_conflict = 1` and monotonically folds the chosen native episode to `Incomplete`. No caller-supplied metadata resolves the conflict.
 
-- [ ] **Step 1: Write the failing contradiction tests.** Extend `native_parent_resolves_exact_request_and_outranks_conflicting_prefix` so the native episode still wins while `HistoryCompleteness::Incomplete`, `history.completeness = incomplete`, and `correlation.prefix_conflict = 1` are observable. Add matching-native-prefix and ambiguous-prefix controls.
-- [ ] **Step 2: Run `cargo test -p bitrouter --all-features trajectory::correlation::tests::native_parent -- --nocapture`.** Expected RED: the conflicting request is currently `Complete` with no conflict marker.
-- [ ] **Step 3: Resolve prefix evidence alongside the trusted native parent in the existing transaction.** Preserve native selection; mark only contradictory or ambiguous non-empty prefix evidence incomplete. `PrefixResolution::None` remains acceptable for native delta/compacted Responses input.
-- [ ] **Step 4: Prove monotonic replay and guard behavior.** Reconnect to file-backed SQLite, replay the episode, and assert the same incomplete snapshot digest. With `incomplete_history: escalate`, assert a protected route; with `observe`, assert no invented semantic result.
-- [ ] **Step 5: Run focused correlation, store, replay, and guard tests until GREEN.**
-- [ ] **Step 6: Commit `fix(trajectory): expose ancestry conflicts`.**
+- [x] **Step 1: Write the failing contradiction tests.** Extend `native_parent_resolves_exact_request_and_outranks_conflicting_prefix` so the native episode still wins while `HistoryCompleteness::Incomplete`, `history.completeness = incomplete`, and `correlation.prefix_conflict = 1` are observable. Add matching-native-prefix and ambiguous-prefix controls.
+- [x] **Step 2: Run `cargo test -p bitrouter --all-features trajectory::correlation::tests::native_parent -- --nocapture`.** Expected RED: the conflicting request is currently `Complete` with no conflict marker.
+- [x] **Step 3: Resolve prefix evidence alongside the trusted native parent in the existing transaction.** Preserve native selection; mark only contradictory or ambiguous non-empty prefix evidence incomplete. `PrefixResolution::None` remains acceptable for native delta/compacted Responses input.
+- [x] **Step 4: Prove monotonic replay and guard behavior.** Reconnect to file-backed SQLite, replay the episode, and assert the same incomplete snapshot digest. With `incomplete_history: escalate`, assert a protected route; with `observe`, assert no invented semantic result.
+- [x] **Step 5: Run focused correlation, store, replay, and guard tests until GREEN.**
+- [x] **Step 6: Commit `fix(trajectory): expose ancestry conflicts`.**
 
 ## Task 9: Restore request Eval compatibility outside guarded trajectories
 
