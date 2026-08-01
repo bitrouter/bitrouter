@@ -7,11 +7,11 @@
 //! (`-32601`). The MCP spec method catalogue is at
 //! <https://modelcontextprotocol.io/specification/2025-06-18>.
 //!
-//! Connections are pooled per server-name and lazily initialised. The first
-//! request to each server triggers the MCP `initialize` handshake (handled
-//! transparently by rmcp's `serve()`); subsequent requests reuse the same
-//! [`RunningService`]. There is no idle eviction in v1.0 — the pool grows to
-//! the number of distinct servers reached.
+//! Connections are pooled per server-name and lazily started through the
+//! configured lifecycle: legacy `initialize` for `latest`, or
+//! `server/discover` with narrowly-defined legacy fallback for `2026-07-28`.
+//! Subsequent requests reuse the same [`RunningService`]. There is no idle
+//! eviction in v1.0 — the pool grows to the number of distinct servers reached.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,7 +57,7 @@ struct BitrouterMcpClient {
     server_name: String,
     progress: Arc<ProgressDispatcher>,
     invalidation: Arc<broadcast::Sender<InvalidationEvent>>,
-    /// Version to request in the upstream `initialize` handshake.
+    /// Version and lifecycle to select when starting the upstream connection.
     protocol_version: ProtocolVersion,
 }
 
@@ -251,16 +251,15 @@ impl RmcpExecutor {
         Self::default()
     }
 
-    /// Request `version` in the upstream `initialize` handshake instead of
+    /// Select `version` and its startup lifecycle instead of
     /// [`ProtocolVersion::LATEST`].
     ///
-    /// This is the whole of the client-side `2026-07-28` opt-in. It is a
-    /// ceiling, not a demand: a server that does not know the version answers
-    /// with one it does support and the connection proceeds on that, so
-    /// raising it cannot strand a working upstream. What it *does* change is
-    /// which response shapes an upstream is permitted to send — at
-    /// `2026-07-28` a `tools/call` may come back as MRTR `input_required` or a
-    /// Tasks handle, which `map_call_tool_result` turns into explicit errors.
+    /// `LATEST` uses the legacy `initialize` path. `2026-07-28` uses
+    /// `server/discover` and falls back to legacy initialization only when the
+    /// peer returns `METHOD_NOT_FOUND`; any other discovery error fails the
+    /// connection. The modern version also permits `tools/call` to return MRTR
+    /// `input_required` or a Tasks handle, which `map_call_tool_result` turns
+    /// into explicit errors.
     ///
     /// Applies to connections opened after this call; pooled ones keep the
     /// version they negotiated.
@@ -278,9 +277,9 @@ impl RmcpExecutor {
     }
 
     /// Drop the pooled connection for `server_name`, if any. The next request
-    /// for that server will re-dial — running the MCP `initialize` handshake
-    /// against the upstream again and (for HTTP transports) rebuilding the
-    /// transport with whatever headers the new connect call supplies.
+    /// for that server will re-dial — running the configured MCP startup
+    /// lifecycle again and (for HTTP transports) rebuilding the transport with
+    /// whatever headers the new connect call supplies.
     ///
     /// The SDK does not interpret *when* to evict — that policy lives in a
     /// downstream decorator. The canonical use case is an OAuth-refresh
@@ -308,7 +307,7 @@ impl RmcpExecutor {
             return Ok(existing);
         }
         // Slow path: dial. We drop the lock across the network round-trip so
-        // a slow `initialize` against one server can't block lookups for
+        // a slow startup against one server can't block lookups for
         // another. If two requests race to dial the same server, both will
         // dial; the second one's value silently replaces the first in the
         // pool — fine because either RunningService is correct.
@@ -695,6 +694,28 @@ fn map_call_tool_result(server: &str, result: ServerResult) -> Result<serde_json
     }
 }
 
+/// Fold one page's cache policy into the aggregate policy for a paginated
+/// result. The aggregate can never be shared or kept fresh more broadly than
+/// any page it contains.
+fn merge_paginated_cache_hints(
+    ttl_ms: &mut Option<u64>,
+    cache_scope: &mut Option<rmcp::model::CacheScope>,
+    page_ttl_ms: Option<u64>,
+    page_cache_scope: Option<rmcp::model::CacheScope>,
+) {
+    if let Some(page_ttl_ms) = page_ttl_ms {
+        *ttl_ms = Some(match *ttl_ms {
+            Some(current) => current.min(page_ttl_ms),
+            None => page_ttl_ms,
+        });
+    }
+    if matches!(page_cache_scope, Some(rmcp::model::CacheScope::Private)) {
+        *cache_scope = Some(rmcp::model::CacheScope::Private);
+    } else if cache_scope.is_none() {
+        *cache_scope = page_cache_scope;
+    }
+}
+
 async fn dispatch(
     peer: &Peer<RoleClient>,
     server: &str,
@@ -712,10 +733,10 @@ async fn dispatch(
     /// `_meta`. `CachingExecutor` reads those hints, so the gateway was
     /// discarding the upstream's cache policy before anything could honour it.
     ///
-    /// Hints are taken from the first page and applied to the aggregate: the
-    /// pages compose into one logical result, so the freshness the server
-    /// stated for it governs the whole thing. `next_cursor` is cleared because
-    /// the aggregate has no further pages.
+    /// The pages compose into one logical result, so their cache policies are
+    /// merged conservatively: private scope wins and the shortest TTL governs
+    /// the whole aggregate. `next_cursor` is cleared because the aggregate has
+    /// no further pages.
     macro_rules! list_all_preserving {
         ($call:ident, $items:ident) => {{
             let mut result = peer
@@ -730,6 +751,12 @@ async fn dispatch(
                     ))
                     .await
                     .map_err(|e| map_service_error(server, method, e))?;
+                merge_paginated_cache_hints(
+                    &mut result.ttl_ms,
+                    &mut result.cache_scope,
+                    page.ttl_ms,
+                    page.cache_scope,
+                );
                 result.$items.append(&mut page.$items);
                 cursor = page.next_cursor;
             }
@@ -823,7 +850,7 @@ mod tests {
     /// lets it answer `tools/call` with shapes this gateway can only turn into
     /// errors, so it has to be a choice someone makes.
     #[test]
-    fn upstream_handshake_requests_latest_by_default() {
+    fn upstream_startup_uses_latest_by_default() {
         let exec = RmcpExecutor::new();
         assert_eq!(
             client_for(&exec).get_info().protocol_version,
@@ -832,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn with_protocol_version_is_carried_into_the_handshake() {
+    fn configured_protocol_version_is_carried_into_client_info() {
         let exec = RmcpExecutor::new().with_protocol_version(ProtocolVersion::V_2026_07_28);
         assert_eq!(
             client_for(&exec).get_info().protocol_version,

@@ -10,8 +10,12 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, ErrorData, GetMeta,
+    ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
+};
 use rmcp::service::RequestContext;
+use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
@@ -949,6 +953,58 @@ pub async fn serve_http_on(
     Ok(())
 }
 
+/// Transport wrapper that replays one message already read during stdio
+/// lifecycle preflight, then delegates every operation to rmcp's transport.
+struct PrefetchedTransport<T> {
+    first: Option<ClientJsonRpcMessage>,
+    inner: T,
+}
+
+impl<T> Transport<RoleServer> for PrefetchedTransport<T>
+where
+    T: Transport<RoleServer>,
+{
+    type Error = T::Error;
+
+    fn send(
+        &mut self,
+        item: ServerJsonRpcMessage,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send + 'static {
+        self.inner.send(item)
+    }
+
+    async fn receive(&mut self) -> Option<ClientJsonRpcMessage> {
+        match self.first.take() {
+            Some(first) => Some(first),
+            None => self.inner.receive().await,
+        }
+    }
+
+    fn close(&mut self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.close()
+    }
+}
+
+/// Identify an inline-lifecycle opener whose `_meta` announces that lifecycle
+/// but does not contain its required client context.
+fn malformed_inline_opener(
+    message: &ClientJsonRpcMessage,
+) -> Option<(RequestId, Vec<&'static str>)> {
+    let ClientJsonRpcMessage::Request(request) = message else {
+        return None;
+    };
+    let meta = request.request.get_meta();
+    let inline = matches!(&request.request, ClientRequest::DiscoverRequest(_))
+        || rmcp::model::RequestMetaObject::DRAFT_REQUIRED_KEYS
+            .iter()
+            .any(|key| meta.contains_key(*key));
+    if !inline {
+        return None;
+    }
+    let missing = meta.missing_required_keys(&ProtocolVersion::V_2026_07_28);
+    (!missing.is_empty()).then(|| (request.id.clone(), missing))
+}
+
 /// Serve `server` over stdio until the client disconnects. `cost_footer`, when
 /// given, annotates successful `complete` / `status` results with one spend
 /// line (the HTTP transport is multi-tenant and gets no footer).
@@ -956,30 +1012,47 @@ pub async fn serve_stdio(
     server: BitrouterMcp,
     cost_footer: Option<Arc<dyn CostFooter>>,
 ) -> anyhow::Result<()> {
-    use rmcp::transport::stdio;
+    use rmcp::ServiceExt;
+    use rmcp::transport::async_rw::AsyncRwTransport;
     let server = match cost_footer {
         Some(footer) => server.with_cost_footer(footer),
         None => server,
     };
-    // `serve_directly` rather than `serve`: MCP `2026-07-28` removed the
-    // `initialize` / `notifications/initialized` handshake (SEP-2575), and a
-    // client on that version opens a stdio connection by sending
-    // `server/discover` — or an ordinary request carrying its protocol version
-    // in `_meta`. rmcp's `serve` waits for `initialize` and hard-errors on
-    // anything else ("expect initialized request"), which would reject every
-    // conformant `2026-07-28` client outright.
-    //
-    // Skipping the handshake costs nothing for older clients: `initialize` is
-    // dispatched to the handler as an ordinary request, and rmcp's default
-    // implementation still negotiates the version and records peer info. So
-    // one entry point serves both lifecycles — covered by the stdio tests.
-    let service = rmcp::service::serve_directly::<rmcp::RoleServer, _, _, _, _>(
-        server,
-        stdio(),
-        // No pre-seeded peer info: a legacy client's `initialize` fills it in,
-        // and a modern one carries identity per request in `_meta`.
-        None,
-    );
+    let mut transport =
+        AsyncRwTransport::<RoleServer, _, _>::new_server(tokio::io::stdin(), tokio::io::stdout());
+    let first = loop {
+        let Some(message) = transport.receive().await else {
+            return Ok(());
+        };
+        let Some((id, missing)) = malformed_inline_opener(&message) else {
+            break message;
+        };
+        transport
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::invalid_params(
+                    format!(
+                        "request _meta is missing or has malformed required fields: {}",
+                        missing.join(", ")
+                    ),
+                    None,
+                ),
+                Some(id),
+            ))
+            .await?;
+    };
+    // rmcp 3.1's normal startup accepts both lifecycle openers. A legacy
+    // `initialize` negotiates and stores the agreed fallback version; a
+    // self-contained modern request enables required per-request metadata for
+    // the rest of the connection. Keeping those transitions inside rmcp is
+    // essential — direct mode intentionally bypasses both. The preflight above
+    // preserves the JSON-RPC `-32602` response for a malformed modern opener;
+    // rmcp's startup otherwise closes before it can dispatch that request.
+    let service = server
+        .serve(PrefetchedTransport {
+            first: Some(first),
+            inner: transport,
+        })
+        .await?;
     service.waiting().await?;
     Ok(())
 }

@@ -30,6 +30,17 @@ fn origin_server_target() -> McpTarget {
     }
 }
 
+fn paginated_server_target(scenario: &str) -> McpTarget {
+    McpTarget::Direct {
+        server_name: format!("pagination-{scenario}"),
+        transport: McpTransport::Stdio {
+            command: env!("CARGO_BIN_EXE_mcp-stdio-local").to_string(),
+            args: vec![scenario.to_string()],
+            env: HashMap::new(),
+        },
+    }
+}
+
 fn tools_list() -> McpRequest {
     McpRequest::direct(
         "origin",
@@ -46,6 +57,20 @@ fn tool_names(result: &serde_json::Value) -> Vec<String> {
         .iter()
         .filter_map(|t| t["name"].as_str().map(str::to_owned))
         .collect()
+}
+
+async fn paginated_tools(scenario: &str) -> anyhow::Result<serde_json::Value> {
+    let executor =
+        RmcpExecutor::new().with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28);
+    Ok(executor
+        .execute(&paginated_server_target(scenario), &tools_list())
+        .await?
+        .result)
+}
+
+fn assert_complete_two_page_result(result: &serde_json::Value) {
+    assert_eq!(tool_names(result), ["first", "second"]);
+    assert!(result.get("nextCursor").is_none(), "got: {result}");
 }
 
 /// The default path, unchanged by the `2026-07-28` work: the client dials with
@@ -85,4 +110,28 @@ async fn gateway_client_reaches_origin_server_on_2026_07_28() {
     // round-trip, which is what lets `CachingExecutor` honour them.
     assert_eq!(result.result["ttlMs"], 5 * 60 * 1000);
     assert_eq!(result.result["cacheScope"], "public");
+}
+
+#[tokio::test]
+async fn later_private_cache_scope_wins_across_pages() -> anyhow::Result<()> {
+    let result = paginated_tools("private").await?;
+    assert_complete_two_page_result(&result);
+    assert_eq!(result["cacheScope"], "private", "got: {result}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn later_zero_ttl_wins_across_pages() -> anyhow::Result<()> {
+    let result = paginated_tools("zero-ttl").await?;
+    assert_complete_two_page_result(&result);
+    assert_eq!(result["ttlMs"], 0, "got: {result}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn positive_page_ttls_merge_to_minimum() -> anyhow::Result<()> {
+    let result = paginated_tools("shorter-ttl").await?;
+    assert_complete_two_page_result(&result);
+    assert_eq!(result["ttlMs"], 1_000, "got: {result}");
+    Ok(())
 }

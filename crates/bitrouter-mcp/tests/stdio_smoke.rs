@@ -143,6 +143,18 @@ async fn draft_peer_via_legacy_handshake_gets_cache_hints() {
     assert_eq!(list["cacheScope"], "public");
 }
 
+/// An unsupported legacy version is negotiated down to the server fallback,
+/// and that negotiated version — not the client's raw request — governs every
+/// later metadata-free request on the connection.
+#[tokio::test]
+async fn legacy_future_version_uses_fallback_for_following_requests() {
+    let (init, list) = legacy_handshake_and_list("2099-01-01").await;
+    assert_eq!(init["protocolVersion"], "2025-11-25");
+    assert!(list.get("resultType").is_none(), "got: {list}");
+    assert!(list.get("ttlMs").is_none(), "got: {list}");
+    assert!(list.get("cacheScope").is_none(), "got: {list}");
+}
+
 /// SEP-2575: servers MUST implement `server/discover`. This is how a
 /// `2026-07-28` client opens a stdio connection, so a `-32601` here means no
 /// conformant client can talk to us at all.
@@ -176,6 +188,28 @@ async fn server_discover_advertises_versions_and_bitrouter_identity() {
     );
     assert!(result.get("serverInfo").is_none(), "got: {result}");
     assert_eq!(result["capabilities"]["tools"], serde_json::json!({}));
+}
+
+/// Once `server/discover` selects the inline lifecycle, every later request on
+/// that connection must remain self-contained. Missing metadata is invalid;
+/// it must not silently switch the connection back to legacy semantics.
+#[tokio::test]
+async fn discover_requires_metadata_on_following_requests() {
+    let mut server = Server::spawn();
+    let discover = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "server/discover",
+            "params": { "_meta": draft_meta() },
+        }))
+        .await;
+    assert!(discover.get("error").is_none(), "got: {discover}");
+
+    let response = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+        }))
+        .await;
+    assert_eq!(response["error"]["code"], -32602, "got: {response}");
 }
 
 /// The real `2026-07-28` shape: no handshake at all, every request
