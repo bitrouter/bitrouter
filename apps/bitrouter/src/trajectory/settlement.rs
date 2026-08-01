@@ -252,7 +252,7 @@ mod tests {
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::publisher::TrajectoryOutboxPublisher;
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
-    use crate::trajectory::types::{KeyedDigest, RequestStatus};
+    use crate::trajectory::types::{KeyedDigest, RequestStatus, canonical_digest};
     use crate::workflow_state::ir::RouteProjection;
 
     const POLICY_DIGEST: &str =
@@ -481,6 +481,126 @@ mod tests {
             .await
             .expect_err("corrupt terminal outbox index must fail closed");
         assert!(error.to_string().contains("lost its outbox"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_retry_rejects_foreign_but_valid_evaluation_envelope() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let request_id = identity_key.request_identity("owner-a", "external-request-current")?;
+        begin_guarded(&store, &request_id, "episode-current").await?;
+        let current_metering = routing_failure_metering("external-request-current", 100);
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                &request_id,
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &current_metering)
+                },
+            )
+            .await?;
+        let current_outbox = store
+            .pending_outbox("owner-a")
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("current terminal outbox missing"))?;
+
+        let mut foreign_input = correlate_input("request-foreign", "episode-foreign");
+        foreign_input.full_input_digest = keyed_digest('8');
+        let foreign_begin = store.correlate_and_begin("owner-a", foreign_input).await?;
+        assert_eq!(foreign_begin.episode_id, "episode-foreign");
+        let foreign_metering = metering("request-foreign");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-foreign",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &foreign_metering)
+                },
+            )
+            .await?;
+        let foreign_outbox = store
+            .pending_outbox("owner-a")
+            .await?
+            .into_iter()
+            .find(|outbox| {
+                outbox
+                    .payload
+                    .evaluation
+                    .as_deref()
+                    .is_some_and(|evaluation| evaluation.subject.subject_id == "episode-foreign")
+            })
+            .ok_or_else(|| anyhow::anyhow!("foreign terminal outbox missing"))?;
+        let foreign_evaluation = foreign_outbox
+            .payload
+            .evaluation
+            .as_deref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("foreign terminal evaluation missing"))?;
+        store
+            .mark_outbox_delivered(
+                "owner-a",
+                &foreign_outbox.outbox_id,
+                &foreign_outbox.created_at,
+            )
+            .await?;
+
+        let mut corrupted_payload = current_outbox.payload;
+        corrupted_payload.evaluation = Some(Box::new(foreign_evaluation));
+        let payload_json = serde_json::to_string(&corrupted_payload)?;
+        let payload_digest = canonical_digest(&corrupted_payload)?;
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE trajectory_outbox \
+             SET payload_json = ?, payload_digest = ? \
+             WHERE owner_user_id = ? AND outbox_id = ?",
+            [
+                payload_json.into(),
+                payload_digest.into(),
+                "owner-a".into(),
+                current_outbox.outbox_id.into(),
+            ],
+        ))
+        .await?;
+
+        let eval_store = EvalStore::new(db);
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            eval_store.clone(),
+            EvalConfig::default(),
+            10,
+        )?;
+        let recorder = TrajectorySettlementRecorder::new(store, publisher.clone(), identity_key);
+        let mut retry = context("external-request-current");
+        retry.emit(routing_failure_metering("external-request-current", 175));
+        let baseline_subjects = eval_store.list_subjects_for_owner("owner-a").await?.len();
+        let baseline_admissions = eval_store
+            .latest_admissions_for_owner("owner-a")
+            .await?
+            .len();
+
+        let result = recorder.record_if_tracked(&retry).await;
+        publisher.wait_for_idle().await;
+
+        assert!(
+            result.is_err(),
+            "terminal retry must reject another episode's valid evaluation envelope"
+        );
+        assert_eq!(
+            eval_store.list_subjects_for_owner("owner-a").await?.len(),
+            baseline_subjects,
+            "rejected reuse must not publish a foreign Eval subject"
+        );
+        assert_eq!(
+            eval_store
+                .latest_admissions_for_owner("owner-a")
+                .await?
+                .len(),
+            baseline_admissions,
+            "rejected reuse must not publish a foreign Eval result"
+        );
         Ok(())
     }
 
