@@ -211,13 +211,52 @@ pub fn reduce(events: &[TrajectoryEvent], protected_tiers: &BTreeSet<String>)
     -> Result<TrajectorySnapshot>;
 ```
 
-- [ ] **Step 1: Write failing hand-derived reducer tests.** Cover a complete root, repeated projection, tier changes, recurring recovery, context growth, settled/unsettled interleaving, missing price/usage, failures, and a persisted guard hold. Assert every field from literal event sequences.
-- [ ] **Step 2: Write failing corruption tests.** Reject gaps/duplicates in sequence, wrong episode/owner, settlement before start, two conflicting settlements, digest mismatch, close followed by new events, and arithmetic overflow.
-- [ ] **Step 3: Implement the pure reducer.** Use checked/saturating conversions where wire widths differ. Recovery comes only from the existing generic `WorkflowStateKind::Recovery`/guarded projection evidence, never quoted failure text or task labels. Context growth compares canonical input size/token evidence, not content semantics.
-- [ ] **Step 4: Implement deterministic replay.** `replay_episode(store, owner, episode_id)` loads events in sequence, validates every digest, calls `reduce`, and returns the same snapshot digest as the live begin/settle path.
-- [ ] **Step 5: Add restart tests.** Start and settle several requests, drop all runtime objects, reconnect to the same SQLite file, and prove the next request sees the same health/hold state as an uninterrupted runtime.
-- [ ] **Step 6: Run focused health/store/replay tests until GREEN.**
-- [ ] **Step 7: Commit `feat(trajectory): reduce replayable health`.**
+**Task 3 reducer evidence contract:** The reducer reads only the following
+exact, bounded, namespaced attributes and never parses prose, task labels,
+model names, headers, or arbitrary metadata:
+
+- `RequestStarted`: categorical `history.completeness` and
+  `correlation.source`, plus structural `request.canonical_input_bytes`.
+  Task 2's typed canonicalizer supplies the byte count of the exact canonical
+  JSON bytes used as the full-input HMAC input; only the count is persisted.
+  There is no model-token estimate and no content persistence.
+- `RouteIntentRecorded`: categorical `route.projection`,
+  `route.selected_tier`, and `route.workflow_state`. Projection and workflow
+  state must be valid generic agent-trace values and agree. Recovery is only
+  the exact `recovery` workflow-state value.
+- `RequestSettled`: structural `settlement.total_tokens` and
+  `settlement.cost_micro_usd`. Presence is authoritative, including an
+  explicit zero; absence remains unknown.
+- `GuardActivated`: structural `guard.hold_for_requests`, a positive value no
+  greater than `u32::MAX`.
+
+Completeness folds all starts and required correlation/intent evidence with
+`Incomplete` dominating `Unknown`, which dominates `Complete`; missing
+required evidence contributes `Unknown`. Token and cost totals are `None` if
+any settled request lacks the corresponding value, otherwise checked sums
+produce `Some`, including `Some(0)`. Streaks advance only on route-intent
+events. A selected tier is protected only by exact membership in the supplied
+set; a missing tier resets the unprotected streak and contributes unknown
+completeness. A hold event leaves its full value remaining and each subsequent
+request-start consumes exactly one. Context growth is the non-negative latest
+versus first authoritative canonical-byte increase in ppm; missing/zero first
+evidence yields `None`, shrinkage yields zero, and multiplication overflow is
+an error.
+
+Replay is explicitly `replay_episode(store, owner, episode_id,
+protected_tiers)`: protected-tier policy data affects the snapshot and cannot
+be hidden in global state. Store loading and the reducer validate the event
+index/digest, sequence, owner, and episode before producing the same canonical
+SHA-256 snapshot digest as direct reduction; that digest excludes its own
+field.
+
+- [x] **Step 1: Write failing hand-derived reducer tests.** Cover a complete root, repeated projection, tier changes, recurring recovery, context growth, settled/unsettled interleaving, missing price/usage, failures, and a persisted guard hold. Assert every field from literal event sequences.
+- [x] **Step 2: Write failing corruption tests.** Reject gaps/duplicates in sequence, wrong episode/owner, settlement before start, two conflicting settlements, digest mismatch, close followed by new events, and arithmetic overflow.
+- [x] **Step 3: Implement the pure reducer.** Use checked/saturating conversions where wire widths differ. Recovery comes only from the existing generic `WorkflowStateKind::Recovery`/guarded projection evidence, never quoted failure text or task labels. Context growth compares canonical input size/token evidence, not content semantics.
+- [x] **Step 4: Implement deterministic replay.** `replay_episode(store, owner, episode_id, protected_tiers)` loads events in sequence, validates every digest, calls `reduce`, and returns the same snapshot digest as the live begin/settle path. The explicit tier set is required because protected classification is policy input and replay must not depend on hidden global state.
+- [x] **Step 5: Add restart tests.** Start and settle several requests, drop all runtime objects, reconnect to the same SQLite file, and prove the next request sees the same health/hold state as an uninterrupted runtime.
+- [x] **Step 6: Run focused health/store/replay tests until GREEN.**
+- [x] **Step 7: Commit `feat(trajectory): reduce replayable health`.**
 
 ## Task 4: Add a signed, lock-owned progress guard
 

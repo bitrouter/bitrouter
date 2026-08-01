@@ -31,6 +31,7 @@ pub struct CorrelationEvidence {
     pub full_input_digest: String,
     pub ancestor_prefix_digests: Vec<String>,
     pub starts_with_prior_turns: bool,
+    pub canonical_input_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +93,7 @@ impl TrajectoryRuntime {
                     full_input_digest: canonical.full_input_digest,
                     ancestor_prefix_digests: canonical.ancestor_prefix_digests,
                     starts_with_prior_turns: canonical.starts_with_prior_turns,
+                    canonical_input_bytes: canonical.canonical_input_bytes,
                     protocol: protocol_name(&inbound_protocol).to_owned(),
                     captured_at: captured_at.to_owned(),
                 },
@@ -120,6 +122,7 @@ fn correlation_evidence(
             .map(|digest| digest.as_str().to_owned())
             .collect(),
         starts_with_prior_turns: canonical.starts_with_prior_turns,
+        canonical_input_bytes: canonical.canonical_input_bytes,
     }
 }
 

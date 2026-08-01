@@ -45,6 +45,7 @@ pub struct CanonicalPromptDigests {
     pub full_input_digest: KeyedDigest,
     pub ancestor_prefix_digests: Vec<KeyedDigest>,
     pub starts_with_prior_turns: bool,
+    pub canonical_input_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -177,15 +178,9 @@ impl Canonicalizer {
     pub fn canonicalize(&self, prompt: &Prompt) -> Result<CanonicalPromptDigests> {
         let turns = canonical_turns(prompt)?;
 
-        let mut prefix_digests = Vec::with_capacity(turns.len());
-        if turns.is_empty() {
-            prefix_digests.push(self.digest(&CanonicalPrefix {
-                version: CANONICAL_PROMPT_VERSION,
-                system: prompt.system.as_deref(),
-                turns: &[],
-            })?);
-        } else {
-            for end in 1..=turns.len() {
+        let mut prefix_digests = Vec::with_capacity(turns.len().saturating_sub(1));
+        if !turns.is_empty() {
+            for end in 1..turns.len() {
                 prefix_digests.push(self.digest(&CanonicalPrefix {
                     version: CANONICAL_PROMPT_VERSION,
                     system: prompt.system.as_deref(),
@@ -193,9 +188,15 @@ impl Canonicalizer {
                 })?);
             }
         }
-        let full_input_digest = prefix_digests
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("canonical prompt produced no full digest"))?;
+        let full_input = serde_json::to_vec(&CanonicalPrefix {
+            version: CANONICAL_PROMPT_VERSION,
+            system: prompt.system.as_deref(),
+            turns: &turns,
+        })
+        .context("serializing canonical full prompt")?;
+        let canonical_input_bytes =
+            u64::try_from(full_input.len()).context("canonical prompt exceeds byte-count range")?;
+        let full_input_digest = self.digest_bytes(&full_input)?;
         let starts_with_prior_turns = turns
             .iter()
             .any(|turn| matches!(turn.role, Role::Assistant | Role::Tool));
@@ -203,14 +204,19 @@ impl Canonicalizer {
             full_input_digest,
             ancestor_prefix_digests: prefix_digests,
             starts_with_prior_turns,
+            canonical_input_bytes,
         })
     }
 
     fn digest<T: Serialize>(&self, value: &T) -> Result<KeyedDigest> {
         let bytes = serde_json::to_vec(value).context("serializing canonical prompt prefix")?;
+        self.digest_bytes(&bytes)
+    }
+
+    fn digest_bytes(&self, bytes: &[u8]) -> Result<KeyedDigest> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key.secret)
             .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
-        mac.update(&bytes);
+        mac.update(bytes);
         let digest = mac.finalize().into_bytes();
         KeyedDigest::parse(format!(
             "hmac-sha256:{}:{}",
@@ -839,6 +845,24 @@ mod tests {
         let baseline = canonicalizer.canonicalize(&baseline)?;
         assert_ne!(baseline, canonicalizer.canonicalize(&changed_tool_json)?);
         assert_ne!(baseline, canonicalizer.canonicalize(&changed_user_json)?);
+        Ok(())
+    }
+
+    #[test]
+    fn canonicalizer_reports_exact_full_input_byte_count_without_content() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([29; 32])?);
+        let prompt = parse(
+            ApiProtocol::ChatCompletions,
+            serde_json::json!({
+                "model": "provider/model",
+                "messages": [{"role": "user", "content": "hello"}]
+            }),
+        )?;
+
+        let canonical = canonicalizer.canonicalize(&prompt)?;
+
+        assert_eq!(canonical.canonical_input_bytes, 96);
+        assert_eq!(canonical.full_input_digest.as_str().len(), 97);
         Ok(())
     }
 }

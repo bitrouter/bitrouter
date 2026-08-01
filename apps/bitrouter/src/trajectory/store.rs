@@ -121,6 +121,7 @@ pub(crate) struct CorrelateAndBegin {
     pub full_input_digest: KeyedDigest,
     pub ancestor_prefix_digests: Vec<KeyedDigest>,
     pub starts_with_prior_turns: bool,
+    pub canonical_input_bytes: u64,
     pub protocol: String,
     pub captured_at: String,
 }
@@ -359,6 +360,10 @@ impl TrajectoryStore {
                         "correlation.key_epoch_conflict".to_owned(),
                         u64::from(key_epoch_conflict),
                     ),
+                    (
+                        "request.canonical_input_bytes".to_owned(),
+                        input.canonical_input_bytes,
+                    ),
                 ]),
                 categorical: std::collections::BTreeMap::from([
                     ("correlation.source".to_owned(), source.as_str().to_owned()),
@@ -438,12 +443,40 @@ impl TrajectoryStore {
         owner_user_id: &str,
         event: TrajectoryEvent,
     ) -> Result<()> {
+        self.append_request_event(
+            owner_user_id,
+            event,
+            TrajectoryEventKind::RouteIntentRecorded,
+            "route intent",
+        )
+        .await
+    }
+
+    pub async fn append_guard_activation(
+        &self,
+        owner_user_id: &str,
+        event: TrajectoryEvent,
+    ) -> Result<()> {
+        self.append_request_event(
+            owner_user_id,
+            event,
+            TrajectoryEventKind::GuardActivated,
+            "guard activation",
+        )
+        .await
+    }
+
+    async fn append_request_event(
+        &self,
+        owner_user_id: &str,
+        event: TrajectoryEvent,
+        expected_kind: TrajectoryEventKind,
+        label: &str,
+    ) -> Result<()> {
         validate_owner(owner_user_id)?;
         validate_event(&event)?;
-        if event.kind != TrajectoryEventKind::RouteIntentRecorded
-            || event.owner_user_id != owner_user_id
-        {
-            anyhow::bail!("route intent event must belong to its owner")
+        if event.kind != expected_kind || event.owner_user_id != owner_user_id {
+            anyhow::bail!("{label} event must belong to its owner")
         }
         let txn = self.db.begin().await?;
         if event_matches_existing(&txn, &event).await? {
@@ -769,6 +802,11 @@ async fn exact_retry_result(
         .digests
         .get("correlation.native_parent")
         .map(String::as_str);
+    let canonical_input_bytes = start
+        .evidence
+        .structural
+        .get("request.canonical_input_bytes")
+        .copied();
     if existing.start_event_id != input.event_id
         || existing.full_input_digest != input.full_input_digest.as_str()
         || existing.protocol != input.protocol
@@ -780,6 +818,7 @@ async fn exact_retry_result(
         || starts_with_prior_turns != Some(u64::from(input.starts_with_prior_turns))
         || native_parent_present != Some(u64::from(input.native_parent_digest.is_some()))
         || native_parent_digest != input.native_parent_digest.as_ref().map(KeyedDigest::as_str)
+        || canonical_input_bytes != Some(input.canonical_input_bytes)
         || start.owner_user_id != owner_user_id
         || start.request_id.as_deref() != Some(input.request_id.as_str())
         || start.kind != TrajectoryEventKind::RequestStarted
@@ -1670,6 +1709,7 @@ mod tests {
             full_input_digest: keyed_digest("key-1", "1"),
             ancestor_prefix_digests: Vec::new(),
             starts_with_prior_turns: false,
+            canonical_input_bytes: 1,
             protocol: "responses".into(),
             captured_at: "2026-08-01T00:00:00Z".into(),
         };
