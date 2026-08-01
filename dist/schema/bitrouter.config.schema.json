@@ -975,6 +975,10 @@
         "cache": {
           "description": "List-call cache settings.",
           "$ref": "#/$defs/McpCacheConfig"
+        },
+        "upstream_protocol": {
+          "description": "MCP startup lifecycle and protocol version for upstream servers.",
+          "$ref": "#/$defs/McpUpstreamProtocol"
         }
       }
     },
@@ -1039,6 +1043,21 @@
           "default": 64
         }
       }
+    },
+    "McpUpstreamProtocol": {
+      "description": "`mcp.upstream_protocol` — the startup lifecycle and protocol version the\ngateway uses when dialing upstream MCP servers.\n\n`latest` keeps the legacy `initialize` path. `2026-07-28` starts with\n`server/discover` and falls back to `initialize` only when discovery returns\nJSON-RPC `METHOD_NOT_FOUND`. Any other discovery error fails the connection,\nso opt in only for upstreams expected to support the modern lifecycle.",
+      "oneOf": [
+        {
+          "description": "Use the legacy `initialize` lifecycle with the latest version the MCP\nSDK treats as current — today `2025-11-25`. This is the default.",
+          "type": "string",
+          "const": "latest"
+        },
+        {
+          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle, falling\nback to legacy `initialize` only on `METHOD_NOT_FOUND`. Other discovery\nerrors fail the connection. Opting in also lets upstreams answer\n`tools/call` with MRTR `input_required` or a Tasks `task` handle;\nneither is a shape this gateway can carry, so both surface as explicit\nerrors (see `docs/MCP_2026_07_28_SPEC.md` D1).",
+          "type": "string",
+          "const": "2026-07-28"
+        }
+      ]
     },
     "McpServerConfig": {
       "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`super::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",

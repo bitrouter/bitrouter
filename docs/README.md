@@ -8,7 +8,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
-  in-flight work (TUI, spawn/launch, onboarding).
+  in-flight work (TUI, spawn/launch, onboarding, the MCP `2026-07-28` upgrade).
 
 ## Where product docs live
 

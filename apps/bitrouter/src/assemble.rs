@@ -397,7 +397,9 @@ pub async fn build_app_with_path(
     // Caches sit at the leaves so a single-server `notifications/*` only
     // invalidates that server's slice.
     let mcp_executor = mcp_routing.as_ref().map(|_| {
-        let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new());
+        let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new().with_protocol_version(
+            bitrouter_sdk::mcp::upstream_protocol_version(config.mcp.upstream_protocol),
+        ));
         let inner_for_cache: Arc<RmcpExecutor> = rmcp.clone();
         if config.mcp.cache.enabled {
             let ttls: CacheTtls = (&config.mcp.cache).into();

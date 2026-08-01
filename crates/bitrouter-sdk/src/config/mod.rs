@@ -575,6 +575,32 @@ pub struct McpConfig {
     pub aggregate: McpAggregateConfig,
     /// List-call cache settings.
     pub cache: McpCacheConfig,
+    /// MCP startup lifecycle and protocol version for upstream servers.
+    pub upstream_protocol: McpUpstreamProtocol,
+}
+
+/// `mcp.upstream_protocol` — the startup lifecycle and protocol version the
+/// gateway uses when dialing upstream MCP servers.
+///
+/// `latest` keeps the legacy `initialize` path. `2026-07-28` starts with
+/// `server/discover` and falls back to `initialize` only when discovery returns
+/// JSON-RPC `METHOD_NOT_FOUND`. Any other discovery error fails the connection,
+/// so opt in only for upstreams expected to support the modern lifecycle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpUpstreamProtocol {
+    /// Use the legacy `initialize` lifecycle with the latest version the MCP
+    /// SDK treats as current — today `2025-11-25`. This is the default.
+    #[default]
+    Latest,
+    /// Use `server/discover` and the modern `2026-07-28` lifecycle, falling
+    /// back to legacy `initialize` only on `METHOD_NOT_FOUND`. Other discovery
+    /// errors fail the connection. Opting in also lets upstreams answer
+    /// `tools/call` with MRTR `input_required` or a Tasks `task` handle;
+    /// neither is a shape this gateway can carry, so both surface as explicit
+    /// errors (see `docs/MCP_2026_07_28_SPEC.md` D1).
+    #[serde(rename = "2026-07-28")]
+    V2026_07_28,
 }
 
 /// `mcp.aggregate` — the virtual aggregate endpoint.
