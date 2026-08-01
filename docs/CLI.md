@@ -390,9 +390,10 @@ trigger: it compares the prospective cumulative recovery count only when the
 current request projects as `recovery`; its configured hold, not the cumulative
 counter by itself, determines how long the escalation persists. The episode
 request, elapsed-time, and known-cost thresholds are monotonic once reached.
-A trigger activates hold when the static candidate already equals the
-escalation tier, without changing that tier; a different protected candidate is
-preserved. Unknown cost remains unknown and cannot satisfy a cost threshold.
+Every genuine trigger activates hold. If the current candidate is any declared
+protected tier, it is preserved exactly; otherwise the escalation tier is
+selected. An active hold uses the same selection rule without resetting its
+duration. Unknown cost remains unknown and cannot satisfy a cost threshold.
 
 The feature is source- and task-neutral. It stores event structure, bounded
 categorical routing facts, exact counters, and keyed/content digests. It does

@@ -10,7 +10,7 @@ use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
 use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
 use bitrouter::trajectory::health::reduce;
 use bitrouter::trajectory::replay::replay_episode;
-use bitrouter::trajectory::store::TrajectoryStore;
+use bitrouter::trajectory::store::{EpisodeAudit, TrajectoryStore};
 use bitrouter::trajectory::types::{HistoryCompleteness, TrajectoryEventKind};
 use bitrouter_sdk::config;
 use bitrouter_sdk::server::{AppState, build_router};
@@ -997,6 +997,80 @@ async fn auto_template_recovery_at_strong_activates_hold_for_next_normal_route()
             .count(),
         1
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovery_at_another_protected_tier_activates_hold_for_unprotected_followup()
+-> anyhow::Result<()> {
+    let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(
+        "../../../templates/auto-router/policy-lock.yaml"
+    ))?;
+    let auto = lock
+        .policies
+        .get_mut("auto")
+        .ok_or_else(|| anyhow::anyhow!("template lock is missing the auto policy"))?;
+    auto.tiers
+        .insert("strong".into(), "strong:strong-model".into());
+    auto.tiers
+        .insert("balanced".into(), "balanced:balanced-model".into());
+    auto.tiers
+        .insert("economy".into(), "economy:economy-model".into());
+    auto.default_tier = Some("balanced".into());
+    auto.progress_guard
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("template auto policy has no progress guard"))?
+        .protected_tiers
+        .insert("balanced".into());
+
+    let harness = HttpHarness::with_lock(lock).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let owner = "alternate-protected-owner";
+    let bearer = add_owner(&assembled.db, owner).await?;
+    let requests = fixture_requests(InboundProtocol::Chat.fixture())?;
+    for request in &requests {
+        post_fixture(&server, InboundProtocol::Chat, &bearer, request, None).await?;
+    }
+
+    let outcome = normalized_outcome(&assembled.db, owner).await?;
+    assert_eq!(
+        outcome.selected_tiers,
+        ["balanced", "balanced", "strong"],
+        "recovery preserves its protected candidate, then hold escalates the next unprotected candidate"
+    );
+    assert_eq!(outcome.active_hold_remaining, 1);
+    let events = events_for_only_episode(&assembled.db, owner).await?;
+    let candidate_tiers = events
+        .iter()
+        .filter(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
+        .filter_map(|event| event.evidence.categorical.get("route.candidate_tier"))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(candidate_tiers, ["balanced", "balanced", "economy"]);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == TrajectoryEventKind::GuardActivated)
+            .count(),
+        1
+    );
+    let episode_id = owner_episode_ids(&assembled.db, owner)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("alternate protected episode is missing"))?;
+    match TrajectoryStore::new(assembled.db.clone())
+        .audit_episode(owner, &episode_id)
+        .await?
+    {
+        EpisodeAudit::Valid { snapshot, .. } => {
+            assert_eq!(snapshot.active_hold_remaining, 1);
+        }
+        EpisodeAudit::Corrupt { reason, .. } => {
+            anyhow::bail!("alternate protected episode failed audit: {reason}")
+        }
+    }
     Ok(())
 }
 
