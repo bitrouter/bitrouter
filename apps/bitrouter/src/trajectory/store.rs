@@ -6,7 +6,7 @@ use sea_orm::{
 };
 
 use super::correlation::CorrelationSource;
-use super::evaluation::TRAJECTORY_EVAL_TOPIC;
+use super::evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation};
 use super::guard::{
     ProgressGuardInput, ProgressGuardPolicy, RouteIntent, RouteIntentClause,
     RouteIntentClauseDisposition, evaluate, validate_persisted_route_intent,
@@ -947,14 +947,15 @@ impl TrajectoryStore {
         {
             anyhow::bail!("trajectory request '{request_id}' has an inconsistent start event")
         }
-        let settlement = events
+        let settlement_position = events
             .iter()
-            .find(|event| event.event_id == settlement_event_id)
+            .position(|event| event.event_id == settlement_event_id)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "settled trajectory request '{request_id}' lost its settlement event"
                 )
             })?;
+        let settlement = &events[settlement_position];
         if settlement.kind != TrajectoryEventKind::RequestSettled
             || settlement.request_id.as_deref() != Some(request_id)
             || settlement.episode_id != request.episode_id
@@ -975,6 +976,7 @@ impl TrajectoryStore {
         {
             anyhow::bail!("trajectory request '{request_id}' has an inconsistent settlement event")
         }
+        let expected_evaluation = build_operational_evaluation(&events[..=settlement_position])?;
         let settlement_outbox_id = request.settlement_outbox_id.as_deref().ok_or_else(|| {
             anyhow::anyhow!("terminal trajectory request '{request_id}' lost its outbox index")
         })?;
@@ -1001,7 +1003,7 @@ impl TrajectoryStore {
                 .get("trajectory.settlement_event")
                 .map(String::as_str)
                 != Some(settlement.content_digest.as_str())
-            || outbox.payload.evaluation.is_none()
+            || outbox.payload.evaluation.as_deref() != Some(&expected_evaluation)
         {
             anyhow::bail!("trajectory request '{request_id}' has an inconsistent outbox")
         }
