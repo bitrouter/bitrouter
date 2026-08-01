@@ -160,14 +160,18 @@ impl Canonicalizer {
         self.key.key_id()
     }
 
-    pub(crate) fn native_parent_digest(&self, native_parent_id: &str) -> Result<String> {
+    pub(crate) fn native_parent_digest(&self, native_parent_id: &str) -> Result<KeyedDigest> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key.secret)
             .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
         mac.update(NATIVE_PARENT_DIGEST_DOMAIN);
         mac.update(&[0]);
         mac.update(native_parent_id.as_bytes());
         let digest = mac.finalize().into_bytes();
-        Ok(format!("sha256:{}", hex::encode(digest)))
+        KeyedDigest::parse(format!(
+            "hmac-sha256:{}:{}",
+            self.key.key_id,
+            hex::encode(digest)
+        ))
     }
 
     pub fn canonicalize(&self, prompt: &Prompt) -> Result<CanonicalPromptDigests> {
@@ -245,11 +249,11 @@ fn canonical_turns(prompt: &Prompt) -> Result<Vec<CanonicalTurn>> {
                 == protocol_artifact_kind(&turn)
                 && protocol_artifact_kind(&turn).is_some();
             if merge_artifact {
-                turns
-                    .last_mut()
-                    .expect("artifact merge requires a preceding turn")
-                    .content
-                    .extend(turn.content);
+                if let Some(previous) = turns.last_mut() {
+                    previous.content.extend(turn.content);
+                } else {
+                    turns.push(turn);
+                }
             } else {
                 turns.push(turn);
             }
@@ -666,6 +670,17 @@ mod tests {
             first.canonicalize(&prompt)?.full_input_digest,
             other.canonicalize(&prompt)?.full_input_digest
         );
+        Ok(())
+    }
+
+    #[test]
+    fn native_parent_digest_is_truthfully_keyed_and_key_bound() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([19; 32])?);
+        let digest = canonicalizer.native_parent_digest("response-parent")?;
+
+        assert_eq!(digest.key_id(), canonicalizer.key_id());
+        assert!(digest.as_str().starts_with("hmac-sha256:"));
+        assert!(!digest.as_str().contains("response-parent"));
         Ok(())
     }
 

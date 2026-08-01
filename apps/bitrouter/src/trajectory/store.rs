@@ -117,7 +117,7 @@ pub(crate) struct CorrelateAndBegin {
     pub event_id: String,
     pub correlation_key_id: String,
     pub native_parent_id: Option<String>,
-    pub native_parent_digest: Option<String>,
+    pub native_parent_digest: Option<KeyedDigest>,
     pub full_input_digest: KeyedDigest,
     pub ancestor_prefix_digests: Vec<KeyedDigest>,
     pub starts_with_prior_turns: bool,
@@ -182,8 +182,15 @@ impl TrajectoryStore {
         {
             anyhow::bail!("ancestor prefix digest uses a different correlation key")
         }
-        if let Some(digest) = &input.native_parent_digest {
-            super::types::validate_digest(digest, "native parent digest")?;
+        if input.native_parent_id.is_some() != input.native_parent_digest.is_some() {
+            anyhow::bail!("native parent id and digest must be present together")
+        }
+        if input
+            .native_parent_digest
+            .as_ref()
+            .is_some_and(|digest| digest.key_id() != input.correlation_key_id)
+        {
+            anyhow::bail!("native parent digest uses a different correlation key")
         }
 
         for attempt in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
@@ -231,6 +238,7 @@ impl TrajectoryStore {
         let mut trusted_native_parent_id = None;
         let mut resolved_episode = None;
         let mut prefix_conflict = false;
+        let mut key_epoch_conflict = false;
         let (source, completeness) = if let Some(native_parent_id) = &input.native_parent_id {
             match request_entity::Entity::find_by_id(native_parent_id)
                 .one(&txn)
@@ -239,9 +247,17 @@ impl TrajectoryStore {
                 Some(parent) if parent.owner_user_id == owner_user_id => {
                     trusted_native_parent_id = Some(native_parent_id.clone());
                     let episode = owned_episode(&txn, owner_user_id, &parent.episode_id).await?;
-                    let completeness = parse_completeness(&episode.history_completeness)?;
-                    resolved_episode = Some(episode);
-                    (CorrelationSource::NativeParentId, completeness)
+                    if episode.correlation_key_id == input.correlation_key_id {
+                        let completeness = parse_completeness(&episode.history_completeness)?;
+                        resolved_episode = Some(episode);
+                        (CorrelationSource::NativeParentId, completeness)
+                    } else {
+                        key_epoch_conflict = true;
+                        (
+                            CorrelationSource::NativeParentId,
+                            HistoryCompleteness::Incomplete,
+                        )
+                    }
                 }
                 Some(_) | None => (
                     CorrelationSource::Unresolved,
@@ -339,6 +355,10 @@ impl TrajectoryStore {
                         "correlation.native_parent_present".to_owned(),
                         u64::from(input.native_parent_digest.is_some()),
                     ),
+                    (
+                        "correlation.key_epoch_conflict".to_owned(),
+                        u64::from(key_epoch_conflict),
+                    ),
                 ]),
                 categorical: std::collections::BTreeMap::from([
                     ("correlation.source".to_owned(), source.as_str().to_owned()),
@@ -353,7 +373,7 @@ impl TrajectoryStore {
                     .map(|digest| {
                         std::collections::BTreeMap::from([(
                             "correlation.native_parent".to_owned(),
-                            digest.clone(),
+                            digest.as_str().to_owned(),
                         )])
                     })
                     .unwrap_or_default(),
@@ -728,8 +748,7 @@ async fn exact_retry_result(
         .iter()
         .find(|event| event.event_id == existing.start_event_id)
         .ok_or_else(|| anyhow::anyhow!("trajectory retry is missing its original start event"))?;
-    let trusted_native_parent_id =
-        trusted_native_parent_id(txn, owner_user_id, input.native_parent_id.as_deref()).await?;
+    validate_stored_native_parent(txn, owner_user_id, existing.native_parent_id.as_deref()).await?;
     let ancestor_count = start
         .evidence
         .structural
@@ -752,7 +771,6 @@ async fn exact_retry_result(
         .map(String::as_str);
     if existing.start_event_id != input.event_id
         || existing.full_input_digest != input.full_input_digest.as_str()
-        || existing.native_parent_id != trusted_native_parent_id
         || existing.protocol != input.protocol
         || ancestor_count
             != Some(
@@ -761,7 +779,7 @@ async fn exact_retry_result(
             )
         || starts_with_prior_turns != Some(u64::from(input.starts_with_prior_turns))
         || native_parent_present != Some(u64::from(input.native_parent_digest.is_some()))
-        || native_parent_digest != input.native_parent_digest.as_deref()
+        || native_parent_digest != input.native_parent_digest.as_ref().map(KeyedDigest::as_str)
         || start.owner_user_id != owner_user_id
         || start.request_id.as_deref() != Some(input.request_id.as_str())
         || start.kind != TrajectoryEventKind::RequestStarted
@@ -796,19 +814,22 @@ async fn exact_retry_result(
     })
 }
 
-async fn trusted_native_parent_id(
+async fn validate_stored_native_parent(
     txn: &DatabaseTransaction,
     owner_user_id: &str,
     native_parent_id: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<()> {
     let Some(native_parent_id) = native_parent_id else {
-        return Ok(None);
+        return Ok(());
     };
-    Ok(request_entity::Entity::find_by_id(native_parent_id)
+    let parent = request_entity::Entity::find_by_id(native_parent_id)
         .one(txn)
         .await?
-        .filter(|request| request.owner_user_id == owner_user_id)
-        .map(|_| native_parent_id.to_owned()))
+        .ok_or_else(|| anyhow::anyhow!("trajectory retry has a missing stored native parent"))?;
+    if parent.owner_user_id != owner_user_id {
+        anyhow::bail!("trajectory retry has a cross-owner stored native parent")
+    }
+    Ok(())
 }
 
 fn validate_episode_head(
@@ -1633,6 +1654,33 @@ mod tests {
         let mut child = begin("episode-child", "request-child");
         child.native_parent_id = Some("request-parent".into());
         assert!(store.begin_request("owner-a", child).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn correlation_store_rejects_native_digest_from_another_key() -> anyhow::Result<()> {
+        let store = store().await?;
+        let input = CorrelateAndBegin {
+            request_id: "request-child".into(),
+            new_episode_id: "episode-child".into(),
+            event_id: "event-child".into(),
+            correlation_key_id: "key-1".into(),
+            native_parent_id: Some("request-parent".into()),
+            native_parent_digest: Some(keyed_digest("key-2", "3")),
+            full_input_digest: keyed_digest("key-1", "1"),
+            ancestor_prefix_digests: Vec::new(),
+            starts_with_prior_turns: false,
+            protocol: "responses".into(),
+            captured_at: "2026-08-01T00:00:00Z".into(),
+        };
+
+        let error = store
+            .correlate_and_begin("owner-a", input)
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("native evidence accepted a different key"))?;
+        assert!(error.to_string().contains("different correlation key"));
+        assert!(store.request("owner-a", "request-child").await?.is_none());
         Ok(())
     }
 

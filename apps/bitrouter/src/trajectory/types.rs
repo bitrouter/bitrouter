@@ -305,9 +305,19 @@ fn validate_structured_attributes(
         }
     }
     for (key, digest) in digests {
-        validate_digest(digest, &format!("{field} digest '{key}'"))?;
+        validate_evidence_digest(digest, &format!("{field} digest '{key}'"))?;
     }
     Ok(())
+}
+
+fn validate_evidence_digest(value: &str, field: &str) -> Result<()> {
+    if value.starts_with("sha256:") {
+        validate_digest(value, field)
+    } else {
+        KeyedDigest::parse(value.to_owned())
+            .with_context(|| format!("{field} must be a digest"))?;
+        Ok(())
+    }
 }
 
 fn validate_identifier(value: &str, field: &str) -> Result<()> {
@@ -444,6 +454,18 @@ mod tests {
     #[test]
     fn keyed_correlation_and_outbox_payload_reject_raw_or_sensitive_material() {
         assert!(KeyedDigest::parse("a raw user prompt").is_err());
+        assert!(
+            KeyedDigest::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
+        assert!(
+            KeyedDigest::parse(
+                "sha256:key-1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            .is_err()
+        );
         assert!(KeyedDigest::parse("hmac-sha256:key-1:short").is_err());
         assert!(
             KeyedDigest::parse(
@@ -461,9 +483,36 @@ mod tests {
         };
         assert!(validate_outbox_payload(&payload).is_ok());
 
+        let mut keyed_outbox = payload.clone();
+        keyed_outbox.digests.insert(
+            "trajectory.event".into(),
+            "hmac-sha256:key-1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+        );
+        assert!(validate_outbox_payload(&keyed_outbox).is_err());
+
         let mut sensitive = payload;
         sensitive.structural.insert("trajectory.api_key".into(), 1);
         assert!(validate_outbox_payload(&sensitive).is_err());
+    }
+
+    #[test]
+    fn event_evidence_accepts_valid_keyed_digests_but_rejects_mislabeled_values() {
+        let mut event = event_fixture();
+        event.evidence.digests.insert(
+            "correlation.native_parent".into(),
+            "hmac-sha256:key-1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+        );
+        event.content_digest = event.semantic_digest().unwrap_or_default();
+        assert!(validate_event(&event).is_ok());
+
+        event.evidence.digests.insert(
+            "correlation.native_parent".into(),
+            "hmac-sha256:key-1:short".into(),
+        );
+        event.content_digest = event.semantic_digest().unwrap_or_default();
+        assert!(validate_event(&event).is_err());
     }
 
     #[test]
