@@ -316,8 +316,7 @@ impl Default for RegistryConfig {
 /// absent or tier-less block leaves routing untouched. The whole spec is static
 /// and operator-owned: it is versionable in `bitrouter.yaml` and never mutated
 /// at runtime.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default, Serialize, schemars::JsonSchema)]
 pub struct PolicyTableConfig {
     /// The request-key family used for `fingerprints`. Active policy routing
     /// uses only the canonical source-independent `agent_trace` projection.
@@ -349,6 +348,48 @@ pub struct PolicyTableConfig {
     /// offending fingerprint to a more capable tier — so an operator's downgrade
     /// that proves inadequate is self-correcting. Off by default.
     pub adequacy: AdequacyConfig,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct PolicyTableConfigInput {
+    key_strategy: PolicyKeyStrategy,
+    tiers: HashMap<String, String>,
+    fingerprints: HashMap<String, String>,
+    default_tier: Option<String>,
+    tool_use_tier: Option<String>,
+    tool_safe_tiers: Vec<String>,
+    adequacy: AdequacyConfig,
+    #[serde(deserialize_with = "reject_global_progress_guard")]
+    progress_guard: (),
+}
+
+impl<'de> Deserialize<'de> for PolicyTableConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let input = PolicyTableConfigInput::deserialize(deserializer)?;
+        let () = input.progress_guard;
+        Ok(Self {
+            key_strategy: input.key_strategy,
+            tiers: input.tiers,
+            fingerprints: input.fingerprints,
+            default_tier: input.default_tier,
+            tool_use_tier: input.tool_use_tier,
+            tool_safe_tiers: input.tool_safe_tiers,
+            adequacy: input.adequacy,
+        })
+    }
+}
+
+fn reject_global_progress_guard<'de, D>(_: D) -> std::result::Result<(), D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Err(serde::de::Error::custom(
+        "policy_table.progress_guard is not supported; configure progress_guard on a signed named policy",
+    ))
 }
 
 /// Request-key family used by `policy_table.fingerprints`.

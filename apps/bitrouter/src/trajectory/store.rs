@@ -2249,6 +2249,109 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn replay_rejects_resigned_all_skipped_route_with_wrong_health_digest() -> anyhow::Result<()> {
+        let start = guarded_start("request-1", 1)?;
+        let mut input = guarded_route_input("route-1", "guard-1");
+        input.policy.max_episode_requests = None;
+        let mut batch =
+            build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
+        assert!(batch.guard_event.is_none());
+        assert!(
+            batch
+                .result
+                .intent
+                .clauses
+                .iter()
+                .all(|clause| { clause.disposition == RouteIntentClauseDisposition::Skipped })
+        );
+
+        batch.route_event.evidence.digests.insert(
+            "route.health_snapshot".into(),
+            format!("sha256:{}", "f".repeat(64)),
+        );
+        batch.route_event.content_digest = batch.route_event.semantic_digest()?;
+
+        assert!(
+            reduce(&[start, batch.route_event], &input.policy.protected_tiers).is_err(),
+            "a re-signed typed route must remain bound to its factual event prefix"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replay_rejects_resigned_trigger_and_guard_with_same_wrong_health_digest()
+    -> anyhow::Result<()> {
+        let start = guarded_start("request-1", 1)?;
+        let input = guarded_route_input("route-1", "guard-1");
+        let mut batch =
+            build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
+        let wrong_digest = format!("sha256:{}", "f".repeat(64));
+        batch
+            .route_event
+            .evidence
+            .digests
+            .insert("route.health_snapshot".into(), wrong_digest.clone());
+        batch.route_event.content_digest = batch.route_event.semantic_digest()?;
+        let mut guard = batch
+            .guard_event
+            .ok_or_else(|| anyhow::anyhow!("test policy must trigger a guard"))?;
+        guard
+            .evidence
+            .digests
+            .insert("guard.health_snapshot".into(), wrong_digest);
+        guard.content_digest = guard.semantic_digest()?;
+
+        assert!(
+            reduce(
+                &[start, batch.route_event, guard],
+                &input.policy.protected_tiers,
+            )
+            .is_err(),
+            "matching route/guard lies must not substitute for the factual prefix digest"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn live_and_offline_replay_share_exact_guarded_prefix_digest() -> anyhow::Result<()> {
+        let store = store().await?;
+        let input = guarded_route_input("route-1", "guard-1");
+        let committed = store
+            .correlate_and_begin(
+                "owner-a",
+                correlate_input("request-1", "episode-1", "start-1", input.clone()),
+            )
+            .await?
+            .guarded_route
+            .ok_or_else(|| anyhow::anyhow!("missing guarded route result"))?;
+        let events = store.events_for_episode("owner-a", "episode-1").await?;
+        let factual_prefix = reduce(&events[..1], &input.policy.protected_tiers)?;
+        let persisted_digest = events[1]
+            .evidence
+            .digests
+            .get("route.health_snapshot")
+            .ok_or_else(|| anyhow::anyhow!("route lost its health digest"))?;
+
+        assert_eq!(committed.snapshot, factual_prefix);
+        assert_eq!(persisted_digest, &factual_prefix.evidence_digest);
+        assert_eq!(
+            committed.intent.trajectory_snapshot_digest,
+            factual_prefix.evidence_digest
+        );
+        assert_eq!(
+            replay_episode(
+                &store,
+                "owner-a",
+                "episode-1",
+                &input.policy.protected_tiers
+            )
+            .await?,
+            reduce(&events, &input.policy.protected_tiers)?
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn new_episode_rejects_invalid_start_evidence_without_writes() -> anyhow::Result<()> {
         for (key, value) in [
