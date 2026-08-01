@@ -389,6 +389,7 @@ policies:
             db,
             None,
             crate::eval::settlement::PendingEvalDecisionStore::default(),
+            None,
         )
         .await
         .expect("build policy runtime");

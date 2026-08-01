@@ -232,12 +232,36 @@ impl RoutingTable for PresetAwareRoutingTable {
 
 struct CountingModelSelector(Arc<AtomicUsize>);
 
+#[async_trait]
 impl ModelSelector for CountingModelSelector {
-    fn select(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()> {
+    async fn select_variant(
+        &self,
+        policy: &str,
+        _variant: Option<&str>,
+        ctx: &mut PipelineContext,
+    ) -> Result<()> {
         assert_eq!(policy, "coding");
+        tokio::task::yield_now().await;
         self.0.fetch_add(1, Ordering::SeqCst);
         ctx.set_model("economy-model");
         Ok(())
+    }
+}
+
+struct FailingModelSelector;
+
+#[async_trait]
+impl ModelSelector for FailingModelSelector {
+    async fn select_variant(
+        &self,
+        _policy: &str,
+        _variant: Option<&str>,
+        _ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        tokio::task::yield_now().await;
+        Err(BitrouterError::bad_request(
+            "async selector rejected request",
+        ))
     }
 }
 
@@ -562,6 +586,27 @@ async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
             ("preferred-provider".into(), "economy-model".into()),
             ("default-provider".into(), "strong-model".into()),
         ]
+    );
+}
+
+#[tokio::test]
+async fn async_policy_selector_errors_propagate_before_route_execution() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .executor(Arc::new(MockExecutor::always_text("must not execute")))
+        .model_selector(Arc::new(FailingModelSelector));
+    let pipeline = builder.build().unwrap();
+
+    let error = pipeline
+        .execute(request_for_model("@adaptive:preferred"))
+        .await
+        .expect_err("selector error must abort route resolution");
+
+    assert!(
+        error
+            .to_string()
+            .contains("async selector rejected request")
     );
 }
 

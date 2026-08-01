@@ -30,6 +30,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use base64::Engine;
+use rand::Rng;
+
+use crate::trajectory::canonical::CorrelationKey;
 
 /// The fixed config filename inside any home directory.
 const CONFIG_FILENAME: &str = "bitrouter.yaml";
@@ -235,6 +239,7 @@ pub fn ensure_home_directory(home: &Path) -> Result<()> {
 
 /// Filename of the persisted anonymous install identifier inside the home.
 const INSTALL_ID_FILENAME: &str = "installation.id";
+const CORRELATION_KEY_FILENAME: &str = "correlation.key";
 
 /// Read the stable anonymous install id from `<home>/installation.id`,
 /// generating and persisting a fresh UUID v4 on first call. The id is
@@ -245,23 +250,122 @@ const INSTALL_ID_FILENAME: &str = "installation.id";
 /// A malformed/empty existing file is treated as missing and rewritten.
 pub fn get_or_create_install_id(home: &Path) -> Result<String> {
     let path = home.join(INSTALL_ID_FILENAME);
+    let mut rewrite_empty = false;
     if let Ok(contents) = std::fs::read_to_string(&path) {
         let trimmed = contents.trim();
         if !trimmed.is_empty() {
             return Ok(trimmed.to_string());
         }
+        rewrite_empty = true;
     }
     ensure_home_directory(home)?;
     let id = uuid::Uuid::new_v4().to_string();
-    std::fs::write(&path, &id).with_context(|| format!("writing {}", path.display()))?;
-    // Match the house pattern for files inside the home (the home is already
-    // 0700; keep the artefact owner-only for consistency).
+    if rewrite_empty {
+        replace_private_file(&path, id.as_bytes())
+            .with_context(|| format!("rewriting {}", path.display()))?;
+        return Ok(id);
+    }
+    match create_private_file(&path, id.as_bytes()) {
+        Ok(()) => return Ok(id),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            for _ in 0..100 {
+                if let Ok(contents) = std::fs::read_to_string(&path) {
+                    let trimmed = contents.trim();
+                    if !trimmed.is_empty() {
+                        return Ok(trimmed.to_owned());
+                    }
+                }
+                std::thread::yield_now();
+            }
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("writing {}", path.display()));
+        }
+    }
+    anyhow::bail!("installation id was concurrently created but could not be read")
+}
+
+/// Load the installation-private HMAC key used only for trajectory correlation,
+/// atomically creating it on the first process start.
+pub fn get_or_create_correlation_key(home: &Path) -> Result<CorrelationKey> {
+    ensure_home_directory(home)?;
+    let installation_id = get_or_create_install_id(home)?;
+    let path = home.join(CORRELATION_KEY_FILENAME);
+    if let Some(secret) = read_correlation_secret(&path)? {
+        return CorrelationKey::from_bytes(&installation_id, secret);
+    }
+
+    let mut secret = [0_u8; 32];
+    rand::rng().fill_bytes(&mut secret);
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
+    match create_private_file(&path, encoded.as_bytes()) {
+        Ok(()) => CorrelationKey::from_bytes(&installation_id, secret),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            for _ in 0..100 {
+                match read_correlation_secret(&path) {
+                    Ok(Some(secret)) => {
+                        return CorrelationKey::from_bytes(&installation_id, secret);
+                    }
+                    Ok(None) | Err(_) => std::thread::yield_now(),
+                }
+            }
+            let secret = read_correlation_secret(&path)?.ok_or_else(|| {
+                anyhow::anyhow!("correlation key was concurrently created but could not be read")
+            })?;
+            CorrelationKey::from_bytes(&installation_id, secret)
+        }
+        Err(error) => Err(error).with_context(|| format!("writing {}", path.display())),
+    }
+}
+
+fn read_correlation_secret(path: &Path) -> Result<Option<[u8; 32]>> {
+    let encoded = match std::fs::read_to_string(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", path.display()));
+        }
+    };
+    if encoded.trim().is_empty() {
+        return Ok(None);
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded.trim())
+        .with_context(|| format!("decoding {}", path.display()))?;
+    let secret: [u8; 32] = decoded
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("correlation key must contain exactly 32 bytes"))?;
+    Ok(Some(secret))
+}
+
+fn create_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+fn replace_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).truncate(true);
+    let mut file = options.open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    Ok(id)
+    file.write_all(contents)?;
+    file.sync_all()
 }
 
 /// Resolve the bitrouter home the same way the daemon's runtime artefacts do
@@ -327,6 +431,52 @@ mod tests {
         // And it really is on disk.
         let on_disk = std::fs::read_to_string(home.join(INSTALL_ID_FILENAME)).unwrap();
         assert_eq!(on_disk.trim(), first);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn correlation_key_is_stable_private_and_beside_installation_id() {
+        let home = unique_tmp("correlation-key");
+        let first = get_or_create_correlation_key(&home).unwrap();
+        let second = get_or_create_correlation_key(&home).unwrap();
+        assert_eq!(first.key_id(), second.key_id());
+        assert!(home.join(INSTALL_ID_FILENAME).is_file());
+        assert!(home.join(CORRELATION_KEY_FILENAME).is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.join(CORRELATION_KEY_FILENAME))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn concurrent_first_start_creates_one_atomic_correlation_key() {
+        let home = unique_tmp("correlation-key-race");
+        let handles = (0..8)
+            .map(|_| {
+                let home = home.clone();
+                std::thread::spawn(move || {
+                    get_or_create_correlation_key(&home)
+                        .unwrap()
+                        .key_id()
+                        .to_owned()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut key_ids = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        key_ids.dedup();
+        assert_eq!(key_ids.len(), 1);
+        let encoded = std::fs::read_to_string(home.join(CORRELATION_KEY_FILENAME)).unwrap();
+        assert!(!encoded.trim().is_empty());
         let _ = std::fs::remove_dir_all(&home);
     }
 
