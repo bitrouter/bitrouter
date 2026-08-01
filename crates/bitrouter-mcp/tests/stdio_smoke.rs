@@ -15,9 +15,8 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// `_meta` a conformant `2026-07-28` client puts on every request (SEP-2575).
-/// All three keys are mandatory on an inline-lifecycle request; omitting any is
-/// an `invalid_params` rejection, which `stateless_request_missing_required_meta_is_rejected`
-/// pins.
+/// Protocol version and client capabilities are mandatory on an inline-lifecycle
+/// request; client info is optional.
 fn draft_meta() -> serde_json::Value {
     serde_json::json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -171,7 +170,11 @@ async fn server_discover_advertises_versions_and_bitrouter_identity() {
     // Identity must be ours, not the SDK's. `InitializeResult::new` defaults to
     // `Implementation::from_build_env()`, which resolves inside rmcp and would
     // otherwise report this server as "rmcp".
-    assert_eq!(result["serverInfo"]["name"], "bitrouter");
+    assert_eq!(
+        result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "bitrouter"
+    );
+    assert!(result.get("serverInfo").is_none(), "got: {result}");
     assert_eq!(result["capabilities"]["tools"], serde_json::json!({}));
 }
 
@@ -213,6 +216,30 @@ async fn stateless_request_missing_required_meta_is_rejected() {
     let error = &response["error"];
     assert_eq!(error["code"], -32602, "got: {response}");
     let message = error["message"].as_str().unwrap_or_default();
-    assert!(message.contains("clientInfo"), "got: {message}");
-    assert!(message.contains("clientCapabilities"), "got: {message}");
+    assert!(
+        message.contains("io.modelcontextprotocol/clientCapabilities"),
+        "got: {message}"
+    );
+}
+
+/// `clientInfo` is optional for a self-contained `2026-07-28` request; the
+/// protocol version and client capabilities establish the required context.
+#[tokio::test]
+async fn stateless_request_accepts_missing_optional_client_info() {
+    let response = oneshot(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+        "params": { "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+        } },
+    }))
+    .await;
+    assert!(
+        response.get("error").is_none(),
+        "stateless tools/list failed: {response}"
+    );
+    let result = &response["result"];
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 5 * 60 * 1000);
+    assert_eq!(result["cacheScope"], "public");
 }
