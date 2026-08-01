@@ -1,6 +1,6 @@
 # Adaptive `@auto` routing
 
-This starter policy uses GPT-5.6 as the strong route, GLM-5.2 as the balanced
+This starter policy uses GPT-5.6 as the strong route, Kimi K3 as the balanced
 route, and DeepSeek V4 Pro as the economy route. It is agent- and
 workflow-independent: ordinary `edit`, `test`, and `tool_followup` projections
 use economy; read-only `review` and long-context execution projections use
@@ -30,8 +30,9 @@ locks remain routable through an exact compatibility fallback; new default
 decisions and learning evidence use v2.
 
 The eight starter routes are compiler-owned experiments informed by settled
-trace analysis and model protocol canaries. Cross-agent quality has not been
-validated; evaluate the policy against your own traffic before broad rollout.
+trace analysis, model protocol canaries, and synthetic long-context action
+qualification. Cross-agent quality has not been validated; evaluate the policy
+against your own traffic before broad rollout.
 Admitted evidence can promote or demote compiler-owned routes. Routes explicitly
 authored as operator-owned remain pinned: conflicting evidence is reported
 rather than overriding the operator's route.

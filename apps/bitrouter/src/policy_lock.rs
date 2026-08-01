@@ -2194,7 +2194,7 @@ policies:
         assert!(!lock_raw.contains("explore_enabled:"));
         let policy = &lock.policies["auto"];
         assert_eq!(policy.key_strategy, PolicyKeyStrategy::AgentTrace);
-        assert_eq!(policy.tiers["balanced"], "bitrouter:z-ai/glm-5.2");
+        assert_eq!(policy.tiers["balanced"], "bitrouter:moonshotai/kimi-k3");
         assert_eq!(policy.routes["agent_trace/v2|edit|normal"], "economy");
         assert_eq!(policy.routes["agent_trace/v2|test|normal"], "economy");
         assert_eq!(

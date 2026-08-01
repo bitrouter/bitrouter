@@ -10,7 +10,7 @@ policies:
   auto:
     key_strategy: agent_trace
     tiers:
-      balanced: "bitrouter:z-ai/glm-5.2"
+      balanced: "bitrouter:moonshotai/kimi-k3"
       economy: "bitrouter:deepseek/deepseek-v4-pro"
       strong: "openai-codex:gpt-5.6-sol"
     routes:
