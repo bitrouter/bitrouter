@@ -41,10 +41,27 @@ struct SnapshotFacts<'a> {
     active_hold_remaining: u64,
 }
 
+pub(crate) enum PrefixReduction {
+    Complete(Box<TrajectorySnapshot>),
+    AwaitingGuardActivation,
+}
+
 pub fn reduce(
     events: &[TrajectoryEvent],
     protected_tiers: &BTreeSet<String>,
 ) -> Result<TrajectorySnapshot> {
+    match reduce_prefix(events, protected_tiers)? {
+        PrefixReduction::Complete(snapshot) => Ok(*snapshot),
+        PrefixReduction::AwaitingGuardActivation => {
+            anyhow::bail!("guarded route trigger is missing its guard activation")
+        }
+    }
+}
+
+pub(crate) fn reduce_prefix(
+    events: &[TrajectoryEvent],
+    protected_tiers: &BTreeSet<String>,
+) -> Result<PrefixReduction> {
     let first = events
         .first()
         .ok_or_else(|| anyhow::anyhow!("trajectory reduction requires at least one event"))?;
@@ -385,36 +402,38 @@ pub fn reduce(
     }
 
     if pending_guard_activation.is_some() {
-        anyhow::bail!("guarded route trigger is missing its guard activation")
+        return Ok(PrefixReduction::AwaitingGuardActivation);
     }
 
     let through_sequence = events
         .last()
         .map(|event| event.sequence)
         .ok_or_else(|| anyhow::anyhow!("trajectory reduction lost its final event"))?;
-    snapshot_from_facts(SnapshotFacts {
-        episode_id,
-        through_sequence,
-        completeness,
-        has_started_request: requests
-            .values()
-            .any(|phase| matches!(phase, RequestPhase::Started)),
-        request_count,
-        settled_request_count,
-        first_timestamp: &first_timestamp,
-        last_timestamp: &last_timestamp,
-        latest_projection: previous_projection.as_deref(),
-        same_projection_streak,
-        same_selected_tier_streak,
-        consecutive_unprotected_requests,
-        recovery_count,
-        requests_since_recovery,
-        first_canonical_bytes,
-        latest_canonical_bytes,
-        total_tokens,
-        settled_cost_micro_usd,
-        active_hold_remaining,
-    })
+    Ok(PrefixReduction::Complete(Box::new(snapshot_from_facts(
+        SnapshotFacts {
+            episode_id,
+            through_sequence,
+            completeness,
+            has_started_request: requests
+                .values()
+                .any(|phase| matches!(phase, RequestPhase::Started)),
+            request_count,
+            settled_request_count,
+            first_timestamp: &first_timestamp,
+            last_timestamp: &last_timestamp,
+            latest_projection: previous_projection.as_deref(),
+            same_projection_streak,
+            same_selected_tier_streak,
+            consecutive_unprotected_requests,
+            recovery_count,
+            requests_since_recovery,
+            first_canonical_bytes,
+            latest_canonical_bytes,
+            total_tokens,
+            settled_cost_micro_usd,
+            active_hold_remaining,
+        },
+    )?)))
 }
 
 fn snapshot_from_facts(facts: SnapshotFacts<'_>) -> Result<TrajectorySnapshot> {

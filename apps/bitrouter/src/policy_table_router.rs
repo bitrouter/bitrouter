@@ -686,6 +686,7 @@ fn is_bitrouter_namespaced(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trajectory::canonical::CorrelationKey;
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
     use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
@@ -693,6 +694,24 @@ mod tests {
     use bitrouter_sdk::config::PolicyKeyStrategy;
     use bitrouter_sdk::language_model::types::{GenerationParams, Message, ProviderMetadata, Tool};
     use http::HeaderValue;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     /// A policy table with a cheap and a flagship tier: `opening` and tool-heavy
     /// steps stay flagship, a read step goes cheap, and only flagship is
@@ -863,6 +882,49 @@ mod tests {
             route("inbound", vec![user("fix the bug")], vec![]),
             "vendor/flagship"
         );
+    }
+
+    #[test]
+    fn guarded_decision_log_uses_only_opaque_trajectory_request_identity() -> anyhow::Result<()> {
+        let raw_request_id = "SECRET-task-labeled-request-header-SENTINEL";
+        let opaque_request_id =
+            CorrelationKey::from_bytes([35; 32])?.request_identity("owner-a", raw_request_id)?;
+        let router = router();
+        let mut request_prompt = prompt("inbound");
+        request_prompt.messages = vec![user("generic request")];
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bitrouter-request-id",
+            HeaderValue::from_str(raw_request_id)?,
+        );
+        let decision = router.candidate_for_guarded_policy(&request_prompt, &headers);
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let sink = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || CapturedLogWriter(sink.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            router.record_bound_policy_decision(
+                &opaque_request_id,
+                "inbound".into(),
+                decision,
+                &headers,
+            );
+        });
+        let rendered = String::from_utf8(
+            captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )?;
+        assert!(rendered.contains(&opaque_request_id));
+        assert!(!rendered.contains(raw_request_id));
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("task-labeled"));
+        Ok(())
     }
 
     #[test]

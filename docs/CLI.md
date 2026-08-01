@@ -396,17 +396,32 @@ quality score and do not infer task identity or capability from private data.
 bitrouter trajectory inspect EPISODE_ID
 bitrouter trajectory replay EPISODE_ID
 bitrouter trajectory prune --before RFC3339 [--dry-run]
+
+bitrouter trajectory --config PATH inspect EPISODE_ID
+bitrouter trajectory --config PATH replay EPISODE_ID
+bitrouter trajectory --config PATH prune --before RFC3339 [--dry-run]
 ```
 
-These commands use the standard config resolution chain and its local database;
-they do not accept an owner argument. `inspect` first resolves the globally
-unique episode, then performs every read inside its owner scope. It reports
-correlation source, history completeness, current structural health, typed
-route clauses, and event digests. `replay` validates a stable episode snapshot
-and compares the newest persisted route checkpoint digest with a fresh replay.
-Corrupt histories expose only the first event id/sequence and a stable reason
-code; concurrent appends are retried and are never reported as corruption.
-Use global `--json` or `--human` for either view.
+`--config PATH` is optional and may appear before or after the trajectory leaf
+command. When omitted, these commands use the standard config resolution chain.
+They always open that selected source's local database and do not accept an
+owner argument. A relative SQLite URL is anchored to the selected config home:
+the config file's directory, or the implicit BitRouter home (normally
+`~/.bitrouter`) for zero-config. It never depends on or changes the caller's
+working directory; absolute/memory SQLite and server database URLs retain their
+existing meaning.
+
+`inspect` first resolves the globally unique episode, then performs every read
+inside its owner scope. It reports correlation source, history completeness,
+current structural health, typed route clauses, and event digests. Persisted
+trajectory request IDs and Responses native-parent IDs are installation-keyed,
+owner-bound opaque identities; external request IDs on the wire, upstream, and
+in metering retain their existing semantics. `replay` validates a stable
+episode snapshot and compares the newest persisted route checkpoint digest with
+a fresh replay. Corrupt histories expose only the first intrinsically invalid
+event id/sequence and a stable reason code; a pending route awaiting its guard
+is not itself corruption. Concurrent appends are retried and are never reported
+as corruption. Use global `--json` or `--human` for either view.
 
 `prune --dry-run` returns exact eligible counts without mutation. A real prune
 removes delivered outbox rows older than the exclusive cutoff, then terminal

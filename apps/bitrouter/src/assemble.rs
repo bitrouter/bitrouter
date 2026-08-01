@@ -529,11 +529,13 @@ pub async fn build_app_with_path(
             Some(home) => home.to_path_buf(),
             None => std::env::current_dir().context("resolve trajectory key home")?,
         };
+        let correlation_key = crate::paths::get_or_create_correlation_key(&home)?;
         let runtime = Arc::new(TrajectoryRuntime::new(
             trajectory_store.clone(),
-            Canonicalizer::new(crate::paths::get_or_create_correlation_key(&home)?),
+            Canonicalizer::new(correlation_key.clone()),
         ));
-        let settlement = TrajectorySettlementRecorder::new(trajectory_store, publisher.clone());
+        let settlement =
+            TrajectorySettlementRecorder::new(trajectory_store, publisher.clone(), correlation_key);
         Some((runtime, settlement, publisher))
     } else {
         None
@@ -2024,7 +2026,10 @@ mod trajectory_assembly_tests {
             .events_for_episode("local", &correlated.episode_id)
             .await?;
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].request_id.as_deref(), Some("request-first"));
+        assert_eq!(
+            events[0].request_id.as_deref(),
+            Some(correlated.request_id.as_str())
+        );
         assert_eq!(
             events[1]
                 .evidence
@@ -2083,7 +2088,7 @@ mod trajectory_assembly_tests {
             event_id: "route-retention".into(),
             owner_user_id: "owner-retention".into(),
             episode_id: root.episode_id.clone(),
-            request_id: Some("request-retention".into()),
+            request_id: Some(root.request_id.clone()),
             sequence: 2,
             kind: TrajectoryEventKind::RouteIntentRecorded,
             evidence: TrajectoryEvidence {
@@ -2111,7 +2116,7 @@ mod trajectory_assembly_tests {
             event_id: "settle-retention".into(),
             owner_user_id: "owner-retention".into(),
             episode_id: root.episode_id.clone(),
-            request_id: Some("request-retention".into()),
+            request_id: Some(root.request_id.clone()),
             sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {

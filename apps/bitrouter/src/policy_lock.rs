@@ -2032,9 +2032,16 @@ impl ModelSelector for PolicyRuntime {
             let request_key = decision.request_key.clone();
             let baseline_tier = router.eval_baseline_tier(&decision);
             let owner = ctx.caller().user_id();
+            let trajectory_request_id = trajectory
+                .request_identity(owner, ctx.request_id())
+                .map_err(|error| {
+                    bitrouter_sdk::BitrouterError::internal(format!(
+                        "trajectory request identity failed: {error}"
+                    ))
+                })?;
             let guarded_input = GuardedRouteInput {
-                route_event_id: stable_id("route-intent", owner, ctx.request_id()),
-                guard_event_id: stable_id("guard-activation", owner, ctx.request_id()),
+                route_event_id: stable_id("route-intent", owner, &trajectory_request_id),
+                guard_event_id: stable_id("guard-activation", owner, &trajectory_request_id),
                 policy_name: policy_name.to_owned(),
                 request_key,
                 baseline_tier,
@@ -2070,7 +2077,6 @@ impl ModelSelector for PolicyRuntime {
                         ))
                     }
                 })?;
-            ctx.insert_extension(Arc::new(correlated));
             let guard_applied = guarded.intent.clauses.iter().any(|clause| {
                 clause.clause_id.starts_with("progress_guard.")
                     && clause.disposition == RouteIntentClauseDisposition::Applied
@@ -2094,7 +2100,7 @@ impl ModelSelector for PolicyRuntime {
                 .map(|clause| clause.clause_id.clone())
                 .collect();
             let selected = router.record_bound_policy_decision(
-                ctx.request_id(),
+                &correlated.request_id,
                 input_model,
                 decision,
                 ctx.headers(),
@@ -2102,6 +2108,7 @@ impl ModelSelector for PolicyRuntime {
             if let Some(model) = selected {
                 ctx.set_model(model);
             }
+            ctx.insert_extension(Arc::new(correlated));
             return Ok(());
         }
         let input_model = ctx.model().to_string();
@@ -2873,6 +2880,11 @@ presets:
         assert!(guarded_record.trajectory_health_digest.is_some());
         assert_eq!(guarded_record.candidate_tier.as_deref(), Some("strong"));
         assert_eq!(guarded_record.progress_clause_ids.len(), 9);
+        assert_eq!(
+            guarded_record.request_id.as_deref(),
+            Some(baseline_correlation.request_id.as_str())
+        );
+        assert!(!baseline_correlation.request_id.contains("request-stable"));
 
         let metadata_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&metadata_db).await?;
@@ -2913,7 +2925,7 @@ presets:
         assert_eq!(baseline_correlation.evidence, metadata_correlation.evidence);
         assert!(
             TrajectoryStore::new(metadata_db)
-                .request("owner-a", "request-stable")
+                .request("owner-a", &metadata_correlation.request_id)
                 .await?
                 .is_some()
         );

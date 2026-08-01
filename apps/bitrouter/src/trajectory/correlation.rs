@@ -36,6 +36,7 @@ pub struct CorrelationEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorrelatedRequest {
+    pub request_id: String,
     pub episode_id: String,
     pub source: CorrelationSource,
     pub completeness: HistoryCompleteness,
@@ -62,6 +63,15 @@ impl TrajectoryRuntime {
 
     pub fn store(&self) -> &TrajectoryStore {
         &self.store
+    }
+
+    pub(crate) fn request_identity(
+        &self,
+        owner_user_id: &str,
+        external_request_id: &str,
+    ) -> Result<String> {
+        self.canonicalizer
+            .request_identity(owner_user_id, external_request_id)
     }
 
     pub async fn begin_request(
@@ -119,10 +129,15 @@ impl TrajectoryRuntime {
         guarded_route: Option<GuardedRouteInput>,
     ) -> Result<(CorrelatedRequest, Option<GuardedRouteResult>)> {
         let canonical = self.canonicalizer.canonicalize(prompt)?;
-        let native_parent_id = native_parent_id(&inbound_protocol, prompt)?;
-        let native_parent_digest = native_parent_id
+        let request_id = self.request_identity(owner_user_id, request_id)?;
+        let external_native_parent_id = native_parent_id(&inbound_protocol, prompt)?;
+        let native_parent_digest = external_native_parent_id
             .as_deref()
             .map(|parent| self.canonicalizer.native_parent_digest(parent))
+            .transpose()?;
+        let native_parent_id = external_native_parent_id
+            .as_deref()
+            .map(|parent| self.request_identity(owner_user_id, parent))
             .transpose()?;
         let evidence = correlation_evidence(native_parent_id, &canonical);
         let result = self
@@ -130,9 +145,9 @@ impl TrajectoryRuntime {
             .correlate_and_begin(
                 owner_user_id,
                 CorrelateAndBegin {
-                    request_id: request_id.to_owned(),
-                    new_episode_id: stable_id("episode", owner_user_id, request_id),
-                    event_id: stable_id("request-start", owner_user_id, request_id),
+                    request_id: request_id.clone(),
+                    new_episode_id: stable_id("episode", owner_user_id, &request_id),
+                    event_id: stable_id("request-start", owner_user_id, &request_id),
                     correlation_key_id: self.canonicalizer.key_id().to_owned(),
                     native_parent_id: evidence.native_parent_id.clone(),
                     native_parent_digest,
@@ -148,6 +163,7 @@ impl TrajectoryRuntime {
             .await?;
         Ok((
             CorrelatedRequest {
+                request_id,
                 episode_id: result.episode_id,
                 source: result.source,
                 completeness: result.completeness,
@@ -342,7 +358,7 @@ mod tests {
         assert_eq!(linked.prior_events.len(), 1);
         assert_eq!(
             linked.evidence.native_parent_id.as_deref(),
-            Some("request-native")
+            Some(native_root.request_id.as_str())
         );
         Ok(())
     }
@@ -379,7 +395,7 @@ mod tests {
         assert!(rejected.prior_events.is_empty());
         let stored = runtime
             .store()
-            .request("owner-b", "request-local")
+            .request("owner-b", &rejected.request_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing local request"))?;
         assert_eq!(stored.native_parent_id, None);
@@ -445,7 +461,7 @@ mod tests {
         assert!(
             runtime
                 .store()
-                .request("owner-c", "request-unknown-parent")
+                .request("owner-c", &unknown.request_id)
                 .await?
                 .is_some_and(|request| request.native_parent_id.is_none())
         );
@@ -481,17 +497,17 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(child.source, CorrelationSource::NativeParentId);
+        assert_eq!(child.source, CorrelationSource::Unresolved);
         assert_eq!(child.completeness, HistoryCompleteness::Incomplete);
         assert_ne!(child.episode_id, root.episode_id);
         assert!(child.prior_events.is_empty());
         assert_eq!(
             runtime_b
                 .store()
-                .request("owner-a", "request-key-b")
+                .request("owner-a", &child.request_id)
                 .await?
                 .and_then(|request| request.native_parent_id),
-            Some("request-key-a".into())
+            None
         );
         let event = runtime_b
             .store()
@@ -503,7 +519,7 @@ mod tests {
                 .evidence
                 .structural
                 .get("correlation.key_epoch_conflict"),
-            Some(&1)
+            Some(&0)
         );
         let native_digest = event
             .evidence
@@ -849,7 +865,7 @@ mod tests {
                 "owner-a",
                 route_intent_event(
                     &first.episode_id,
-                    "request-settled-retry",
+                    &first.request_id,
                     2,
                     "2026-08-01T00:00:30Z",
                 )?,
@@ -860,7 +876,7 @@ mod tests {
             event_id: "event-settled-retry".into(),
             owner_user_id: "owner-a".into(),
             episode_id: first.episode_id.clone(),
-            request_id: Some("request-settled-retry".into()),
+            request_id: Some(first.request_id.clone()),
             sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {
@@ -957,6 +973,7 @@ mod tests {
                 "2026-08-01T00:00:08Z",
             ),
         ] {
+            let trajectory_request_id = runtime.request_identity("owner-a", request_id)?;
             if request_id == "request-r2" {
                 runtime
                     .begin_request(
@@ -972,7 +989,12 @@ mod tests {
                 .store()
                 .append_route_intent(
                     "owner-a",
-                    route_intent_event(&root.episode_id, request_id, route_sequence, route_at)?,
+                    route_intent_event(
+                        &root.episode_id,
+                        &trajectory_request_id,
+                        route_sequence,
+                        route_at,
+                    )?,
                 )
                 .await?;
             let mut event = TrajectoryEvent {
@@ -980,7 +1002,7 @@ mod tests {
                 event_id: event_id.into(),
                 owner_user_id: "owner-a".into(),
                 episode_id: root.episode_id.clone(),
-                request_id: Some(request_id.into()),
+                request_id: Some(trajectory_request_id),
                 sequence: settle_sequence,
                 kind: TrajectoryEventKind::RequestSettled,
                 evidence: TrajectoryEvidence {
@@ -1028,7 +1050,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing episode"))?;
         assert_eq!(
             row.try_get::<String>("", "latest_request_id")?,
-            "request-r3"
+            runtime.request_identity("owner-a", "request-r3")?
         );
         Ok(())
     }
@@ -1373,7 +1395,7 @@ mod tests {
                 "owner-a",
                 route_intent_event(
                     &root.episode_id,
-                    "request-pruned-parent",
+                    &root.request_id,
                     2,
                     "2026-06-01T00:00:01Z",
                 )?,
@@ -1384,7 +1406,7 @@ mod tests {
             event_id: "event-pruned-parent-settled".into(),
             owner_user_id: "owner-a".into(),
             episode_id: root.episode_id.clone(),
-            request_id: Some("request-pruned-parent".into()),
+            request_id: Some(root.request_id.clone()),
             sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {
@@ -1442,7 +1464,7 @@ mod tests {
         assert_eq!(
             runtime
                 .store()
-                .request("owner-a", "request-late-continuation")
+                .request("owner-a", &late.request_id)
                 .await?
                 .and_then(|request| request.native_parent_id),
             None
