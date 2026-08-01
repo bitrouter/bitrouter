@@ -135,6 +135,7 @@ chrono = { version = "0.4", default-features = false, features = [
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
 tempfile = "3"
+atomicwrites = "0.4.4"
 
 # cli / tui
 clap = { version = "4", features = ["derive"] }

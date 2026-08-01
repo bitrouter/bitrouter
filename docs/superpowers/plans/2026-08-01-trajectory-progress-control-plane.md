@@ -168,6 +168,7 @@ pub trait ModelSelector: Send + Sync {
 - [x] **Step 7: Run focused SDK pipeline, policy-runtime, online-state, and correlation tests until GREEN.**
 - [x] **Step 8: Commit `refactor(policy): make selection trajectory-aware`.**
 - [x] **Review fix round 1/5:** replace representation-level metadata stripping with typed canonicalization, harden installation identity/key publication, make exact retries immutable and correlation appends CAS-safe, validate episode heads before mutation, treat ambiguous prefixes as unresolved, and map only malformed native-parent evidence to HTTP 400.
+- [x] **Review fix round 2/5:** preserve semantic message boundaries while normalizing homogeneous tool artifacts, fail closed on corrupt key material with secret-derived key identity, persist keyed native-parent evidence for exact retries, reload deterministic concurrent start winners, keep `latest_request_id` tied to `RequestStarted`, and classify retryable database errors by typed codes with bounded backoff.
 
 ## Task 3: Reduce deterministic trajectory health and replay it
 

@@ -4,12 +4,14 @@ use bitrouter_sdk::language_model::{
 };
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::collections::BTreeMap;
 
 use super::types::KeyedDigest;
 
 const CANONICAL_PROMPT_VERSION: u32 = 1;
+const CORRELATION_KEY_ID_DOMAIN: &[u8] = b"bitrouter.trajectory.correlation.key-id.v1";
+const NATIVE_PARENT_DIGEST_DOMAIN: &[u8] = b"bitrouter.trajectory.correlation.native-parent.v1";
 
 #[derive(Clone)]
 pub struct CorrelationKey {
@@ -18,17 +20,13 @@ pub struct CorrelationKey {
 }
 
 impl CorrelationKey {
-    pub fn from_bytes(installation_id: &str, secret: [u8; 32]) -> Result<Self> {
-        if installation_id.trim().is_empty() {
-            anyhow::bail!("correlation key requires an installation id")
-        }
-        let mut key_fingerprint = Sha256::new();
-        key_fingerprint.update(installation_id.as_bytes());
-        key_fingerprint.update([0]);
-        key_fingerprint.update(secret);
-        let id_digest = key_fingerprint.finalize();
+    pub fn from_bytes(secret: [u8; 32]) -> Result<Self> {
+        let mut key_fingerprint = Hmac::<Sha256>::new_from_slice(&secret)
+            .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
+        key_fingerprint.update(CORRELATION_KEY_ID_DOMAIN);
+        let id_digest = key_fingerprint.finalize().into_bytes();
         Ok(Self {
-            key_id: format!("install-{}", hex::encode(&id_digest[..8])),
+            key_id: format!("key-{}", hex::encode(&id_digest[..8])),
             secret,
         })
     }
@@ -60,6 +58,12 @@ struct CanonicalPrefix<'a> {
 struct CanonicalTurn {
     role: Role,
     content: Vec<CanonicalContent>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProtocolArtifactKind {
+    ToolCall,
+    ToolResult,
 }
 
 #[derive(Serialize)]
@@ -156,6 +160,16 @@ impl Canonicalizer {
         self.key.key_id()
     }
 
+    pub(crate) fn native_parent_digest(&self, native_parent_id: &str) -> Result<String> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key.secret)
+            .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
+        mac.update(NATIVE_PARENT_DIGEST_DOMAIN);
+        mac.update(&[0]);
+        mac.update(native_parent_id.as_bytes());
+        let digest = mac.finalize().into_bytes();
+        Ok(format!("sha256:{}", hex::encode(digest)))
+    }
+
     pub fn canonicalize(&self, prompt: &Prompt) -> Result<CanonicalPromptDigests> {
         let turns = canonical_turns(prompt)?;
 
@@ -205,6 +219,7 @@ impl Canonicalizer {
 fn canonical_turns(prompt: &Prompt) -> Result<Vec<CanonicalTurn>> {
     let mut turns: Vec<CanonicalTurn> = Vec::new();
     for message in &prompt.messages {
+        let mut message_turns: Vec<CanonicalTurn> = Vec::new();
         let has_nonempty_sibling = message.content.len() > 1;
         for content in &message.content {
             if has_nonempty_sibling
@@ -214,19 +229,51 @@ fn canonical_turns(prompt: &Prompt) -> Result<Vec<CanonicalTurn>> {
             }
             let role = canonical_role(message.role, content);
             let content = canonical_content(content)?;
-            if let Some(turn) = turns.last_mut()
+            if let Some(turn) = message_turns.last_mut()
                 && turn.role == role
             {
                 turn.content.push(content);
             } else {
-                turns.push(CanonicalTurn {
+                message_turns.push(CanonicalTurn {
                     role,
                     content: vec![content],
                 });
             }
         }
+        for turn in message_turns {
+            let merge_artifact = turns.last().and_then(protocol_artifact_kind)
+                == protocol_artifact_kind(&turn)
+                && protocol_artifact_kind(&turn).is_some();
+            if merge_artifact {
+                turns
+                    .last_mut()
+                    .expect("artifact merge requires a preceding turn")
+                    .content
+                    .extend(turn.content);
+            } else {
+                turns.push(turn);
+            }
+        }
     }
     Ok(turns)
+}
+
+fn protocol_artifact_kind(turn: &CanonicalTurn) -> Option<ProtocolArtifactKind> {
+    if turn
+        .content
+        .iter()
+        .all(|content| matches!(content, CanonicalContent::ToolCall { .. }))
+    {
+        Some(ProtocolArtifactKind::ToolCall)
+    } else if turn
+        .content
+        .iter()
+        .all(|content| matches!(content, CanonicalContent::ToolResult { .. }))
+    {
+        Some(ProtocolArtifactKind::ToolResult)
+    } else {
+        None
+    }
 }
 
 fn canonical_role(message_role: Role, content: &Content) -> Role {
@@ -485,9 +532,62 @@ mod tests {
         Ok([chat, messages, responses])
     }
 
+    fn equivalent_multi_tool_histories() -> anyhow::Result<[Prompt; 3]> {
+        let chat = parse(
+            ApiProtocol::ChatCompletions,
+            serde_json::json!({
+                "model": "chat-model",
+                "messages": [
+                    {"role": "user", "content": "Weather?"},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"Paris\"}"}},
+                        {"id": "call-2", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"London\"}"}}
+                    ]},
+                    {"role": "tool", "tool_call_id": "call-1", "content": "{\"temp\":21}"},
+                    {"role": "tool", "tool_call_id": "call-2", "content": "{\"temp\":17}"},
+                    {"role": "user", "content": "Compare."}
+                ]
+            }),
+        )?;
+        let messages = parse(
+            ApiProtocol::Messages,
+            serde_json::json!({
+                "model": "messages-model",
+                "max_tokens": 128,
+                "messages": [
+                    {"role": "user", "content": "Weather?"},
+                    {"role": "assistant", "content": [
+                        {"type": "tool_use", "id": "call-1", "name": "weather", "input": {"city": "Paris"}},
+                        {"type": "tool_use", "id": "call-2", "name": "weather", "input": {"city": "London"}}
+                    ]},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "call-1", "content": {"temp": 21}},
+                        {"type": "tool_result", "tool_use_id": "call-2", "content": {"temp": 17}}
+                    ]},
+                    {"role": "user", "content": "Compare."}
+                ]
+            }),
+        )?;
+        let responses = parse(
+            ApiProtocol::Responses,
+            serde_json::json!({
+                "model": "responses-model",
+                "input": [
+                    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Weather?"}]},
+                    {"type": "function_call", "call_id": "call-1", "name": "weather", "arguments": "{\"city\":\"Paris\"}"},
+                    {"type": "function_call", "call_id": "call-2", "name": "weather", "arguments": "{\"city\":\"London\"}"},
+                    {"type": "function_call_output", "call_id": "call-1", "output": "{\"temp\":21}"},
+                    {"type": "function_call_output", "call_id": "call-2", "output": "{\"temp\":17}"},
+                    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Compare."}]}
+                ]
+            }),
+        )?;
+        Ok([chat, messages, responses])
+    }
+
     #[test]
     fn equivalent_protocol_histories_have_identical_ordered_prefix_digests() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [7; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([7; 32])?);
         let [chat, messages, responses] = equivalent_prompts()?;
 
         let chat = canonicalizer.canonicalize(&chat)?;
@@ -511,7 +611,7 @@ mod tests {
     #[test]
     fn provider_and_workflow_metadata_do_not_change_digests_but_ancestry_does() -> anyhow::Result<()>
     {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [9; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([9; 32])?);
         let [baseline, _, _] = equivalent_prompts()?;
         let mut metadata_changed = baseline.clone();
         metadata_changed.model = "another-provider:model".into();
@@ -552,11 +652,11 @@ mod tests {
     }
 
     #[test]
-    fn keyed_digests_are_installation_scoped_and_stable_for_one_key() -> anyhow::Result<()> {
+    fn keyed_digests_are_secret_scoped_and_stable_for_one_key() -> anyhow::Result<()> {
         let [prompt, _, _] = equivalent_prompts()?;
-        let first = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [11; 32])?);
-        let restarted = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [11; 32])?);
-        let other = Canonicalizer::new(CorrelationKey::from_bytes("install-b", [12; 32])?);
+        let first = Canonicalizer::new(CorrelationKey::from_bytes([11; 32])?);
+        let restarted = Canonicalizer::new(CorrelationKey::from_bytes([11; 32])?);
+        let other = Canonicalizer::new(CorrelationKey::from_bytes([12; 32])?);
 
         assert_eq!(
             first.canonicalize(&prompt)?,
@@ -571,7 +671,7 @@ mod tests {
 
     #[test]
     fn equivalent_cross_protocol_tool_histories_share_digests() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [13; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([13; 32])?);
         let [chat, messages, responses] = equivalent_tool_histories()?;
 
         let chat = canonicalizer.canonicalize(&chat)?;
@@ -581,8 +681,91 @@ mod tests {
     }
 
     #[test]
+    fn semantic_message_boundaries_affect_digests_and_prefixes() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([14; 32])?);
+        let one_multi_block = parse(
+            ApiProtocol::Messages,
+            serde_json::json!({
+                "model": "messages-model",
+                "max_tokens": 128,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "A"},
+                    {"type": "text", "text": "B"}
+                ]}]
+            }),
+        )?;
+        let two_messages = parse(
+            ApiProtocol::Messages,
+            serde_json::json!({
+                "model": "messages-model",
+                "max_tokens": 128,
+                "messages": [
+                    {"role": "user", "content": "A"},
+                    {"role": "user", "content": "B"}
+                ]
+            }),
+        )?;
+
+        let one = canonicalizer.canonicalize(&one_multi_block)?;
+        let two = canonicalizer.canonicalize(&two_messages)?;
+        assert_ne!(one.full_input_digest, two.full_input_digest);
+        assert_eq!(two.ancestor_prefix_digests.len(), 1);
+        assert_eq!(
+            two.ancestor_prefix_digests[0],
+            canonicalizer
+                .canonicalize(&parse(
+                    ApiProtocol::Messages,
+                    serde_json::json!({
+                        "model": "messages-model",
+                        "max_tokens": 128,
+                        "messages": [{"role": "user", "content": "A"}]
+                    }),
+                )?)?
+                .full_input_digest
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn adjacent_same_role_semantic_messages_remain_distinct() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([16; 32])?);
+        for role in ["user", "assistant"] {
+            let prompt = parse(
+                ApiProtocol::ChatCompletions,
+                serde_json::json!({
+                    "model": "chat-model",
+                    "messages": [
+                        {"role": role, "content": "first"},
+                        {"role": role, "content": "second"}
+                    ]
+                }),
+            )?;
+            assert_eq!(
+                canonicalizer
+                    .canonicalize(&prompt)?
+                    .ancestor_prefix_digests
+                    .len(),
+                1,
+                "{role} messages were flattened"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn equivalent_multi_tool_histories_merge_only_protocol_artifact_fragments() -> anyhow::Result<()>
+    {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([18; 32])?);
+        let [chat, messages, responses] = equivalent_multi_tool_histories()?;
+        let chat = canonicalizer.canonicalize(&chat)?;
+        assert_eq!(chat, canonicalizer.canonicalize(&messages)?);
+        assert_eq!(chat, canonicalizer.canonicalize(&responses)?);
+        Ok(())
+    }
+
+    #[test]
     fn parseable_tool_json_ignores_key_order_and_whitespace() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [15; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([15; 32])?);
         let [mut baseline, _, _] = equivalent_tool_histories()?;
         let mut reordered = baseline.clone();
         for content in &mut reordered.messages[1].content {
@@ -611,7 +794,7 @@ mod tests {
 
     #[test]
     fn user_and_tool_json_provider_metadata_keys_are_semantic() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [17; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([17; 32])?);
         let [mut baseline, _, _] = equivalent_tool_histories()?;
         if let Content::ToolResult { output, .. } = &mut baseline.messages[2].content[0] {
             *output = ToolResultOutput::Json {

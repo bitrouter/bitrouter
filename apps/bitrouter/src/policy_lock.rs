@@ -2268,7 +2268,7 @@ presets:
         fn trajectory(db: sea_orm::DatabaseConnection) -> anyhow::Result<Arc<TrajectoryRuntime>> {
             Ok(Arc::new(TrajectoryRuntime::new(
                 TrajectoryStore::new(db),
-                Canonicalizer::new(CorrelationKey::from_bytes("install-test", [31; 32])?),
+                Canonicalizer::new(CorrelationKey::from_bytes([31; 32])?),
             )))
         }
 
