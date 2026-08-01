@@ -1,0 +1,676 @@
+//! Durable trajectory settlement bridge.
+
+use std::collections::BTreeMap;
+
+use anyhow::{Context, Result};
+use bitrouter_sdk::language_model::SettlementContext;
+use chrono::{DateTime, SecondsFormat, TimeDelta};
+
+use crate::metering::MeteringSettlementEvent;
+
+use super::{
+    evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation},
+    publisher::TrajectoryOutboxPublisher,
+    store::TrajectoryStore,
+    types::{
+        OutboxPayload, OutboxWrite, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION,
+        TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, canonical_digest,
+    },
+};
+
+#[derive(Clone)]
+pub(crate) struct TrajectorySettlementRecorder {
+    store: TrajectoryStore,
+    publisher: TrajectoryOutboxPublisher,
+}
+
+impl TrajectorySettlementRecorder {
+    pub(crate) fn new(store: TrajectoryStore, publisher: TrajectoryOutboxPublisher) -> Self {
+        Self { store, publisher }
+    }
+
+    /// Returns `true` when the request belongs to the durable trajectory ledger.
+    /// A tracked request without the authoritative metering event is deliberately
+    /// left unsettled; absence is never converted into zero-valued evidence.
+    pub(crate) async fn record_if_tracked(&self, context: &SettlementContext) -> Result<bool> {
+        let owner_user_id = context.caller.user_id();
+        if self
+            .store
+            .request(owner_user_id, &context.request_id)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let Some(metering) = context.get_event::<MeteringSettlementEvent>().cloned() else {
+            return Ok(true);
+        };
+        if metering.request_id != context.request_id {
+            anyhow::bail!("metering settlement identity does not match trajectory request")
+        }
+        let owner = owner_user_id.to_owned();
+        let request_id = context.request_id.clone();
+        self.store
+            .settle_request_from_current_head(&owner, &request_id, |request, events, sequence| {
+                build_settlement(&owner, request, events, sequence, &metering)
+            })
+            .await?;
+        self.publisher.kick();
+        Ok(true)
+    }
+}
+
+fn build_settlement(
+    owner_user_id: &str,
+    request: &super::types::StoredRequest,
+    events: &[TrajectoryEvent],
+    sequence: u64,
+    metering: &MeteringSettlementEvent,
+) -> Result<Settlement> {
+    let captured_at = settlement_timestamp(request, events, metering.duration_ms)?;
+    let mut structural =
+        BTreeMap::from([("settlement.duration_ms".to_owned(), metering.duration_ms)]);
+    for (key, value) in [
+        ("settlement.prompt_tokens", metering.prompt_tokens),
+        ("settlement.completion_tokens", metering.completion_tokens),
+        ("settlement.reasoning_tokens", metering.reasoning_tokens),
+        ("settlement.cache_read_tokens", metering.cache_read_tokens),
+        ("settlement.cache_write_tokens", metering.cache_write_tokens),
+        ("settlement.total_tokens", metering.total_tokens),
+        ("settlement.cost_micro_usd", metering.cost_micro_usd),
+    ] {
+        if let Some(value) = value {
+            structural.insert(key.to_owned(), value);
+        }
+    }
+    let mut categorical = BTreeMap::from([
+        (
+            "settlement.provider".to_owned(),
+            metering.provider_id.clone(),
+        ),
+        ("settlement.model".to_owned(), metering.model_id.clone()),
+        (
+            "settlement.usage_origin".to_owned(),
+            metering.usage_origin.as_str().to_owned(),
+        ),
+        (
+            "settlement.outcome".to_owned(),
+            if metering.error_code.is_some() {
+                "failed"
+            } else {
+                "settled"
+            }
+            .to_owned(),
+        ),
+    ]);
+    if let Some(error_code) = &metering.error_code {
+        categorical.insert("settlement.error_code".to_owned(), error_code.clone());
+    }
+    if let Some(finish_reason) = &metering.finish_reason {
+        categorical.insert("settlement.finish_reason".to_owned(), finish_reason.clone());
+    }
+    let event_seed = canonical_digest(&(
+        owner_user_id,
+        request.episode_id.as_str(),
+        request.request_id.as_str(),
+        sequence,
+        "request-settled",
+    ))?;
+    let mut event = TrajectoryEvent {
+        schema_version: TRAJECTORY_SCHEMA_VERSION,
+        event_id: format!("trajectory-settlement:{}", digest_hex(&event_seed)?),
+        owner_user_id: owner_user_id.to_owned(),
+        episode_id: request.episode_id.clone(),
+        request_id: Some(request.request_id.clone()),
+        sequence,
+        kind: TrajectoryEventKind::RequestSettled,
+        evidence: TrajectoryEvidence {
+            structural,
+            categorical,
+            digests: BTreeMap::new(),
+        },
+        captured_at: captured_at.clone(),
+        content_digest: String::new(),
+    };
+    event.content_digest = event.semantic_digest()?;
+    let mut candidate = events.to_vec();
+    candidate.push(event.clone());
+    let envelope = build_operational_evaluation(&candidate)?;
+    let outbox_seed = canonical_digest(&(
+        owner_user_id,
+        event.event_id.as_str(),
+        sequence,
+        TRAJECTORY_EVAL_TOPIC,
+    ))?;
+    let outbox = OutboxWrite {
+        outbox_id: format!("trajectory-eval:{}", digest_hex(&outbox_seed)?),
+        topic: TRAJECTORY_EVAL_TOPIC.to_owned(),
+        payload: OutboxPayload {
+            structural: BTreeMap::from([("trajectory.through_sequence".to_owned(), sequence)]),
+            digests: BTreeMap::from([(
+                "trajectory.settlement_event".to_owned(),
+                event.content_digest.clone(),
+            )]),
+            evaluation: Some(Box::new(envelope)),
+        },
+        created_at: captured_at,
+    };
+    Ok(Settlement {
+        event,
+        status: if metering.error_code.is_some() {
+            RequestStatus::Failed
+        } else {
+            RequestStatus::Settled
+        },
+        outbox: Some(outbox),
+    })
+}
+
+fn settlement_timestamp(
+    request: &super::types::StoredRequest,
+    events: &[TrajectoryEvent],
+    duration_ms: u64,
+) -> Result<String> {
+    let start = events
+        .iter()
+        .find(|event| event.event_id == request.start_event_id)
+        .ok_or_else(|| anyhow::anyhow!("trajectory request start event is missing"))?;
+    let start_time = DateTime::parse_from_rfc3339(&start.captured_at)?;
+    let duration = TimeDelta::milliseconds(
+        i64::try_from(duration_ms).context("settlement duration exceeds timestamp range")?,
+    );
+    let measured = start_time
+        .checked_add_signed(duration)
+        .ok_or_else(|| anyhow::anyhow!("settlement timestamp exceeds supported range"))?;
+    let head = events
+        .last()
+        .map(|event| DateTime::parse_from_rfc3339(&event.captured_at))
+        .transpose()?
+        .unwrap_or(start_time);
+    Ok(std::cmp::max(measured, head).to_rfc3339_opts(SecondsFormat::AutoSi, true))
+}
+
+fn digest_hex(digest: &str) -> Result<&str> {
+    digest
+        .strip_prefix("sha256:")
+        .ok_or_else(|| anyhow::anyhow!("canonical digest has unsupported encoding"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::config::EvalConfig;
+    use bitrouter_sdk::event::EventBus;
+    use bitrouter_sdk::language_model::{SettlementContext, UsageOrigin};
+
+    use super::{TrajectorySettlementRecorder, build_settlement};
+    use crate::eval::{EvalService, admission::SubmissionPrincipal, store::EvalStore};
+    use crate::metering::MeteringSettlementEvent;
+    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+    use crate::trajectory::publisher::TrajectoryOutboxPublisher;
+    use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
+    use crate::trajectory::types::{KeyedDigest, RequestStatus};
+    use crate::workflow_state::ir::RouteProjection;
+
+    const POLICY_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn settlement_and_typed_outbox_survive_restart_and_publish() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        begin_guarded(&store, "request-1", "episode-1").await?;
+        let metering = metering("request-1");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-1",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &metering)
+                },
+            )
+            .await?;
+
+        let pending = store.pending_outbox("owner-a").await?;
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].payload.evaluation.is_some());
+        assert_eq!(
+            store
+                .request("owner-a", "request-1")
+                .await?
+                .map(|request| request.status),
+            Some(RequestStatus::Settled)
+        );
+
+        let restarted_store = TrajectoryStore::new(db.clone());
+        let eval_store = EvalStore::new(db);
+        let publisher = TrajectoryOutboxPublisher::new(
+            restarted_store.clone(),
+            eval_store.clone(),
+            EvalConfig::default(),
+            10,
+        )?;
+        let summary = publisher.drain_pending().await?;
+        assert_eq!(summary.delivered, 1);
+        assert!(restarted_store.pending_outbox("owner-a").await?.is_empty());
+        assert_eq!(
+            eval_store.list_subjects_for_owner("owner-a").await?.len(),
+            1
+        );
+        assert_eq!(
+            eval_store
+                .latest_admissions_for_owner("owner-a")
+                .await?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exact_settlement_retry_is_idempotent_and_changed_authority_conflicts()
+    -> anyhow::Result<()> {
+        let (_db, store) = store().await?;
+        begin_guarded(&store, "request-1", "episode-1").await?;
+        let metering = metering("request-1");
+        for _ in 0..2 {
+            store
+                .settle_request_from_current_head(
+                    "owner-a",
+                    "request-1",
+                    |request, events, sequence| {
+                        build_settlement("owner-a", request, events, sequence, &metering)
+                    },
+                )
+                .await?;
+        }
+        let mut conflicting = metering;
+        conflicting.provider_id = "different-provider".into();
+        let error = store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-1",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &conflicting)
+                },
+            )
+            .await
+            .expect_err("changed authoritative settlement must conflict");
+        assert!(error.to_string().contains("different settlement"));
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-1")
+                .await?
+                .len(),
+            3
+        );
+        assert_eq!(store.pending_outbox("owner-a").await?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tracked_request_without_metering_proof_remains_unsettled() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        begin_guarded(&store, "request-1", "episode-1").await?;
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            EvalStore::new(db),
+            EvalConfig::default(),
+            10,
+        )?;
+        let recorder = TrajectorySettlementRecorder::new(store.clone(), publisher);
+
+        assert!(recorder.record_if_tracked(&context("request-1")).await?);
+        assert_eq!(
+            store
+                .request("owner-a", "request-1")
+                .await?
+                .map(|request| request.status),
+            Some(RequestStatus::Started)
+        );
+        assert!(store.pending_outbox("owner-a").await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_usage_and_price_remain_absent_in_settlement_and_evaluation()
+    -> anyhow::Result<()> {
+        let (_db, store) = store().await?;
+        begin_guarded(&store, "request-1", "episode-1").await?;
+        let mut unknown = metering("request-1");
+        unknown.usage_origin = UsageOrigin::Unknown;
+        unknown.prompt_tokens = None;
+        unknown.completion_tokens = None;
+        unknown.reasoning_tokens = None;
+        unknown.cache_read_tokens = None;
+        unknown.cache_write_tokens = None;
+        unknown.total_tokens = None;
+        unknown.cost_micro_usd = None;
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-1",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &unknown)
+                },
+            )
+            .await?;
+
+        let events = store.events_for_episode("owner-a", "episode-1").await?;
+        let settlement = events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("settlement missing"))?;
+        for key in [
+            "settlement.prompt_tokens",
+            "settlement.completion_tokens",
+            "settlement.total_tokens",
+            "settlement.cost_micro_usd",
+        ] {
+            assert!(!settlement.evidence.structural.contains_key(key));
+        }
+        let envelope = store.pending_outbox("owner-a").await?[0]
+            .payload
+            .evaluation
+            .as_deref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("typed evaluation missing"))?;
+        assert!(
+            !envelope
+                .result
+                .metrics
+                .contains_key("trajectory.total_tokens")
+        );
+        assert!(
+            !envelope
+                .result
+                .metrics
+                .contains_key("trajectory.cost.usd_micros")
+        );
+        assert!(!envelope.result.metrics.contains_key("cost.usd_micros"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn poison_outbox_does_not_block_later_item_or_shutdown_drain() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        begin_guarded(&store, "request-poison", "episode-poison").await?;
+        let poison_metering = metering("request-poison");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-poison",
+                |request, events, sequence| {
+                    let mut settlement =
+                        build_settlement("owner-a", request, events, sequence, &poison_metering)?;
+                    if let Some(outbox) = &mut settlement.outbox {
+                        outbox.outbox_id = "aaa-poison".into();
+                        outbox.topic = "unsupported.topic".into();
+                    }
+                    Ok(settlement)
+                },
+            )
+            .await?;
+        begin_guarded(&store, "request-valid", "episode-valid").await?;
+        let valid_metering = metering("request-valid");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-valid",
+                |request, events, sequence| {
+                    let mut settlement =
+                        build_settlement("owner-a", request, events, sequence, &valid_metering)?;
+                    if let Some(outbox) = &mut settlement.outbox {
+                        outbox.outbox_id = "zzz-valid".into();
+                    }
+                    Ok(settlement)
+                },
+            )
+            .await?;
+
+        let eval_store = EvalStore::new(db);
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            eval_store.clone(),
+            EvalConfig::default(),
+            1,
+        )?;
+        let summary = publisher.drain_pending().await?;
+        assert_eq!(summary.delivered, 1);
+        assert!(summary.failed >= 1);
+        let pending = store.pending_outbox("owner-a").await?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].outbox_id, "aaa-poison");
+        assert_eq!(pending[0].attempts, 1);
+        assert_eq!(
+            eval_store.list_subjects_for_owner("owner-a").await?.len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_after_admission_before_mark_is_idempotent() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        begin_guarded(&store, "request-1", "episode-1").await?;
+        let metering = metering("request-1");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-1",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &metering)
+                },
+            )
+            .await?;
+        let envelope = store.pending_outbox("owner-a").await?[0]
+            .payload
+            .evaluation
+            .as_deref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("typed evaluation missing"))?;
+        let eval_store = EvalStore::new(db.clone());
+        eval_store
+            .insert_subject_owned(&envelope.subject, "owner-a")
+            .await?;
+        EvalService::new(eval_store.clone(), EvalConfig::default())
+            .submit(
+                envelope.result,
+                SubmissionPrincipal::BuiltinTrajectory {
+                    owner_user_id: "owner-a".into(),
+                },
+            )
+            .await?;
+        assert_eq!(store.pending_outbox("owner-a").await?.len(), 1);
+
+        let restarted = TrajectoryOutboxPublisher::new(
+            TrajectoryStore::new(db),
+            eval_store,
+            EvalConfig::default(),
+            10,
+        )?;
+        let summary = restarted.drain_pending().await?;
+        assert_eq!(summary.delivered, 1);
+        assert!(store.pending_outbox("owner-a").await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publisher_batch_is_bounded() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        assert!(
+            TrajectoryOutboxPublisher::new(
+                store.clone(),
+                EvalStore::new(db.clone()),
+                EvalConfig::default(),
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            TrajectoryOutboxPublisher::new(
+                store,
+                EvalStore::new(db),
+                EvalConfig::default(),
+                1_001,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn burst_kicks_use_one_single_flight_worker_and_converge() -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        for index in 0..24 {
+            let request_id = format!("request-{index:02}");
+            let episode_id = format!("episode-{index:02}");
+            begin_guarded(&store, &request_id, &episode_id).await?;
+            let metering = metering(&request_id);
+            store
+                .settle_request_from_current_head(
+                    "owner-a",
+                    &request_id,
+                    |request, events, sequence| {
+                        build_settlement("owner-a", request, events, sequence, &metering)
+                    },
+                )
+                .await?;
+        }
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            EvalStore::new(db),
+            EvalConfig::default(),
+            3,
+        )?;
+
+        for _ in 0..1_000 {
+            publisher.kick();
+        }
+        publisher.wait_for_idle().await;
+
+        assert!(store.pending_outbox("owner-a").await?.is_empty());
+        assert_eq!(publisher.worker_stats(), (1, 1));
+        Ok(())
+    }
+
+    async fn store() -> anyhow::Result<(sea_orm::DatabaseConnection, TrajectoryStore)> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        Ok((db.clone(), TrajectoryStore::new(db)))
+    }
+
+    async fn begin_guarded(
+        store: &TrajectoryStore,
+        request_id: &str,
+        episode_id: &str,
+    ) -> anyhow::Result<()> {
+        let result = store
+            .correlate_and_begin("owner-a", correlate_input(request_id, episode_id))
+            .await?;
+        assert!(result.guarded_route.is_some());
+        Ok(())
+    }
+
+    fn correlate_input(request_id: &str, episode_id: &str) -> CorrelateAndBegin {
+        CorrelateAndBegin {
+            request_id: request_id.into(),
+            new_episode_id: episode_id.into(),
+            event_id: format!("start-{request_id}"),
+            correlation_key_id: "key-1".into(),
+            native_parent_id: None,
+            native_parent_digest: None,
+            full_input_digest: keyed_digest('7'),
+            ancestor_prefix_digests: Vec::new(),
+            starts_with_prior_turns: false,
+            canonical_input_bytes: 10,
+            protocol: "chat_completions".into(),
+            captured_at: "2026-08-01T00:00:00Z".into(),
+            guarded_route: Some(GuardedRouteInput {
+                route_event_id: format!("route-{request_id}"),
+                guard_event_id: format!("guard-{request_id}"),
+                policy_name: "auto:cost".into(),
+                request_key: "agent_trace/v2|edit|normal".into(),
+                baseline_tier: Some("reference".into()),
+                preset: Some("auto:cost".into()),
+                projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
+                    .unwrap_or_else(|| unreachable!()),
+                candidate_tier: Some("economy".into()),
+                policy_digest: POLICY_DIGEST.into(),
+                policy: ProgressGuardPolicy {
+                    escalation_tier: "strong".into(),
+                    protected_tiers: BTreeSet::from(["strong".into()]),
+                    max_consecutive_unprotected: None,
+                    max_same_projection_unprotected: None,
+                    max_recovery_count: None,
+                    max_episode_requests: None,
+                    max_episode_elapsed_ms: None,
+                    max_episode_cost_micro_usd: None,
+                    hold_for_requests: 2,
+                    incomplete_history: IncompleteHistoryAction::Observe,
+                },
+                carries_tools: false,
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: BTreeSet::from(["strong".into()]),
+            }),
+        }
+    }
+
+    fn keyed_digest(digit: char) -> KeyedDigest {
+        KeyedDigest::parse(format!(
+            "hmac-sha256:key-1:{}",
+            digit.to_string().repeat(64)
+        ))
+        .unwrap_or_else(|_| unreachable!())
+    }
+
+    fn metering(request_id: &str) -> MeteringSettlementEvent {
+        MeteringSettlementEvent {
+            request_id: request_id.into(),
+            provider_id: "provider".into(),
+            model_id: "model".into(),
+            usage_origin: UsageOrigin::ProviderReported,
+            prompt_tokens: Some(10),
+            completion_tokens: Some(5),
+            reasoning_tokens: Some(0),
+            cache_read_tokens: Some(0),
+            cache_write_tokens: Some(0),
+            total_tokens: Some(15),
+            cost_micro_usd: Some(70),
+            duration_ms: 100,
+            error_code: None,
+            finish_reason: Some("stop".into()),
+        }
+    }
+
+    fn context(request_id: &str) -> SettlementContext {
+        SettlementContext {
+            request_id: request_id.into(),
+            caller: CallerContext::new("key-a", "owner-a"),
+            target: None,
+            model_id: "model".into(),
+            provider_id: "provider".into(),
+            account_label: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            usage_origin: UsageOrigin::Unknown,
+            raw_usage: None,
+            web_search_count: 0,
+            media_input_count: 0,
+            media_output_count: 0,
+            server_tool_calls: Vec::new(),
+            streamed: false,
+            request_duration_ms: 100,
+            upstream_duration_ms: None,
+            ttft_ms: None,
+            generation_duration_ms: None,
+            first_token_kind: None,
+            finish_reason: None,
+            error: None,
+            events: EventBus::default(),
+        }
+    }
+}

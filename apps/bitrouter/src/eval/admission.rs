@@ -12,6 +12,7 @@ use super::types::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionPrincipal {
     LocalOperator,
+    BuiltinTrajectory { owner_user_id: String },
     ApiKey { key_id: String, user_id: String },
 }
 
@@ -19,6 +20,7 @@ impl SubmissionPrincipal {
     pub fn owner_user_id(&self) -> &str {
         match self {
             Self::LocalOperator => "local",
+            Self::BuiltinTrajectory { owner_user_id } => owner_user_id,
             Self::ApiKey { user_id, .. } => user_id,
         }
     }
@@ -42,12 +44,20 @@ pub async fn submit(
         SubmissionPrincipal::LocalOperator => {
             store.subject_for_owner(&result.eval_id, "local").await?
         }
+        SubmissionPrincipal::BuiltinTrajectory { owner_user_id } => {
+            store
+                .subject_for_owner(&result.eval_id, owner_user_id)
+                .await?
+        }
         SubmissionPrincipal::ApiKey { user_id, .. } => {
             store.subject_for_owner(&result.eval_id, user_id).await?
         }
     }
     .ok_or_else(|| anyhow::anyhow!("unknown eval subject '{}'", result.eval_id))?;
     validate_result_for_subject(&result, &subject)?;
+    if matches!(&principal, SubmissionPrincipal::BuiltinTrajectory { .. }) {
+        validate_builtin_trajectory_result(&result)?;
+    }
     let insertion = store
         .insert_result_owned(&result, principal.owner_user_id())
         .await?;
@@ -55,7 +65,7 @@ pub async fn submit(
     let result_id = insertion.result_id().to_string();
 
     let authority = match &principal {
-        SubmissionPrincipal::LocalOperator => None,
+        SubmissionPrincipal::LocalOperator | SubmissionPrincipal::BuiltinTrajectory { .. } => None,
         SubmissionPrincipal::ApiKey { key_id, user_id } => {
             let Some(authority) = config.authorities.get(&result.evaluator.authority_id) else {
                 return record(
@@ -214,6 +224,32 @@ pub async fn submit(
         duplicate,
     )
     .await
+}
+
+pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
+    use crate::trajectory::evaluation::{
+        TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,
+        trajectory_evaluator_config_digest,
+    };
+
+    if result.evaluator.authority_id != TRAJECTORY_EVALUATOR_AUTHORITY_ID
+        || result.evaluator.evaluator_id != TRAJECTORY_EVALUATOR_ID
+        || result.evaluator.kind != EvaluatorKind::Generic
+        || result.evaluator.version != TRAJECTORY_EVALUATOR_VERSION
+        || result.evaluator.config_digest != trajectory_evaluator_config_digest()?
+        || result.verdict != EvalVerdict::Inconclusive
+        || !result.hard_violations.is_empty()
+        || result.confidence_ppm.is_some()
+    {
+        anyhow::bail!("trusted trajectory principal requires the built-in operational evaluator")
+    }
+    if result.metrics.keys().any(|metric| {
+        !metric.starts_with("trajectory.")
+            && !matches!(metric.as_str(), "cost.usd_micros" | "latency.ms")
+    }) {
+        anyhow::bail!("trusted trajectory principal submitted a metric outside its scope")
+    }
+    Ok(())
 }
 
 async fn record(
@@ -381,6 +417,125 @@ mod tests {
 
     fn digest() -> String {
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into()
+    }
+
+    #[tokio::test]
+    async fn builtin_trajectory_principal_is_owner_scoped_and_metric_limited() -> anyhow::Result<()>
+    {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let store = EvalStore::new(db);
+        let evidence = Vec::new();
+        store
+            .insert_subject_owned(
+                &EvalSubject {
+                    schema_version: EVAL_SCHEMA_VERSION,
+                    eval_id: "trajectory:episode-1:3".into(),
+                    scope: EvalScope::Episode,
+                    subject_id: "episode-1".into(),
+                    policy_digest: digest(),
+                    preset: Some("auto:cost".into()),
+                    cohort: None,
+                    holdout: false,
+                    decisions: Vec::new(),
+                    requested_dimensions: BTreeSet::from([
+                        "trajectory.request_count".into(),
+                        "latency.ms".into(),
+                    ]),
+                    evidence_digest: evidence_digest(&evidence)?,
+                    evidence,
+                    observed_at: "2026-08-01T00:00:02Z".into(),
+                },
+                "owner-a",
+            )
+            .await?;
+        let service = crate::eval::EvalService::new(store, EvalConfig::default());
+        let mut operational = result(
+            "bitrouter.builtin",
+            EvaluatorKind::Generic,
+            EvalVerdict::Inconclusive,
+            "trajectory-operational:episode-1:3",
+        );
+        operational.eval_id = "trajectory:episode-1:3".into();
+        operational.evaluator.authority_id =
+            crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_AUTHORITY_ID.into();
+        operational.evaluator.evaluator_id =
+            crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_ID.into();
+        operational.evaluator.version =
+            crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_VERSION.into();
+        operational.evaluator.config_digest =
+            crate::trajectory::evaluation::trajectory_evaluator_config_digest()?;
+        operational.evidence_digest =
+            "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945".into();
+        operational.metrics = BTreeMap::from([
+            (
+                "trajectory.request_count".into(),
+                crate::eval::types::MetricValue::new(1, crate::eval::types::MetricUnit::Count),
+            ),
+            (
+                "latency.ms".into(),
+                crate::eval::types::MetricValue::new(
+                    100,
+                    crate::eval::types::MetricUnit::Milliseconds,
+                ),
+            ),
+        ]);
+
+        let admitted = service
+            .submit(
+                operational.clone(),
+                SubmissionPrincipal::BuiltinTrajectory {
+                    owner_user_id: "owner-a".into(),
+                },
+            )
+            .await?;
+        assert_eq!(admitted.status, AdmissionStatus::Admitted);
+
+        operational.idempotency_key = "trajectory-operational:wrong-owner".into();
+        let wrong_owner = service
+            .submit(
+                operational,
+                SubmissionPrincipal::BuiltinTrajectory {
+                    owner_user_id: "owner-b".into(),
+                },
+            )
+            .await;
+        assert!(wrong_owner.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn builtin_trajectory_principal_rejects_non_operational_identity_and_metrics()
+    -> anyhow::Result<()> {
+        let mut untrusted = result(
+            "bitrouter.builtin",
+            EvaluatorKind::Generic,
+            EvalVerdict::Inconclusive,
+            "builtin-invalid",
+        );
+        untrusted.metrics.insert(
+            "quality.pass".into(),
+            crate::eval::types::MetricValue::new(1, crate::eval::types::MetricUnit::Boolean),
+        );
+        assert!(super::validate_builtin_trajectory_result(&untrusted).is_err());
+        untrusted.metrics.clear();
+        untrusted.evaluator.evaluator_id = "another-evaluator".into();
+        assert!(super::validate_builtin_trajectory_result(&untrusted).is_err());
+        untrusted.evaluator.evaluator_id =
+            crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_ID.into();
+        untrusted.evaluator.version = "2".into();
+        untrusted.evaluator.config_digest =
+            crate::trajectory::evaluation::trajectory_evaluator_config_digest()?;
+        assert!(super::validate_builtin_trajectory_result(&untrusted).is_err());
+        untrusted.evaluator.version =
+            crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_VERSION.into();
+        untrusted.evaluator.config_digest = digest();
+        assert!(super::validate_builtin_trajectory_result(&untrusted).is_err());
+        untrusted.evaluator.config_digest =
+            crate::trajectory::evaluation::trajectory_evaluator_config_digest()?;
+        untrusted.confidence_ppm = Some(1);
+        assert!(super::validate_builtin_trajectory_result(&untrusted).is_err());
+        Ok(())
     }
 
     #[tokio::test]

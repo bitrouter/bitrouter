@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::AdequacyStore;
-use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
@@ -1844,7 +1843,6 @@ pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     db: DatabaseConnection,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
-    eval_decisions: PendingEvalDecisionStore,
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
 
@@ -1854,18 +1852,21 @@ impl PolicyRuntime {
         config_path: Option<&Path>,
         db: DatabaseConnection,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
-        eval_decisions: PendingEvalDecisionStore,
         trajectory: Option<Arc<TrajectoryRuntime>>,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
             decision_recorder,
-            eval_decisions,
             trajectory,
         });
         runtime.reload_for_config(config, config_path).await?;
         Ok(runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trajectory_is_active(&self) -> bool {
+        self.trajectory.is_some()
     }
 
     pub async fn reload_for_config(
@@ -1912,8 +1913,7 @@ impl PolicyRuntime {
                 let mut router = PolicyTableRouter::new(table)
                     .with_state_namespace(name.clone())
                     .with_progress_guard(definition.progress_guard.clone());
-                router = router.with_eval_observer(
-                    self.eval_decisions.clone(),
+                router = router.with_eval_metadata(
                     name.clone(),
                     loaded.digest.clone(),
                     route_baselines,
@@ -2004,10 +2004,21 @@ impl ModelSelector for PolicyRuntime {
                     "guarded named policy has no active lock digest",
                 )
             })?;
+            let policy_name = router.eval_policy_name().ok_or_else(|| {
+                bitrouter_sdk::BitrouterError::internal(
+                    "guarded named policy has no persisted evaluation identity",
+                )
+            })?;
+            let request_key = decision.request_key.clone();
+            let baseline_tier = router.eval_baseline_tier(&decision);
             let owner = ctx.caller().user_id();
             let guarded_input = GuardedRouteInput {
                 route_event_id: stable_id("route-intent", owner, ctx.request_id()),
                 guard_event_id: stable_id("guard-activation", owner, ctx.request_id()),
+                policy_name: policy_name.to_owned(),
+                request_key,
+                baseline_tier,
+                preset: Some(policy_name.to_owned()),
                 projection,
                 candidate_tier: decision.static_tier.clone(),
                 policy_digest: policy_digest.to_owned(),
@@ -2512,30 +2523,15 @@ presets:
             &compiled.document,
         )?;
 
-        let runtime = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            db,
-            None,
-            PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await?;
+        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None, None).await?;
         let mut frozen = context();
         runtime.select_variant("coding", None, &mut frozen).await?;
         assert_eq!(frozen.model(), "vendor:economy");
 
         let empty_target_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&empty_target_db).await?;
-        let empty_target = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            empty_target_db,
-            None,
-            PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await?;
+        let empty_target =
+            PolicyRuntime::new(&config, Some(&config_path), empty_target_db, None, None).await?;
         let mut copied = context();
         empty_target
             .select_variant("coding", None, &mut copied)
@@ -2607,15 +2603,7 @@ presets:
         let config = bitrouter_sdk::config::load(&config_path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let runtime = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            db,
-            None,
-            PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await?;
+        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None, None).await?;
 
         let mut exact = context();
         runtime
@@ -2715,7 +2703,6 @@ presets:
             Some(&old_config_path),
             old_db.clone(),
             None,
-            PendingEvalDecisionStore::default(),
             Some(trajectory(old_db.clone())?),
         )
         .await?;
@@ -2761,15 +2748,9 @@ presets:
 
         let disabled_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&disabled_db).await?;
-        let disabled = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            disabled_db.clone(),
-            None,
-            PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await?;
+        let disabled =
+            PolicyRuntime::new(&config, Some(&config_path), disabled_db.clone(), None, None)
+                .await?;
         let mut disabled_context = context(http::HeaderMap::new());
         disabled
             .select_variant("coding", None, &mut disabled_context)
@@ -2784,7 +2765,6 @@ presets:
 
         let baseline_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&baseline_db).await?;
-        let baseline_pending = PendingEvalDecisionStore::default();
         let decision_path = dir.path().join("guarded-decisions.jsonl");
         let baseline = PolicyRuntime::new(
             &config,
@@ -2793,7 +2773,6 @@ presets:
             Some(Arc::new(PolicyDecisionJsonlRecorder::new(
                 decision_path.clone(),
             )?)),
-            baseline_pending.clone(),
             Some(trajectory(baseline_db.clone())?),
         )
         .await?;
@@ -2817,7 +2796,6 @@ presets:
         let baseline_correlation = baseline_context
             .extension::<CorrelatedRequest>()
             .ok_or_else(|| anyhow::anyhow!("missing baseline correlation"))?;
-        assert!(baseline_pending.get("request-stable").is_some());
         let records =
             crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&decision_path)?;
         let guarded_record = records
@@ -2858,7 +2836,6 @@ presets:
             Some(&config_path),
             metadata_db.clone(),
             None,
-            PendingEvalDecisionStore::default(),
             Some(trajectory(metadata_db.clone())?),
         )
         .await?;
@@ -3420,16 +3397,9 @@ presets:
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
-        let runtime = PolicyRuntime::new(
-            &config,
-            Some(&config_path),
-            db,
-            None,
-            PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await
-        .unwrap();
+        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None, None)
+            .await
+            .unwrap();
 
         let mut initial = context("vendor:strong");
         runtime

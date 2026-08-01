@@ -144,7 +144,8 @@ pub fn reduce(
             }
             TrajectoryEventKind::RouteIntentRecorded => {
                 let request_id = required_request_id(event)?;
-                if let Some(clauses) = validate_persisted_route_intent(event)? {
+                let persisted_guarded_route = validate_persisted_route_intent(event)?;
+                if let Some(clauses) = &persisted_guarded_route {
                     let policy = event
                         .evidence
                         .digests
@@ -249,8 +250,24 @@ pub fn reduce(
                     same_selected_tier_streak,
                     "same selected tier streak",
                 )?;
+                let selected_is_protected = if let Some(value) = event
+                    .evidence
+                    .structural
+                    .get("route.selected_is_protected")
+                    .copied()
+                {
+                    match value {
+                        0 => false,
+                        1 => true,
+                        _ => anyhow::bail!(
+                            "guarded route has an invalid selected-tier protection fact"
+                        ),
+                    }
+                } else {
+                    selected_tier.is_some_and(|tier| protected_tiers.contains(tier))
+                };
                 consecutive_unprotected_requests = match selected_tier {
-                    Some(tier) if protected_tiers.contains(tier) => 0,
+                    Some(_) if selected_is_protected => 0,
                     Some(_) => checked_increment(
                         consecutive_unprotected_requests,
                         "consecutive unprotected request count",
@@ -553,6 +570,9 @@ mod tests {
         HistoryCompleteness, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind,
         TrajectoryEvidence, TrajectoryHealth,
     };
+
+    const TEST_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[test]
     fn hand_literal_episode_reduces_every_health_field() -> anyhow::Result<()> {
@@ -1008,6 +1028,27 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn typed_route_protection_is_historical_across_policy_reload() -> anyhow::Result<()> {
+        let mut events = vec![start(1, "r1", 10, "complete", "explicit_root")?];
+        let first = typed_intent(&events, 2, "r1", "planning", "shared", true)?;
+        events.push(first);
+        events.push(start(3, "r2", 20, "complete", "canonical_prefix")?);
+        let second = typed_intent(&events, 4, "r2", "planning", "shared", false)?;
+        events.push(second);
+
+        let replay_with_old_policy = reduce(&events, &BTreeSet::from(["shared".to_owned()]))?;
+        let replay_with_new_policy = reduce(&events, &BTreeSet::new())?;
+        assert_eq!(
+            replay_with_old_policy
+                .health
+                .consecutive_unprotected_requests,
+            1
+        );
+        assert_eq!(replay_with_old_policy, replay_with_new_policy);
+        Ok(())
+    }
+
     fn start(
         sequence: u64,
         request_id: &str,
@@ -1047,6 +1088,60 @@ mod tests {
                 ("route.workflow_state".to_owned(), state.to_owned()),
             ]),
         )
+    }
+
+    fn typed_intent(
+        prefix: &[TrajectoryEvent],
+        sequence: u64,
+        request_id: &str,
+        state: &str,
+        tier: &str,
+        selected_is_protected: bool,
+    ) -> anyhow::Result<TrajectoryEvent> {
+        let snapshot = reduce(prefix, &BTreeSet::new())?;
+        let mut route = intent(sequence, request_id, state, tier)?;
+        route
+            .evidence
+            .structural
+            .insert("route.applied_clause_count".to_owned(), 0);
+        route.evidence.structural.insert(
+            "route.selected_is_protected".to_owned(),
+            u64::from(selected_is_protected),
+        );
+        route
+            .evidence
+            .digests
+            .insert("route.policy_lock".to_owned(), TEST_DIGEST.to_owned());
+        route
+            .evidence
+            .digests
+            .insert("route.health_snapshot".to_owned(), snapshot.evidence_digest);
+        for (index, clause_id) in [
+            "progress_guard.active_hold",
+            "progress_guard.incomplete_history",
+            "progress_guard.max_consecutive_unprotected",
+            "progress_guard.max_same_projection_unprotected",
+            "progress_guard.max_recovery_count",
+            "progress_guard.max_episode_requests",
+            "progress_guard.max_episode_elapsed_ms",
+            "progress_guard.max_episode_cost_micro_usd",
+            "tool_safety.floor",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let prefix = format!("route.clause_{index:02}");
+            route
+                .evidence
+                .categorical
+                .insert(format!("{prefix}.id"), clause_id.to_owned());
+            route
+                .evidence
+                .categorical
+                .insert(format!("{prefix}.disposition"), "skipped".to_owned());
+        }
+        resign(&mut route)?;
+        Ok(route)
     }
 
     fn settled(

@@ -229,7 +229,7 @@ pub struct PolicyTableRouter {
 
 #[derive(Clone)]
 struct EvalDecisionObserver {
-    pending: PendingEvalDecisionStore,
+    pending: Option<PendingEvalDecisionStore>,
     policy: String,
     policy_digest: String,
     route_baselines: HashMap<String, String>,
@@ -283,6 +283,7 @@ impl PolicyTableRouter {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn with_eval_observer(
         mut self,
         pending: PendingEvalDecisionStore,
@@ -292,7 +293,24 @@ impl PolicyTableRouter {
         default_baseline: Option<String>,
     ) -> Self {
         self.eval_observer = Some(EvalDecisionObserver {
-            pending,
+            pending: Some(pending),
+            policy: policy.into(),
+            policy_digest: policy_digest.into(),
+            route_baselines,
+            default_baseline,
+        });
+        self
+    }
+
+    pub(crate) fn with_eval_metadata(
+        mut self,
+        policy: impl Into<String>,
+        policy_digest: impl Into<String>,
+        route_baselines: HashMap<String, String>,
+        default_baseline: Option<String>,
+    ) -> Self {
+        self.eval_observer = Some(EvalDecisionObserver {
+            pending: None,
             policy: policy.into(),
             policy_digest: policy_digest.into(),
             route_baselines,
@@ -308,6 +326,25 @@ impl PolicyTableRouter {
 
     pub(crate) fn progress_guard(&self) -> Option<&ProgressGuardPolicy> {
         self.progress_guard.as_ref()
+    }
+
+    pub(crate) fn eval_policy_name(&self) -> Option<&str> {
+        self.eval_observer
+            .as_ref()
+            .map(|observer| observer.policy.as_str())
+    }
+
+    pub(crate) fn eval_baseline_tier(&self, decision: &PolicyDecision) -> Option<String> {
+        self.eval_observer
+            .as_ref()
+            .and_then(|observer| {
+                observer
+                    .route_baselines
+                    .get(&decision.request_key)
+                    .cloned()
+                    .or_else(|| observer.default_baseline.clone())
+            })
+            .or_else(|| decision.static_tier.clone())
     }
 
     pub(crate) fn tool_use_tier(&self) -> Option<&str> {
@@ -492,17 +529,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         request_id_override: Option<&str>,
     ) -> Option<String> {
-        let baseline_tier = self
-            .eval_observer
-            .as_ref()
-            .and_then(|observer| {
-                observer
-                    .route_baselines
-                    .get(&decision.request_key)
-                    .cloned()
-                    .or_else(|| observer.default_baseline.clone())
-            })
-            .or_else(|| decision.static_tier.clone());
+        let baseline_tier = self.eval_baseline_tier(&decision);
         let request_id = request_id_override.or_else(|| {
             headers
                 .get("x-bitrouter-request-id")
@@ -544,8 +571,9 @@ impl PolicyTableRouter {
             &self.eval_observer,
             request_id,
             decision.selected_tier.as_deref(),
-        ) {
-            observer.pending.insert(PendingEvalDecision {
+        ) && let Some(pending) = &observer.pending
+        {
+            pending.insert(PendingEvalDecision {
                 request_id: request_id.to_string(),
                 decision_id: format!("{request_id}:{}", observer.policy),
                 policy: observer.policy.clone(),

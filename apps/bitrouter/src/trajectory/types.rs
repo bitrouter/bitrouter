@@ -153,6 +153,8 @@ pub struct OutboxPayload {
     pub structural: BTreeMap<String, u64>,
     #[serde(default)]
     pub digests: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<Box<super::evaluation::TrajectoryEvaluationEnvelope>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,7 +189,9 @@ pub struct StoredRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingOutbox {
     pub outbox_id: String,
+    pub owner_user_id: String,
     pub topic: String,
+    pub payload: OutboxPayload,
     pub payload_json: String,
     pub payload_digest: String,
     pub attempts: u64,
@@ -322,6 +326,9 @@ pub fn validate_outbox_payload(payload: &OutboxPayload) -> Result<()> {
     }
     for (key, digest) in &payload.digests {
         validate_digest(digest, &format!("trajectory outbox payload digest '{key}'"))?;
+    }
+    if let Some(evaluation) = &payload.evaluation {
+        super::evaluation::validate_evaluation_envelope(evaluation)?;
     }
     Ok(())
 }
@@ -561,6 +568,7 @@ mod tests {
                 "trajectory.event".into(),
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
             )]),
+            evaluation: None,
         };
         assert!(validate_outbox_payload(&payload).is_ok());
 

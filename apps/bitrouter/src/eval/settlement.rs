@@ -70,6 +70,7 @@ pub struct EvalSettlementRecorder {
     store: EvalStore,
     pending: PendingEvalDecisionStore,
     pricing: Arc<PricingTable>,
+    trajectory: Option<crate::trajectory::settlement::TrajectorySettlementRecorder>,
 }
 
 impl EvalSettlementRecorder {
@@ -82,7 +83,16 @@ impl EvalSettlementRecorder {
             store,
             pending,
             pricing,
+            trajectory: None,
         }
+    }
+
+    pub(crate) fn with_trajectory(
+        mut self,
+        trajectory: crate::trajectory::settlement::TrajectorySettlementRecorder,
+    ) -> Self {
+        self.trajectory = Some(trajectory);
+        self
     }
 
     fn subject(
@@ -171,6 +181,18 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
+        if let Some(trajectory) = &self.trajectory
+            && trajectory
+                .record_if_tracked(context)
+                .await
+                .map_err(|error| {
+                    bitrouter_sdk::BitrouterError::internal(format!(
+                        "persisting trajectory settlement: {error}"
+                    ))
+                })?
+        {
+            return Ok(());
+        }
         let Some(decision) = self.pending.take(&context.request_id) else {
             return Ok(());
         };
