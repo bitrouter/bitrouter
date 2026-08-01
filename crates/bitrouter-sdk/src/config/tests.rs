@@ -794,6 +794,45 @@ fn policy_table_rejects_the_removed_session_downgrade_budget() {
 }
 
 #[test]
+fn policy_table_rejects_progress_guard_with_named_policy_guidance() {
+    let err = parse_with(
+        "policy_table:\n  progress_guard:\n    escalation_tier: strong\n",
+        |_| None,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "policy_table.progress_guard is not supported; configure progress_guard on a signed named policy"
+        ),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn policy_table_keeps_ignoring_unrelated_unknown_fields() {
+    let config = parse_with(
+        "policy_table:\n  future_compatible_extension:\n    enabled: true\n  tiers:\n    strong: vendor:strong\n  default_tier: strong\n",
+        |_| None,
+    )
+    .unwrap();
+
+    assert_eq!(config.policy_table.default_tier.as_deref(), Some("strong"));
+    assert_eq!(
+        config.policy_table.tiers.get("strong").map(String::as_str),
+        Some("vendor:strong")
+    );
+}
+
+#[test]
+fn policy_table_schema_and_serialization_expose_no_progress_guard_sentinel() {
+    let serialized = serde_saphyr::to_string(&PolicyTableConfig::default()).unwrap();
+    let schema = serde_json::to_string(&schemars::schema_for!(PolicyTableConfig)).unwrap();
+
+    assert!(!serialized.contains("progress_guard"));
+    assert!(!schema.contains("progress_guard"));
+}
+
+#[test]
 fn policy_schema_hides_the_removed_session_downgrade_budget() {
     let schema = serde_json::to_string(&schemars::schema_for!(PolicyTableConfig)).unwrap();
     assert!(!schema.contains("max_downgraded_requests_per_session"));

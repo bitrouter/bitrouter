@@ -732,10 +732,16 @@ mod tests {
     #[test]
     fn reducer_requires_guard_activation_exactly_for_new_progress_trigger() -> Result<()> {
         let start = persisted_start()?;
-        let trigger_route = persisted_route(Some(3))?;
+        let prefix_digest = reduce(std::slice::from_ref(&start), &BTreeSet::new())?.evidence_digest;
+        let trigger_route = with_health_digest(
+            persisted_route(Some(3))?,
+            "route.health_snapshot",
+            &prefix_digest,
+        )?;
         assert!(reduce(&[start.clone(), trigger_route.clone()], &BTreeSet::new()).is_err());
 
-        let guard = persisted_guard()?;
+        let guard =
+            with_health_digest(persisted_guard()?, "guard.health_snapshot", &prefix_digest)?;
         assert!(
             reduce(
                 &[start.clone(), trigger_route, guard.clone()],
@@ -744,7 +750,11 @@ mod tests {
             .is_ok()
         );
 
-        let all_skipped = persisted_route(None)?;
+        let all_skipped = with_health_digest(
+            persisted_route(None)?,
+            "route.health_snapshot",
+            &prefix_digest,
+        )?;
         assert!(
             reduce(
                 &[start.clone(), all_skipped, guard.clone()],
@@ -753,7 +763,11 @@ mod tests {
             .is_err()
         );
 
-        let active_hold_only = persisted_route(Some(0))?;
+        let active_hold_only = with_health_digest(
+            persisted_route(Some(0))?,
+            "route.health_snapshot",
+            &prefix_digest,
+        )?;
         assert!(
             reduce(
                 &[start.clone(), active_hold_only, guard.clone()],
@@ -773,14 +787,23 @@ mod tests {
         };
         let mut legacy_guard = legacy_guard;
         legacy_guard.content_digest = legacy_guard.semantic_digest()?;
-        assert!(
-            reduce(
-                &[start, persisted_route(None)?, legacy_guard],
-                &BTreeSet::new()
-            )
-            .is_err()
-        );
+        let skipped_route = with_health_digest(
+            persisted_route(None)?,
+            "route.health_snapshot",
+            &prefix_digest,
+        )?;
+        assert!(reduce(&[start, skipped_route, legacy_guard], &BTreeSet::new()).is_err());
         Ok(())
+    }
+
+    fn with_health_digest(
+        mut event: TrajectoryEvent,
+        key: &str,
+        digest: &str,
+    ) -> Result<TrajectoryEvent> {
+        event.evidence.digests.insert(key.into(), digest.into());
+        event.content_digest = event.semantic_digest()?;
+        Ok(event)
     }
 
     fn persisted_start() -> Result<TrajectoryEvent> {

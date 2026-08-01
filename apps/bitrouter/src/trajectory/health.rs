@@ -19,6 +19,28 @@ enum RequestPhase {
     Settled,
 }
 
+struct SnapshotFacts<'a> {
+    episode_id: &'a str,
+    through_sequence: u64,
+    completeness: HistoryCompleteness,
+    has_started_request: bool,
+    request_count: u64,
+    settled_request_count: u64,
+    first_timestamp: &'a chrono::DateTime<chrono::FixedOffset>,
+    last_timestamp: &'a chrono::DateTime<chrono::FixedOffset>,
+    latest_projection: Option<&'a str>,
+    same_projection_streak: u64,
+    same_selected_tier_streak: u64,
+    consecutive_unprotected_requests: u64,
+    recovery_count: u64,
+    requests_since_recovery: Option<u64>,
+    first_canonical_bytes: Option<u64>,
+    latest_canonical_bytes: Option<u64>,
+    total_tokens: Option<u64>,
+    settled_cost_micro_usd: Option<u64>,
+    active_hold_remaining: u64,
+}
+
 pub fn reduce(
     events: &[TrajectoryEvent],
     protected_tiers: &BTreeSet<String>,
@@ -78,6 +100,7 @@ pub fn reduce(
         if captured_at < previous_timestamp {
             anyhow::bail!("trajectory event timestamps regress in sequence order")
         }
+        let prefix_timestamp = last_timestamp;
         previous_timestamp = captured_at;
         last_timestamp = captured_at;
 
@@ -132,6 +155,36 @@ pub fn reduce(
                         .digests
                         .get("route.health_snapshot")
                         .ok_or_else(|| anyhow::anyhow!("guarded route lost its health digest"))?;
+                    let factual_prefix = snapshot_from_facts(SnapshotFacts {
+                        episode_id,
+                        through_sequence: event.sequence.checked_sub(1).ok_or_else(|| {
+                            anyhow::anyhow!("guarded route has no factual event prefix")
+                        })?,
+                        completeness,
+                        has_started_request: requests
+                            .values()
+                            .any(|phase| matches!(phase, RequestPhase::Started)),
+                        request_count,
+                        settled_request_count,
+                        first_timestamp: &first_timestamp,
+                        last_timestamp: &prefix_timestamp,
+                        latest_projection: previous_projection.as_deref(),
+                        same_projection_streak,
+                        same_selected_tier_streak,
+                        consecutive_unprotected_requests,
+                        recovery_count,
+                        requests_since_recovery,
+                        first_canonical_bytes,
+                        latest_canonical_bytes,
+                        total_tokens,
+                        settled_cost_micro_usd,
+                        active_hold_remaining,
+                    })?;
+                    if health != &factual_prefix.evidence_digest {
+                        anyhow::bail!(
+                            "guarded route health digest disagrees with its factual pre-intent trajectory snapshot"
+                        )
+                    }
                     guarded_route_digests
                         .insert(request_id.to_owned(), (policy.clone(), health.clone()));
                     if clauses.iter().any(|(id, disposition)| {
@@ -318,47 +371,75 @@ pub fn reduce(
         anyhow::bail!("guarded route trigger is missing its guard activation")
     }
 
-    if requests
-        .values()
-        .any(|phase| matches!(phase, RequestPhase::Started))
-    {
-        completeness = merge_completeness(completeness, HistoryCompleteness::Unknown);
-    }
-    let unsettled_request_count = request_count
-        .checked_sub(settled_request_count)
-        .ok_or_else(|| anyhow::anyhow!("settled request count exceeds request count"))?;
-    let elapsed_ms = u64::try_from(
-        last_timestamp
-            .signed_duration_since(first_timestamp)
-            .num_milliseconds(),
-    )
-    .context("trajectory elapsed time is negative")?;
-    let context_growth_ppm = context_growth_ppm(first_canonical_bytes, latest_canonical_bytes)?;
-    let health = TrajectoryHealth {
+    let through_sequence = events
+        .last()
+        .map(|event| event.sequence)
+        .ok_or_else(|| anyhow::anyhow!("trajectory reduction lost its final event"))?;
+    snapshot_from_facts(SnapshotFacts {
+        episode_id,
+        through_sequence,
         completeness,
+        has_started_request: requests
+            .values()
+            .any(|phase| matches!(phase, RequestPhase::Started)),
         request_count,
         settled_request_count,
-        unsettled_request_count,
-        elapsed_ms,
-        latest_projection: previous_projection,
+        first_timestamp: &first_timestamp,
+        last_timestamp: &last_timestamp,
+        latest_projection: previous_projection.as_deref(),
         same_projection_streak,
         same_selected_tier_streak,
         consecutive_unprotected_requests,
         recovery_count,
         requests_since_recovery,
-        context_growth_ppm,
+        first_canonical_bytes,
+        latest_canonical_bytes,
         total_tokens,
         settled_cost_micro_usd,
-    };
-    let through_sequence = events
-        .last()
-        .map(|event| event.sequence)
-        .ok_or_else(|| anyhow::anyhow!("trajectory reduction lost its final event"))?;
-    let mut snapshot = TrajectorySnapshot {
-        episode_id: episode_id.clone(),
-        through_sequence,
-        health,
         active_hold_remaining,
+    })
+}
+
+fn snapshot_from_facts(facts: SnapshotFacts<'_>) -> Result<TrajectorySnapshot> {
+    let completeness = if facts.has_started_request {
+        merge_completeness(facts.completeness, HistoryCompleteness::Unknown)
+    } else {
+        facts.completeness
+    };
+    let unsettled_request_count = facts
+        .request_count
+        .checked_sub(facts.settled_request_count)
+        .ok_or_else(|| anyhow::anyhow!("settled request count exceeds request count"))?;
+    let elapsed_ms = u64::try_from(
+        facts
+            .last_timestamp
+            .signed_duration_since(facts.first_timestamp)
+            .num_milliseconds(),
+    )
+    .context("trajectory elapsed time is negative")?;
+    let context_growth_ppm =
+        context_growth_ppm(facts.first_canonical_bytes, facts.latest_canonical_bytes)?;
+    let health = TrajectoryHealth {
+        completeness,
+        request_count: facts.request_count,
+        settled_request_count: facts.settled_request_count,
+        unsettled_request_count,
+        elapsed_ms,
+        latest_projection: facts.latest_projection.map(ToOwned::to_owned),
+        same_projection_streak: facts.same_projection_streak,
+        same_selected_tier_streak: facts.same_selected_tier_streak,
+        consecutive_unprotected_requests: facts.consecutive_unprotected_requests,
+        recovery_count: facts.recovery_count,
+        requests_since_recovery: facts.requests_since_recovery,
+        context_growth_ppm,
+        total_tokens: facts.total_tokens,
+        settled_cost_micro_usd: facts.settled_cost_micro_usd,
+    };
+    let mut snapshot = TrajectorySnapshot {
+        episode_id: facts.episode_id.to_owned(),
+        through_sequence: facts.through_sequence,
+        health,
+        active_hold_remaining: facts.active_hold_remaining,
         evidence_digest: String::new(),
     };
     snapshot.evidence_digest = snapshot.semantic_digest()?;
