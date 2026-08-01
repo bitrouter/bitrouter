@@ -3908,12 +3908,12 @@ fn responses_stream_tool_call_lifecycle() {
     assert_eq!(output[0]["arguments"], "{\"cmd\":\"ls\"}");
 }
 
-///.3 — `response.completed` decodes to the dedicated `ResponseCompleted`
-/// part, preserving the response id + status + usage that a bare `Finish` would
-/// have lost; and that part re-encodes to a `response.completed` event carrying
-/// the same id.
+/// A native Responses upstream id remains provider metadata on the canonical
+/// stream parts, but every client-visible lifecycle response uses the gateway
+/// request id. Otherwise the terminal id cannot be used as the next turn's
+/// `previous_response_id` by gateway-owned continuation storage.
 #[test]
-fn responses_completed_preserves_id_status_and_usage() {
+fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
     let adapter = adapter_for(ApiProtocol::Responses);
 
     // decode: response.completed → ResponseCompleted
@@ -3941,20 +3941,49 @@ fn responses_completed_preserves_id_status_and_usage() {
         other => panic!("expected ResponseCompleted, got {other:?}"),
     }
 
-    // re-encode: ResponseCompleted → a response.completed event with the id
-    let mut encoder = adapter.stream_encoder("fallback_id", "gpt-5");
-    let frames = encoder
-        .encode(&StreamPart::ResponseCompleted {
+    // Re-encode a native lifecycle whose provider id differs from the gateway
+    // identity. The upstream id remains available on the canonical parts above,
+    // but must never replace the client continuation identity.
+    let mut encoder = adapter.stream_encoder("gateway-request-id", "gpt-5");
+    let mut frames = encoder
+        .encode(&StreamPart::ResponseStarted {
             id: "resp_xyz".to_string(),
-            status: "completed".to_string(),
-            usage: Some(Usage {
-                prompt_tokens: 12,
-                completion_tokens: 8,
-                reasoning_tokens: 0,
-                ..Default::default()
-            }),
         })
         .unwrap();
+    frames.extend(
+        encoder
+            .encode(&StreamPart::TextDelta {
+                text: "answer".to_string(),
+            })
+            .unwrap(),
+    );
+    frames.extend(
+        encoder
+            .encode(&StreamPart::ResponseCompleted {
+                id: "resp_xyz".to_string(),
+                status: "completed".to_string(),
+                usage: Some(Usage {
+                    prompt_tokens: 12,
+                    completion_tokens: 8,
+                    reasoning_tokens: 0,
+                    ..Default::default()
+                }),
+            })
+            .unwrap(),
+    );
+    let response_ids = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            SseFrame::Event { data, .. } => serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|event| event["response"]["id"].as_str().map(ToOwned::to_owned)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        response_ids, ["gateway-request-id"; 3],
+        "created, in-progress, and completed must expose one continuation id"
+    );
     let completed = frames.iter().find_map(|f| match f {
         SseFrame::Event { event, data } if event.as_deref() == Some("response.completed") => {
             Some(serde_json::from_str::<serde_json::Value>(data).unwrap())
@@ -3962,10 +3991,60 @@ fn responses_completed_preserves_id_status_and_usage() {
         _ => None,
     });
     let completed = completed.expect("response.completed event emitted");
-    // the carried response id wins over the encoder's fallback request id
-    assert_eq!(completed["response"]["id"], "resp_xyz");
+    assert_eq!(completed["response"]["id"], "gateway-request-id");
     assert_eq!(completed["response"]["status"], "completed");
     assert_eq!(completed["response"]["usage"]["input_tokens"], 12);
+
+    for status in ["incomplete", "failed"] {
+        let gateway_id = format!("gateway-{status}");
+        let mut encoder = adapter.stream_encoder(&gateway_id, "gpt-5");
+        let mut frames = encoder
+            .encode(&StreamPart::ResponseStarted {
+                id: format!("provider-{status}"),
+            })
+            .unwrap();
+        frames.extend(
+            encoder
+                .encode(&StreamPart::ResponseCompleted {
+                    id: format!("provider-{status}"),
+                    status: status.to_string(),
+                    usage: None,
+                })
+                .unwrap(),
+        );
+        let response_ids = frames
+            .iter()
+            .filter_map(|frame| match frame {
+                SseFrame::Event { data, .. } => serde_json::from_str::<serde_json::Value>(data)
+                    .ok()
+                    .and_then(|event| event["response"]["id"].as_str().map(ToOwned::to_owned)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(response_ids, vec![gateway_id; 3], "status={status}");
+    }
+
+    let mut encoder = adapter.stream_encoder("gateway-error", "gpt-5");
+    let mut failed = encoder
+        .encode(&StreamPart::ResponseStarted {
+            id: "provider-error".to_string(),
+        })
+        .unwrap();
+    failed.extend(encoder.encode_error("provider failed"));
+    let failed_ids = failed
+        .iter()
+        .filter_map(|frame| match frame {
+            SseFrame::Event { data, .. } => serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|event| event["response"]["id"].as_str().map(ToOwned::to_owned)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failed_ids, ["gateway-error"; 3]);
+    assert!(failed.iter().any(|frame| matches!(
+        frame,
+        SseFrame::Event { event, .. } if event.as_deref() == Some("response.failed")
+    )));
 }
 
 /// Upstreams that omit the SSE `event:` line (OpenRouter, vanilla OpenAI

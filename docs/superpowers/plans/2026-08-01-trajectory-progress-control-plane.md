@@ -486,12 +486,12 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 
 **Interfaces:** Every client-visible `response.id` in one Responses stream uses the stable gateway request ID that trajectory correlation indexes. The upstream response ID remains provider metadata only and never replaces the public continuation identity mid-stream.
 
-- [ ] **Step 1: Write a protocol RED test.** Feed an upstream-native `ResponseStarted` plus terminal completion whose upstream ID differs from the gateway request ID; assert created, in-progress, output, and completed events must expose one gateway ID.
-- [ ] **Step 2: Run the focused Responses protocol test.** Expected RED: terminal `response.completed.response.id` exposes the upstream ID.
-- [ ] **Step 3: Normalize terminal stream events to the gateway identity.** Preserve upstream metadata without making it the next-turn native key.
-- [ ] **Step 4: Add a real streaming Responses-to-Responses HTTP continuation.** Parse the terminal response ID, send it as `previous_response_id`, and assert native-parent correlation selects the original complete episode before and after restart.
-- [ ] **Step 5: Run Responses protocol, stream, HTTP trajectory matrix, and cross-protocol tests until GREEN.**
-- [ ] **Step 6: Commit `fix(responses): stabilize stream identity`.**
+- [x] **Step 1: Write a protocol RED test.** Feed an upstream-native `ResponseStarted` plus terminal completion whose upstream ID differs from the gateway request ID; assert created, in-progress, output, and completed events must expose one gateway ID.
+- [x] **Step 2: Run the focused Responses protocol test.** Expected RED: terminal `response.completed.response.id` exposes the upstream ID.
+- [x] **Step 3: Normalize terminal stream events to the gateway identity.** Preserve upstream metadata without making it the next-turn native key.
+- [x] **Step 4: Add a real streaming Responses-to-Responses HTTP continuation.** Parse the terminal response ID, send it as `previous_response_id`, and assert native-parent correlation selects the original complete episode before and after restart.
+- [x] **Step 5: Run Responses protocol, stream, HTTP trajectory matrix, and cross-protocol tests until GREEN.**
+- [x] **Step 6: Commit `fix(responses): stabilize stream identity`.**
 
 ## Task 12: Bound prefix-correlation work and index its lookup
 
