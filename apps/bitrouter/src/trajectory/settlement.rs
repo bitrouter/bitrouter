@@ -47,13 +47,15 @@ impl TrajectorySettlementRecorder {
         let request_id = self
             .identity_key
             .request_identity(owner_user_id, &context.request_id)?;
-        if self
-            .store
-            .request(owner_user_id, &request_id)
-            .await?
-            .is_none()
-        {
+        let Some(request) = self.store.request(owner_user_id, &request_id).await? else {
             return Ok(false);
+        };
+        if request.status != RequestStatus::Started {
+            self.store
+                .validate_reusable_terminal_settlement(owner_user_id, &request_id)
+                .await?;
+            self.publisher.kick();
+            return Ok(true);
         }
         let Some(metering) = context.get_event::<MeteringSettlementEvent>().cloned() else {
             return Ok(true);
@@ -62,11 +64,26 @@ impl TrajectorySettlementRecorder {
             anyhow::bail!("metering settlement identity does not match trajectory request")
         }
         let owner = owner_user_id.to_owned();
-        self.store
+        let settlement = self
+            .store
             .settle_request_from_current_head(&owner, &request_id, |request, events, sequence| {
                 build_settlement(&owner, request, events, sequence, &metering)
             })
-            .await?;
+            .await;
+        if let Err(error) = settlement {
+            if self
+                .store
+                .request(owner_user_id, &request_id)
+                .await?
+                .is_some_and(|request| request.status != RequestStatus::Started)
+            {
+                self.store
+                    .validate_reusable_terminal_settlement(owner_user_id, &request_id)
+                    .await?;
+            } else {
+                return Err(error);
+            }
+        }
         self.publisher.kick();
         Ok(true)
     }
@@ -330,6 +347,140 @@ mod tests {
             3
         );
         assert_eq!(store.pending_outbox("owner-a").await?.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_retry_after_restart_reuses_first_terminal_settlement() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("trajectory-retry.db").display()
+        );
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let request_id = identity_key.request_identity("owner-a", "external-request-1")?;
+
+        let db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&db).await?;
+        let store = TrajectoryStore::new(db.clone());
+        begin_guarded(&store, &request_id, "episode-1").await?;
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            EvalStore::new(db.clone()),
+            EvalConfig::default(),
+            10,
+        )?;
+        let recorder = TrajectorySettlementRecorder::new(
+            store.clone(),
+            publisher.clone(),
+            identity_key.clone(),
+        );
+        let mut first = context("external-request-1");
+        first.emit(routing_failure_metering("external-request-1", 100));
+        assert!(recorder.record_if_tracked(&first).await?);
+        publisher.wait_for_idle().await;
+        drop(recorder);
+        drop(publisher);
+        drop(store);
+        drop(db);
+
+        let restarted_db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&restarted_db).await?;
+        let restarted_store = TrajectoryStore::new(restarted_db.clone());
+        let restarted_publisher = TrajectoryOutboxPublisher::new(
+            restarted_store.clone(),
+            EvalStore::new(restarted_db.clone()),
+            EvalConfig::default(),
+            10,
+        )?;
+        let restarted_recorder = TrajectorySettlementRecorder::new(
+            restarted_store.clone(),
+            restarted_publisher,
+            identity_key,
+        );
+        let mut retry = context("external-request-1");
+        retry.emit(routing_failure_metering("external-request-1", 175));
+
+        assert!(restarted_recorder.record_if_tracked(&retry).await?);
+
+        let events = restarted_store
+            .events_for_episode("owner-a", "episode-1")
+            .await?;
+        let settlements = events
+            .iter()
+            .filter(|event| event.kind == super::TrajectoryEventKind::RequestSettled)
+            .collect::<Vec<_>>();
+        assert_eq!(settlements.len(), 1);
+        assert_eq!(
+            settlements[0]
+                .evidence
+                .structural
+                .get("settlement.duration_ms"),
+            Some(&100)
+        );
+        let outbox_count: i64 = restarted_db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM trajectory_outbox",
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("trajectory outbox count row missing"))?
+            .try_get("", "count")?;
+        assert_eq!(outbox_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_retry_rejects_corrupt_terminal_event_index() -> anyhow::Result<()> {
+        let (db, recorder, request_id, first) = terminal_recorder_fixture().await?;
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE trajectory_requests SET settlement_event_id = ? WHERE request_id = ?",
+            ["missing-terminal-event".into(), request_id.into()],
+        ))
+        .await?;
+
+        let error = recorder
+            .record_if_tracked(&first)
+            .await
+            .expect_err("corrupt terminal event index must fail closed");
+        assert!(error.to_string().contains("lost its settlement event"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_retry_rejects_corrupt_terminal_status() -> anyhow::Result<()> {
+        let (db, recorder, request_id, first) = terminal_recorder_fixture().await?;
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE trajectory_requests SET status = 'settled' WHERE request_id = ?",
+            [request_id.into()],
+        ))
+        .await?;
+
+        let error = recorder
+            .record_if_tracked(&first)
+            .await
+            .expect_err("status that disagrees with terminal evidence must fail closed");
+        assert!(error.to_string().contains("inconsistent settlement event"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_retry_rejects_corrupt_terminal_outbox_index() -> anyhow::Result<()> {
+        let (db, recorder, request_id, first) = terminal_recorder_fixture().await?;
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE trajectory_requests SET settlement_outbox_id = ? WHERE request_id = ?",
+            ["missing-terminal-outbox".into(), request_id.into()],
+        ))
+        .await?;
+
+        let error = recorder
+            .record_if_tracked(&first)
+            .await
+            .expect_err("corrupt terminal outbox index must fail closed");
+        assert!(error.to_string().contains("lost its outbox"));
         Ok(())
     }
 
@@ -802,6 +953,29 @@ mod tests {
         Ok((db.clone(), TrajectoryStore::new(db)))
     }
 
+    async fn terminal_recorder_fixture() -> anyhow::Result<(
+        sea_orm::DatabaseConnection,
+        TrajectorySettlementRecorder,
+        String,
+        SettlementContext,
+    )> {
+        let (db, store) = store().await?;
+        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let request_id = identity_key.request_identity("owner-a", "external-request-1")?;
+        begin_guarded(&store, &request_id, "episode-1").await?;
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            EvalStore::new(db.clone()),
+            EvalConfig::default(),
+            10,
+        )?;
+        let recorder = TrajectorySettlementRecorder::new(store, publisher, identity_key);
+        let mut first = context("external-request-1");
+        first.emit(routing_failure_metering("external-request-1", 100));
+        assert!(recorder.record_if_tracked(&first).await?);
+        Ok((db, recorder, request_id, first))
+    }
+
     async fn raw_json_column(
         db: &sea_orm::DatabaseConnection,
         query: &str,
@@ -951,6 +1125,25 @@ mod tests {
             duration_ms: 100,
             error_code: None,
             finish_reason: Some("stop".into()),
+        }
+    }
+
+    fn routing_failure_metering(request_id: &str, duration_ms: u64) -> MeteringSettlementEvent {
+        MeteringSettlementEvent {
+            request_id: request_id.into(),
+            provider_id: String::new(),
+            model_id: String::new(),
+            usage_origin: UsageOrigin::Unknown,
+            prompt_tokens: None,
+            completion_tokens: None,
+            reasoning_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            total_tokens: None,
+            cost_micro_usd: None,
+            duration_ms,
+            error_code: Some("not_found".into()),
+            finish_reason: None,
         }
     }
 

@@ -6,6 +6,7 @@ use sea_orm::{
 };
 
 use super::correlation::CorrelationSource;
+use super::evaluation::TRAJECTORY_EVAL_TOPIC;
 use super::guard::{
     ProgressGuardInput, ProgressGuardPolicy, RouteIntent, RouteIntentClause,
     RouteIntentClauseDisposition, evaluate, validate_persisted_route_intent,
@@ -901,6 +902,111 @@ impl TrajectoryStore {
             .await?
             .map(stored_request)
             .transpose()
+    }
+
+    pub(crate) async fn validate_reusable_terminal_settlement(
+        &self,
+        owner_user_id: &str,
+        request_id: &str,
+    ) -> Result<()> {
+        validate_owner(owner_user_id)?;
+        validate_opaque(request_id, "request_id")?;
+        let txn = self.db.begin().await?;
+        let request = request_entity::Entity::find()
+            .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(request_entity::Column::RequestId.eq(request_id))
+            .one(&txn)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'")
+            })?;
+        let stored = stored_request(request.clone())?;
+        let expected_outcome = match stored.status {
+            RequestStatus::Settled => "settled",
+            RequestStatus::Failed => "failed",
+            RequestStatus::Started => {
+                anyhow::bail!("trajectory request '{request_id}' is not terminal")
+            }
+        };
+        let settlement_event_id = request.settlement_event_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "terminal trajectory request '{request_id}' lost its settlement event index"
+            )
+        })?;
+        let episode = owned_episode(&txn, owner_user_id, &request.episode_id).await?;
+        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
+        validate_episode_head(&episode, &events)?;
+        let start = events
+            .iter()
+            .find(|event| event.event_id == request.start_event_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("trajectory request '{request_id}' lost its start event")
+            })?;
+        if start.kind != TrajectoryEventKind::RequestStarted
+            || start.request_id.as_deref() != Some(request_id)
+        {
+            anyhow::bail!("trajectory request '{request_id}' has an inconsistent start event")
+        }
+        let settlement = events
+            .iter()
+            .find(|event| event.event_id == settlement_event_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "settled trajectory request '{request_id}' lost its settlement event"
+                )
+            })?;
+        if settlement.kind != TrajectoryEventKind::RequestSettled
+            || settlement.request_id.as_deref() != Some(request_id)
+            || settlement.episode_id != request.episode_id
+            || settlement
+                .evidence
+                .categorical
+                .get("settlement.outcome")
+                .map(String::as_str)
+                != Some(expected_outcome)
+            || events
+                .iter()
+                .filter(|event| {
+                    event.kind == TrajectoryEventKind::RequestSettled
+                        && event.request_id.as_deref() == Some(request_id)
+                })
+                .count()
+                != 1
+        {
+            anyhow::bail!("trajectory request '{request_id}' has an inconsistent settlement event")
+        }
+        let settlement_outbox_id = request.settlement_outbox_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("terminal trajectory request '{request_id}' lost its outbox index")
+        })?;
+        let outbox = outbox_entity::Entity::find()
+            .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(outbox_entity::Column::OutboxId.eq(settlement_outbox_id))
+            .one(&txn)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("terminal trajectory request '{request_id}' lost its outbox")
+            })?;
+        let outbox = stored_outbox(outbox)?;
+        if outbox.topic != TRAJECTORY_EVAL_TOPIC
+            || outbox.created_at != settlement.captured_at
+            || outbox
+                .payload
+                .structural
+                .get("trajectory.through_sequence")
+                .copied()
+                != Some(settlement.sequence)
+            || outbox
+                .payload
+                .digests
+                .get("trajectory.settlement_event")
+                .map(String::as_str)
+                != Some(settlement.content_digest.as_str())
+            || outbox.payload.evaluation.is_none()
+        {
+            anyhow::bail!("trajectory request '{request_id}' has an inconsistent outbox")
+        }
+        txn.commit().await?;
+        Ok(())
     }
 
     pub async fn pending_outbox(&self, owner_user_id: &str) -> Result<Vec<PendingOutbox>> {

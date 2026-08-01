@@ -79,15 +79,16 @@ pub const MAX_CONCURRENT_SUBAGENTS: usize = 6;
 
 /// The outcome of reading the machine-wide spend the budget ceiling enforces
 /// against. Distinguishes a known total (a fresh/empty database reads as
-/// `Known(0)`) from an unreadable one — the ceiling **fails closed** on
+/// `Known(0)`) from an unavailable one — the ceiling **fails closed** on
 /// [`SpendReading::Unavailable`] rather than silently treating an unreadable
-/// database as `$0`, which would let spawns bypass the budget.
+/// database or unknown charge evidence as `$0`, which would let spawns bypass
+/// the budget.
 pub enum SpendReading {
     /// A known machine-wide spend total in micro-USD (`0` for an empty/absent
     /// database — a fresh install legitimately hasn't spent anything).
     Known(u64),
-    /// A metering database is configured but couldn't be read (config, path,
-    /// connection, or query error). Spend is unknown, so the ceiling refuses.
+    /// Spend cannot be enforced because the configured database is unreadable
+    /// or at least one request has unknown charge evidence.
     Unavailable,
 }
 
@@ -97,8 +98,8 @@ pub enum SpendReading {
 #[async_trait::async_trait]
 pub trait SpendSnapshot: Send + Sync {
     /// Today's machine-wide spend as a [`SpendReading`]: `Known(micro_usd)`
-    /// when readable (an absent/empty database reads as `Known(0)`), or
-    /// `Unavailable` when a configured database can't be read.
+    /// when every charge is authoritative (an absent/empty database reads as
+    /// `Known(0)`), or `Unavailable` when storage or charge evidence is unknown.
     async fn spent_micro_usd(&self) -> SpendReading;
 }
 
@@ -126,10 +127,12 @@ impl SpendSnapshot for MeteringSpend {
             ReadSide::Absent => SpendReading::Known(0),
             // Configured but unreadable → fail closed (don't guess $0).
             ReadSide::Unavailable => SpendReading::Unavailable,
-            ReadSide::Store(store) => match store.spend_summary(TimeWindow::Today).await {
-                Ok(today) => SpendReading::Known(today.spend_micro_usd),
-                Err(_) => SpendReading::Unavailable,
-            },
+            ReadSide::Store(store) => {
+                match store.get_enforceable_total_spend(TimeWindow::Today).await {
+                    Ok(Some(spend)) => SpendReading::Known(spend),
+                    Ok(None) | Err(_) => SpendReading::Unavailable,
+                }
+            }
         }
     }
 }
@@ -1552,6 +1555,67 @@ mod tests {
             .check()
             .await
             .expect("an empty database reads as $0 and never blocks the first spawn");
+    }
+
+    #[tokio::test]
+    async fn metering_budget_fails_closed_on_unknown_charge_evidence() -> anyhow::Result<()> {
+        use std::sync::Arc;
+
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
+
+        let home = tempfile::tempdir()?;
+        let config_path = home.path().join("bitrouter.yaml");
+        std::fs::write(&config_path, "database:\n  url: sqlite://./bitrouter.db\n")?;
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            home.path().join("bitrouter.db").display()
+        );
+        let db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&db).await?;
+        let recorder = crate::metering::MeteringRecorder::new(
+            crate::metering::MeteringStore::new(db.clone()),
+            Arc::new(crate::metering::PricingTable::new()),
+        );
+        let mut settlement = SettlementContext {
+            request_id: "missing-route".into(),
+            caller: CallerContext::new("key-a", "owner-a"),
+            target: None,
+            model_id: String::new(),
+            provider_id: String::new(),
+            account_label: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            usage_origin: UsageOrigin::Unknown,
+            raw_usage: None,
+            web_search_count: 0,
+            media_input_count: 0,
+            media_output_count: 0,
+            server_tool_calls: Vec::new(),
+            streamed: false,
+            request_duration_ms: 100,
+            upstream_duration_ms: None,
+            ttft_ms: None,
+            generation_duration_ms: None,
+            first_token_kind: None,
+            finish_reason: None,
+            error: Some(bitrouter_sdk::BitrouterError::NotFound(
+                "no route for selected model".into(),
+            )),
+            events: bitrouter_sdk::EventBus::new(),
+        };
+        recorder.record(&mut settlement).await?;
+        drop(db);
+
+        let spend = MeteringSpend::new(crate::paths::ConfigSource::File(config_path));
+        assert!(
+            matches!(spend.spent_micro_usd().await, SpendReading::Unavailable),
+            "unknown charge evidence must not be enforced as a known zero"
+        );
+        Ok(())
     }
 }
 
