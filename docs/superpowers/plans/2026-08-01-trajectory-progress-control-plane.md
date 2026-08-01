@@ -261,6 +261,11 @@ field.
   endpoint-presence and settlement-total semantics, transactional store/reducer
   parity, full-event exact retries, and bounded typed contention handling across
   route, guard, and settlement appends.
+- [x] **Review fix round 2/5:** validate a brand-new episode's sequence-one
+  start through the reducer before any mutation, require its indexed
+  completeness/source/key-epoch facts to agree with immutable start evidence,
+  and prove invalid or divergent starts roll back without residual rows while
+  valid incomplete/unmatched starts remain replayable.
 
 ## Task 4: Add a signed, lock-owned progress guard
 
