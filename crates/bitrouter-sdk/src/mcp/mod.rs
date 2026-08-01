@@ -61,7 +61,7 @@ pub mod rmcp_executor;
 /// Lives here rather than as a `From` impl in `config` so the config module
 /// stays free of an rmcp dependency — `config` is compiled without the `mcp`
 /// feature too.
-#[cfg(feature = "config_file")]
+#[cfg(all(feature = "config_file", feature = "mcp"))]
 pub fn upstream_protocol_version(
     setting: crate::config::McpUpstreamProtocol,
 ) -> rmcp::model::ProtocolVersion {
