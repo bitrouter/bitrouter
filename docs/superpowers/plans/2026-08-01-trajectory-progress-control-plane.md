@@ -232,16 +232,16 @@ model names, headers, or arbitrary metadata:
 
 Completeness folds all starts and required correlation/intent evidence with
 `Incomplete` dominating `Unknown`, which dominates `Complete`; missing
-required evidence contributes `Unknown`. Token and cost totals are `None` if
-any settled request lacks the corresponding value, otherwise checked sums
-produce `Some`, including `Some(0)`. Streaks advance only on route-intent
+required evidence contributes `Unknown`. Token and cost totals are `None` when
+there are no settled requests or if any settled request lacks the corresponding
+value; otherwise checked sums produce `Some`, including `Some(0)`. Streaks advance only on route-intent
 events. A selected tier is protected only by exact membership in the supplied
 set; a missing tier resets the unprotected streak and contributes unknown
 completeness. A hold event leaves its full value remaining and each subsequent
-request-start consumes exactly one. Context growth is the non-negative latest
-versus first authoritative canonical-byte increase in ppm; missing/zero first
-evidence yields `None`, shrinkage yields zero, and multiplication overflow is
-an error.
+request-start consumes exactly one. Context growth compares the first and latest
+`RequestStarted` endpoints: a missing endpoint or zero first value yields
+`None`, missing middle values do not matter, shrinkage yields zero, and
+multiplication overflow is an error.
 
 Replay is explicitly `replay_episode(store, owner, episode_id,
 protected_tiers)`: protected-tier policy data affects the snapshot and cannot
@@ -257,6 +257,10 @@ field.
 - [x] **Step 5: Add restart tests.** Start and settle several requests, drop all runtime objects, reconnect to the same SQLite file, and prove the next request sees the same health/hold state as an uninterrupted runtime.
 - [x] **Step 6: Run focused health/store/replay tests until GREEN.**
 - [x] **Step 7: Commit `feat(trajectory): reduce replayable health`.**
+- [x] **Review fix round 1/5:** enforce the strict per-request phase machine,
+  endpoint-presence and settlement-total semantics, transactional store/reducer
+  parity, full-event exact retries, and bounded typed contention handling across
+  route, guard, and settlement appends.
 
 ## Task 4: Add a signed, lock-owned progress guard
 

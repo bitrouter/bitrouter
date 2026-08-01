@@ -168,6 +168,7 @@ fn stable_id(kind: &str, owner_user_id: &str, request_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use bitrouter_sdk::language_model::{ApiProtocol, GenerationParams, Message, Prompt, Role};
@@ -792,13 +793,25 @@ mod tests {
                 "2026-08-01T00:00:00Z",
             )
             .await?;
+        runtime
+            .store()
+            .append_route_intent(
+                "owner-a",
+                route_intent_event(
+                    &first.episode_id,
+                    "request-settled-retry",
+                    2,
+                    "2026-08-01T00:00:30Z",
+                )?,
+            )
+            .await?;
         let mut event = TrajectoryEvent {
             schema_version: TRAJECTORY_SCHEMA_VERSION,
             event_id: "event-settled-retry".into(),
             owner_user_id: "owner-a".into(),
             episode_id: first.episode_id.clone(),
             request_id: Some("request-settled-retry".into()),
-            sequence: 2,
+            sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {
                 structural: Default::default(),
@@ -840,7 +853,7 @@ mod tests {
                 .events_for_episode("owner-a", &first.episode_id)
                 .await?
                 .len(),
-            2
+            3
         );
         Ok(())
     }
@@ -868,10 +881,31 @@ mod tests {
             )
             .await?;
 
-        for (request_id, event_id, sequence, captured_at) in [
-            ("request-r1", "event-settle-r1", 3, "2026-08-01T00:00:02Z"),
-            ("request-r2", "event-settle-r2", 5, "2026-08-01T00:00:04Z"),
-            ("request-r3", "event-settle-r3", 6, "2026-08-01T00:00:05Z"),
+        for (request_id, event_id, route_sequence, settle_sequence, route_at, settle_at) in [
+            (
+                "request-r1",
+                "event-settle-r1",
+                3,
+                4,
+                "2026-08-01T00:00:02Z",
+                "2026-08-01T00:00:03Z",
+            ),
+            (
+                "request-r2",
+                "event-settle-r2",
+                6,
+                7,
+                "2026-08-01T00:00:05Z",
+                "2026-08-01T00:00:06Z",
+            ),
+            (
+                "request-r3",
+                "event-settle-r3",
+                8,
+                9,
+                "2026-08-01T00:00:07Z",
+                "2026-08-01T00:00:08Z",
+            ),
         ] {
             if request_id == "request-r2" {
                 runtime
@@ -880,24 +914,31 @@ mod tests {
                         "request-r3",
                         ApiProtocol::Responses,
                         &responses_prompt(vec![Message::text(Role::User, "r3")], "request-r2"),
-                        "2026-08-01T00:00:03Z",
+                        "2026-08-01T00:00:04Z",
                     )
                     .await?;
             }
+            runtime
+                .store()
+                .append_route_intent(
+                    "owner-a",
+                    route_intent_event(&root.episode_id, request_id, route_sequence, route_at)?,
+                )
+                .await?;
             let mut event = TrajectoryEvent {
                 schema_version: TRAJECTORY_SCHEMA_VERSION,
                 event_id: event_id.into(),
                 owner_user_id: "owner-a".into(),
                 episode_id: root.episode_id.clone(),
                 request_id: Some(request_id.into()),
-                sequence,
+                sequence: settle_sequence,
                 kind: TrajectoryEventKind::RequestSettled,
                 evidence: TrajectoryEvidence {
                     structural: Default::default(),
                     categorical: Default::default(),
                     digests: Default::default(),
                 },
-                captured_at: captured_at.into(),
+                captured_at: settle_at.into(),
                 content_digest: String::new(),
             };
             event.content_digest = event.semantic_digest()?;
@@ -923,7 +964,7 @@ mod tests {
                 .iter()
                 .map(|event| event.sequence)
                 .collect::<Vec<_>>(),
-            (1..=6).collect::<Vec<_>>()
+            (1..=9).collect::<Vec<_>>()
         );
         let row = db
             .query_one(Statement::from_string(
@@ -1261,5 +1302,38 @@ mod tests {
         assert_eq!(child.source, CorrelationSource::CanonicalPrefix);
         assert_eq!(child.episode_id, root.episode_id);
         Ok(())
+    }
+
+    fn route_intent_event(
+        episode_id: &str,
+        request_id: &str,
+        sequence: u64,
+        captured_at: &str,
+    ) -> anyhow::Result<TrajectoryEvent> {
+        let mut event = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: format!("event-route-{request_id}"),
+            owner_user_id: "owner-a".into(),
+            episode_id: episode_id.into(),
+            request_id: Some(request_id.into()),
+            sequence,
+            kind: TrajectoryEventKind::RouteIntentRecorded,
+            evidence: TrajectoryEvidence {
+                structural: Default::default(),
+                categorical: BTreeMap::from([
+                    (
+                        "route.projection".into(),
+                        "agent_trace/v2|opening|normal".into(),
+                    ),
+                    ("route.selected_tier".into(), "tier-a".into()),
+                    ("route.workflow_state".into(), "opening".into()),
+                ]),
+                digests: Default::default(),
+            },
+            captured_at: captured_at.into(),
+            content_digest: String::new(),
+        };
+        event.content_digest = event.semantic_digest()?;
+        Ok(event)
     }
 }
