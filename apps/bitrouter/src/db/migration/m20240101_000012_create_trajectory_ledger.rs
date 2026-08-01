@@ -162,6 +162,7 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(TrajectoryRequests::SettlementEventId).string())
+                    .col(ColumnDef::new(TrajectoryRequests::SettlementOutboxId).string())
                     .col(
                         ColumnDef::new(TrajectoryRequests::FullInputDigest)
                             .string()
@@ -325,6 +326,7 @@ enum TrajectoryRequests {
     EpisodeId,
     StartEventId,
     SettlementEventId,
+    SettlementOutboxId,
     FullInputDigest,
     NativeParentId,
     Protocol,
