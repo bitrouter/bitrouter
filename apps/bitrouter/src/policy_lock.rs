@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adequacy::store::AdequacyStore;
+use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
 use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
@@ -1851,6 +1852,7 @@ pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     db: DatabaseConnection,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+    eval_decisions: PendingEvalDecisionStore,
     trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
@@ -1861,12 +1863,14 @@ impl PolicyRuntime {
         config_path: Option<&Path>,
         db: DatabaseConnection,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+        eval_decisions: PendingEvalDecisionStore,
         trajectory: Option<Arc<TrajectoryRuntime>>,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
             decision_recorder,
+            eval_decisions,
             trajectory_config: config.trajectory.clone(),
             trajectory,
         });
@@ -1933,12 +1937,22 @@ impl PolicyRuntime {
                 let mut router = PolicyTableRouter::new(table)
                     .with_state_namespace(name.clone())
                     .with_progress_guard(definition.progress_guard.clone());
-                router = router.with_eval_metadata(
-                    name.clone(),
-                    loaded.digest.clone(),
-                    route_baselines,
-                    definition.default_tier.clone(),
-                );
+                router = if definition.progress_guard.is_none() {
+                    router.with_eval_observer(
+                        self.eval_decisions.clone(),
+                        name.clone(),
+                        loaded.digest.clone(),
+                        route_baselines,
+                        definition.default_tier.clone(),
+                    )
+                } else {
+                    router.with_eval_metadata(
+                        name.clone(),
+                        loaded.digest.clone(),
+                        route_baselines,
+                        definition.default_tier.clone(),
+                    )
+                };
                 if let Some(recorder) = &self.decision_recorder {
                     router = router.with_shared_decision_recorder(recorder.clone());
                 }
@@ -2573,15 +2587,30 @@ presets:
             &compiled.document,
         )?;
 
-        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None, None).await?;
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await?;
         let mut frozen = context();
         runtime.select_variant("coding", None, &mut frozen).await?;
         assert_eq!(frozen.model(), "vendor:economy");
 
         let empty_target_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&empty_target_db).await?;
-        let empty_target =
-            PolicyRuntime::new(&config, Some(&config_path), empty_target_db, None, None).await?;
+        let empty_target = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            empty_target_db,
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await?;
         let mut copied = context();
         empty_target
             .select_variant("coding", None, &mut copied)
@@ -2653,7 +2682,15 @@ presets:
         let config = bitrouter_sdk::config::load(&config_path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None, None).await?;
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await?;
 
         let mut exact = context();
         runtime
@@ -2753,6 +2790,7 @@ presets:
             Some(&old_config_path),
             old_db.clone(),
             None,
+            PendingEvalDecisionStore::default(),
             Some(trajectory(old_db.clone())?),
         )
         .await?;
@@ -2798,8 +2836,15 @@ presets:
 
         let disabled_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&disabled_db).await?;
-        let disabled =
-            PolicyRuntime::new(&config, Some(&config_path), disabled_db.clone(), None, None).await;
+        let disabled = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            disabled_db.clone(),
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await;
         let Err(disabled_error) = disabled else {
             anyhow::bail!("enabled guarded policy must reject missing trajectory runtime")
         };
@@ -2825,6 +2870,7 @@ presets:
             Some(Arc::new(PolicyDecisionJsonlRecorder::new(
                 decision_path.clone(),
             )?)),
+            PendingEvalDecisionStore::default(),
             Some(trajectory(baseline_db.clone())?),
         )
         .await?;
@@ -2893,6 +2939,7 @@ presets:
             Some(&config_path),
             metadata_db.clone(),
             None,
+            PendingEvalDecisionStore::default(),
             Some(trajectory(metadata_db.clone())?),
         )
         .await?;
@@ -2988,7 +3035,15 @@ presets:
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let disabled_config = Config::default();
-        let disabled = PolicyRuntime::new(&disabled_config, None, db.clone(), None, None).await?;
+        let disabled = PolicyRuntime::new(
+            &disabled_config,
+            None,
+            db.clone(),
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await?;
         let mut enabled_config = Config::default();
         enabled_config.trajectory.enabled = true;
         let Err(enable_error) = disabled.prepare_for_config(&enabled_config, None).await else {
@@ -3033,7 +3088,15 @@ presets:
             TrajectoryStore::new(db.clone()),
             Canonicalizer::new(CorrelationKey::from_bytes([41; 32])?),
         ));
-        let enabled = PolicyRuntime::new(&enabled_config, None, db, None, Some(trajectory)).await?;
+        let enabled = PolicyRuntime::new(
+            &enabled_config,
+            None,
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+            Some(trajectory),
+        )
+        .await?;
         let Err(disable_error) = enabled.prepare_for_config(&disabled_config, None).await else {
             anyhow::bail!("hot disabling trajectory must require restart")
         };
@@ -3549,9 +3612,16 @@ presets:
         write_atomic(&lock_path, None, &lock).unwrap();
         let db = crate::db::connect("sqlite::memory:").await.unwrap();
         crate::db::run_migrations(&db).await.unwrap();
-        let runtime = PolicyRuntime::new(&config, Some(&config_path), db, None, None)
-            .await
-            .unwrap();
+        let runtime = PolicyRuntime::new(
+            &config,
+            Some(&config_path),
+            db,
+            None,
+            PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await
+        .unwrap();
 
         let mut initial = context("vendor:strong");
         runtime

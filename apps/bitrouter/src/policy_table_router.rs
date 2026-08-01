@@ -283,7 +283,6 @@ impl PolicyTableRouter {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn with_eval_observer(
         mut self,
         pending: PendingEvalDecisionStore,
