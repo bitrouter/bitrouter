@@ -316,34 +316,18 @@ fn decision_credit(
     current_settlement: &TrajectoryEvent,
     metrics: &BTreeMap<String, MetricValue>,
 ) -> BTreeMap<String, DecisionCredit> {
-    let Some((event, decision)) = decoded
+    let Some((_, decision)) = decoded
         .iter()
         .rev()
         .find(|(event, _)| event.request_id == current_settlement.request_id)
     else {
         return BTreeMap::new();
     };
-    let mut metric_ids = [
-        "trajectory.same_projection_streak",
-        "trajectory.same_selected_tier_streak",
-        "trajectory.unprotected_streak",
-        "cost.usd_micros",
-        "latency.ms",
-    ]
-    .into_iter()
-    .filter(|metric| metrics.contains_key(*metric))
-    .map(str::to_owned)
-    .collect::<BTreeSet<_>>();
-    if event
-        .evidence
-        .categorical
-        .get("route.workflow_state")
-        .map(String::as_str)
-        == Some("recovery")
-        && metrics.contains_key("trajectory.recovery_count")
-    {
-        metric_ids.insert("trajectory.recovery_count".to_owned());
-    }
+    let metric_ids = ["cost.usd_micros", "latency.ms"]
+        .into_iter()
+        .filter(|metric| metrics.contains_key(*metric))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
     if metric_ids.is_empty() {
         return BTreeMap::new();
     }
@@ -578,6 +562,186 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn interleaved_settlements_credit_only_their_request_local_metrics() -> anyhow::Result<()> {
+        let events = interleaved_events()?;
+
+        let settled_a = build_operational_evaluation(&events[..5])?;
+        assert_eq!(
+            settled_a.result.decision_credit.keys().collect::<Vec<_>>(),
+            ["route-a"]
+        );
+        assert_eq!(
+            settled_a.result.decision_credit["route-a"].metric_ids,
+            BTreeSet::from(["cost.usd_micros".into(), "latency.ms".into()])
+        );
+        assert_eq!(settled_a.result.metrics["cost.usd_micros"].value, 70);
+        assert_eq!(settled_a.result.metrics["latency.ms"].value, 100);
+
+        let settled_b = build_operational_evaluation(&events)?;
+        assert_eq!(
+            settled_b.result.decision_credit.keys().collect::<Vec<_>>(),
+            ["route-b"]
+        );
+        assert_eq!(
+            settled_b.result.decision_credit["route-b"].metric_ids,
+            BTreeSet::from(["cost.usd_micros".into(), "latency.ms".into()])
+        );
+        assert_eq!(settled_b.result.metrics["cost.usd_micros"].value, 90);
+        assert_eq!(settled_b.result.metrics["latency.ms"].value, 200);
+        Ok(())
+    }
+
+    fn interleaved_events() -> anyhow::Result<Vec<TrajectoryEvent>> {
+        let start_a = request_start(1, "start-a", "request-a", 20)?;
+        let route_a = typed_route(
+            std::slice::from_ref(&start_a),
+            2,
+            "route-a",
+            "request-a",
+            "agent_trace/v2|planning|normal",
+            "planning",
+            ("economy", false),
+        )?;
+        let start_b = request_start(3, "start-b", "request-b", 40)?;
+        let prefix_b = vec![start_a.clone(), route_a.clone(), start_b.clone()];
+        let route_b = typed_route(
+            &prefix_b,
+            4,
+            "route-b",
+            "request-b",
+            "agent_trace/v2|recovery|guarded",
+            "recovery",
+            ("strong", true),
+        )?;
+        let settlement_a = request_settlement(5, "settlement-a", "request-a", 100, 15, 70)?;
+        let settlement_b = request_settlement(6, "settlement-b", "request-b", 200, 20, 90)?;
+        Ok(vec![
+            start_a,
+            route_a,
+            start_b,
+            route_b,
+            settlement_a,
+            settlement_b,
+        ])
+    }
+
+    fn request_start(
+        sequence: u64,
+        event_id: &str,
+        request_id: &str,
+        canonical_input_bytes: u64,
+    ) -> anyhow::Result<TrajectoryEvent> {
+        event_for_request(
+            sequence,
+            event_id,
+            request_id,
+            TrajectoryEventKind::RequestStarted,
+            BTreeMap::from([(
+                "request.canonical_input_bytes".to_owned(),
+                canonical_input_bytes,
+            )]),
+            BTreeMap::from([
+                ("history.completeness".to_owned(), "complete".to_owned()),
+                ("correlation.source".to_owned(), "explicit_root".to_owned()),
+            ]),
+            BTreeMap::new(),
+        )
+    }
+
+    fn typed_route(
+        prefix: &[TrajectoryEvent],
+        sequence: u64,
+        event_id: &str,
+        request_id: &str,
+        projection: &str,
+        workflow_state: &str,
+        selection: (&str, bool),
+    ) -> anyhow::Result<TrajectoryEvent> {
+        let (selected_tier, selected_is_protected) = selection;
+        let snapshot = reduce(prefix, &BTreeSet::new())?;
+        let mut route = event_for_request(
+            sequence,
+            event_id,
+            request_id,
+            TrajectoryEventKind::RouteIntentRecorded,
+            BTreeMap::from([
+                ("route.applied_clause_count".to_owned(), 0),
+                (
+                    "route.selected_is_protected".to_owned(),
+                    u64::from(selected_is_protected),
+                ),
+            ]),
+            BTreeMap::from([
+                ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
+                ("route.policy".to_owned(), "auto:cost".to_owned()),
+                ("route.request_key".to_owned(), projection.to_owned()),
+                ("route.baseline_tier".to_owned(), "reference".to_owned()),
+                ("route.preset".to_owned(), "auto:cost".to_owned()),
+                ("route.projection".to_owned(), projection.to_owned()),
+                ("route.workflow_state".to_owned(), workflow_state.to_owned()),
+                ("route.selected_tier".to_owned(), selected_tier.to_owned()),
+            ]),
+            BTreeMap::from([
+                ("route.policy_lock".to_owned(), POLICY_DIGEST.to_owned()),
+                ("route.health_snapshot".to_owned(), snapshot.evidence_digest),
+            ]),
+        )?;
+        for (index, clause_id) in [
+            "progress_guard.active_hold",
+            "progress_guard.incomplete_history",
+            "progress_guard.max_consecutive_unprotected",
+            "progress_guard.max_same_projection_unprotected",
+            "progress_guard.max_recovery_count",
+            "progress_guard.max_episode_requests",
+            "progress_guard.max_episode_elapsed_ms",
+            "progress_guard.max_episode_cost_micro_usd",
+            "tool_safety.floor",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let clause = format!("route.clause_{index:02}");
+            route
+                .evidence
+                .categorical
+                .insert(format!("{clause}.id"), clause_id.to_owned());
+            route
+                .evidence
+                .categorical
+                .insert(format!("{clause}.disposition"), "skipped".to_owned());
+        }
+        resign(&mut route)?;
+        Ok(route)
+    }
+
+    fn request_settlement(
+        sequence: u64,
+        event_id: &str,
+        request_id: &str,
+        duration_ms: u64,
+        total_tokens: u64,
+        cost_micro_usd: u64,
+    ) -> anyhow::Result<TrajectoryEvent> {
+        event_for_request(
+            sequence,
+            event_id,
+            request_id,
+            TrajectoryEventKind::RequestSettled,
+            BTreeMap::from([
+                ("settlement.duration_ms".to_owned(), duration_ms),
+                ("settlement.total_tokens".to_owned(), total_tokens),
+                ("settlement.cost_micro_usd".to_owned(), cost_micro_usd),
+            ]),
+            BTreeMap::from([
+                ("settlement.outcome".to_owned(), "settled".to_owned()),
+                ("settlement.provider".to_owned(), "provider".to_owned()),
+                ("settlement.model".to_owned(), "model".to_owned()),
+            ]),
+            BTreeMap::new(),
+        )
+    }
+
     fn complete_events(
         total_tokens: Option<u64>,
         cost_micro_usd: Option<u64>,
@@ -678,12 +842,32 @@ mod tests {
         categorical: BTreeMap<String, String>,
         digests: BTreeMap<String, String>,
     ) -> anyhow::Result<TrajectoryEvent> {
+        event_for_request(
+            sequence,
+            event_id,
+            "request-1",
+            kind,
+            structural,
+            categorical,
+            digests,
+        )
+    }
+
+    fn event_for_request(
+        sequence: u64,
+        event_id: &str,
+        request_id: &str,
+        kind: TrajectoryEventKind,
+        structural: BTreeMap<String, u64>,
+        categorical: BTreeMap<String, String>,
+        digests: BTreeMap<String, String>,
+    ) -> anyhow::Result<TrajectoryEvent> {
         let mut event = TrajectoryEvent {
             schema_version: TRAJECTORY_SCHEMA_VERSION,
             event_id: event_id.to_owned(),
             owner_user_id: "owner-1".to_owned(),
             episode_id: "episode-1".to_owned(),
-            request_id: Some("request-1".to_owned()),
+            request_id: Some(request_id.to_owned()),
             sequence,
             kind,
             evidence: TrajectoryEvidence {
