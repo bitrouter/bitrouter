@@ -336,7 +336,24 @@ impl TrajectoryStore {
                     trusted_native_parent_id = Some(native_parent_id.clone());
                     let episode = owned_episode(&txn, owner_user_id, &parent.episode_id).await?;
                     if episode.correlation_key_id == input.correlation_key_id {
-                        let completeness = parse_completeness(&episode.history_completeness)?;
+                        prefix_conflict = match find_prefix_episode(
+                            &txn,
+                            owner_user_id,
+                            &input.ancestor_prefix_digests,
+                        )
+                        .await?
+                        {
+                            PrefixResolution::Unique(prefix_episode) => {
+                                prefix_episode.episode_id != episode.episode_id
+                            }
+                            PrefixResolution::Ambiguous => true,
+                            PrefixResolution::None => false,
+                        };
+                        let completeness = if prefix_conflict {
+                            HistoryCompleteness::Incomplete
+                        } else {
+                            parse_completeness(&episode.history_completeness)?
+                        };
                         resolved_episode = Some(episode);
                         (CorrelationSource::NativeParentId, completeness)
                     } else {
@@ -492,6 +509,7 @@ impl TrajectoryStore {
                 sequence,
                 &input.request_id,
                 &input.captured_at,
+                completeness,
             )
             .await?;
             if !reserved {
@@ -2082,6 +2100,7 @@ async fn reserve_episode_head(
     expected_sequence: u64,
     request_id: &str,
     captured_at: &str,
+    completeness: HistoryCompleteness,
 ) -> Result<bool> {
     let expected =
         i64::try_from(expected_sequence).context("trajectory sequence exceeds database range")?;
@@ -2097,6 +2116,10 @@ async fn reserve_episode_head(
         .col_expr(
             episode_entity::Column::LatestRequestId,
             Expr::value(request_id.to_owned()),
+        )
+        .col_expr(
+            episode_entity::Column::HistoryCompleteness,
+            Expr::value(completeness_name(completeness)),
         )
         .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(episode_entity::Column::EpisodeId.eq(episode_id))
@@ -3638,6 +3661,7 @@ mod tests {
                 2,
                 "request-2",
                 "2026-08-01T00:01:00Z",
+                HistoryCompleteness::Complete,
             )
             .await?
         );
@@ -3652,6 +3676,7 @@ mod tests {
                 2,
                 "request-stale",
                 "2026-08-01T00:01:01Z",
+                HistoryCompleteness::Complete,
             )
             .await?
         );

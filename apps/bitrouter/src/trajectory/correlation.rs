@@ -335,19 +335,20 @@ mod tests {
             )
             .await?;
 
+        let child_prompt = responses_prompt(
+            vec![
+                Message::text(Role::User, "prefix root"),
+                Message::text(Role::Assistant, "answer"),
+                Message::text(Role::User, "continue"),
+            ],
+            "request-native",
+        );
         let linked = runtime
             .begin_request(
                 "owner-a",
                 "request-child",
                 ApiProtocol::Responses,
-                &responses_prompt(
-                    vec![
-                        Message::text(Role::User, "prefix root"),
-                        Message::text(Role::Assistant, "answer"),
-                        Message::text(Role::User, "continue"),
-                    ],
-                    "request-native",
-                ),
+                &child_prompt,
                 "2026-08-01T00:00:02Z",
             )
             .await?;
@@ -355,10 +356,175 @@ mod tests {
         assert_eq!(linked.source, CorrelationSource::NativeParentId);
         assert_eq!(linked.episode_id, native_root.episode_id);
         assert_ne!(linked.episode_id, prefix_root.episode_id);
+        assert_eq!(linked.completeness, HistoryCompleteness::Incomplete);
         assert_eq!(linked.prior_events.len(), 1);
         assert_eq!(
             linked.evidence.native_parent_id.as_deref(),
             Some(native_root.request_id.as_str())
+        );
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &linked.episode_id)
+            .await?;
+        let start = events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing conflicting request start"))?;
+        assert_eq!(
+            start.evidence.structural.get("correlation.prefix_conflict"),
+            Some(&1)
+        );
+        assert_eq!(
+            start
+                .evidence
+                .categorical
+                .get("history.completeness")
+                .map(String::as_str),
+            Some("incomplete")
+        );
+        assert_eq!(
+            runtime
+                .store()
+                .episode("owner-a", &linked.episode_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing native episode"))?
+                .completeness,
+            HistoryCompleteness::Incomplete
+        );
+
+        let retry = runtime
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:05:00Z",
+            )
+            .await?;
+        assert_eq!(retry.episode_id, linked.episode_id);
+        assert_eq!(retry.source, CorrelationSource::NativeParentId);
+        assert_eq!(retry.completeness, HistoryCompleteness::Incomplete);
+        assert_eq!(retry.prior_events, linked.prior_events);
+        assert_eq!(
+            runtime
+                .store()
+                .events_for_episode("owner-a", &linked.episode_id)
+                .await?
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_parent_matching_prefix_preserves_complete_episode() -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-root",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "shared root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+
+        let linked = runtime
+            .begin_request(
+                "owner-a",
+                "request-matching-child",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![
+                        Message::text(Role::User, "shared root"),
+                        Message::text(Role::Assistant, "answer"),
+                        Message::text(Role::User, "continue"),
+                    ],
+                    "request-root",
+                ),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        assert_eq!(linked.source, CorrelationSource::NativeParentId);
+        assert_eq!(linked.episode_id, root.episode_id);
+        assert_eq!(linked.completeness, HistoryCompleteness::Complete);
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &root.episode_id)
+            .await?;
+        assert_eq!(
+            events[1]
+                .evidence
+                .structural
+                .get("correlation.prefix_conflict"),
+            Some(&0)
+        );
+        assert_eq!(
+            runtime
+                .store()
+                .episode("owner-a", &root.episode_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing matching episode"))?
+                .completeness,
+            HistoryCompleteness::Complete
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_parent_outranks_ambiguous_prefix_but_marks_incomplete() -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let shared = prompt(vec![Message::text(Role::User, "shared root")]);
+        let native_root = runtime
+            .begin_request(
+                "owner-a",
+                "request-native-root",
+                ApiProtocol::Responses,
+                &shared,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let other_root = runtime
+            .begin_request(
+                "owner-a",
+                "request-other-root",
+                ApiProtocol::ChatCompletions,
+                &shared,
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        let linked = runtime
+            .begin_request(
+                "owner-a",
+                "request-ambiguous-native-child",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![
+                        Message::text(Role::User, "shared root"),
+                        Message::text(Role::Assistant, "answer"),
+                        Message::text(Role::User, "continue"),
+                    ],
+                    "request-native-root",
+                ),
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+
+        assert_eq!(linked.source, CorrelationSource::NativeParentId);
+        assert_eq!(linked.episode_id, native_root.episode_id);
+        assert_ne!(linked.episode_id, other_root.episode_id);
+        assert_eq!(linked.completeness, HistoryCompleteness::Incomplete);
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &linked.episode_id)
+            .await?;
+        assert_eq!(
+            events[1]
+                .evidence
+                .structural
+                .get("correlation.prefix_conflict"),
+            Some(&1)
         );
         Ok(())
     }

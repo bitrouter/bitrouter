@@ -26,10 +26,10 @@ mod tests {
     use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
     use crate::trajectory::correlation::TrajectoryRuntime;
     use crate::trajectory::health::reduce;
-    use crate::trajectory::store::TrajectoryStore;
+    use crate::trajectory::store::{EpisodeAudit, TrajectoryStore};
     use crate::trajectory::types::{
-        RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind,
-        TrajectoryEvidence,
+        HistoryCompleteness, RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent,
+        TrajectoryEventKind, TrajectoryEvidence,
     };
 
     #[tokio::test]
@@ -253,7 +253,201 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn file_sqlite_restart_replays_native_prefix_conflict_monotonically() -> anyhow::Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("trajectory-conflict.db").display()
+        );
+        let protected_tiers = BTreeSet::from(["protected".to_owned()]);
+        let db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&db).await?;
+        let runtime = TrajectoryRuntime::new(
+            TrajectoryStore::new(db.clone()),
+            Canonicalizer::new(CorrelationKey::from_bytes([33; 32])?),
+        );
+        let native_root = runtime
+            .begin_request(
+                "owner-a",
+                "request-native-root",
+                ApiProtocol::Responses,
+                &prompt("native-private-root", None),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let prefix_root = runtime
+            .begin_request(
+                "owner-a",
+                "request-prefix-root",
+                ApiProtocol::ChatCompletions,
+                &prompt("prefix-private-root", None),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        let conflicting_prompt = prompt_messages(
+            vec![
+                Message::text(Role::User, "prefix-private-root"),
+                Message::text(Role::Assistant, "private-answer"),
+                Message::text(Role::User, "private-continue"),
+            ],
+            Some(("previous_response_id", "request-native-root")),
+        );
+        let conflicting = runtime
+            .begin_request(
+                "owner-a",
+                "request-conflicting-child",
+                ApiProtocol::Responses,
+                &conflicting_prompt,
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+        assert_eq!(conflicting.episode_id, native_root.episode_id);
+        assert_ne!(conflicting.episode_id, prefix_root.episode_id);
+        assert_eq!(conflicting.completeness, HistoryCompleteness::Incomplete);
+        assert_eq!(
+            runtime
+                .store()
+                .episode("owner-a", &conflicting.episode_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing conflicted episode"))?
+                .completeness,
+            HistoryCompleteness::Incomplete
+        );
+        let persisted = runtime
+            .store()
+            .events_for_episode("owner-a", &conflicting.episode_id)
+            .await?;
+        assert_eq!(
+            persisted[1]
+                .evidence
+                .structural
+                .get("correlation.prefix_conflict"),
+            Some(&1)
+        );
+        let uninterrupted = replay_episode(
+            runtime.store(),
+            "owner-a",
+            &conflicting.episode_id,
+            &protected_tiers,
+        )
+        .await?;
+        assert_eq!(
+            uninterrupted.health.completeness,
+            HistoryCompleteness::Incomplete
+        );
+
+        drop(runtime);
+        db.close().await?;
+
+        let restarted_db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&restarted_db).await?;
+        let restarted = TrajectoryRuntime::new(
+            TrajectoryStore::new(restarted_db),
+            Canonicalizer::new(CorrelationKey::from_bytes([33; 32])?),
+        );
+        let replayed = replay_episode(
+            restarted.store(),
+            "owner-a",
+            &conflicting.episode_id,
+            &protected_tiers,
+        )
+        .await?;
+        assert_eq!(replayed, uninterrupted);
+        assert_eq!(replayed.evidence_digest, uninterrupted.evidence_digest);
+
+        let retry = restarted
+            .begin_request(
+                "owner-a",
+                "request-conflicting-child",
+                ApiProtocol::Responses,
+                &conflicting_prompt,
+                "2026-08-01T00:05:00Z",
+            )
+            .await?;
+        assert_eq!(retry.episode_id, conflicting.episode_id);
+        assert_eq!(retry.completeness, HistoryCompleteness::Incomplete);
+        assert_eq!(retry.prior_events, conflicting.prior_events);
+        assert_eq!(
+            restarted
+                .store()
+                .events_for_episode("owner-a", &conflicting.episode_id)
+                .await?
+                .len(),
+            2
+        );
+
+        let compacted = restarted
+            .begin_request(
+                "owner-a",
+                "request-compacted-child",
+                ApiProtocol::Responses,
+                &prompt(
+                    "compacted-private-delta",
+                    Some(("previous_response_id", "request-conflicting-child")),
+                ),
+                "2026-08-01T00:05:01Z",
+            )
+            .await?;
+        assert_eq!(compacted.episode_id, conflicting.episode_id);
+        assert_eq!(compacted.completeness, HistoryCompleteness::Incomplete);
+        let final_events = restarted
+            .store()
+            .events_for_episode("owner-a", &conflicting.episode_id)
+            .await?;
+        assert_eq!(
+            final_events[2]
+                .evidence
+                .structural
+                .get("correlation.prefix_conflict"),
+            Some(&0),
+            "missing prefix evidence on a compacted native delta is not a conflict"
+        );
+        let final_replay = replay_episode(
+            restarted.store(),
+            "owner-a",
+            &conflicting.episode_id,
+            &protected_tiers,
+        )
+        .await?;
+        assert_eq!(
+            final_replay.health.completeness,
+            HistoryCompleteness::Incomplete
+        );
+        match restarted
+            .store()
+            .audit_episode("owner-a", &conflicting.episode_id)
+            .await?
+        {
+            EpisodeAudit::Valid {
+                episode, snapshot, ..
+            } => {
+                assert_eq!(episode.completeness, HistoryCompleteness::Incomplete);
+                assert_eq!(snapshot, final_replay);
+            }
+            EpisodeAudit::Corrupt { reason, .. } => {
+                anyhow::bail!("conflicted episode audit failed: {reason}")
+            }
+        }
+        let persisted_json = serde_json::to_string(&final_events)?;
+        for raw in [
+            "native-private-root",
+            "prefix-private-root",
+            "private-answer",
+            "private-continue",
+            "compacted-private-delta",
+        ] {
+            assert!(!persisted_json.contains(raw), "persisted raw input: {raw}");
+        }
+        Ok(())
+    }
+
     fn prompt(text: &str, extra: Option<(&str, &str)>) -> Prompt {
+        prompt_messages(vec![Message::text(Role::User, text)], extra)
+    }
+
+    fn prompt_messages(messages: Vec<Message>, extra: Option<(&str, &str)>) -> Prompt {
         let mut params = GenerationParams::default();
         if let Some((key, value)) = extra {
             params
@@ -264,7 +458,7 @@ mod tests {
             model: "inbound".to_owned(),
             system: None,
             system_provider_metadata: BTreeMap::new(),
-            messages: vec![Message::text(Role::User, text)],
+            messages,
             tools: Vec::new(),
             params,
             response_format: None,
