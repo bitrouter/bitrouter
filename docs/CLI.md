@@ -385,6 +385,15 @@ changing `enabled`, `retention_days`, or `outbox_batch_size` during reload is
 rejected while the last-known-good runtime remains active. Restart the daemon
 to apply any trajectory setting change.
 
+Progress-guard clauses have two timing models. `max_recovery_count` is an edge
+trigger: it compares the prospective cumulative recovery count only when the
+current request projects as `recovery`; its configured hold, not the cumulative
+counter by itself, determines how long the escalation persists. The episode
+request, elapsed-time, and known-cost thresholds are monotonic once reached.
+A trigger activates hold when the static candidate already equals the
+escalation tier, without changing that tier; a different protected candidate is
+preserved. Unknown cost remains unknown and cannot satisfy a cost threshold.
+
 The feature is source- and task-neutral. It stores event structure, bounded
 categorical routing facts, exact counters, and keyed/content digests. It does
 not store API keys, bearer credentials, prompts, system instructions, tool

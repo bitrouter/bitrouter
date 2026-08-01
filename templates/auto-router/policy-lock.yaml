@@ -28,6 +28,17 @@ policies:
       - strong
       - balanced
       - economy
+    progress_guard:
+      escalation_tier: strong
+      protected_tiers:
+        - strong
+      max_consecutive_unprotected: 3
+      max_same_projection_unprotected: 3
+      max_recovery_count: 1
+      max_episode_requests: 24
+      max_episode_elapsed_ms: 1800000
+      hold_for_requests: 2
+      incomplete_history: escalate
     adequacy:
       escalation_tier: strong
       escalation_threshold: 1

@@ -21,14 +21,19 @@ use bitrouter::workflow_state::archive::{
 use bitrouter::workflow_state::decision::{PolicyDecisionRecord, PolicyDecisionSummary};
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
+use bitrouter::workflow_state::online::OnlineWorkflowState;
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
 use bitrouter::workflow_state::replay::ReplayEvaluator;
 use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::config;
-use bitrouter_sdk::language_model::{NormalizedUsage, UsageOrigin};
+use bitrouter_sdk::language_model::{
+    ApiProtocol, NormalizedUsage, UsageOrigin, inbound_adapter_for,
+};
+use serde::Deserialize;
 use serde_json::json;
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -76,6 +81,61 @@ fn temp_path(name: &str) -> PathBuf {
         "bitrouter-workflow-state-{name}-{}-{unique}",
         std::process::id()
     ))
+}
+
+#[derive(Deserialize)]
+struct ProgressFixtureRequest {
+    stage: String,
+    body: serde_json::Value,
+}
+
+#[test]
+fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<()> {
+    let adapter = inbound_adapter_for(&ApiProtocol::ChatCompletions)
+        .ok_or_else(|| anyhow::anyhow!("chat completions adapter is unavailable"))?;
+    let requests = include_str!("fixtures/trajectory/recovery_then_repeat.jsonl")
+        .lines()
+        .map(serde_json::from_str::<ProgressFixtureRequest>)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let stages = requests
+        .iter()
+        .map(|request| request.stage.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stages,
+        [
+            "opening", "recovery", "review_1", "review_2", "review_3", "review_4", "review_5",
+        ]
+    );
+
+    let projections = requests
+        .into_iter()
+        .map(|request| {
+            let prompt = adapter.parse_request(request.body)?;
+            Ok(OnlineWorkflowState::from_prompt(
+                &HeaderMap::new(),
+                &prompt,
+                None,
+                ProtocolKind::ChatCompletions,
+            )
+            .routing_key()
+            .to_owned())
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    assert_eq!(
+        projections,
+        [
+            "agent_trace/v2|opening|normal",
+            "agent_trace/v2|recovery|guarded",
+            "agent_trace/v2|review|normal",
+            "agent_trace/v2|review|normal",
+            "agent_trace/v2|review|normal",
+            "agent_trace/v2|review|normal",
+            "agent_trace/v2|review|normal",
+        ]
+    );
+    Ok(())
 }
 
 #[tokio::test]

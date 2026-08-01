@@ -1,0 +1,1036 @@
+//! HTTP-level generality and trajectory-inflation regressions for the
+//! task-neutral progress control plane.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use axum_test::TestServer;
+use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
+use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+use bitrouter::trajectory::health::reduce;
+use bitrouter::trajectory::replay::replay_episode;
+use bitrouter::trajectory::store::TrajectoryStore;
+use bitrouter::trajectory::types::{HistoryCompleteness, TrajectoryEventKind};
+use bitrouter_sdk::config;
+use bitrouter_sdk::server::{AppState, build_router};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+const ASSISTANT_REVIEW_ACTION: &str =
+    r#"{"commands":[{"keystrokes":"git status"}],"task_complete":false}"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InboundProtocol {
+    Chat,
+    Messages,
+    Responses,
+}
+
+impl InboundProtocol {
+    fn endpoint(self) -> &'static str {
+        match self {
+            Self::Chat => "/v1/chat/completions",
+            Self::Messages => "/v1/messages",
+            Self::Responses => "/v1/responses",
+        }
+    }
+
+    fn persisted_name(self) -> &'static str {
+        match self {
+            Self::Chat => "chat_completions",
+            Self::Messages => "messages",
+            Self::Responses => "responses",
+        }
+    }
+
+    fn fixture(self) -> &'static str {
+        match self {
+            Self::Chat => include_str!("fixtures/trajectory/complete_chat.jsonl"),
+            Self::Messages => include_str!("fixtures/trajectory/complete_messages.jsonl"),
+            Self::Responses => include_str!("fixtures/trajectory/complete_responses.jsonl"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FixtureRequest {
+    stage: String,
+    body: Value,
+}
+
+struct HttpHarness {
+    _home: TempDir,
+    config_path: PathBuf,
+    config: config::Config,
+    strong: MockServer,
+    economy: MockServer,
+}
+
+impl HttpHarness {
+    async fn new(progress_guard: bool) -> anyhow::Result<Self> {
+        let policy = PolicyDefinition {
+            tiers: BTreeMap::from([
+                ("economy".into(), "economy:economy-model".into()),
+                ("strong".into(), "strong:strong-model".into()),
+            ]),
+            default_tier: Some("economy".into()),
+            tool_use_tier: Some("strong".into()),
+            tool_safe_tiers: vec!["economy".into(), "strong".into()],
+            progress_guard: progress_guard.then(|| ProgressGuardPolicy {
+                escalation_tier: "strong".into(),
+                protected_tiers: BTreeSet::from(["strong".into()]),
+                max_consecutive_unprotected: Some(3),
+                max_same_projection_unprotected: None,
+                max_recovery_count: Some(1),
+                max_episode_requests: None,
+                max_episode_elapsed_ms: None,
+                max_episode_cost_micro_usd: None,
+                hold_for_requests: 2,
+                incomplete_history: IncompleteHistoryAction::Observe,
+            }),
+            ..PolicyDefinition::default()
+        };
+        let mut lock = PolicyLock::default();
+        lock.policies.insert("auto".into(), policy);
+        Self::with_lock(lock).await
+    }
+
+    async fn with_lock(lock: PolicyLock) -> anyhow::Result<Self> {
+        let home = tempfile::tempdir()?;
+        let strong = mock_upstream("strong-model").await;
+        let economy = mock_upstream("economy-model").await;
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            home.path().join("trajectory.db").display()
+        );
+        let yaml = format!(
+            r#"
+server:
+  listen: "127.0.0.1:0"
+  skip_auth: false
+database:
+  url: "{database_url}"
+trajectory:
+  enabled: true
+  retention_days: 30
+  outbox_batch_size: 10
+policy:
+  path: "./policy-lock.yaml"
+  mode: frozen
+providers:
+  strong:
+    api_base: "{strong_uri}"
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: strong-model
+  economy:
+    api_base: "{economy_uri}"
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: economy-model
+  balanced:
+    api_base: "{economy_uri}"
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: balanced-model
+presets:
+  auto:
+    model: "strong:strong-model"
+    policy: auto
+  flex:
+    model: "strong:strong-model"
+    policy: auto
+"#,
+            strong_uri = strong.uri(),
+            economy_uri = economy.uri(),
+        );
+        let config = config::parse_with(&yaml, |_| None)?;
+        write_policy_lock(home.path(), &lock).await?;
+        Ok(Self {
+            config_path: home.path().join("bitrouter.yaml"),
+            config,
+            _home: home,
+            strong,
+            economy,
+        })
+    }
+
+    async fn assemble(&self) -> anyhow::Result<bitrouter::Assembled> {
+        bitrouter::build_app_with_path(&self.config, Some(&self.config_path)).await
+    }
+}
+
+async fn mock_upstream(model: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(NativeIdResponse {
+            model: model.to_owned(),
+        })
+        .mount(&server)
+        .await;
+    server
+}
+
+struct NativeIdResponse {
+    model: String,
+}
+
+impl Respond for NativeIdResponse {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let request_id = request
+            .headers
+            .get("x-bitrouter-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("missing-request-id");
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": format!("upstream-{request_id}"),
+            "object": "chat.completion",
+            "model": self.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": ASSISTANT_REVIEW_ACTION},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+        }))
+    }
+}
+
+async fn write_policy_lock(home: &Path, lock: &PolicyLock) -> anyhow::Result<()> {
+    tokio::fs::write(home.join("policy-lock.yaml"), deterministic_yaml(lock)?).await?;
+    Ok(())
+}
+
+fn server(assembled: &bitrouter::Assembled) -> TestServer {
+    let state = AppState {
+        language_model: assembled
+            .app
+            .language_model()
+            .expect("language model configured")
+            .clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    TestServer::new(build_router(state))
+}
+
+async fn add_owner(db: &DatabaseConnection, owner: &str) -> anyhow::Result<String> {
+    auth_db::upsert_user(db, owner).await?;
+    let generated = generate();
+    auth_db::insert_api_key(
+        db,
+        &NewApiKey {
+            id: format!("key-{owner}"),
+            key_hash: generated.hash,
+            user_id: owner.to_owned(),
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            policy_id: None,
+        },
+    )
+    .await?;
+    Ok(generated.secret)
+}
+
+fn fixture_requests(raw: &str) -> anyhow::Result<Vec<FixtureRequest>> {
+    raw.lines()
+        .map(serde_json::from_str)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn post_fixture(
+    server: &TestServer,
+    protocol: InboundProtocol,
+    bearer: &str,
+    fixture: &FixtureRequest,
+    previous_response_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut body = fixture.body.clone();
+    if protocol == InboundProtocol::Responses
+        && let Some(previous_response_id) = previous_response_id
+    {
+        body["previous_response_id"] = Value::String(previous_response_id.to_owned());
+    }
+    post_body(server, protocol, bearer, &fixture.stage, &body, &[]).await
+}
+
+async fn post_body(
+    server: &TestServer,
+    protocol: InboundProtocol,
+    bearer: &str,
+    stage: &str,
+    body: &Value,
+    headers: &[(&str, &str)],
+) -> anyhow::Result<String> {
+    let mut request = server
+        .post(protocol.endpoint())
+        .add_header("authorization", format!("Bearer {bearer}"));
+    for (name, value) in headers {
+        request = request.add_header(*name, *value);
+    }
+    let response = request.json(body).await;
+    assert_eq!(
+        response.status_code().as_u16(),
+        200,
+        "{} request failed: {}",
+        stage,
+        response.text()
+    );
+    let response: Value = response.json();
+    response["id"]
+        .as_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("{stage} response has no native id"))
+}
+
+async fn owner_episode_ids(db: &DatabaseConnection, owner: &str) -> anyhow::Result<Vec<String>> {
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT episode_id FROM trajectory_episodes WHERE owner_user_id = ? ORDER BY episode_id",
+            [owner.into()],
+        ))
+        .await?;
+    rows.into_iter()
+        .map(|row| row.try_get("", "episode_id").map_err(Into::into))
+        .collect()
+}
+
+async fn request_diagnostics(
+    db: &DatabaseConnection,
+    owner: &str,
+) -> anyhow::Result<Vec<(String, Option<String>)>> {
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT protocol, native_parent_id FROM trajectory_requests WHERE owner_user_id = ? ORDER BY rowid",
+            [owner.into()],
+        ))
+        .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get("", "protocol")?,
+                row.try_get("", "native_parent_id")?,
+            ))
+        })
+        .collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NormalizedOutcome {
+    completeness: HistoryCompleteness,
+    request_count: u64,
+    settled_request_count: u64,
+    recovery_count: u64,
+    latest_projection: Option<String>,
+    same_projection_streak: u64,
+    same_selected_tier_streak: u64,
+    consecutive_unprotected_requests: u64,
+    active_hold_remaining: u64,
+    selected_tiers: Vec<String>,
+    correlation_sources: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProgressView<'a> {
+    completeness: HistoryCompleteness,
+    request_count: u64,
+    settled_request_count: u64,
+    recovery_count: u64,
+    latest_projection: &'a Option<String>,
+    same_projection_streak: u64,
+    same_selected_tier_streak: u64,
+    consecutive_unprotected_requests: u64,
+    active_hold_remaining: u64,
+    selected_tiers: &'a [String],
+}
+
+impl NormalizedOutcome {
+    fn progress_view(&self) -> ProgressView<'_> {
+        ProgressView {
+            completeness: self.completeness,
+            request_count: self.request_count,
+            settled_request_count: self.settled_request_count,
+            recovery_count: self.recovery_count,
+            latest_projection: &self.latest_projection,
+            same_projection_streak: self.same_projection_streak,
+            same_selected_tier_streak: self.same_selected_tier_streak,
+            consecutive_unprotected_requests: self.consecutive_unprotected_requests,
+            active_hold_remaining: self.active_hold_remaining,
+            selected_tiers: &self.selected_tiers,
+        }
+    }
+}
+
+async fn normalized_outcome(
+    db: &DatabaseConnection,
+    owner: &str,
+) -> anyhow::Result<NormalizedOutcome> {
+    let episodes = owner_episode_ids(db, owner).await?;
+    if episodes.len() != 1 {
+        anyhow::bail!(
+            "owner {owner} has {} episodes, expected one",
+            episodes.len()
+        );
+    }
+    let store = TrajectoryStore::new(db.clone());
+    let events = store.events_for_episode(owner, &episodes[0]).await?;
+    let selected_tiers = events
+        .iter()
+        .filter(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
+        .filter_map(|event| {
+            event
+                .evidence
+                .categorical
+                .get("route.selected_tier")
+                .cloned()
+        })
+        .collect();
+    let correlation_sources = events
+        .iter()
+        .filter(|event| event.kind == TrajectoryEventKind::RequestStarted)
+        .filter_map(|event| {
+            event
+                .evidence
+                .categorical
+                .get("correlation.source")
+                .cloned()
+        })
+        .collect();
+    let snapshot = replay_episode(
+        &store,
+        owner,
+        &episodes[0],
+        &BTreeSet::from(["strong".to_owned()]),
+    )
+    .await?;
+    Ok(NormalizedOutcome {
+        completeness: snapshot.health.completeness,
+        request_count: snapshot.health.request_count,
+        settled_request_count: snapshot.health.settled_request_count,
+        recovery_count: snapshot.health.recovery_count,
+        latest_projection: snapshot.health.latest_projection,
+        same_projection_streak: snapshot.health.same_projection_streak,
+        same_selected_tier_streak: snapshot.health.same_selected_tier_streak,
+        consecutive_unprotected_requests: snapshot.health.consecutive_unprotected_requests,
+        active_hold_remaining: snapshot.active_hold_remaining,
+        selected_tiers,
+        correlation_sources,
+    })
+}
+
+fn replace_fixture_value(value: &mut Value, replacements: &[(&str, &str)]) {
+    match value {
+        Value::String(text) => {
+            for (from, to) in replacements {
+                *text = text.replace(from, to);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                replace_fixture_value(value, replacements);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                replace_fixture_value(value, replacements);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+async fn events_for_only_episode(
+    db: &DatabaseConnection,
+    owner: &str,
+) -> anyhow::Result<Vec<bitrouter::trajectory::types::TrajectoryEvent>> {
+    let episodes = owner_episode_ids(db, owner).await?;
+    if episodes.len() != 1 {
+        anyhow::bail!(
+            "owner {owner} has {} episodes, expected one",
+            episodes.len()
+        );
+    }
+    TrajectoryStore::new(db.clone())
+        .events_for_episode(owner, &episodes[0])
+        .await
+}
+
+#[tokio::test]
+async fn header_free_chat_messages_and_responses_have_equivalent_progress() -> anyhow::Result<()> {
+    let harness = HttpHarness::new(true).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let cases = [
+        (InboundProtocol::Chat, "protocol-chat"),
+        (InboundProtocol::Messages, "protocol-messages"),
+        (InboundProtocol::Responses, "protocol-responses"),
+    ];
+    let mut outcomes = Vec::new();
+
+    for (protocol, owner) in cases {
+        let bearer = add_owner(&assembled.db, owner).await?;
+        let requests = fixture_requests(protocol.fixture())?;
+        let mut response_ids = Vec::new();
+        for request in &requests {
+            let response_id = post_fixture(
+                &server,
+                protocol,
+                &bearer,
+                request,
+                response_ids.last().map(String::as_str),
+            )
+            .await?;
+            response_ids.push(response_id);
+        }
+
+        let diagnostics = request_diagnostics(&assembled.db, owner).await?;
+        assert_eq!(diagnostics.len(), 3);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|(name, _)| name == protocol.persisted_name())
+        );
+        if protocol == InboundProtocol::Responses {
+            assert_eq!(
+                response_ids.iter().collect::<BTreeSet<_>>().len(),
+                response_ids.len(),
+                "Responses must return a distinct native id for every request"
+            );
+            assert_eq!(diagnostics[0].1, None);
+            for (index, (_, parent)) in diagnostics.iter().enumerate().skip(1) {
+                let parent = parent.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("Responses request {index} lost native parent")
+                })?;
+                assert!(parent.starts_with("trajectory-request-"));
+                assert_ne!(parent, response_ids[index - 1]);
+            }
+        } else {
+            assert!(diagnostics.iter().all(|(_, parent)| parent.is_none()));
+        }
+        outcomes.push((protocol, normalized_outcome(&assembled.db, owner).await?));
+    }
+
+    let chat = &outcomes[0].1;
+    for (_, outcome) in &outcomes[1..] {
+        assert_eq!(outcome.progress_view(), chat.progress_view());
+    }
+    assert_eq!(
+        outcomes[0].1.correlation_sources,
+        ["explicit_root", "canonical_prefix", "canonical_prefix"]
+    );
+    assert_eq!(
+        outcomes[2].1.correlation_sources,
+        ["explicit_root", "native_parent_id", "native_parent_id"]
+    );
+    assert_eq!(
+        chat.selected_tiers,
+        ["economy", "strong", "strong"],
+        "recovery escalates immediately and the first review remains held"
+    );
+    assert_eq!(chat.completeness, HistoryCompleteness::Complete);
+    assert_eq!(chat.request_count, 3);
+    assert_eq!(chat.settled_request_count, 3);
+    assert_eq!(chat.recovery_count, 1);
+    assert_eq!(chat.active_hold_remaining, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn synthetic_recovery_hold_and_streak_bound_are_task_neutral() -> anyhow::Result<()> {
+    let requests = fixture_requests(include_str!(
+        "fixtures/trajectory/recovery_then_repeat.jsonl"
+    ))?;
+
+    let disabled = HttpHarness::new(false).await?;
+    let disabled_app = disabled.assemble().await?;
+    let disabled_server = server(&disabled_app);
+    let disabled_bearer = add_owner(&disabled_app.db, "guard-disabled").await?;
+    for request in &requests {
+        post_fixture(
+            &disabled_server,
+            InboundProtocol::Chat,
+            &disabled_bearer,
+            request,
+            None,
+        )
+        .await?;
+    }
+    assert!(
+        owner_episode_ids(&disabled_app.db, "guard-disabled")
+            .await?
+            .is_empty(),
+        "an existing lock without progress_guard must not start persistence"
+    );
+    assert_eq!(
+        disabled
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        0
+    );
+    assert_eq!(
+        disabled
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        requests.len()
+    );
+
+    let enabled = HttpHarness::new(true).await?;
+    let enabled_app = enabled.assemble().await?;
+    let enabled_server = server(&enabled_app);
+    let enabled_bearer = add_owner(&enabled_app.db, "guard-enabled").await?;
+    for request in &requests {
+        post_fixture(
+            &enabled_server,
+            InboundProtocol::Chat,
+            &enabled_bearer,
+            request,
+            None,
+        )
+        .await?;
+    }
+    let outcome = normalized_outcome(&enabled_app.db, "guard-enabled").await?;
+    assert_eq!(
+        outcome.selected_tiers,
+        [
+            "economy", "strong", "strong", "strong", "economy", "economy", "strong"
+        ]
+    );
+    assert_eq!(outcome.recovery_count, 1);
+
+    let events = events_for_only_episode(&enabled_app.db, "guard-enabled").await?;
+    let mut terminal_streaks = Vec::new();
+    for (index, event) in events.iter().enumerate() {
+        if event.kind == TrajectoryEventKind::RequestSettled {
+            let snapshot = reduce(&events[..=index], &BTreeSet::from(["strong".to_owned()]))?;
+            terminal_streaks.push(snapshot.health.consecutive_unprotected_requests);
+        }
+    }
+    assert_eq!(terminal_streaks, [1, 0, 0, 0, 1, 2, 0]);
+    assert!(terminal_streaks.into_iter().all(|streak| streak <= 3));
+    assert_eq!(
+        enabled
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        4
+    );
+    assert_eq!(
+        enabled
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        3
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_model_tool_and_harness_labels_are_noncausal() -> anyhow::Result<()> {
+    let harness = HttpHarness::new(true).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let baseline_bearer = add_owner(&assembled.db, "independence-baseline").await?;
+    let mutated_bearer = add_owner(&assembled.db, "independence-mutated").await?;
+    let requests = fixture_requests(include_str!(
+        "fixtures/trajectory/recovery_then_repeat.jsonl"
+    ))?;
+
+    for request in &requests {
+        post_fixture(
+            &server,
+            InboundProtocol::Chat,
+            &baseline_bearer,
+            request,
+            None,
+        )
+        .await?;
+
+        let mut mutated = request.body.clone();
+        replace_fixture_value(
+            &mut mutated,
+            &[
+                ("neutral task alpha", "changed task omega"),
+                ("inspect", "observe"),
+                ("@auto", "@flex"),
+            ],
+        );
+        post_body(
+            &server,
+            InboundProtocol::Chat,
+            &mutated_bearer,
+            &request.stage,
+            &mutated,
+            &[
+                ("user-agent", "generic-harness-beta"),
+                ("x-bitrouter-harness", "codex"),
+                ("x-bitrouter-workflow-name", "workflow-beta"),
+                ("x-bitrouter-case-id", "case-beta"),
+                ("x-bitrouter-benchmark-id", "benchmark-beta"),
+                ("x-bitrouter-trial-id", "trial-beta"),
+            ],
+        )
+        .await?;
+    }
+
+    let baseline = normalized_outcome(&assembled.db, "independence-baseline").await?;
+    let mutated = normalized_outcome(&assembled.db, "independence-mutated").await?;
+    assert_eq!(baseline.progress_view(), mutated.progress_view());
+    assert_eq!(baseline.correlation_sources, mutated.correlation_sources);
+
+    let baseline_routes: Vec<_> = events_for_only_episode(&assembled.db, "independence-baseline")
+        .await?
+        .into_iter()
+        .filter(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
+        .map(|event| (event.evidence.structural, event.evidence.categorical))
+        .collect();
+    let mutated_routes: Vec<_> = events_for_only_episode(&assembled.db, "independence-mutated")
+        .await?
+        .into_iter()
+        .filter(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
+        .map(|event| (event.evidence.structural, event.evidence.categorical))
+        .collect();
+    assert_eq!(baseline_routes, mutated_routes);
+    Ok(())
+}
+
+#[tokio::test]
+async fn incomplete_conflicting_interleaved_and_owner_histories_are_explicit() -> anyhow::Result<()>
+{
+    let harness = HttpHarness::new(true).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let complete = fixture_requests(InboundProtocol::Chat.fixture())?;
+
+    // Identical content under distinct authenticated owners never shares state.
+    for owner in ["isolation-a", "isolation-b"] {
+        let bearer = add_owner(&assembled.db, owner).await?;
+        post_fixture(&server, InboundProtocol::Chat, &bearer, &complete[0], None).await?;
+        assert_eq!(
+            normalized_outcome(&assembled.db, owner).await?.completeness,
+            HistoryCompleteness::Complete
+        );
+    }
+    assert_ne!(
+        owner_episode_ids(&assembled.db, "isolation-a").await?,
+        owner_episode_ids(&assembled.db, "isolation-b").await?
+    );
+
+    // One owner can interleave two distinct conversations without merging them.
+    let interleaved = "interleaved-owner";
+    let bearer = add_owner(&assembled.db, interleaved).await?;
+    let mut root_b = complete[0].body.clone();
+    let mut child_b = complete[1].body.clone();
+    for body in [&mut root_b, &mut child_b] {
+        replace_fixture_value(body, &[("neutral task alpha", "neutral task bravo")]);
+    }
+    post_fixture(&server, InboundProtocol::Chat, &bearer, &complete[0], None).await?;
+    post_body(
+        &server,
+        InboundProtocol::Chat,
+        &bearer,
+        "root-b",
+        &root_b,
+        &[],
+    )
+    .await?;
+    post_fixture(&server, InboundProtocol::Chat, &bearer, &complete[1], None).await?;
+    post_body(
+        &server,
+        InboundProtocol::Chat,
+        &bearer,
+        "child-b",
+        &child_b,
+        &[],
+    )
+    .await?;
+    let interleaved_episodes = owner_episode_ids(&assembled.db, interleaved).await?;
+    assert_eq!(interleaved_episodes.len(), 2);
+    for episode in interleaved_episodes {
+        let stored = TrajectoryStore::new(assembled.db.clone())
+            .episode(interleaved, &episode)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing interleaved episode"))?;
+        assert_eq!(stored.completeness, HistoryCompleteness::Complete);
+    }
+
+    // Two indistinguishable roots make the later prefix explicitly ambiguous.
+    let conflict_owner = "prefix-conflict";
+    let conflict_bearer = add_owner(&assembled.db, conflict_owner).await?;
+    for _ in 0..2 {
+        post_fixture(
+            &server,
+            InboundProtocol::Chat,
+            &conflict_bearer,
+            &complete[0],
+            None,
+        )
+        .await?;
+    }
+    post_fixture(
+        &server,
+        InboundProtocol::Chat,
+        &conflict_bearer,
+        &complete[1],
+        None,
+    )
+    .await?;
+    let conflict_episodes = owner_episode_ids(&assembled.db, conflict_owner).await?;
+    assert_eq!(conflict_episodes.len(), 3);
+    let mut incomplete = 0;
+    for episode in conflict_episodes {
+        let stored = TrajectoryStore::new(assembled.db.clone())
+            .episode(conflict_owner, &episode)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing conflict episode"))?;
+        incomplete += usize::from(stored.completeness == HistoryCompleteness::Incomplete);
+    }
+    assert_eq!(incomplete, 1);
+
+    // Truncation and compaction retain no guess at missing ancestry.
+    for (owner, body) in [
+        ("truncated-owner", complete[1].body.clone()),
+        (
+            "compacted-owner",
+            json!({
+                "model": "@auto",
+                "messages": [
+                    {"role": "assistant", "content": "bounded structural summary"},
+                    {"role": "user", "content": "continue after compaction"}
+                ]
+            }),
+        ),
+    ] {
+        let bearer = add_owner(&assembled.db, owner).await?;
+        post_body(&server, InboundProtocol::Chat, &bearer, owner, &body, &[]).await?;
+        assert_eq!(
+            normalized_outcome(&assembled.db, owner).await?.completeness,
+            HistoryCompleteness::Incomplete
+        );
+    }
+
+    // Unknown and cross-owner native parents fail closed and remain opaque.
+    let parent_owner = "parent-owner";
+    let parent_bearer = add_owner(&assembled.db, parent_owner).await?;
+    let parent_id = post_body(
+        &server,
+        InboundProtocol::Responses,
+        &parent_bearer,
+        "parent-root",
+        &json!({"model": "@auto", "input": "root"}),
+        &[],
+    )
+    .await?;
+    for (owner, raw_parent) in [
+        ("unknown-parent-owner", "response-does-not-exist"),
+        ("foreign-parent-owner", parent_id.as_str()),
+    ] {
+        let bearer = add_owner(&assembled.db, owner).await?;
+        post_body(
+            &server,
+            InboundProtocol::Responses,
+            &bearer,
+            owner,
+            &json!({
+                "model": "@auto",
+                "previous_response_id": raw_parent,
+                "input": "independent root"
+            }),
+            &[],
+        )
+        .await?;
+        let events = events_for_only_episode(&assembled.db, owner).await?;
+        assert_eq!(
+            events[0].evidence.categorical.get("history.completeness"),
+            Some(&"incomplete".to_owned())
+        );
+        let digest = events[0]
+            .evidence
+            .digests
+            .get("correlation.native_parent")
+            .ok_or_else(|| anyhow::anyhow!("missing native parent digest"))?;
+        assert!(digest.starts_with("hmac-sha256:"));
+        assert!(!digest.contains(raw_parent));
+        assert_eq!(request_diagnostics(&assembled.db, owner).await?[0].1, None);
+    }
+    assert_ne!(
+        owner_episode_ids(&assembled.db, parent_owner).await?,
+        owner_episode_ids(&assembled.db, "foreign-parent-owner").await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_database_restart_preserves_episode_and_hold() -> anyhow::Result<()> {
+    let harness = HttpHarness::new(true).await?;
+    let first_app = harness.assemble().await?;
+    let first_server = server(&first_app);
+    let bearer = add_owner(&first_app.db, "restart-owner").await?;
+    let requests = fixture_requests(InboundProtocol::Chat.fixture())?;
+    for request in &requests[..2] {
+        post_fixture(&first_server, InboundProtocol::Chat, &bearer, request, None).await?;
+    }
+    let before = normalized_outcome(&first_app.db, "restart-owner").await?;
+    assert_eq!(before.selected_tiers, ["economy", "strong"]);
+    assert_eq!(before.active_hold_remaining, 2);
+    drop(first_server);
+    drop(first_app);
+
+    let restarted_app = harness.assemble().await?;
+    let restarted_server = server(&restarted_app);
+    post_fixture(
+        &restarted_server,
+        InboundProtocol::Chat,
+        &bearer,
+        &requests[2],
+        None,
+    )
+    .await?;
+    let after = normalized_outcome(&restarted_app.db, "restart-owner").await?;
+    assert_eq!(after.selected_tiers, ["economy", "strong", "strong"]);
+    assert_eq!(after.active_hold_remaining, 1);
+    assert_eq!(after.recovery_count, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn transport_retry_identity_is_idempotent_without_becoming_a_route_key() -> anyhow::Result<()>
+{
+    let harness = HttpHarness::new(true).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let bearer = add_owner(&assembled.db, "retry-owner").await?;
+    let opening = fixture_requests(InboundProtocol::Chat.fixture())?.remove(0);
+
+    let first = post_body(
+        &server,
+        InboundProtocol::Chat,
+        &bearer,
+        "retry-first",
+        &opening.body,
+        &[("x-bitrouter-request-id", "transport-retry-001")],
+    )
+    .await?;
+    let second = post_body(
+        &server,
+        InboundProtocol::Chat,
+        &bearer,
+        "retry-second",
+        &opening.body,
+        &[("x-bitrouter-request-id", "transport-retry-001")],
+    )
+    .await?;
+
+    assert_eq!(first, second);
+    let outcome = normalized_outcome(&assembled.db, "retry-owner").await?;
+    assert_eq!(outcome.request_count, 1);
+    assert_eq!(outcome.settled_request_count, 1);
+    assert_eq!(outcome.selected_tiers, ["economy"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn auto_template_recovery_at_strong_activates_hold_for_next_normal_route()
+-> anyhow::Result<()> {
+    let mut lock: PolicyLock = serde_saphyr::from_str(include_str!(
+        "../../../templates/auto-router/policy-lock.yaml"
+    ))?;
+    let auto = lock
+        .policies
+        .get_mut("auto")
+        .ok_or_else(|| anyhow::anyhow!("template lock is missing the auto policy"))?;
+    auto.tiers
+        .insert("strong".into(), "strong:strong-model".into());
+    auto.tiers
+        .insert("balanced".into(), "balanced:balanced-model".into());
+    auto.tiers
+        .insert("economy".into(), "economy:economy-model".into());
+
+    let harness = HttpHarness::with_lock(lock).await?;
+    let assembled = harness.assemble().await?;
+    let server = server(&assembled);
+    let bearer = add_owner(&assembled.db, "template-hold-owner").await?;
+    let requests = fixture_requests(InboundProtocol::Chat.fixture())?;
+    for request in &requests {
+        post_fixture(&server, InboundProtocol::Chat, &bearer, request, None).await?;
+    }
+
+    let outcome = normalized_outcome(&assembled.db, "template-hold-owner").await?;
+    assert_eq!(
+        outcome.selected_tiers,
+        ["strong", "strong", "strong"],
+        "the template recovery is already statically strong but must activate hold for the next economy route"
+    );
+    assert_eq!(outcome.recovery_count, 1);
+    assert_eq!(outcome.active_hold_remaining, 1);
+    let events = events_for_only_episode(&assembled.db, "template-hold-owner").await?;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == TrajectoryEventKind::GuardActivated)
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn auto_template_explicitly_opts_into_conservative_progress_control() -> anyhow::Result<()> {
+    let config = config::parse_with(
+        include_str!("../../../templates/auto-router/bitrouter.yaml"),
+        |_| None,
+    )?;
+    assert!(
+        config.trajectory.enabled,
+        "the generalized @auto template must explicitly enable trajectory persistence"
+    );
+
+    let lock: PolicyLock = serde_saphyr::from_str(include_str!(
+        "../../../templates/auto-router/policy-lock.yaml"
+    ))?;
+    bitrouter::policy_lock::validate_for_config(&config, &lock)?;
+    let auto = lock
+        .policies
+        .get("auto")
+        .ok_or_else(|| anyhow::anyhow!("template lock is missing the auto policy"))?;
+    let guard = auto.progress_guard.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("the generalized @auto policy must explicitly define progress_guard")
+    })?;
+    assert_eq!(guard.escalation_tier, "strong");
+    assert!(guard.protected_tiers.contains("strong"));
+    assert_eq!(guard.max_recovery_count, Some(1));
+    assert_eq!(guard.max_consecutive_unprotected, Some(3));
+    assert_eq!(guard.max_same_projection_unprotected, Some(3));
+    assert_eq!(guard.max_episode_requests, Some(24));
+    assert_eq!(guard.max_episode_elapsed_ms, Some(1_800_000));
+    assert_eq!(guard.max_episode_cost_micro_usd, None);
+    assert_eq!(guard.hold_for_requests, 2);
+    assert_eq!(guard.incomplete_history, IncompleteHistoryAction::Escalate);
+    Ok(())
+}

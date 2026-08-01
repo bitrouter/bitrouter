@@ -407,13 +407,19 @@ bitrouter trajectory prune --before <RFC3339> [--dry-run]
 - Modify: `templates/auto-router/policy-lock.yaml`
 - Modify: `templates/auto-router/README.md`
 
-- [ ] **Step 1: Write a failing HTTP matrix with no private routing headers.** Equivalent multi-turn Chat Completions, Messages, and Responses requests must form one episode per conversation, reduce to equivalent health, and preserve protocol diagnostics without changing the guard decision.
-- [ ] **Step 2: Test incomplete and conflicting history.** Truncated histories, unknown native parents, cross-user parent IDs, compaction, interleaved conversations, duplicated retries, and restarts produce explicit deterministic completeness and never share owner state.
-- [ ] **Step 3: Add the benchmark-derived invariant fixture.** Use a synthetic task-neutral sequence: opening -> recovery -> repeated review/context requests whose static candidate is unprotected. With guard disabled, preserve current routing. With guard enabled, recovery immediately selects the protected tier and hold-down prevents the next request from bouncing back. Assert a configured maximum unprotected streak can never be exceeded.
-- [ ] **Step 4: Prove input independence.** Replace fixture task text, tool names, model IDs, harness/user-agent, workflow names, case labels, and benchmark headers while preserving structural ancestry/projections; the health thresholds and route intent remain identical.
-- [ ] **Step 5: Opt the generalized `@auto` template into trajectory persistence and an explicitly documented conservative guard only after the synthetic matrix is green. Template thresholds are policy examples, not hidden runtime defaults. Existing user locks remain unchanged.**
-- [ ] **Step 6: Run restart, cross-protocol, policy reload/rollback, Eval outbox, real-agent, and replay integration suites until GREEN.**
-- [ ] **Step 7: Commit `test(trajectory): prove progress control`.**
+`workflow_state_real_agent_e2e.rs` is intentionally unchanged: its shared setup
+launches installed agent CLIs and protocol-specific streaming mocks, while this
+task's deterministic matrix needs direct HTTP requests, a file-backed ledger,
+owner-scoped inspection, and restart control. Reusing that harness would make
+the general progress invariant depend on external agent installations.
+
+- [x] **Step 1: Write a failing HTTP matrix with no private routing headers.** Equivalent multi-turn Chat Completions, Messages, and Responses requests must form one episode per conversation, reduce to equivalent health, and preserve protocol diagnostics without changing the guard decision.
+- [x] **Step 2: Test incomplete and conflicting history.** Truncated histories, unknown native parents, cross-user parent IDs, compaction, interleaved conversations, duplicated retries, and restarts produce explicit deterministic completeness and never share owner state.
+- [x] **Step 3: Add the benchmark-derived invariant fixture.** Use a synthetic task-neutral sequence: opening -> recovery -> repeated review/context requests whose static candidate is unprotected. With guard disabled, preserve current routing. With guard enabled, recovery immediately selects the protected tier and hold-down prevents the next request from bouncing back. Assert a configured maximum unprotected streak can never be exceeded.
+- [x] **Step 4: Prove input independence.** Replace fixture task text, tool names, model IDs, harness/user-agent, workflow names, case labels, and benchmark headers while preserving structural ancestry/projections; the health thresholds and route intent remain identical.
+- [x] **Step 5: Opt the generalized `@auto` template into trajectory persistence and an explicitly documented conservative guard only after the synthetic matrix is green. Template thresholds are policy examples, not hidden runtime defaults. Existing user locks remain unchanged.**
+- [x] **Step 6: Run restart, cross-protocol, policy reload/rollback, Eval outbox, real-agent, and replay integration suites until GREEN.**
+- [x] **Step 7: Commit `test(trajectory): prove progress control`.**
 
 ## Task 8: Validate the exact PR tree and record benchmark evidence
 

@@ -104,7 +104,7 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
     let (server, _, _config_dir) = generalization_server(&upstream.uri()).await;
 
-    for (path, body) in [
+    for (index, (path, mut body)) in [
         (
             "/v1/chat/completions",
             json!({
@@ -170,7 +170,20 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
                 ]
             }),
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let root_text = format!("complete root {index}");
+        body["messages"][0]["content"] = serde_json::Value::String(root_text.clone());
+        server
+            .post(path)
+            .json(&json!({
+                "model": body["model"].clone(),
+                "messages": [{"role": "user", "content": root_text}]
+            }))
+            .await
+            .assert_status_ok();
         server.post(path).json(&body).await.assert_status_ok();
     }
 
@@ -180,7 +193,18 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
             "model": "@auto",
             "messages": [
                 {"role": "system", "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with commands and task_complete."},
-                {"role": "user", "content": "continue"},
+                {"role": "user", "content": "complete review root"}
+            ]
+        }))
+        .await
+        .assert_status_ok();
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "@auto",
+            "messages": [
+                {"role": "system", "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment. Format your response as JSON with commands and task_complete."},
+                {"role": "user", "content": "complete review root"},
                 {"role": "assistant", "content": "{\"commands\":[{\"keystrokes\":\"git diff\"}],\"task_complete\":false}"}
             ]
         }))
@@ -191,8 +215,16 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         .post("/v1/chat/completions")
         .json(&json!({
             "model": "@auto",
+            "messages": [{"role": "user", "content": "complete recovery root"}]
+        }))
+        .await
+        .assert_status_ok();
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "@auto",
             "messages": [
-                {"role": "user", "content": "continue"},
+                {"role": "user", "content": "complete recovery root"},
                 {"role": "assistant", "tool_calls": [{
                     "id": "call_failed", "type": "function",
                     "function": {"name": "bash", "arguments": "{}"}
@@ -203,10 +235,33 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
         .await
         .assert_status_ok();
 
+    server
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "@auto",
+            "messages": [
+                {"role": "user", "content": "unseen standalone root"},
+                {"role": "assistant", "tool_calls": [{
+                    "id": "call_incomplete", "type": "function",
+                    "function": {"name": "apply_patch", "arguments": "{}"}
+                }]}
+            ]
+        }))
+        .await
+        .assert_status_ok();
+
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("HTTP traffic emits readable policy decisions");
-    assert_eq!(decisions.len(), 7);
-    for (decision, key) in decisions[..5].iter().zip([
+    assert_eq!(decisions.len(), 15);
+    for decision in decisions.iter().step_by(2).take(7) {
+        assert_eq!(decision.request_key, "agent_trace/v2|opening|normal");
+        assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(
+            decision.trajectory_completeness.as_deref(),
+            Some("complete")
+        );
+    }
+    for (decision, key) in decisions[1..10].iter().step_by(2).zip([
         "agent_trace/v2|edit|normal",
         "agent_trace/v2|test|normal",
         "agent_trace/v2|tool_followup|normal",
@@ -215,18 +270,29 @@ async fn auto_template_keeps_normal_traces_shared_and_guarded_traces_strong() {
     ]) {
         assert_eq!(decision.request_key, key);
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
+        assert_eq!(
+            decision.trajectory_completeness.as_deref(),
+            Some("complete")
+        );
     }
-    assert_eq!(decisions[5].request_key, "agent_trace/v2|review|normal");
-    assert_eq!(decisions[5].selected_tier.as_deref(), Some("balanced"));
+    assert_eq!(decisions[11].request_key, "agent_trace/v2|review|normal");
+    assert_eq!(decisions[11].selected_tier.as_deref(), Some("balanced"));
     assert_eq!(
-        decisions[5].selected_model.as_deref(),
+        decisions[11].selected_model.as_deref(),
         Some(MOCK_BALANCED_MODEL)
     );
-    assert_eq!(decisions[6].request_key, "agent_trace/v2|recovery|guarded");
-    assert_eq!(decisions[6].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(decisions[13].request_key, "agent_trace/v2|recovery|guarded");
+    assert_eq!(decisions[13].selected_tier.as_deref(), Some("strong"));
     assert_eq!(
-        decisions[6].selected_model.as_deref(),
+        decisions[13].selected_model.as_deref(),
         Some(MOCK_STRONG_MODEL)
+    );
+    assert_eq!(decisions[14].request_key, "agent_trace/v2|edit|normal");
+    assert_eq!(decisions[14].static_tier.as_deref(), Some("economy"));
+    assert_eq!(decisions[14].selected_tier.as_deref(), Some("strong"));
+    assert_eq!(
+        decisions[14].trajectory_completeness.as_deref(),
+        Some("incomplete")
     );
 }
 
@@ -239,7 +305,7 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
     let _decision_env = DecisionRecorderEnv::set(&decisions_path);
     let (server, capture, _config_dir) = generalization_server(&upstream.uri()).await;
 
-    let scenarios = [
+    let mut scenarios = [
         (
             "edit",
             "agent_trace/v2|edit|normal",
@@ -278,16 +344,22 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
         ),
     ];
 
-    for (_, _, first, second, _, _) in &scenarios {
+    for (name, _, first, second, _, _) in &mut scenarios {
+        let first_root = complete_native_root(first, &format!("{name} terminus root"));
+        post_native_body(&server, first, &first_root).await;
         post_native_case(&server, first).await;
+        let second_root = complete_native_root(second, &format!("{name} claude root"));
+        post_native_body(&server, second, &second_root).await;
         post_native_case(&server, second).await;
     }
 
     let traces = capture.records();
-    assert_eq!(traces.len(), 8);
-    for pair in traces.chunks_exact(2) {
+    assert_eq!(traces.len(), 16);
+    for pair in traces.chunks_exact(4) {
         assert_eq!(pair[0].harness, HarnessId::Terminus2);
-        assert_eq!(pair[1].harness, HarnessId::ClaudeCode);
+        assert_eq!(pair[1].harness, HarnessId::Terminus2);
+        assert_eq!(pair[2].harness, HarnessId::ClaudeCode);
+        assert_eq!(pair[3].harness, HarnessId::ClaudeCode);
         assert!(pair.iter().all(|trace| {
             trace
                 .headers
@@ -298,23 +370,48 @@ async fn native_sources_share_template_projection_keys_and_tiers() {
 
     let decisions = PolicyDecisionRecord::load_jsonl(&decisions_path)
         .expect("native HTTP traffic emits policy decisions");
-    assert_eq!(decisions.len(), 8);
-    for ((name, key, _, _, tier, model), pair) in scenarios.iter().zip(decisions.chunks_exact(2)) {
-        assert_eq!(pair[0].request_key, *key, "{name} first source");
-        assert_eq!(pair[1].request_key, *key, "{name} second source");
-        assert_eq!(pair[0].selected_tier.as_deref(), Some(*tier), "{name}");
+    assert_eq!(decisions.len(), 16);
+    for ((name, key, _, _, tier, model), pair) in scenarios.iter().zip(decisions.chunks_exact(4)) {
+        for root in [&pair[0], &pair[2]] {
+            assert_eq!(root.request_key, "agent_trace/v2|opening|normal");
+            assert_eq!(root.selected_tier.as_deref(), Some("strong"));
+            assert_eq!(root.trajectory_completeness.as_deref(), Some("complete"));
+        }
+        assert_eq!(pair[1].request_key, *key, "{name} first source");
+        assert_eq!(pair[3].request_key, *key, "{name} second source");
         assert_eq!(pair[1].selected_tier.as_deref(), Some(*tier), "{name}");
-        assert_eq!(pair[0].selected_model.as_deref(), Some(*model), "{name}");
+        assert_eq!(pair[3].selected_tier.as_deref(), Some(*tier), "{name}");
         assert_eq!(pair[1].selected_model.as_deref(), Some(*model), "{name}");
+        assert_eq!(pair[3].selected_model.as_deref(), Some(*model), "{name}");
+        assert_eq!(pair[1].trajectory_completeness.as_deref(), Some("complete"));
+        assert_eq!(pair[3].trajectory_completeness.as_deref(), Some("complete"));
     }
 }
 
 async fn post_native_case(server: &TestServer, case: &NativeCase) {
+    post_native_body(server, case, &case.body).await;
+}
+
+async fn post_native_body(server: &TestServer, case: &NativeCase, body: &Value) {
     let mut request = server.post(case.path);
     for (name, value) in case.headers {
         request = request.add_header(*name, *value);
     }
-    request.json(&case.body).await.assert_status_ok();
+    request.json(body).await.assert_status_ok();
+}
+
+fn complete_native_root(case: &mut NativeCase, root_text: &str) -> Value {
+    let user_index = if case.path == "/v1/messages" { 0 } else { 1 };
+    let messages = case.body["messages"]
+        .as_array_mut()
+        .expect("native continuation messages");
+    messages[user_index]["content"] = Value::String(root_text.to_owned());
+    let mut root = case.body.clone();
+    root["messages"]
+        .as_array_mut()
+        .expect("native root messages")
+        .truncate(user_index + 1);
+    root
 }
 
 fn terminus_action_case(model: &str, command: &str) -> NativeCase {
@@ -490,6 +587,12 @@ async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture,
     let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path))
         .await
         .expect("app assembles");
+    for generated_identity in [".installation.lock", "correlation.key", "installation.id"] {
+        assert!(
+            !template_root().join(generated_identity).exists(),
+            "template tests must not generate {generated_identity} in the source tree"
+        );
+    }
     let state = AppState {
         language_model: assembled
             .app
@@ -516,7 +619,6 @@ fn template_config() -> config::Config {
 }
 
 fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf, TempDir) {
-    let config_path = template_root().join("bitrouter.yaml");
     let mut config = template_config();
     config.server.skip_auth = true;
     config.database.url = "sqlite::memory:".to_string();
@@ -550,6 +652,7 @@ fn template_config_with_mock(upstream: &str) -> (config::Config, PathBuf, TempDi
         .model = Some(MOCK_STRONG_MODEL.to_string());
 
     let config_dir = TempDir::new().expect("temporary mock policy directory");
+    let config_path = config_dir.path().join("bitrouter.yaml");
     let lock_path = template_root().join("policy-lock.yaml");
     let lock_yaml = std::fs::read_to_string(&lock_path).expect("read auto template policy lock");
     let mut lock: PolicyLock =
