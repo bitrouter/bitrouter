@@ -3236,21 +3236,10 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         PolicyAction::Diff { active, candidate } => {
             let active_lock = bitrouter::policy_lock::load(&active).await?;
             let candidate_lock = bitrouter::policy_lock::load(&candidate).await?;
-            let changes = bitrouter::policy_lock::diff_documents(
+            let changes = bitrouter::policy_lock::diff_explanations(
                 &active_lock.document,
                 &candidate_lock.document,
-            )
-            .into_iter()
-            .map(|difference| {
-                format!(
-                    "{}: {} {} -> {}",
-                    difference.policy,
-                    difference.request_key,
-                    difference.active_tier.as_deref().unwrap_or("default"),
-                    difference.candidate_tier.as_deref().unwrap_or("default")
-                )
-            })
-            .collect();
+            );
             output.emit(&PolicyReport {
                 action: "diff".into(),
                 path: Some(active.display().to_string()),

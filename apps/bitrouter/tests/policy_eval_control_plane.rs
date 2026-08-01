@@ -62,6 +62,7 @@ presets:
         parent_digest: Some(&semantic_digest(&active)?),
         legacy: &legacy,
         eval: None,
+        proposed_progress_guards: None,
     })?
     .document;
     std::fs::write(&candidate_path, deterministic_yaml(&candidate)?)?;
@@ -207,6 +208,7 @@ fn compile(active: &PolicyLock) -> anyhow::Result<PolicyLock> {
         parent_digest: Some(&semantic_digest(active)?),
         legacy: &legacy,
         eval: None,
+        proposed_progress_guards: None,
     })?
     .document)
 }
@@ -311,6 +313,7 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         parent_digest: Some(&semantic_digest(&active)?),
         legacy: &legacy,
         eval: Some(&eval),
+        proposed_progress_guards: None,
     })?
     .document;
     std::fs::write(&candidate_path, deterministic_yaml(&candidate)?)?;

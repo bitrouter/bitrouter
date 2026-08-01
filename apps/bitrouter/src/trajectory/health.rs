@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
+use super::guard::{validate_persisted_guard_activation, validate_persisted_route_intent};
 use super::types::{
     HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectoryHealth,
     TrajectorySnapshot, validate_event,
@@ -35,6 +36,8 @@ pub fn reduce(
     let mut previous_timestamp = first_timestamp;
     let mut last_timestamp = first_timestamp;
     let mut requests = BTreeMap::<String, RequestPhase>::new();
+    let mut guarded_route_digests = BTreeMap::<String, (String, String)>::new();
+    let mut pending_guard_activation: Option<String> = None;
     let mut completeness = HistoryCompleteness::Complete;
     let mut request_count = 0_u64;
     let mut settled_request_count = 0_u64;
@@ -78,6 +81,13 @@ pub fn reduce(
         previous_timestamp = captured_at;
         last_timestamp = captured_at;
 
+        if let Some(request_id) = pending_guard_activation.as_deref()
+            && (event.kind != TrajectoryEventKind::GuardActivated
+                || event.request_id.as_deref() != Some(request_id))
+        {
+            anyhow::bail!("guarded route trigger must be followed by its guard activation")
+        }
+
         match event.kind {
             TrajectoryEventKind::RequestStarted => {
                 let request_id = required_request_id(event)?;
@@ -111,6 +121,27 @@ pub fn reduce(
             }
             TrajectoryEventKind::RouteIntentRecorded => {
                 let request_id = required_request_id(event)?;
+                if let Some(clauses) = validate_persisted_route_intent(event)? {
+                    let policy = event
+                        .evidence
+                        .digests
+                        .get("route.policy_lock")
+                        .ok_or_else(|| anyhow::anyhow!("guarded route lost its policy digest"))?;
+                    let health = event
+                        .evidence
+                        .digests
+                        .get("route.health_snapshot")
+                        .ok_or_else(|| anyhow::anyhow!("guarded route lost its health digest"))?;
+                    guarded_route_digests
+                        .insert(request_id.to_owned(), (policy.clone(), health.clone()));
+                    if clauses.iter().any(|(id, disposition)| {
+                        *disposition == super::guard::RouteIntentClauseDisposition::Applied
+                            && id.starts_with("progress_guard.")
+                            && id != "progress_guard.active_hold"
+                    }) {
+                        pending_guard_activation = Some(request_id.to_owned());
+                    }
+                }
                 let phase = requests.get_mut(request_id).ok_or_else(|| {
                     anyhow::anyhow!("route intent references unknown request '{request_id}'")
                 })?;
@@ -215,6 +246,39 @@ pub fn reduce(
             }
             TrajectoryEventKind::GuardActivated => {
                 let request_id = required_request_id(event)?;
+                if validate_persisted_guard_activation(event)? {
+                    if pending_guard_activation.as_deref() != Some(request_id) {
+                        anyhow::bail!(
+                            "guard activation has no immediately preceding new guard trigger"
+                        )
+                    }
+                    let route_digests = guarded_route_digests.get(request_id).ok_or_else(|| {
+                        anyhow::anyhow!("guard activation has no guarded route intent")
+                    })?;
+                    let guard_policy =
+                        event
+                            .evidence
+                            .digests
+                            .get("guard.policy_lock")
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("guard activation lost its policy digest")
+                            })?;
+                    let guard_health = event
+                        .evidence
+                        .digests
+                        .get("guard.health_snapshot")
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("guard activation lost its health digest")
+                        })?;
+                    if route_digests != &(guard_policy.clone(), guard_health.clone()) {
+                        anyhow::bail!(
+                            "guard activation policy/health digests disagree with route intent"
+                        )
+                    }
+                    pending_guard_activation = None;
+                } else if guarded_route_digests.contains_key(request_id) {
+                    anyhow::bail!("guarded route requires typed guard activation evidence")
+                }
                 let phase = requests.get_mut(request_id).ok_or_else(|| {
                     anyhow::anyhow!("guard activation references unknown request '{request_id}'")
                 })?;
@@ -250,6 +314,10 @@ pub fn reduce(
         }
     }
 
+    if pending_guard_activation.is_some() {
+        anyhow::bail!("guarded route trigger is missing its guard activation")
+    }
+
     if requests
         .values()
         .any(|phase| matches!(phase, RequestPhase::Started))
@@ -272,6 +340,7 @@ pub fn reduce(
         settled_request_count,
         unsettled_request_count,
         elapsed_ms,
+        latest_projection: previous_projection,
         same_projection_streak,
         same_selected_tier_streak,
         consecutive_unprotected_requests,
@@ -434,6 +503,7 @@ mod tests {
                 settled_request_count: 4,
                 unsettled_request_count: 0,
                 elapsed_ms: 12_000,
+                latest_projection: Some("agent_trace/v2|recovery|normal".to_string()),
                 same_projection_streak: 2,
                 same_selected_tier_streak: 1,
                 consecutive_unprotected_requests: 1,

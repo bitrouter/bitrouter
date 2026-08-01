@@ -202,6 +202,8 @@ pub struct TrajectoryHealth {
     pub settled_request_count: u64,
     pub unsettled_request_count: u64,
     pub elapsed_ms: u64,
+    #[serde(default)]
+    pub latest_projection: Option<String>,
     pub same_projection_streak: u64,
     pub same_selected_tier_streak: u64,
     pub consecutive_unprotected_requests: u64,
@@ -497,6 +499,7 @@ mod tests {
                 settled_request_count: 1,
                 unsettled_request_count: 0,
                 elapsed_ms: 2_000,
+                latest_projection: Some("agent_trace/v2|edit|normal".into()),
                 same_projection_streak: 1,
                 same_selected_tier_streak: 1,
                 consecutive_unprotected_requests: 1,

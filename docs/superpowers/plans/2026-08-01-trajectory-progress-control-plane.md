@@ -307,14 +307,14 @@ pub struct RouteIntent {
 }
 ```
 
-- [ ] **Step 1: Write failing lock compatibility tests.** Old v1/v2 locks without `progress_guard` deserialize and serialize as before. The optional clause participates in the semantic digest, deterministic YAML, candidate diff, certificate validation, freeze/publish, reload, and rollback.
-- [ ] **Step 2: Write failing guard validation tests.** Require a defined escalation tier, non-empty protected tiers containing the escalation tier, positive configured thresholds/hold length, and a named policy. Reject guard clauses on legacy global `policy_table:` input.
-- [ ] **Step 3: Write failing pure guard tests.** Prove disabled guards preserve the candidate; protected tiers reset vulnerable streaks; a recovery request can trigger immediate escalation; repeated unprotected/same-projection requests trigger at exact boundaries; unknown cost cannot satisfy a cost threshold; `IncompleteHistoryAction::Escalate` is conservative; active hold persists for exactly N subsequent requests.
-- [ ] **Step 4: Define precedence and non-downgrade invariants.** Compute static candidate, apply progress escalation/hold, then apply the existing tool-use floor. Record every applied/skipped clause. A guard-selected tier must be in `protected_tiers`; no clause may replace a protected/tool-safe decision with an unprotected tier.
-- [ ] **Step 5: Persist intent before upstream execution.** Append `RouteIntentRecorded` and, when triggered, `GuardActivated` in the request-start transaction. Extend `PolicyDecisionReason` and JSONL records with progress reason, episode/sequence, completeness, health digest, candidate tier, selected tier, and clause IDs. JSONL remains diagnostic; the database event is authoritative.
-- [ ] **Step 6: Make the compiler round-trip guard clauses.** Candidate generation may preserve or propose guard configuration only from explicit compiler input; L1 evidence must not silently mutate thresholds. Candidate diff/explain shows every guard change.
-- [ ] **Step 7: Run lock, router, compiler, decision, reload, rollback, and guard tests until GREEN.**
-- [ ] **Step 8: Commit `feat(policy): add trajectory progress guard`.**
+- [x] **Step 1: Write failing lock compatibility tests.** Old v1/v2 locks without `progress_guard` deserialize and serialize as before. The optional clause participates in the semantic digest, deterministic YAML, candidate diff, certificate validation, freeze/publish, reload, and rollback.
+- [x] **Step 2: Write failing guard validation tests.** Require a defined escalation tier, non-empty protected tiers containing the escalation tier, positive configured thresholds/hold length, and a named policy. Reject guard clauses on legacy global `policy_table:` input.
+- [x] **Step 3: Write failing pure guard tests.** Prove disabled guards preserve the candidate; protected tiers reset vulnerable streaks; a recovery request can trigger immediate escalation; repeated unprotected/same-projection requests trigger at exact boundaries; unknown cost cannot satisfy a cost threshold; `IncompleteHistoryAction::Escalate` is conservative; active hold persists for exactly N subsequent requests.
+- [x] **Step 4: Define precedence and non-downgrade invariants.** Compute static candidate, apply progress escalation/hold, then apply the existing tool-use floor. Record every applied/skipped clause. A guard-selected tier must be in `protected_tiers`; no clause may replace a protected/tool-safe decision with an unprotected tier.
+- [x] **Step 5: Persist intent before upstream execution.** Append `RouteIntentRecorded` and, when triggered, `GuardActivated` in the request-start transaction. Extend `PolicyDecisionReason` and JSONL records with progress reason, episode/sequence, completeness, health digest, candidate tier, selected tier, and clause IDs. JSONL remains diagnostic; the database event is authoritative.
+- [x] **Step 6: Make the compiler round-trip guard clauses.** Candidate generation may preserve or propose guard configuration only from explicit compiler input; L1 evidence must not silently mutate thresholds. Candidate diff/explain shows every guard change.
+- [x] **Step 7: Run lock, router, compiler, decision, reload, rollback, and guard tests until GREEN.**
+- [x] **Step 8: Commit `feat(policy): add trajectory progress guard`.**
 
 ## Task 5: Settle trajectories durably and publish L1 operational evaluation
 

@@ -5,6 +5,10 @@ use sea_orm::{
 };
 
 use super::correlation::CorrelationSource;
+use super::guard::{
+    ProgressGuardInput, ProgressGuardPolicy, RouteIntent, RouteIntentClause,
+    RouteIntentClauseDisposition, evaluate, validate_persisted_route_intent,
+};
 use super::health::reduce;
 use super::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxWrite, PendingOutbox,
@@ -12,6 +16,7 @@ use super::types::{
     TrajectoryEventKind, TrajectoryEvidence, canonical_digest, validate_event,
     validate_keyed_component, validate_outbox_payload,
 };
+use crate::workflow_state::ir::RouteProjection;
 
 mod episode_entity {
     use sea_orm::entity::prelude::*;
@@ -125,6 +130,7 @@ pub(crate) struct CorrelateAndBegin {
     pub canonical_input_bytes: u64,
     pub protocol: String,
     pub captured_at: String,
+    pub guarded_route: Option<GuardedRouteInput>,
 }
 
 pub(crate) struct CorrelateAndBeginResult {
@@ -132,10 +138,40 @@ pub(crate) struct CorrelateAndBeginResult {
     pub source: CorrelationSource,
     pub completeness: HistoryCompleteness,
     pub prior_events: Vec<TrajectoryEvent>,
+    pub guarded_route: Option<GuardedRouteResult>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GuardedRouteInput {
+    pub route_event_id: String,
+    pub guard_event_id: String,
+    pub projection: RouteProjection,
+    pub candidate_tier: Option<String>,
+    pub policy_digest: String,
+    pub policy: ProgressGuardPolicy,
+    pub carries_tools: bool,
+    pub tool_use_tier: Option<String>,
+    pub tool_safe_tiers: std::collections::BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GuardedRouteResult {
+    pub snapshot: super::types::TrajectorySnapshot,
+    pub intent: RouteIntent,
+    pub guard_activated: bool,
+    pub tool_floor_applied: bool,
+    pub route_sequence: u64,
+    pub causal_completeness: HistoryCompleteness,
+}
+
+struct GuardedRouteBatch {
+    route_event: TrajectoryEvent,
+    guard_event: Option<TrajectoryEvent>,
+    result: GuardedRouteResult,
 }
 
 enum CorrelateAttempt {
-    Complete(CorrelateAndBeginResult),
+    Complete(Box<CorrelateAndBeginResult>),
     RetrySequenceReservation,
     RetryDeterministicStart,
 }
@@ -198,7 +234,7 @@ impl TrajectoryStore {
 
         for attempt in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
             match self.correlate_and_begin_once(owner_user_id, &input).await {
-                Ok(CorrelateAttempt::Complete(result)) => return Ok(result),
+                Ok(CorrelateAttempt::Complete(result)) => return Ok(*result),
                 Ok(CorrelateAttempt::RetrySequenceReservation)
                 | Ok(CorrelateAttempt::RetryDeterministicStart) => {
                     tokio::time::sleep(contention_backoff(attempt)).await;
@@ -228,7 +264,7 @@ impl TrajectoryStore {
         {
             let result = exact_retry_result(&txn, owner_user_id, &existing, input).await?;
             txn.commit().await?;
-            return Ok(CorrelateAttempt::Complete(result));
+            return Ok(CorrelateAttempt::Complete(Box::new(result)));
         }
         if request_entity::Entity::find_by_id(&input.request_id)
             .one(&txn)
@@ -389,6 +425,7 @@ impl TrajectoryStore {
             content_digest: String::new(),
         };
         event.content_digest = event.semantic_digest()?;
+        let start_event = event.clone();
         let begin = BeginRequest {
             episode: episode_start,
             event,
@@ -432,13 +469,30 @@ impl TrajectoryStore {
                 return Err(error);
             }
         }
+        let guarded_route = match &input.guarded_route {
+            Some(route) => Some(
+                append_guarded_route_in_tx(
+                    &txn,
+                    owner_user_id,
+                    &prior_events,
+                    &start_event,
+                    completeness,
+                    route,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         txn.commit().await?;
-        Ok(CorrelateAttempt::Complete(CorrelateAndBeginResult {
-            episode_id,
-            source,
-            completeness,
-            prior_events,
-        }))
+        Ok(CorrelateAttempt::Complete(Box::new(
+            CorrelateAndBeginResult {
+                episode_id,
+                source,
+                completeness,
+                prior_events,
+                guarded_route,
+            },
+        )))
     }
 
     pub async fn append_route_intent(
@@ -913,14 +967,307 @@ async fn exact_retry_result(
     let completeness = parse_completeness(completeness)?;
     let start_sequence = start.sequence;
     let prior_events = events
-        .into_iter()
+        .iter()
+        .cloned()
         .take_while(|event| event.sequence < start_sequence)
-        .collect();
+        .collect::<Vec<_>>();
+    let guarded_route = match &input.guarded_route {
+        Some(route) => {
+            reduce(&events, &route.policy.protected_tiers)?;
+            let expected = build_guarded_route_batch(&prior_events, start, completeness, route)?;
+            let persisted_route = events
+                .iter()
+                .find(|event| event.event_id == route.route_event_id)
+                .ok_or_else(|| anyhow::anyhow!("trajectory retry is missing its route intent"))?;
+            if persisted_route != &expected.route_event {
+                anyhow::bail!(
+                    "trajectory request '{}' already exists with a different route intent",
+                    existing.request_id
+                )
+            }
+            match (
+                &expected.guard_event,
+                events
+                    .iter()
+                    .find(|event| event.event_id == route.guard_event_id),
+            ) {
+                (Some(expected), Some(persisted)) if expected == persisted => {}
+                (None, None) => {}
+                _ => anyhow::bail!(
+                    "trajectory request '{}' already exists with a different guard activation",
+                    existing.request_id
+                ),
+            }
+            let route_event_count = events
+                .iter()
+                .filter(|event| {
+                    event.request_id.as_deref() == Some(existing.request_id.as_str())
+                        && event.kind == TrajectoryEventKind::RouteIntentRecorded
+                })
+                .count();
+            let guard_event_count = events
+                .iter()
+                .filter(|event| {
+                    event.request_id.as_deref() == Some(existing.request_id.as_str())
+                        && event.kind == TrajectoryEventKind::GuardActivated
+                })
+                .count();
+            if route_event_count != 1
+                || guard_event_count != usize::from(expected.guard_event.is_some())
+            {
+                anyhow::bail!(
+                    "trajectory request '{}' has an unexpected persisted routing batch",
+                    existing.request_id
+                )
+            }
+            Some(expected.result)
+        }
+        None => {
+            for event in events.iter().filter(|event| {
+                event.request_id.as_deref() == Some(existing.request_id.as_str())
+                    && event.kind == TrajectoryEventKind::RouteIntentRecorded
+            }) {
+                if validate_persisted_route_intent(event)?.is_some() {
+                    anyhow::bail!(
+                        "trajectory request '{}' already exists with guarded routing content",
+                        existing.request_id
+                    )
+                }
+            }
+            None
+        }
+    };
     Ok(CorrelateAndBeginResult {
         episode_id: existing.episode_id.clone(),
         source,
         completeness,
         prior_events,
+        guarded_route,
+    })
+}
+
+async fn append_guarded_route_in_tx(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    prior_events: &[TrajectoryEvent],
+    start: &TrajectoryEvent,
+    completeness: HistoryCompleteness,
+    input: &GuardedRouteInput,
+) -> Result<GuardedRouteResult> {
+    let batch = build_guarded_route_batch(prior_events, start, completeness, input)?;
+    let mut candidate_history = Vec::with_capacity(
+        prior_events
+            .len()
+            .checked_add(3)
+            .ok_or_else(|| anyhow::anyhow!("guarded route history capacity overflow"))?,
+    );
+    candidate_history.extend_from_slice(prior_events);
+    candidate_history.push(start.clone());
+    candidate_history.push(batch.route_event.clone());
+    if let Some(guard_event) = &batch.guard_event {
+        candidate_history.push(guard_event.clone());
+    }
+    reduce(&candidate_history, &input.policy.protected_tiers)?;
+    let episode = owned_episode(txn, owner_user_id, &start.episode_id).await?;
+    validate_sequence(&episode, &batch.route_event)?;
+    validate_event(&batch.route_event)?;
+    append_event(txn, &batch.route_event).await?;
+    update_episode_head(txn, episode, &batch.route_event, None).await?;
+    if let Some(guard_event) = &batch.guard_event {
+        let episode = owned_episode(txn, owner_user_id, &start.episode_id).await?;
+        validate_sequence(&episode, guard_event)?;
+        validate_event(guard_event)?;
+        append_event(txn, guard_event).await?;
+        update_episode_head(txn, episode, guard_event, None).await?;
+    }
+    Ok(batch.result)
+}
+
+fn build_guarded_route_batch(
+    prior_events: &[TrajectoryEvent],
+    start: &TrajectoryEvent,
+    completeness: HistoryCompleteness,
+    input: &GuardedRouteInput,
+) -> Result<GuardedRouteBatch> {
+    let prior_snapshot = if prior_events.is_empty() {
+        None
+    } else {
+        Some(reduce(prior_events, &input.policy.protected_tiers)?)
+    };
+    let mut through_start = Vec::with_capacity(
+        prior_events
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("guard snapshot history capacity overflow"))?,
+    );
+    through_start.extend_from_slice(prior_events);
+    through_start.push(start.clone());
+    let pre_intent_snapshot = reduce(&through_start, &input.policy.protected_tiers)?;
+    let mut evaluation = evaluate(
+        &input.policy,
+        ProgressGuardInput {
+            prior_snapshot: prior_snapshot.as_ref(),
+            pre_intent_snapshot: &pre_intent_snapshot,
+            correlation_completeness: completeness,
+            current_projection: &input.projection,
+            candidate_tier: input.candidate_tier.as_deref(),
+            policy_digest: &input.policy_digest,
+        },
+    )?;
+    let before_tool_floor = evaluation.intent.selected_tier.clone();
+    let tool_floor_applied = input.carries_tools
+        && before_tool_floor.as_ref().is_some_and(|tier| {
+            !input.tool_safe_tiers.contains(tier)
+                && input
+                    .tool_use_tier
+                    .as_deref()
+                    .is_some_and(|floor| floor != tier)
+        });
+    let tool_floor_explanation = if tool_floor_applied {
+        let floor = input
+            .tool_use_tier
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("tool floor disappeared during guard evaluation"))?;
+        if !input.policy.protected_tiers.contains(floor) {
+            anyhow::bail!("tool safety floor must remain a protected progress-guard tier")
+        }
+        evaluation.intent.selected_tier = Some(floor.clone());
+        "tool-carrying request requires the configured protected tool floor"
+    } else if !input.carries_tools {
+        "request carries no tools"
+    } else if before_tool_floor
+        .as_ref()
+        .is_some_and(|tier| input.tool_safe_tiers.contains(tier))
+    {
+        "selected tier is already tool-safe"
+    } else {
+        "no distinct tool safety floor is configured"
+    };
+    evaluation.intent.clauses.push(RouteIntentClause {
+        clause_id: "tool_safety.floor".to_string(),
+        disposition: if tool_floor_applied {
+            RouteIntentClauseDisposition::Applied
+        } else {
+            RouteIntentClauseDisposition::Skipped
+        },
+        explanation: tool_floor_explanation.to_string(),
+    });
+
+    let route_sequence = start
+        .sequence
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("route intent sequence overflow"))?;
+    let mut categorical = std::collections::BTreeMap::from([
+        ("route.projection".to_owned(), input.projection.key()),
+        (
+            "route.workflow_state".to_owned(),
+            input.projection.state_kind.to_string(),
+        ),
+    ]);
+    if let Some(candidate) = &evaluation.intent.candidate_tier {
+        categorical.insert("route.candidate_tier".to_owned(), candidate.clone());
+    }
+    if let Some(selected) = &evaluation.intent.selected_tier {
+        categorical.insert("route.selected_tier".to_owned(), selected.clone());
+    }
+    for (index, clause) in evaluation.intent.clauses.iter().enumerate() {
+        let prefix = format!("route.clause_{index:02}");
+        categorical.insert(format!("{prefix}.id"), clause.clause_id.clone());
+        categorical.insert(
+            format!("{prefix}.disposition"),
+            match clause.disposition {
+                RouteIntentClauseDisposition::Applied => "applied",
+                RouteIntentClauseDisposition::Skipped => "skipped",
+            }
+            .to_string(),
+        );
+    }
+    let applied_clause_count = u64::try_from(
+        evaluation
+            .intent
+            .clauses
+            .iter()
+            .filter(|clause| clause.disposition == RouteIntentClauseDisposition::Applied)
+            .count(),
+    )
+    .context("too many applied route clauses")?;
+    let mut route_event = TrajectoryEvent {
+        schema_version: TRAJECTORY_SCHEMA_VERSION,
+        event_id: input.route_event_id.clone(),
+        owner_user_id: start.owner_user_id.clone(),
+        episode_id: start.episode_id.clone(),
+        request_id: start.request_id.clone(),
+        sequence: route_sequence,
+        kind: TrajectoryEventKind::RouteIntentRecorded,
+        evidence: TrajectoryEvidence {
+            structural: std::collections::BTreeMap::from([(
+                "route.applied_clause_count".to_owned(),
+                applied_clause_count,
+            )]),
+            categorical,
+            digests: std::collections::BTreeMap::from([
+                (
+                    "route.health_snapshot".to_owned(),
+                    evaluation.intent.trajectory_snapshot_digest.clone(),
+                ),
+                (
+                    "route.policy_lock".to_owned(),
+                    evaluation.intent.policy_digest.clone(),
+                ),
+            ]),
+        },
+        captured_at: start.captured_at.clone(),
+        content_digest: String::new(),
+    };
+    route_event.content_digest = route_event.semantic_digest()?;
+
+    let guard_event = if evaluation.activated {
+        let mut event = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: input.guard_event_id.clone(),
+            owner_user_id: start.owner_user_id.clone(),
+            episode_id: start.episode_id.clone(),
+            request_id: start.request_id.clone(),
+            sequence: route_sequence
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("guard activation sequence overflow"))?,
+            kind: TrajectoryEventKind::GuardActivated,
+            evidence: TrajectoryEvidence {
+                structural: std::collections::BTreeMap::from([(
+                    "guard.hold_for_requests".to_owned(),
+                    input.policy.hold_for_requests,
+                )]),
+                categorical: std::collections::BTreeMap::new(),
+                digests: std::collections::BTreeMap::from([
+                    (
+                        "guard.health_snapshot".to_owned(),
+                        evaluation.intent.trajectory_snapshot_digest.clone(),
+                    ),
+                    (
+                        "guard.policy_lock".to_owned(),
+                        evaluation.intent.policy_digest.clone(),
+                    ),
+                ]),
+            },
+            captured_at: start.captured_at.clone(),
+            content_digest: String::new(),
+        };
+        event.content_digest = event.semantic_digest()?;
+        Some(event)
+    } else {
+        None
+    };
+    Ok(GuardedRouteBatch {
+        route_event,
+        guard_event,
+        result: GuardedRouteResult {
+            snapshot: pre_intent_snapshot,
+            intent: evaluation.intent,
+            guard_activated: evaluation.activated,
+            tool_floor_applied,
+            route_sequence,
+            causal_completeness: evaluation.causal_completeness,
+        },
     })
 }
 
@@ -1599,8 +1946,308 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, RuntimeErr, Statement};
 
     use super::*;
+    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
+    use crate::workflow_state::ir::RouteProjection;
+
+    const POLICY_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn guarded_root_rolls_back_every_partial_batch_failure() -> anyhow::Result<()> {
+        for failure in ["route_validation", "guard_insert"] {
+            let store = store().await?;
+            let mut route = guarded_route_input("route-1", "guard-1");
+            if failure == "route_validation" {
+                route.policy_digest = "invalid".into();
+            } else {
+                route.guard_event_id = "start-1".into();
+            }
+            let result = store
+                .correlate_and_begin(
+                    "owner-a",
+                    correlate_input("request-1", "episode-1", "start-1", route),
+                )
+                .await;
+            assert!(result.is_err(), "failure point {failure}");
+            assert_trajectory_tables_empty(&store).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guarded_exact_retry_is_one_immutable_batch() -> anyhow::Result<()> {
+        let store = store().await?;
+        let route = guarded_route_input("route-1", "guard-1");
+        let input = correlate_input("request-1", "episode-1", "start-1", route.clone());
+        let first = store.correlate_and_begin("owner-a", input).await?;
+        let first_route = first
+            .guarded_route
+            .ok_or_else(|| anyhow::anyhow!("missing first guarded route"))?;
+        assert!(first_route.guard_activated);
+
+        let retry = store
+            .correlate_and_begin(
+                "owner-a",
+                correlate_input("request-1", "episode-1", "start-1", route.clone()),
+            )
+            .await?;
+        assert_eq!(retry.guarded_route, Some(first_route));
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-1")
+                .await?
+                .len(),
+            3
+        );
+
+        let mut changed_policy = route.clone();
+        changed_policy.policy_digest =
+            "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into();
+        let conflict = store
+            .correlate_and_begin(
+                "owner-a",
+                correlate_input("request-1", "episode-1", "start-1", changed_policy),
+            )
+            .await;
+        assert!(conflict.is_err());
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-1")
+                .await?
+                .len(),
+            3
+        );
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let tasks = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let route = route.clone();
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    store
+                        .correlate_and_begin(
+                            "owner-a",
+                            correlate_input("request-1", "episode-1", "start-1", route),
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        for task in tasks {
+            task.await??;
+        }
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-1")
+                .await?
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_guarded_commit_converges_without_mixed_batches() -> anyhow::Result<()>
+    {
+        let (store, _directory) = file_store().await?;
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let tasks = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    let route = guarded_route_input("route-1", "guard-1");
+                    barrier.wait().await;
+                    store
+                        .correlate_and_begin(
+                            "owner-a",
+                            correlate_input("request-1", "episode-1", "start-1", route),
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut selected = None;
+        for task in tasks {
+            let result = task.await??;
+            let route = result
+                .guarded_route
+                .ok_or_else(|| anyhow::anyhow!("concurrent commit lost guarded route"))?;
+            if let Some(expected) = &selected {
+                assert_eq!(expected, &route);
+            } else {
+                selected = Some(route);
+            }
+        }
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-1")
+                .await?
+                .len(),
+            3
+        );
+        assert!(store.request("owner-a", "request-1").await?.is_some());
+
+        let (conflict_store, _conflict_directory) = file_store().await?;
+        let conflict_barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let tasks = [
+            POLICY_DIGEST,
+            "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ]
+        .into_iter()
+        .map(|digest| {
+            let store = conflict_store.clone();
+            let barrier = conflict_barrier.clone();
+            tokio::spawn(async move {
+                let mut route = guarded_route_input("route-1", "guard-1");
+                route.policy_digest = digest.into();
+                barrier.wait().await;
+                store
+                    .correlate_and_begin(
+                        "owner-a",
+                        correlate_input("request-1", "episode-1", "start-1", route),
+                    )
+                    .await
+            })
+        })
+        .collect::<Vec<_>>();
+        let mut successes = 0;
+        let mut conflicts = 0;
+        for task in tasks {
+            match task.await? {
+                Ok(_) => successes += 1,
+                Err(error) => {
+                    conflicts += 1;
+                    assert!(error.to_string().contains("different route intent"));
+                }
+            }
+        }
+        assert_eq!((successes, conflicts), (1, 1));
+        assert_eq!(
+            conflict_store
+                .events_for_episode("owner-a", "episode-1")
+                .await?
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guarded_existing_episode_failure_preserves_original_head() -> anyhow::Result<()> {
+        let store = store().await?;
+        store
+            .begin_request("owner-a", begin("episode-1", "request-0"))
+            .await?;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event("episode-1", "request-0", 2, "route-0"),
+            )
+            .await?;
+        let before = store.events_for_episode("owner-a", "episode-1").await?;
+
+        let mut route = guarded_route_input("route-1", "guard-1");
+        route.policy_digest = "invalid".into();
+        let mut input = correlate_input("request-1", "unused-new-episode", "start-1", route);
+        input.ancestor_prefix_digests = vec![keyed_digest("key-1", "2")];
+        input.starts_with_prior_turns = true;
+        assert!(store.correlate_and_begin("owner-a", input).await.is_err());
+
+        assert_eq!(
+            store.events_for_episode("owner-a", "episode-1").await?,
+            before
+        );
+        assert!(store.request("owner-a", "request-1").await?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_hold_covers_exactly_n_subsequent_requests() -> anyhow::Result<()> {
+        let policy = guarded_route_input("route-1", "guard-1");
+        let mut events = Vec::new();
+
+        let first = guarded_start("request-1", 1)?;
+        let first_batch =
+            build_guarded_route_batch(&events, &first, HistoryCompleteness::Complete, &policy)?;
+        assert!(first_batch.guard_event.is_some());
+        events.push(first);
+        events.push(first_batch.route_event);
+        if let Some(guard) = first_batch.guard_event {
+            events.push(guard);
+        }
+        assert_eq!(
+            reduce(&events, &policy.policy.protected_tiers)?.active_hold_remaining,
+            2
+        );
+
+        for (request, expected_remaining) in [("request-2", 1), ("request-3", 0)] {
+            let sequence = u64::try_from(events.len())?
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("test sequence overflow"))?;
+            let start = guarded_start(request, sequence)?;
+            let mut input = policy.clone();
+            input.route_event_id = format!("route-{request}");
+            input.guard_event_id = format!("guard-{request}");
+            let batch =
+                build_guarded_route_batch(&events, &start, HistoryCompleteness::Complete, &input)?;
+            assert!(batch.guard_event.is_none(), "active hold must not reset");
+            events.push(start);
+            events.push(batch.route_event);
+            assert_eq!(
+                reduce(&events, &policy.policy.protected_tiers)?.active_hold_remaining,
+                expected_remaining
+            );
+        }
+
+        let sequence = u64::try_from(events.len())?
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("test sequence overflow"))?;
+        let fourth = guarded_start("request-4", sequence)?;
+        let mut fourth_input = policy.clone();
+        fourth_input.route_event_id = "route-request-4".into();
+        fourth_input.guard_event_id = "guard-request-4".into();
+        let fourth_batch = build_guarded_route_batch(
+            &events,
+            &fourth,
+            HistoryCompleteness::Complete,
+            &fourth_input,
+        )?;
+        assert!(fourth_batch.guard_event.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn tool_floor_runs_after_progress_guard_and_remains_protected() -> anyhow::Result<()> {
+        let start = guarded_start("request-1", 1)?;
+        let mut input = guarded_route_input("route-1", "guard-1");
+        input.policy.protected_tiers.insert("tool-protected".into());
+        input.carries_tools = true;
+        input.tool_use_tier = Some("tool-protected".into());
+        input.tool_safe_tiers = BTreeSet::from(["tool-protected".into()]);
+
+        let batch = build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
+
+        assert!(batch.result.guard_activated);
+        assert!(batch.result.tool_floor_applied);
+        assert_eq!(
+            batch.result.intent.selected_tier.as_deref(),
+            Some("tool-protected")
+        );
+        assert!(batch.result.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.max_episode_requests"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+        assert!(batch.result.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "tool_safety.floor"
+                && clause.disposition == RouteIntentClauseDisposition::Applied
+        }));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn new_episode_rejects_invalid_start_evidence_without_writes() -> anyhow::Result<()> {
@@ -1980,6 +2627,7 @@ mod tests {
             canonical_input_bytes: 1,
             protocol: "responses".into(),
             captured_at: "2026-08-01T00:00:00Z".into(),
+            guarded_route: None,
         };
 
         let error = store
@@ -2689,6 +3337,75 @@ mod tests {
         };
         event.content_digest = event.semantic_digest().unwrap_or_default();
         event
+    }
+
+    fn guarded_route_input(route_event_id: &str, guard_event_id: &str) -> GuardedRouteInput {
+        GuardedRouteInput {
+            route_event_id: route_event_id.into(),
+            guard_event_id: guard_event_id.into(),
+            projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
+                .unwrap_or_else(|| unreachable!()),
+            candidate_tier: Some("economy".into()),
+            policy_digest: POLICY_DIGEST.into(),
+            policy: ProgressGuardPolicy {
+                escalation_tier: "strong".into(),
+                protected_tiers: BTreeSet::from(["strong".into()]),
+                max_consecutive_unprotected: None,
+                max_same_projection_unprotected: None,
+                max_recovery_count: None,
+                max_episode_requests: Some(1),
+                max_episode_elapsed_ms: None,
+                max_episode_cost_micro_usd: None,
+                hold_for_requests: 2,
+                incomplete_history: IncompleteHistoryAction::Observe,
+            },
+            carries_tools: false,
+            tool_use_tier: Some("strong".into()),
+            tool_safe_tiers: BTreeSet::from(["strong".into()]),
+        }
+    }
+
+    fn correlate_input(
+        request_id: &str,
+        episode_id: &str,
+        event_id: &str,
+        guarded_route: GuardedRouteInput,
+    ) -> CorrelateAndBegin {
+        CorrelateAndBegin {
+            request_id: request_id.into(),
+            new_episode_id: episode_id.into(),
+            event_id: event_id.into(),
+            correlation_key_id: "key-1".into(),
+            native_parent_id: None,
+            native_parent_digest: None,
+            full_input_digest: keyed_digest("key-1", "7"),
+            ancestor_prefix_digests: Vec::new(),
+            starts_with_prior_turns: false,
+            canonical_input_bytes: 10,
+            protocol: "chat_completions".into(),
+            captured_at: "2026-08-01T00:00:00Z".into(),
+            guarded_route: Some(guarded_route),
+        }
+    }
+
+    fn guarded_start(request_id: &str, sequence: u64) -> anyhow::Result<TrajectoryEvent> {
+        let mut start = event(
+            &format!("start-{request_id}"),
+            "episode-1",
+            Some(request_id),
+            sequence,
+            TrajectoryEventKind::RequestStarted,
+        );
+        start.evidence.categorical = BTreeMap::from([
+            ("correlation.source".into(), "canonical_prefix".into()),
+            ("history.completeness".into(), "complete".into()),
+        ]);
+        start
+            .evidence
+            .structural
+            .insert("request.canonical_input_bytes".into(), sequence * 10);
+        start.content_digest = start.semantic_digest()?;
+        Ok(start)
     }
 
     fn keyed_digest(key_id: &str, digit: &str) -> KeyedDigest {

@@ -3,7 +3,7 @@ use bitrouter_sdk::language_model::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
 use super::canonical::{CanonicalPromptDigests, Canonicalizer};
-use super::store::{CorrelateAndBegin, TrajectoryStore};
+use super::store::{CorrelateAndBegin, GuardedRouteInput, GuardedRouteResult, TrajectoryStore};
 use super::types::{HistoryCompleteness, TrajectoryEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +72,52 @@ impl TrajectoryRuntime {
         prompt: &Prompt,
         captured_at: &str,
     ) -> Result<CorrelatedRequest> {
+        self.begin_request_inner(
+            owner_user_id,
+            request_id,
+            inbound_protocol,
+            prompt,
+            captured_at,
+            None,
+        )
+        .await
+        .map(|(correlated, _)| correlated)
+    }
+
+    pub(crate) async fn begin_guarded_request(
+        &self,
+        owner_user_id: &str,
+        request_id: &str,
+        inbound_protocol: ApiProtocol,
+        prompt: &Prompt,
+        captured_at: &str,
+        guarded_route: GuardedRouteInput,
+    ) -> Result<(CorrelatedRequest, GuardedRouteResult)> {
+        let (correlated, result) = self
+            .begin_request_inner(
+                owner_user_id,
+                request_id,
+                inbound_protocol,
+                prompt,
+                captured_at,
+                Some(guarded_route),
+            )
+            .await?;
+        let result = result.ok_or_else(|| {
+            anyhow::anyhow!("guarded trajectory request committed without a route intent")
+        })?;
+        Ok((correlated, result))
+    }
+
+    async fn begin_request_inner(
+        &self,
+        owner_user_id: &str,
+        request_id: &str,
+        inbound_protocol: ApiProtocol,
+        prompt: &Prompt,
+        captured_at: &str,
+        guarded_route: Option<GuardedRouteInput>,
+    ) -> Result<(CorrelatedRequest, Option<GuardedRouteResult>)> {
         let canonical = self.canonicalizer.canonicalize(prompt)?;
         let native_parent_id = native_parent_id(&inbound_protocol, prompt)?;
         let native_parent_digest = native_parent_id
@@ -96,16 +142,20 @@ impl TrajectoryRuntime {
                     canonical_input_bytes: canonical.canonical_input_bytes,
                     protocol: protocol_name(&inbound_protocol).to_owned(),
                     captured_at: captured_at.to_owned(),
+                    guarded_route,
                 },
             )
             .await?;
-        Ok(CorrelatedRequest {
-            episode_id: result.episode_id,
-            source: result.source,
-            completeness: result.completeness,
-            prior_events: result.prior_events,
-            evidence,
-        })
+        Ok((
+            CorrelatedRequest {
+                episode_id: result.episode_id,
+                source: result.source,
+                completeness: result.completeness,
+                prior_events: result.prior_events,
+                evidence,
+            },
+            result.guarded_route,
+        ))
     }
 }
 
@@ -156,7 +206,7 @@ fn protocol_name(protocol: &ApiProtocol) -> &str {
     }
 }
 
-fn stable_id(kind: &str, owner_user_id: &str, request_id: &str) -> String {
+pub(crate) fn stable_id(kind: &str, owner_user_id: &str, request_id: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(kind.as_bytes());
     hash.update([0]);

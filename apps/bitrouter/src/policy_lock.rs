@@ -22,8 +22,11 @@ use sha2::{Digest, Sha256};
 use crate::adequacy::store::AdequacyStore;
 use crate::eval::settlement::PendingEvalDecisionStore;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
-use crate::trajectory::correlation::TrajectoryRuntime;
+use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
+use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
+use crate::trajectory::store::GuardedRouteInput;
 use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
+use crate::workflow_state::ir::RouteProjection;
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
 pub const LEGACY_POLICY_LOCKFILE_VERSION: u32 = 1;
@@ -226,6 +229,10 @@ pub struct PolicyDefinition {
     pub default_tier: Option<String>,
     pub tool_use_tier: Option<String>,
     pub tool_safe_tiers: Vec<String>,
+    /// Optional signed, named-policy-only trajectory guard. Legacy global
+    /// `policy_table:` config has no corresponding field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_guard: Option<ProgressGuardPolicy>,
     pub adequacy: AdequacyConfig,
 }
 
@@ -238,6 +245,7 @@ impl Default for PolicyDefinition {
             default_tier: None,
             tool_use_tier: None,
             tool_safe_tiers: Vec::new(),
+            progress_guard: None,
             adequacy: AdequacyConfig::default(),
         }
     }
@@ -377,9 +385,68 @@ pub fn validate_document(document: &PolicyLock) -> Result<()> {
                 );
             }
         }
+        if let Some(guard) = &policy.progress_guard {
+            if document.lockfile_version != POLICY_LOCKFILE_VERSION {
+                anyhow::bail!(
+                    "policy '{name}' progress_guard requires policy lock v{POLICY_LOCKFILE_VERSION}"
+                );
+            }
+            validate_progress_guard(name, policy, guard)?;
+        }
     }
     if document.lockfile_version == POLICY_LOCKFILE_VERSION {
         validate_v2_certificates(document)?;
+    }
+    Ok(())
+}
+
+fn validate_progress_guard(
+    policy_name: &str,
+    policy: &PolicyDefinition,
+    guard: &ProgressGuardPolicy,
+) -> Result<()> {
+    if guard.escalation_tier.trim().is_empty() || !policy.tiers.contains_key(&guard.escalation_tier)
+    {
+        anyhow::bail!(
+            "policy '{policy_name}' progress_guard escalation_tier must reference a defined tier"
+        )
+    }
+    if guard.protected_tiers.is_empty() || !guard.protected_tiers.contains(&guard.escalation_tier) {
+        anyhow::bail!(
+            "policy '{policy_name}' progress_guard protected_tiers must be non-empty and contain escalation_tier"
+        )
+    }
+    if let Some(unknown) = guard
+        .protected_tiers
+        .iter()
+        .find(|tier| !policy.tiers.contains_key(*tier))
+    {
+        anyhow::bail!(
+            "policy '{policy_name}' progress_guard protected tier '{unknown}' is not defined"
+        )
+    }
+    if let Some(tool_use_tier) = policy.tool_use_tier.as_deref()
+        && !guard.protected_tiers.contains(tool_use_tier)
+    {
+        anyhow::bail!(
+            "policy '{policy_name}' progress_guard protected_tiers must contain tool_use_tier '{tool_use_tier}'"
+        )
+    }
+    if guard.hold_for_requests == 0 || guard.hold_for_requests > u32::MAX as u64 {
+        anyhow::bail!(
+            "policy '{policy_name}' progress_guard hold_for_requests must be in 1..=u32::MAX"
+        )
+    }
+    let thresholds = [
+        guard.max_consecutive_unprotected,
+        guard.max_same_projection_unprotected,
+        guard.max_recovery_count,
+        guard.max_episode_requests,
+        guard.max_episode_elapsed_ms,
+        guard.max_episode_cost_micro_usd,
+    ];
+    if thresholds.into_iter().flatten().any(|value| value == 0) {
+        anyhow::bail!("policy '{policy_name}' progress_guard thresholds must be positive")
     }
     Ok(())
 }
@@ -668,6 +735,143 @@ pub fn diff_documents(active: &PolicyLock, candidate: &PolicyLock) -> Vec<Policy
         }
     }
     differences
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyGuardDiff {
+    pub policy: String,
+    pub field: String,
+    pub active_value: Option<String>,
+    pub candidate_value: Option<String>,
+}
+
+pub fn diff_progress_guards(active: &PolicyLock, candidate: &PolicyLock) -> Vec<PolicyGuardDiff> {
+    let mut policies = active.policies.keys().cloned().collect::<BTreeSet<_>>();
+    policies.extend(candidate.policies.keys().cloned());
+    let mut differences = Vec::new();
+    for policy_name in policies {
+        let active_fields = guard_fields(
+            active
+                .policies
+                .get(&policy_name)
+                .and_then(|policy| policy.progress_guard.as_ref()),
+        );
+        let candidate_fields = guard_fields(
+            candidate
+                .policies
+                .get(&policy_name)
+                .and_then(|policy| policy.progress_guard.as_ref()),
+        );
+        let mut fields = active_fields.keys().cloned().collect::<BTreeSet<_>>();
+        fields.extend(candidate_fields.keys().cloned());
+        for field in fields {
+            let active_value = active_fields.get(&field).cloned();
+            let candidate_value = candidate_fields.get(&field).cloned();
+            if active_value != candidate_value {
+                differences.push(PolicyGuardDiff {
+                    policy: policy_name.clone(),
+                    field,
+                    active_value,
+                    candidate_value,
+                });
+            }
+        }
+    }
+    differences
+}
+
+pub fn diff_explanations(active: &PolicyLock, candidate: &PolicyLock) -> Vec<String> {
+    let mut explanations = diff_documents(active, candidate)
+        .into_iter()
+        .map(|difference| {
+            format!(
+                "{}: {} {} -> {}",
+                difference.policy,
+                difference.request_key,
+                difference.active_tier.as_deref().unwrap_or("default"),
+                difference.candidate_tier.as_deref().unwrap_or("default")
+            )
+        })
+        .collect::<Vec<_>>();
+    explanations.extend(
+        diff_progress_guards(active, candidate)
+            .into_iter()
+            .map(|difference| {
+                format!(
+                    "{}: {} {} -> {}",
+                    difference.policy,
+                    difference.field,
+                    difference.active_value.as_deref().unwrap_or("unset"),
+                    difference.candidate_value.as_deref().unwrap_or("unset")
+                )
+            }),
+    );
+    explanations
+}
+
+fn guard_fields(guard: Option<&ProgressGuardPolicy>) -> BTreeMap<String, String> {
+    let Some(guard) = guard else {
+        return BTreeMap::new();
+    };
+    let optional = |value: Option<u64>| value.map(|value| value.to_string());
+    let mut fields = BTreeMap::from([
+        (
+            "progress_guard.escalation_tier".to_string(),
+            guard.escalation_tier.clone(),
+        ),
+        (
+            "progress_guard.protected_tiers".to_string(),
+            guard
+                .protected_tiers
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        (
+            "progress_guard.hold_for_requests".to_string(),
+            guard.hold_for_requests.to_string(),
+        ),
+        (
+            "progress_guard.incomplete_history".to_string(),
+            match guard.incomplete_history {
+                crate::trajectory::guard::IncompleteHistoryAction::Observe => "observe",
+                crate::trajectory::guard::IncompleteHistoryAction::Escalate => "escalate",
+            }
+            .to_string(),
+        ),
+    ]);
+    for (field, value) in [
+        (
+            "progress_guard.max_consecutive_unprotected",
+            optional(guard.max_consecutive_unprotected),
+        ),
+        (
+            "progress_guard.max_same_projection_unprotected",
+            optional(guard.max_same_projection_unprotected),
+        ),
+        (
+            "progress_guard.max_recovery_count",
+            optional(guard.max_recovery_count),
+        ),
+        (
+            "progress_guard.max_episode_requests",
+            optional(guard.max_episode_requests),
+        ),
+        (
+            "progress_guard.max_episode_elapsed_ms",
+            optional(guard.max_episode_elapsed_ms),
+        ),
+        (
+            "progress_guard.max_episode_cost_micro_usd",
+            optional(guard.max_episode_cost_micro_usd),
+        ),
+    ] {
+        if let Some(value) = value {
+            fields.insert(field.to_string(), value);
+        }
+    }
+    fields
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1192,6 +1396,7 @@ pub async fn compile_files_with_eval(
         parent_digest: Some(&loaded.digest),
         legacy: &legacy,
         eval: eval.as_ref(),
+        proposed_progress_guards: None,
     })?;
     let digest = semantic_digest(&compiled.document)?;
     let changes = compiled
@@ -1273,7 +1478,7 @@ pub async fn publish_candidate_file(
     {
         anyhow::bail!("compiled candidate contains blocked route conflicts");
     }
-    let differences = diff_documents(&active.document, &candidate.document);
+    let differences = diff_explanations(&active.document, &candidate.document);
     let history_dir = default_history_dir(&active.path);
     let record = publish_candidate(
         &active.path,
@@ -1285,18 +1490,7 @@ pub async fn publish_candidate_file(
         path: active.path,
         digest: record.child_digest,
         document: candidate.document,
-        changes: differences
-            .into_iter()
-            .map(|difference| {
-                format!(
-                    "{}: {} {} -> {}",
-                    difference.policy,
-                    difference.request_key,
-                    difference.active_tier.as_deref().unwrap_or("default"),
-                    difference.candidate_tier.as_deref().unwrap_or("default")
-                )
-            })
-            .collect(),
+        changes: differences,
         conflicts: Vec::new(),
     })
 }
@@ -1715,7 +1909,9 @@ impl PolicyRuntime {
                             .map(|baseline| (request_key.clone(), baseline.clone()))
                     })
                     .collect();
-                let mut router = PolicyTableRouter::new(table).with_state_namespace(name.clone());
+                let mut router = PolicyTableRouter::new(table)
+                    .with_state_namespace(name.clone())
+                    .with_progress_guard(definition.progress_guard.clone());
                 router = router.with_eval_observer(
                     self.eval_decisions.clone(),
                     name.clone(),
@@ -1781,7 +1977,8 @@ impl ModelSelector for PolicyRuntime {
                     "preset references unavailable policy '{policy}'"
                 ))
             })?;
-        if let Some(trajectory) = &self.trajectory {
+        let guard = router.progress_guard();
+        if let (Some(trajectory), Some(guard)) = (&self.trajectory, guard) {
             if ctx.caller().is_anonymous() {
                 return Err(bitrouter_sdk::BitrouterError::Unauthorized(
                     "trajectory correlation requires an authenticated caller".into(),
@@ -1794,13 +1991,39 @@ impl ModelSelector for PolicyRuntime {
             })?;
             let captured_at =
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let correlated = trajectory
-                .begin_request(
+            let input_model = ctx.model().to_string();
+            let mut decision = router.candidate_for_guarded_policy(ctx.prompt(), ctx.headers());
+            let projection =
+                RouteProjection::parse_key(&decision.route_projection).ok_or_else(|| {
+                    bitrouter_sdk::BitrouterError::internal(
+                        "named policy produced an invalid canonical route projection",
+                    )
+                })?;
+            let policy_digest = snapshot.digest.as_deref().ok_or_else(|| {
+                bitrouter_sdk::BitrouterError::internal(
+                    "guarded named policy has no active lock digest",
+                )
+            })?;
+            let owner = ctx.caller().user_id();
+            let guarded_input = GuardedRouteInput {
+                route_event_id: stable_id("route-intent", owner, ctx.request_id()),
+                guard_event_id: stable_id("guard-activation", owner, ctx.request_id()),
+                projection,
+                candidate_tier: decision.static_tier.clone(),
+                policy_digest: policy_digest.to_owned(),
+                policy: guard.clone(),
+                carries_tools: !ctx.prompt().tools.is_empty(),
+                tool_use_tier: router.tool_use_tier().map(ToOwned::to_owned),
+                tool_safe_tiers: router.tool_safe_tiers(),
+            };
+            let (correlated, guarded) = trajectory
+                .begin_guarded_request(
                     ctx.caller().user_id(),
                     ctx.request_id(),
                     inbound_protocol,
                     ctx.prompt(),
                     &captured_at,
+                    guarded_input,
                 )
                 .await
                 .map_err(|error| {
@@ -1817,6 +2040,38 @@ impl ModelSelector for PolicyRuntime {
                     }
                 })?;
             ctx.insert_extension(Arc::new(correlated));
+            let guard_applied = guarded.intent.clauses.iter().any(|clause| {
+                clause.clause_id.starts_with("progress_guard.")
+                    && clause.disposition == RouteIntentClauseDisposition::Applied
+            });
+            router.apply_guarded_route(
+                &mut decision,
+                guarded.intent.selected_tier.as_deref(),
+                guard_applied,
+                guarded.tool_floor_applied,
+            );
+            decision.trajectory_episode_id = Some(guarded.snapshot.episode_id.clone());
+            decision.trajectory_sequence = Some(guarded.route_sequence);
+            decision.trajectory_completeness = Some(guarded.causal_completeness);
+            decision.trajectory_health_digest =
+                Some(guarded.intent.trajectory_snapshot_digest.clone());
+            decision.progress_candidate_tier = guarded.intent.candidate_tier.clone();
+            decision.progress_clause_ids = guarded
+                .intent
+                .clauses
+                .iter()
+                .map(|clause| clause.clause_id.clone())
+                .collect();
+            let selected = router.record_bound_policy_decision(
+                ctx.request_id(),
+                input_model,
+                decision,
+                ctx.headers(),
+            );
+            if let Some(model) = selected {
+                ctx.set_model(model);
+            }
+            return Ok(());
         }
         let input_model = ctx.model().to_string();
         let decision = router.decision_for_bound_policy(ctx.prompt(), ctx.headers());
@@ -1856,6 +2111,21 @@ mod tests {
             tool_use_tier: Some("strong".into()),
             tool_safe_tiers: vec!["strong".into()],
             ..Default::default()
+        }
+    }
+
+    fn progress_guard() -> ProgressGuardPolicy {
+        ProgressGuardPolicy {
+            escalation_tier: "strong".into(),
+            protected_tiers: BTreeSet::from(["strong".into()]),
+            max_consecutive_unprotected: Some(3),
+            max_same_projection_unprotected: Some(4),
+            max_recovery_count: Some(1),
+            max_episode_requests: Some(8),
+            max_episode_elapsed_ms: None,
+            max_episode_cost_micro_usd: Some(50_000),
+            hold_for_requests: 2,
+            incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Observe,
         }
     }
 
@@ -1999,6 +2269,156 @@ certificates:
     }
 
     #[test]
+    fn progress_guard_is_optional_signed_and_deterministic() -> anyhow::Result<()> {
+        let old = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
+        };
+        let old_bytes = deterministic_yaml(&old)?;
+        assert!(!old_bytes.contains("progress_guard"));
+        let old_round_trip: PolicyLock = serde_saphyr::from_str(&old_bytes)?;
+        assert_eq!(deterministic_yaml(&old_round_trip)?, old_bytes);
+
+        let mut guarded = PolicyLock::default();
+        let mut policy = definition();
+        policy.routes.clear();
+        policy.progress_guard = Some(crate::trajectory::guard::ProgressGuardPolicy {
+            escalation_tier: "strong".into(),
+            protected_tiers: BTreeSet::from(["strong".into()]),
+            max_consecutive_unprotected: Some(3),
+            max_same_projection_unprotected: None,
+            max_recovery_count: Some(1),
+            max_episode_requests: None,
+            max_episode_elapsed_ms: None,
+            max_episode_cost_micro_usd: Some(5_000),
+            hold_for_requests: 2,
+            incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Escalate,
+        });
+        guarded.policies.insert("coding".into(), policy);
+        let guarded_bytes = deterministic_yaml(&guarded)?;
+        let parsed: PolicyLock = serde_saphyr::from_str(&guarded_bytes)?;
+        assert_eq!(deterministic_yaml(&parsed)?, guarded_bytes);
+        assert_ne!(
+            semantic_digest(&guarded)?,
+            semantic_digest(&PolicyLock::default())?
+        );
+        assert!(guarded_bytes.contains("progress_guard:"));
+        Ok(())
+    }
+
+    #[test]
+    fn progress_guard_validation_is_named_v2_and_non_downgrading() -> anyhow::Result<()> {
+        let guarded_lock = |guard: ProgressGuardPolicy, mutate: fn(&mut PolicyDefinition)| {
+            let mut lock = PolicyLock::default();
+            let mut policy = definition();
+            policy.routes.clear();
+            policy.progress_guard = Some(guard);
+            mutate(&mut policy);
+            lock.policies.insert("coding".into(), policy);
+            lock
+        };
+
+        let mut v1 = guarded_lock(progress_guard(), |_| {});
+        v1.lockfile_version = LEGACY_POLICY_LOCKFILE_VERSION;
+        v1.artifact = None;
+        assert!(validate_document(&v1).is_err());
+
+        let mut unknown_escalation = progress_guard();
+        unknown_escalation.escalation_tier = "missing".into();
+        assert!(validate_document(&guarded_lock(unknown_escalation, |_| {})).is_err());
+
+        let mut empty_protected = progress_guard();
+        empty_protected.protected_tiers.clear();
+        assert!(validate_document(&guarded_lock(empty_protected, |_| {})).is_err());
+
+        let mut zero_threshold = progress_guard();
+        zero_threshold.max_episode_requests = Some(0);
+        assert!(validate_document(&guarded_lock(zero_threshold, |_| {})).is_err());
+
+        let mut zero_hold = progress_guard();
+        zero_hold.hold_for_requests = 0;
+        assert!(validate_document(&guarded_lock(zero_hold, |_| {})).is_err());
+
+        let unprotected_floor = guarded_lock(progress_guard(), |policy| {
+            policy.tiers.insert("floor".into(), "vendor:floor".into());
+            policy.tool_use_tier = Some("floor".into());
+            policy.tool_safe_tiers = vec!["floor".into()];
+        });
+        assert!(validate_document(&unprotected_floor).is_err());
+
+        let legacy_global = bitrouter_sdk::config::parse(
+            "policy_table:\n  progress_guard:\n    escalation_tier: strong\n",
+        );
+        assert!(legacy_global.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn guard_diff_reports_every_changed_field() {
+        let mut active = PolicyLock::default();
+        let mut policy = definition();
+        policy.routes.clear();
+        active.policies.insert("coding".into(), policy.clone());
+        policy.progress_guard = Some(progress_guard());
+        let mut candidate = PolicyLock::default();
+        candidate.policies.insert("coding".into(), policy);
+
+        let differences = diff_progress_guards(&active, &candidate);
+        let fields = differences
+            .iter()
+            .map(|difference| difference.field.as_str())
+            .collect::<BTreeSet<_>>();
+        for field in [
+            "progress_guard.escalation_tier",
+            "progress_guard.protected_tiers",
+            "progress_guard.max_consecutive_unprotected",
+            "progress_guard.max_same_projection_unprotected",
+            "progress_guard.max_recovery_count",
+            "progress_guard.max_episode_requests",
+            "progress_guard.max_episode_cost_micro_usd",
+            "progress_guard.hold_for_requests",
+            "progress_guard.incomplete_history",
+        ] {
+            assert!(fields.contains(field), "missing {field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_reload_and_rollback_preserve_guard_bytes() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let active_path = dir.path().join("policy-lock.yaml");
+        let history = dir.path().join("history");
+        let mut active = PolicyLock::default();
+        let mut policy = definition();
+        policy.routes.clear();
+        active.policies.insert("coding".into(), policy.clone());
+        write_atomic(&active_path, None, &active)?;
+        let active_bytes = std::fs::read(&active_path)?;
+
+        policy.progress_guard = Some(progress_guard());
+        let mut candidate = active.clone();
+        candidate.policies.insert("coding".into(), policy);
+        let promoted = publish_candidate(
+            &active_path,
+            &semantic_digest(&active)?,
+            &candidate,
+            &history,
+        )?;
+        let loaded = load(&active_path).await?;
+        assert_eq!(loaded.document, candidate);
+        rollback_to_digest(
+            &active_path,
+            &promoted.child_digest,
+            &promoted.parent_digest,
+            &history,
+        )?;
+        assert_eq!(std::fs::read(&active_path)?, active_bytes);
+        Ok(())
+    }
+
+    #[test]
     fn process_mode_never_activates_request_time_learning() {
         let mut policy = definition();
         policy.adequacy.enabled = false;
@@ -2084,6 +2504,7 @@ presets:
                 parent_digest: None,
                 legacy: &snapshot,
                 eval: None,
+                proposed_progress_guards: None,
             })?;
         write_atomic(
             &dir.path().join("policy-lock.yaml"),
@@ -2272,6 +2693,46 @@ presets:
             )))
         }
 
+        let old_dir = tempfile::tempdir()?;
+        let old_config_path = old_dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &old_config_path,
+            "presets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
+        )
+        .await?;
+        let old_lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
+        };
+        write_atomic(&old_dir.path().join("policy-lock.yaml"), None, &old_lock)?;
+        let old_config = bitrouter_sdk::config::load(&old_config_path).await?;
+        let old_db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&old_db).await?;
+        let old_runtime = PolicyRuntime::new(
+            &old_config,
+            Some(&old_config_path),
+            old_db.clone(),
+            None,
+            PendingEvalDecisionStore::default(),
+            Some(trajectory(old_db.clone())?),
+        )
+        .await?;
+        let mut old_context =
+            context_with_previous_response_id(http::HeaderMap::new(), "request-old-no-guard", None);
+        old_runtime
+            .select_variant("coding", None, &mut old_context)
+            .await?;
+        assert_eq!(old_context.model(), "vendor:strong");
+        assert!(old_context.extension::<CorrelatedRequest>().is_none());
+        assert!(
+            TrajectoryStore::new(old_db)
+                .request("owner-a", "request-old-no-guard")
+                .await?
+                .is_none()
+        );
+
         let dir = tempfile::tempdir()?;
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -2279,12 +2740,22 @@ presets:
             "presets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
         )
         .await?;
-        let lock = PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
-            policies: BTreeMap::from([("coding".into(), definition())]),
-            certificates: BTreeMap::new(),
-        };
+        let mut guarded_definition = definition();
+        guarded_definition.routes.clear();
+        guarded_definition.progress_guard = Some(ProgressGuardPolicy {
+            escalation_tier: "strong".into(),
+            protected_tiers: BTreeSet::from(["strong".into()]),
+            max_consecutive_unprotected: Some(3),
+            max_same_projection_unprotected: Some(3),
+            max_recovery_count: Some(2),
+            max_episode_requests: Some(10),
+            max_episode_elapsed_ms: None,
+            max_episode_cost_micro_usd: None,
+            hold_for_requests: 2,
+            incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Observe,
+        });
+        let mut lock = PolicyLock::default();
+        lock.policies.insert("coding".into(), guarded_definition);
         write_atomic(&dir.path().join("policy-lock.yaml"), None, &lock)?;
         let config = bitrouter_sdk::config::load(&config_path).await?;
 
@@ -2314,11 +2785,14 @@ presets:
         let baseline_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&baseline_db).await?;
         let baseline_pending = PendingEvalDecisionStore::default();
+        let decision_path = dir.path().join("guarded-decisions.jsonl");
         let baseline = PolicyRuntime::new(
             &config,
             Some(&config_path),
             baseline_db.clone(),
-            None,
+            Some(Arc::new(PolicyDecisionJsonlRecorder::new(
+                decision_path.clone(),
+            )?)),
             baseline_pending.clone(),
             Some(trajectory(baseline_db.clone())?),
         )
@@ -2344,6 +2818,38 @@ presets:
             .extension::<CorrelatedRequest>()
             .ok_or_else(|| anyhow::anyhow!("missing baseline correlation"))?;
         assert!(baseline_pending.get("request-stable").is_some());
+        let records =
+            crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&decision_path)?;
+        let guarded_record = records
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing guarded decision record"))?;
+        let guarded_events = TrajectoryStore::new(baseline_db.clone())
+            .events_for_episode("owner-a", &baseline_correlation.episode_id)
+            .await?;
+        assert_eq!(guarded_events.len(), 2);
+        assert_eq!(
+            guarded_events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                crate::trajectory::types::TrajectoryEventKind::RequestStarted,
+                crate::trajectory::types::TrajectoryEventKind::RouteIntentRecorded,
+            ],
+            "the atomic route intent must exist when policy selection returns"
+        );
+        assert_eq!(
+            guarded_record.trajectory_completeness.as_deref(),
+            Some("complete")
+        );
+        assert!(guarded_record.trajectory_episode_id.is_some());
+        assert_eq!(
+            guarded_record.trajectory_sequence,
+            guarded_events.last().map(|event| event.sequence)
+        );
+        assert!(guarded_record.trajectory_health_digest.is_some());
+        assert_eq!(guarded_record.candidate_tier.as_deref(), Some("strong"));
+        assert_eq!(guarded_record.progress_clause_ids.len(), 9);
 
         let metadata_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&metadata_db).await?;

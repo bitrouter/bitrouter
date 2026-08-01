@@ -1,5 +1,6 @@
 pub mod canonical;
 pub mod correlation;
+pub mod guard;
 pub mod health;
 pub mod replay;
 pub mod store;

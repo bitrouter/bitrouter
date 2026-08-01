@@ -317,7 +317,7 @@ impl Default for RegistryConfig {
 /// and operator-owned: it is versionable in `bitrouter.yaml` and never mutated
 /// at runtime.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PolicyTableConfig {
     /// The request-key family used for `fingerprints`. Active policy routing
     /// uses only the canonical source-independent `agent_trace` projection.
