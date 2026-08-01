@@ -97,11 +97,6 @@ fn build_settlement(
     }
     let mut categorical = BTreeMap::from([
         (
-            "settlement.provider".to_owned(),
-            metering.provider_id.clone(),
-        ),
-        ("settlement.model".to_owned(), metering.model_id.clone()),
-        (
             "settlement.usage_origin".to_owned(),
             metering.usage_origin.as_str().to_owned(),
         ),
@@ -115,6 +110,15 @@ fn build_settlement(
             .to_owned(),
         ),
     ]);
+    if !metering.provider_id.trim().is_empty() {
+        categorical.insert(
+            "settlement.provider".to_owned(),
+            metering.provider_id.clone(),
+        );
+    }
+    if !metering.model_id.trim().is_empty() {
+        categorical.insert("settlement.model".to_owned(), metering.model_id.clone());
+    }
     if let Some(error_code) = &metering.error_code {
         categorical.insert("settlement.error_code".to_owned(), error_code.clone());
     }
@@ -410,6 +414,71 @@ mod tests {
                 .contains_key("trajectory.cost.usd_micros")
         );
         assert!(!envelope.result.metrics.contains_key("cost.usd_micros"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routing_failure_without_target_is_terminal_and_keeps_evidence_absent()
+    -> anyhow::Result<()> {
+        let (_db, store) = store().await?;
+        begin_guarded(&store, "request-1", "episode-1").await?;
+        let mut unknown = metering("request-1");
+        unknown.provider_id.clear();
+        unknown.model_id.clear();
+        unknown.usage_origin = UsageOrigin::Unknown;
+        unknown.prompt_tokens = None;
+        unknown.completion_tokens = None;
+        unknown.reasoning_tokens = None;
+        unknown.cache_read_tokens = None;
+        unknown.cache_write_tokens = None;
+        unknown.total_tokens = None;
+        unknown.cost_micro_usd = None;
+        unknown.error_code = Some("not_found".into());
+
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-1",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &unknown)
+                },
+            )
+            .await?;
+
+        let request = store
+            .request("owner-a", "request-1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("settled request missing"))?;
+        assert_eq!(request.status, RequestStatus::Failed);
+        let events = store.events_for_episode("owner-a", "episode-1").await?;
+        let settlement = events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("settlement event missing"))?;
+        assert!(
+            !settlement
+                .evidence
+                .categorical
+                .contains_key("settlement.provider")
+        );
+        assert!(
+            !settlement
+                .evidence
+                .categorical
+                .contains_key("settlement.model")
+        );
+        assert!(
+            !settlement
+                .evidence
+                .structural
+                .contains_key("settlement.total_tokens")
+        );
+        assert!(
+            !settlement
+                .evidence
+                .structural
+                .contains_key("settlement.cost_micro_usd")
+        );
+        assert_eq!(store.pending_outbox("owner-a").await?.len(), 1);
         Ok(())
     }
 

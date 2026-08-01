@@ -467,12 +467,12 @@ the general progress invariant depend on external agent installations.
 
 **Interfaces:** After Stage 1 succeeds, any Stage-2 error that occurs after a model selector may have durably recorded a route intent. Both streaming and non-streaming paths therefore call the existing `run_settlement(ctx, false, Some(error))` before returning because no response stream has opened yet. Unknown provider usage remains `UsageOrigin::Unknown` with absent token/cost evidence; it is never coerced to zero.
 
-- [ ] **Step 1: Write SDK RED tests for no-route and failing route-hook paths in both execution modes.** Assert every registered settlement recorder runs once with the original error and unknown usage, while pre-request denials still do not fabricate a routed settlement.
-- [ ] **Step 2: Write a guarded App RED test.** Use a signed policy tier whose non-empty provider-qualified model has no routing-table entry. Assert the request currently remains `started` to prove the defect.
-- [ ] **Step 3: Settle Stage-2 failures in both pipeline entrypoints.** Preserve observe ordering: settlement phase and failed request-end occur exactly once.
-- [ ] **Step 4: Prove durable closure.** Assert `RequestStatus::Failed`, one settlement event/outbox record, no numeric token/cost facts, idempotent restart/reconciliation, successful publication, and prune eligibility after the cutoff.
-- [ ] **Step 5: Run SDK pipeline, metering, trajectory settlement/store, publisher, restart, and prune tests until GREEN.**
-- [ ] **Step 6: Commit `fix(pipeline): settle routing failures`.**
+- [x] **Step 1: Write SDK RED tests for no-route and failing route-hook paths in both execution modes.** Assert every registered settlement recorder runs once with the original error and unknown usage, while pre-request denials still do not fabricate a routed settlement.
+- [x] **Step 2: Write a guarded App RED test.** Use a signed policy tier whose non-empty provider-qualified model has no routing-table entry. Assert the request currently remains `started` to prove the defect.
+- [x] **Step 3: Settle Stage-2 failures in both pipeline entrypoints.** Preserve observe ordering: settlement phase and failed request-end occur exactly once.
+- [x] **Step 4: Prove durable closure.** Assert `RequestStatus::Failed`, one settlement event/outbox record, no numeric token/cost facts, idempotent restart/reconciliation, successful publication, and prune eligibility after the cutoff.
+- [x] **Step 5: Run SDK pipeline, metering, trajectory settlement/store, publisher, restart, and prune tests until GREEN.**
+- [x] **Step 6: Commit `fix(pipeline): settle routing failures`.**
 
 ## Task 11: Keep streaming Responses identity ledger-compatible
 

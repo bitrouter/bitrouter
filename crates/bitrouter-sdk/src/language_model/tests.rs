@@ -132,6 +132,132 @@ impl ObserveHook for RequestEndCountingObserver {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoutingFailureSettlement {
+    streamed: bool,
+    target: Option<(String, String)>,
+    provider_id: String,
+    model_id: String,
+    usage_origin: UsageOrigin,
+    raw_usage_present: bool,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    error: Option<(u16, String, String)>,
+}
+
+struct RoutingFailureRecorder(Arc<std::sync::Mutex<Vec<RoutingFailureSettlement>>>);
+
+#[async_trait]
+impl SettlementRecorder for RoutingFailureRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        let snapshot = RoutingFailureSettlement {
+            streamed: ctx.streamed,
+            target: ctx
+                .target
+                .as_ref()
+                .map(|target| (target.provider_name.clone(), target.service_id.clone())),
+            provider_id: ctx.provider_id.clone(),
+            model_id: ctx.model_id.clone(),
+            usage_origin: ctx.usage_origin,
+            raw_usage_present: ctx.raw_usage.is_some(),
+            prompt_tokens: ctx.prompt_tokens,
+            completion_tokens: ctx.completion_tokens,
+            error: ctx.error.as_ref().map(|error| {
+                (
+                    error.status(),
+                    error.error_code().to_owned(),
+                    error.to_string(),
+                )
+            }),
+        };
+        match self.0.lock() {
+            Ok(mut snapshots) => snapshots.push(snapshot),
+            Err(poisoned) => poisoned.into_inner().push(snapshot),
+        }
+        Ok(())
+    }
+}
+
+struct FailingSettlementRecorder(Arc<AtomicUsize>);
+
+#[async_trait]
+impl SettlementRecorder for FailingSettlementRecorder {
+    async fn record(&self, _ctx: &mut SettlementContext) -> Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(BitrouterError::internal("settlement recorder failed"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoutingFailureObserveEvent {
+    Started,
+    Phase(Phase),
+    Failed(u16, String, String),
+}
+
+struct RoutingFailureObserver(Arc<std::sync::Mutex<Vec<RoutingFailureObserveEvent>>>);
+
+#[async_trait]
+impl ObserveHook for RoutingFailureObserver {
+    async fn on_request_start(&self, _ctx: &PipelineContext) {
+        let event = RoutingFailureObserveEvent::Started;
+        match self.0.lock() {
+            Ok(mut events) => events.push(event),
+            Err(poisoned) => poisoned.into_inner().push(event),
+        }
+    }
+
+    async fn after_phase(&self, phase: Phase, _ctx: &PipelineContext) {
+        let event = RoutingFailureObserveEvent::Phase(phase);
+        match self.0.lock() {
+            Ok(mut events) => events.push(event),
+            Err(poisoned) => poisoned.into_inner().push(event),
+        }
+    }
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let event = match outcome {
+            RequestOutcome::Failed(error) => RoutingFailureObserveEvent::Failed(
+                error.status(),
+                error.error_code().to_owned(),
+                error.to_string(),
+            ),
+            RequestOutcome::Completed | RequestOutcome::ClientDisconnected => return,
+        };
+        match self.0.lock() {
+            Ok(mut events) => events.push(event),
+            Err(poisoned) => poisoned.into_inner().push(event),
+        }
+    }
+}
+
+struct FailingRouteHook;
+
+#[async_trait]
+impl RouteHook for FailingRouteHook {
+    async fn resolve(
+        &self,
+        _chain: &mut Vec<RoutingTarget>,
+        _ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        Err(BitrouterError::bad_request("route hook rejected request"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoutingFailureKind {
+    NoRoute,
+    RouteHook,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PipelineExecutionMode {
+    NonStreaming,
+    Streaming,
+}
+
 /// Records the `(prompt_tokens, completion_tokens)` seen by every settlement
 /// call so a test can assert what was actually billed.
 struct UsageCapturingRecorder(Arc<std::sync::Mutex<Vec<(u64, u64)>>>);
@@ -535,6 +661,136 @@ async fn full_pipeline_runs_all_four_stages() {
 }
 
 #[tokio::test]
+async fn non_streaming_no_route_runs_settlement_once() -> Result<()> {
+    assert_route_resolution_failure_settles(
+        PipelineExecutionMode::NonStreaming,
+        RoutingFailureKind::NoRoute,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn streaming_no_route_runs_settlement_once() -> Result<()> {
+    assert_route_resolution_failure_settles(
+        PipelineExecutionMode::Streaming,
+        RoutingFailureKind::NoRoute,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn non_streaming_route_hook_failure_runs_settlement_once() -> Result<()> {
+    assert_route_resolution_failure_settles(
+        PipelineExecutionMode::NonStreaming,
+        RoutingFailureKind::RouteHook,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn streaming_route_hook_failure_runs_settlement_once() -> Result<()> {
+    assert_route_resolution_failure_settles(
+        PipelineExecutionMode::Streaming,
+        RoutingFailureKind::RouteHook,
+    )
+    .await
+}
+
+async fn assert_route_resolution_failure_settles(
+    mode: PipelineExecutionMode,
+    failure: RoutingFailureKind,
+) -> Result<()> {
+    let settlements = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let failing_recorder_calls = Arc::new(AtomicUsize::new(0));
+    let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let routing = match failure {
+        RoutingFailureKind::NoRoute => routing_table(&[]),
+        RoutingFailureKind::RouteHook => routing_table(&["openai"]),
+    };
+    let pipeline = pipeline_with(
+        routing,
+        Arc::new(MockExecutor::always_text("must not execute")),
+        |builder| {
+            if failure == RoutingFailureKind::RouteHook {
+                builder.route_hook(FailingRouteHook);
+            }
+            builder
+                .settlement_recorder(FailingSettlementRecorder(failing_recorder_calls.clone()))
+                .settlement_recorder(RoutingFailureRecorder(settlements.clone()))
+                .observe_hook(RoutingFailureObserver(observations.clone()));
+        },
+    );
+
+    let error = match mode {
+        PipelineExecutionMode::NonStreaming => pipeline.execute(request()).await,
+        PipelineExecutionMode::Streaming => {
+            match pipeline.clone().execute_stream(stream_request()).await {
+                Err(error) => Err(error),
+                Ok(_) => Err(BitrouterError::internal(
+                    "route resolution failure unexpectedly opened a stream",
+                )),
+            }
+        }
+    }
+    .expect_err("route resolution must fail before execution");
+    let expected = match failure {
+        RoutingFailureKind::NoRoute => (
+            404,
+            "not_found".to_owned(),
+            "not found: no route for model 'test-model' after applying routing preferences"
+                .to_owned(),
+        ),
+        RoutingFailureKind::RouteHook => (
+            400,
+            "invalid_request".to_owned(),
+            "bad request: route hook rejected request".to_owned(),
+        ),
+    };
+    assert_eq!(
+        (
+            error.status(),
+            error.error_code().to_owned(),
+            error.to_string()
+        ),
+        expected
+    );
+    assert_eq!(failing_recorder_calls.load(Ordering::SeqCst), 1);
+
+    let snapshots = match settlements.lock() {
+        Ok(snapshots) => snapshots.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    assert_eq!(
+        snapshots,
+        [RoutingFailureSettlement {
+            streamed: false,
+            target: None,
+            provider_id: String::new(),
+            model_id: String::new(),
+            usage_origin: UsageOrigin::Unknown,
+            raw_usage_present: false,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            error: Some(expected.clone()),
+        }]
+    );
+    let observations = match observations.lock() {
+        Ok(events) => events.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    assert_eq!(
+        observations,
+        [
+            RoutingFailureObserveEvent::Started,
+            RoutingFailureObserveEvent::Phase(Phase::PreRequest),
+            RoutingFailureObserveEvent::Phase(Phase::Settlement),
+            RoutingFailureObserveEvent::Failed(expected.0, expected.1, expected.2),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn failed_non_streaming_request_settles_the_attempted_target() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
@@ -687,6 +943,33 @@ async fn pre_request_deny_stops_pipeline() {
         0,
         "route stage not reached after deny"
     );
+    assert_eq!(recorded.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn streaming_pre_request_deny_does_not_settle() -> Result<()> {
+    let recorded = Arc::new(AtomicUsize::new(0));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::always_text("must not execute")),
+        |builder| {
+            builder
+                .pre_request_hook(DenyHook)
+                .settlement_recorder(CountingRecorder(recorded.clone()));
+        },
+    );
+
+    let error = match pipeline.execute_stream(stream_request()).await {
+        Err(error) => error,
+        Ok(_) => {
+            return Err(BitrouterError::internal(
+                "pre-request denial unexpectedly opened a stream",
+            ));
+        }
+    };
+    assert_eq!(error.status(), 401);
+    assert_eq!(recorded.load(Ordering::SeqCst), 0);
+    Ok(())
 }
 
 #[tokio::test]
