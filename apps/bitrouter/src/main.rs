@@ -2558,6 +2558,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         cfg.server.skip_auth,
     );
     let policy_store = assembled.policy_store;
+    let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
     // Clone before moving the original into `run_control_socket` — we
     // need a handle here too so the shutdown path below can drive the
     // exporter flush before the runtime tears down.
@@ -2703,6 +2704,20 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             Err(e) => { tracing::warn!(error = %e, "termination-signal listener unavailable"); Ok(()) }
         },
     };
+
+    let trajectory_drain = trajectory_outbox_for_shutdown
+        .drain_after_active_worker()
+        .await;
+    match trajectory_drain {
+        Ok(summary) if summary.failed > 0 => tracing::warn!(
+            attempted = summary.attempted,
+            delivered = summary.delivered,
+            failed = summary.failed,
+            "trajectory outbox drain completed with poison items still pending"
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "trajectory outbox shutdown drain failed"),
+    }
 
     // Drive the OTel exporter's flush before anything else drops — its
     // `rt-tokio` background tasks need a live async runtime to drain,

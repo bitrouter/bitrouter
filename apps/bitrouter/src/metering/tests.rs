@@ -14,7 +14,10 @@ use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable, TimeWindow};
+use super::{
+    MeteringRecorder, MeteringSettlementEvent, MeteringStore, ModelPricing, PricingTable,
+    TimeWindow,
+};
 use crate::db;
 
 async fn pool() -> DatabaseConnection {
@@ -70,6 +73,64 @@ async fn recorder_writes_estimated_charge_from_pricing() -> Result<()> {
     recorder.record(&mut ctx("k1", 10, 5)).await?;
     let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
     assert_eq!(spend, 70);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_emits_authoritative_content_free_settlement_after_persisting() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool);
+    let recorder = MeteringRecorder::new(store, pricing());
+    let mut settlement = ctx("event", 10, 5);
+
+    recorder.record(&mut settlement).await?;
+
+    let event = settlement
+        .get_event::<MeteringSettlementEvent>()
+        .expect("metering settlement event");
+    assert_eq!(event.request_id, "r-event-10-5");
+    assert_eq!(event.provider_id, "openai");
+    assert_eq!(event.model_id, "gpt-5");
+    assert_eq!(event.total_tokens, Some(15));
+    assert_eq!(event.cost_micro_usd, Some(70));
+    assert_eq!(event.duration_ms, 100);
+    assert_eq!(event.error_code, None);
+    assert_eq!(event.finish_reason, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_event_keeps_unknown_usage_and_price_absent() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool);
+    let recorder = MeteringRecorder::new(store, Arc::new(PricingTable::new()));
+    let mut settlement = ctx("unknown", 0, 0);
+    settlement.usage_origin = bitrouter_sdk::language_model::UsageOrigin::Unknown;
+
+    recorder.record(&mut settlement).await?;
+
+    let event = settlement
+        .get_event::<MeteringSettlementEvent>()
+        .expect("metering settlement event");
+    assert_eq!(event.total_tokens, None);
+    assert_eq!(event.cost_micro_usd, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_failure_does_not_emit_settlement_authority() -> anyhow::Result<()> {
+    let pool = pool().await;
+    pool.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TABLE requests".to_owned(),
+    ))
+    .await?;
+    let store = MeteringStore::new(pool);
+    let recorder = MeteringRecorder::new(store, pricing());
+    let mut settlement = ctx("failed-write", 10, 5);
+
+    assert!(recorder.record(&mut settlement).await.is_err());
+    assert!(settlement.get_event::<MeteringSettlementEvent>().is_none());
     Ok(())
 }
 
@@ -680,6 +741,15 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
         record.error_code.as_deref(),
         Some("upstream_policy_violation")
     );
+    let event = settlement
+        .get_event::<MeteringSettlementEvent>()
+        .expect("metering settlement event");
+    assert_eq!(
+        event.usage_origin,
+        bitrouter_sdk::language_model::UsageOrigin::Unknown
+    );
+    assert_eq!(event.total_tokens, None);
+    assert_eq!(event.cost_micro_usd, None);
     Ok(())
 }
 

@@ -1,7 +1,10 @@
 pub mod canonical;
 pub mod correlation;
+pub mod evaluation;
 pub mod guard;
 pub mod health;
+pub mod publisher;
 pub mod replay;
+pub mod settlement;
 pub mod store;
 pub mod types;

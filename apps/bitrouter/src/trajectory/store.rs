@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, RuntimeErr, Set, TransactionTrait, sea_query::Expr,
+    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RuntimeErr, Set,
+    TransactionTrait, sea_query::Expr,
 };
 
 use super::correlation::CorrelationSource;
@@ -141,10 +142,22 @@ pub(crate) struct CorrelateAndBeginResult {
     pub guarded_route: Option<GuardedRouteResult>,
 }
 
+pub(crate) struct OutboxBatchItem {
+    pub outbox_id: String,
+    pub owner_user_id: String,
+    pub topic: String,
+    pub payload: Option<super::types::OutboxPayload>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GuardedRouteInput {
     pub route_event_id: String,
     pub guard_event_id: String,
+    pub policy_name: String,
+    pub request_key: String,
+    pub baseline_tier: Option<String>,
+    pub preset: Option<String>,
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
     pub policy_digest: String,
@@ -184,6 +197,7 @@ enum PrefixResolution {
 
 const MAX_SEQUENCE_RESERVATION_ATTEMPTS: usize = 32;
 const MAX_LEDGER_MUTATION_ATTEMPTS: usize = 32;
+pub(crate) const MAX_OUTBOX_BATCH_SIZE: usize = 1_000;
 
 impl TrajectoryStore {
     pub fn new(db: DatabaseConnection) -> Self {
@@ -597,6 +611,123 @@ impl TrajectoryStore {
         )
     }
 
+    /// Build and append a settlement against the transaction's current episode
+    /// head. The builder is invoked again after a contention retry, so its event
+    /// sequence and any sequence-addressed outbox payload cannot become stale.
+    /// For an already-settled request, the builder receives the immutable prefix
+    /// immediately before the original settlement and must rebuild the exact
+    /// persisted event and outbox batch.
+    pub(crate) async fn settle_request_from_current_head<F>(
+        &self,
+        owner_user_id: &str,
+        request_id: &str,
+        build: F,
+    ) -> Result<Settlement>
+    where
+        F: Fn(&StoredRequest, &[TrajectoryEvent], u64) -> Result<Settlement>,
+    {
+        validate_owner(owner_user_id)?;
+        validate_opaque(request_id, "request_id")?;
+        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
+            match self
+                .settle_request_from_current_head_once(owner_user_id, request_id, &build)
+                .await
+            {
+                Ok(settlement) => return Ok(settlement),
+                Err(error) if mutation_error_is_retryable(&error) => {
+                    tokio::time::sleep(contention_backoff(attempt)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        anyhow::bail!(
+            "trajectory settlement contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
+        )
+    }
+
+    async fn settle_request_from_current_head_once<F>(
+        &self,
+        owner_user_id: &str,
+        request_id: &str,
+        build: &F,
+    ) -> Result<Settlement>
+    where
+        F: Fn(&StoredRequest, &[TrajectoryEvent], u64) -> Result<Settlement>,
+    {
+        let txn = self.db.begin().await?;
+        let request = request_entity::Entity::find()
+            .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(request_entity::Column::RequestId.eq(request_id))
+            .one(&txn)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'")
+            })?;
+        let episode = owned_episode(&txn, owner_user_id, &request.episode_id).await?;
+        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
+        validate_episode_head(&episode, &events)?;
+        let stored = stored_request(request.clone())?;
+
+        if let Some(settlement_event_id) = request.settlement_event_id.as_deref() {
+            let position = events
+                .iter()
+                .position(|event| event.event_id == settlement_event_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "settled trajectory request '{request_id}' lost its settlement event"
+                    )
+                })?;
+            let persisted = &events[position];
+            let rebuilt = build(&stored, &events[..position], persisted.sequence)?;
+            validate_settlement(owner_user_id, &rebuilt)?;
+            if rebuilt.event == *persisted
+                && request.status == request_status_name(rebuilt.status.clone())
+                && settlement_outbox_matches(
+                    &txn,
+                    owner_user_id,
+                    request.settlement_outbox_id.as_deref(),
+                    rebuilt.outbox.as_ref(),
+                )
+                .await?
+            {
+                txn.commit().await?;
+                return Ok(rebuilt);
+            }
+            anyhow::bail!("trajectory request '{request_id}' already has a different settlement")
+        }
+
+        if episode.closed_at.is_some() {
+            anyhow::bail!("trajectory episode is closed and cannot accept new events")
+        }
+        let sequence = u64::try_from(episode.next_sequence)
+            .context("stored trajectory sequence is negative")?;
+        let settlement = build(&stored, &events, sequence)?;
+        validate_settlement(owner_user_id, &settlement)?;
+        if settlement.event.request_id.as_deref() != Some(request_id)
+            || settlement.event.episode_id != request.episode_id
+        {
+            anyhow::bail!("transactional settlement builder changed request identity")
+        }
+        validate_sequence(&episode, &settlement.event)?;
+        validate_candidate_history(&events, &settlement.event)?;
+        append_event(&txn, &settlement.event).await?;
+
+        let mut active = request.into_active_model();
+        active.settlement_event_id = Set(Some(settlement.event.event_id.clone()));
+        active.settlement_outbox_id = Set(settlement
+            .outbox
+            .as_ref()
+            .map(|outbox| outbox.outbox_id.clone()));
+        active.status = Set(request_status_name(settlement.status.clone()).into());
+        active.update(&txn).await?;
+        update_episode_head(&txn, episode, &settlement.event, None).await?;
+        if let Some(outbox) = &settlement.outbox {
+            insert_outbox(&txn, owner_user_id, outbox.clone()).await?;
+        }
+        txn.commit().await?;
+        Ok(settlement)
+    }
+
     async fn settle_request_once(
         &self,
         owner_user_id: &str,
@@ -724,12 +855,65 @@ impl TrajectoryStore {
         outbox_entity::Entity::find()
             .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(outbox_entity::Column::DeliveredAt.is_null())
+            .order_by_asc(outbox_entity::Column::Attempts)
             .order_by_asc(outbox_entity::Column::CreatedAt)
             .all(&self.db)
             .await?
             .into_iter()
             .map(stored_outbox)
             .collect()
+    }
+
+    pub(crate) async fn pending_outbox_batch(&self, limit: usize) -> Result<Vec<OutboxBatchItem>> {
+        if limit == 0 || limit > MAX_OUTBOX_BATCH_SIZE {
+            anyhow::bail!(
+                "trajectory outbox batch size must be between 1 and {MAX_OUTBOX_BATCH_SIZE}"
+            )
+        }
+        let rows = outbox_entity::Entity::find()
+            .filter(outbox_entity::Column::DeliveredAt.is_null())
+            .order_by_asc(outbox_entity::Column::Attempts)
+            .order_by_asc(outbox_entity::Column::CreatedAt)
+            .order_by_asc(outbox_entity::Column::OutboxId)
+            .limit(u64::try_from(limit).context("outbox batch size exceeds u64")?)
+            .all(&self.db)
+            .await?;
+        Ok(rows.into_iter().map(stored_outbox_batch_item).collect())
+    }
+
+    pub(crate) async fn pending_outbox_count(&self) -> Result<u64> {
+        outbox_entity::Entity::find()
+            .filter(outbox_entity::Column::DeliveredAt.is_null())
+            .count(&self.db)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub(crate) async fn record_outbox_attempt(
+        &self,
+        owner_user_id: &str,
+        outbox_id: &str,
+    ) -> Result<()> {
+        validate_owner(owner_user_id)?;
+        let Some(row) = outbox_entity::Entity::find()
+            .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(outbox_entity::Column::OutboxId.eq(outbox_id))
+            .one(&self.db)
+            .await?
+        else {
+            anyhow::bail!("unknown owner-scoped trajectory outbox '{outbox_id}'")
+        };
+        if row.delivered_at.is_some() {
+            return Ok(());
+        }
+        let next_attempt = row
+            .attempts
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("trajectory outbox attempts overflow"))?;
+        let mut active = row.into_active_model();
+        active.attempts = Set(next_attempt);
+        active.update(&self.db).await?;
+        Ok(())
     }
 
     pub async fn mark_outbox_delivered(
@@ -1163,7 +1347,16 @@ fn build_guarded_route_batch(
             "route.workflow_state".to_owned(),
             input.projection.state_kind.to_string(),
         ),
+        ("route.policy".to_owned(), input.policy_name.clone()),
+        ("route.request_key".to_owned(), input.request_key.clone()),
+        ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
     ]);
+    if let Some(baseline_tier) = &input.baseline_tier {
+        categorical.insert("route.baseline_tier".to_owned(), baseline_tier.clone());
+    }
+    if let Some(preset) = &input.preset {
+        categorical.insert("route.preset".to_owned(), preset.clone());
+    }
     if let Some(candidate) = &evaluation.intent.candidate_tier {
         categorical.insert("route.candidate_tier".to_owned(), candidate.clone());
     }
@@ -1200,10 +1393,22 @@ fn build_guarded_route_batch(
         sequence: route_sequence,
         kind: TrajectoryEventKind::RouteIntentRecorded,
         evidence: TrajectoryEvidence {
-            structural: std::collections::BTreeMap::from([(
-                "route.applied_clause_count".to_owned(),
-                applied_clause_count,
-            )]),
+            structural: std::collections::BTreeMap::from([
+                (
+                    "route.applied_clause_count".to_owned(),
+                    applied_clause_count,
+                ),
+                (
+                    "route.selected_is_protected".to_owned(),
+                    u64::from(
+                        evaluation
+                            .intent
+                            .selected_tier
+                            .as_ref()
+                            .is_some_and(|tier| input.policy.protected_tiers.contains(tier)),
+                    ),
+                ),
+            ]),
             categorical,
             digests: std::collections::BTreeMap::from([
                 (
@@ -1864,14 +2069,38 @@ fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
 }
 
 fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
+    let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
+        .context("stored trajectory outbox payload is invalid")?;
+    validate_outbox_payload(&payload)?;
+    if canonical_digest(&payload)? != row.payload_digest {
+        anyhow::bail!("stored trajectory outbox payload digest does not match its content")
+    }
     Ok(PendingOutbox {
         outbox_id: row.outbox_id,
+        owner_user_id: row.owner_user_id,
         topic: row.topic,
+        payload,
         payload_json: row.payload_json,
         payload_digest: row.payload_digest,
         attempts: u64::try_from(row.attempts).context("stored outbox attempts are negative")?,
         created_at: row.created_at,
     })
+}
+
+fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
+    let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
+        .ok()
+        .filter(|payload| validate_outbox_payload(payload).is_ok())
+        .filter(|payload| {
+            canonical_digest(payload).is_ok_and(|digest| digest == row.payload_digest)
+        });
+    OutboxBatchItem {
+        outbox_id: row.outbox_id,
+        owner_user_id: row.owner_user_id,
+        topic: row.topic,
+        payload,
+        created_at: row.created_at,
+    }
 }
 
 fn validate_owner(owner_user_id: &str) -> Result<()> {
@@ -2133,6 +2362,54 @@ mod tests {
                 .await?
                 .len(),
             3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guarded_route_persists_exact_named_policy_evaluation_identity() -> anyhow::Result<()> {
+        let store = store().await?;
+        let result = store
+            .correlate_and_begin(
+                "owner-a",
+                correlate_input(
+                    "request-identity",
+                    "episode-identity",
+                    "start-identity",
+                    guarded_route_input("route-identity", "guard-identity"),
+                ),
+            )
+            .await?;
+        let route_sequence = result
+            .guarded_route
+            .ok_or_else(|| anyhow::anyhow!("guarded route missing"))?
+            .route_sequence;
+        let events = store
+            .events_for_episode("owner-a", "episode-identity")
+            .await?;
+        let route = events
+            .iter()
+            .find(|event| event.sequence == route_sequence)
+            .ok_or_else(|| anyhow::anyhow!("route event missing"))?;
+        assert_eq!(
+            route.evidence.categorical.get("route.policy"),
+            Some(&"auto:cost".to_string())
+        );
+        assert_eq!(
+            route.evidence.categorical.get("route.request_key"),
+            Some(&"agent_trace/v2|edit|normal".to_string())
+        );
+        assert_eq!(
+            route.evidence.categorical.get("route.baseline_tier"),
+            Some(&"reference".to_string())
+        );
+        assert_eq!(
+            route.evidence.categorical.get("route.preset"),
+            Some(&"auto:cost".to_string())
+        );
+        assert_eq!(
+            route.evidence.structural.get("route.selected_is_protected"),
+            Some(&1)
         );
         Ok(())
     }
@@ -3265,6 +3542,130 @@ mod tests {
         Ok(TrajectoryStore::new(db))
     }
 
+    #[tokio::test]
+    async fn transactional_settlement_builder_rebases_concurrent_episode_heads()
+    -> anyhow::Result<()> {
+        let store = store().await?;
+        store
+            .begin_request("owner-a", begin("episode-head", "request-a"))
+            .await?;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event("episode-head", "request-a", 2, "route-a"),
+            )
+            .await?;
+
+        let mut second = begin("episode-head", "request-b");
+        second.event.sequence = 3;
+        second.event.event_id = "event-start-request-b".into();
+        second.event.content_digest = second.event.semantic_digest()?;
+        second.full_input_digest = keyed_digest("key-1", "3");
+        store.begin_request("owner-a", second).await?;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event("episode-head", "request-b", 4, "route-b"),
+            )
+            .await?;
+
+        let left = store.settle_request_from_current_head(
+            "owner-a",
+            "request-a",
+            |_request, _prefix, sequence| {
+                Ok(settlement_at(
+                    "episode-head",
+                    "request-a",
+                    sequence,
+                    "settlement-a",
+                ))
+            },
+        );
+        let right = store.settle_request_from_current_head(
+            "owner-a",
+            "request-b",
+            |_request, _prefix, sequence| {
+                Ok(settlement_at(
+                    "episode-head",
+                    "request-b",
+                    sequence,
+                    "settlement-b",
+                ))
+            },
+        );
+        let (left, right) = tokio::join!(left, right);
+        left?;
+        right?;
+
+        let events = store.events_for_episode("owner-a", "episode-head").await?;
+        let settlement_sequences = events
+            .iter()
+            .filter(|event| event.kind == TrajectoryEventKind::RequestSettled)
+            .map(|event| event.sequence)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(settlement_sequences, BTreeSet::from([5, 6]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn transactional_settlement_builder_rebuilds_exact_retry_and_rejects_conflict()
+    -> anyhow::Result<()> {
+        let store = store().await?;
+        store
+            .begin_request("owner-a", begin("episode-retry", "request-retry"))
+            .await?;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event("episode-retry", "request-retry", 2, "route-retry"),
+            )
+            .await?;
+        let exact = |_request: &StoredRequest, _prefix: &[TrajectoryEvent], sequence| {
+            Ok(settlement_at(
+                "episode-retry",
+                "request-retry",
+                sequence,
+                "settlement-retry",
+            ))
+        };
+
+        store
+            .settle_request_from_current_head("owner-a", "request-retry", exact)
+            .await?;
+        store
+            .settle_request_from_current_head("owner-a", "request-retry", exact)
+            .await?;
+
+        let conflict = store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-retry",
+                |_request, _prefix, sequence| {
+                    Ok(settlement_at(
+                        "episode-retry",
+                        "request-retry",
+                        sequence,
+                        "different-settlement",
+                    ))
+                },
+            )
+            .await;
+        assert!(
+            conflict
+                .expect_err("conflicting settlement must fail")
+                .to_string()
+                .contains("different settlement")
+        );
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", "episode-retry")
+                .await?
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
     async fn file_store() -> anyhow::Result<(TrajectoryStore, tempfile::TempDir)> {
         let directory = tempfile::tempdir()?;
         let url = format!(
@@ -3335,6 +3736,7 @@ mod tests {
                         )
                         .content_digest,
                     )]),
+                    evaluation: None,
                 },
                 created_at: "2026-08-01T00:01:00Z".into(),
             }),
@@ -3446,6 +3848,10 @@ mod tests {
         GuardedRouteInput {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
+            policy_name: "auto:cost".into(),
+            request_key: "agent_trace/v2|edit|normal".into(),
+            baseline_tier: Some("reference".into()),
+            preset: Some("auto:cost".into()),
             projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
                 .unwrap_or_else(|| unreachable!()),
             candidate_tier: Some("economy".into()),

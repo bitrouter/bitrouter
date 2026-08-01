@@ -235,9 +235,11 @@ Completeness folds all starts and required correlation/intent evidence with
 required evidence contributes `Unknown`. Token and cost totals are `None` when
 there are no settled requests or if any settled request lacks the corresponding
 value; otherwise checked sums produce `Some`, including `Some(0)`. Streaks advance only on route-intent
-events. A selected tier is protected only by exact membership in the supplied
-set; a missing tier resets the unprotected streak and contributes unknown
-completeness. A hold event leaves its full value remaining and each subsequent
+events. A newly typed route intent persists the exact structural fact
+`route.selected_is_protected` from the signed policy active for that decision,
+so later policy reloads cannot reinterpret history. Legacy route evidence still
+uses exact membership in the caller-supplied set; a missing tier resets the
+unprotected streak and contributes unknown completeness. A hold event leaves its full value remaining and each subsequent
 request-start consumes exactly one. Context growth compares the first and latest
 `RequestStarted` endpoints: a missing endpoint or zero first value yields
 `None`, missing middle values do not matter, shrinkage yields zero, and
@@ -321,6 +323,7 @@ pub struct RouteIntent {
 **Files:**
 - Create: `apps/bitrouter/src/trajectory/settlement.rs`
 - Create: `apps/bitrouter/src/trajectory/evaluation.rs`
+- Create: `apps/bitrouter/src/trajectory/publisher.rs`
 - Modify: `apps/bitrouter/src/eval/settlement.rs`
 - Modify: `apps/bitrouter/src/eval/mod.rs`
 - Modify: `apps/bitrouter/src/eval/admission.rs`
@@ -344,15 +347,15 @@ pub struct RouteIntent {
 - `trajectory.history_complete`
 - Existing request metrics `cost.usd_micros` and `latency.ms`
 
-- [ ] **Step 1: Write failing settlement tests.** A routed request's authoritative provider/model, usage, duration, error code, finish reason, and computed cost append exactly one `RequestSettled` event. Unknown price/usage remains absent. Duplicate settlement is idempotent; a conflict fails.
-- [ ] **Step 2: Replace named-policy process-local correlation.** `EvalSettlementRecorder` loads the persisted request/intent by `(owner, request_id)`. Remove `PendingEvalDecisionStore` from `PolicyRuntime`; retain it only for the compatibility-only legacy transform until that path is removed.
-- [ ] **Step 3: Build immutable episode-snapshot subjects.** Use `EvalScope::Episode`, `subject_id = episode_id`, and `eval_id = trajectory:<episode_id>:<through_sequence>`. Evidence contains only redacted event/snapshot digests and structural attributes. Requested dimensions exactly match available L1 metrics.
-- [ ] **Step 4: Build an immediate built-in result.** Evaluator identity is `bitrouter.trajectory-operational` with `EvaluatorKind::Generic`; verdict is always `Inconclusive`; no `quality.pass` or hard violation is emitted. Credit only decisions present in the subject and only the metrics they influenced.
-- [ ] **Step 5: Add a trusted built-in submission principal.** It is owner-scoped and may submit only `trajectory.*`, `cost.usd_micros`, and `latency.ms`. External authority admission remains unchanged.
-- [ ] **Step 6: Make publication crash-safe.** The same transaction appends settlement and inserts a canonical outbox envelope. A bounded worker publishes subject/result idempotently, marks delivery only after admission succeeds, drains pending rows at startup, and drains on graceful shutdown. Restart tests cover crashes before publish and before delivery marking.
-- [ ] **Step 7: Wire one shared `TrajectoryStore`/outbox publisher through `assemble.rs`.** Registration order must let Metering settle authoritative usage before trajectory evaluation consumes it, without making routing depend on asynchronous evaluator results.
-- [ ] **Step 8: Run trajectory settlement, Eval Exchange, admission, compiler, metering, and assembly tests until GREEN.**
-- [ ] **Step 9: Commit `feat(eval): publish trajectory operations`.**
+- [x] **Step 1: Write failing settlement tests.** A routed request's authoritative provider/model, usage, duration, error code, finish reason, and computed cost append exactly one `RequestSettled` event. Unknown price/usage remains absent. Duplicate settlement is idempotent; a conflict fails.
+- [x] **Step 2: Replace named-policy process-local correlation.** `EvalSettlementRecorder` loads the persisted request/intent by `(owner, request_id)`. Remove `PendingEvalDecisionStore` from `PolicyRuntime`; retain it only for the compatibility-only legacy transform until that path is removed.
+- [x] **Step 3: Build immutable episode-snapshot subjects.** Use `EvalScope::Episode`, `subject_id = episode_id`, and `eval_id = trajectory:<episode_id>:<through_sequence>`. Evidence contains only redacted event/snapshot digests and structural attributes. Requested dimensions exactly match available L1 metrics.
+- [x] **Step 4: Build an immediate built-in result.** Evaluator identity is `bitrouter.trajectory-operational` with `EvaluatorKind::Generic`; verdict is always `Inconclusive`; no `quality.pass` or hard violation is emitted. Credit only decisions present in the subject and only the metrics they influenced.
+- [x] **Step 5: Add a trusted built-in submission principal.** It is owner-scoped and may submit only `trajectory.*`, `cost.usd_micros`, and `latency.ms`. External authority admission remains unchanged.
+- [x] **Step 6: Make publication crash-safe.** The same transaction appends settlement and inserts a canonical outbox envelope. A bounded worker publishes subject/result idempotently, marks delivery only after admission succeeds, drains pending rows at startup, and drains on graceful shutdown. Restart tests cover crashes before publish and before delivery marking.
+- [x] **Step 7: Wire one shared `TrajectoryStore`/outbox publisher through `assemble.rs`.** Registration order must let Metering settle authoritative usage before trajectory evaluation consumes it, without making routing depend on asynchronous evaluator results.
+- [x] **Step 8: Run trajectory settlement, Eval Exchange, admission, compiler, metering, and assembly tests until GREEN.**
+- [x] **Step 9: Commit `feat(eval): publish trajectory operations`.**
 
 ## Task 6: Add retention, inspect, explain, and replay operations
 

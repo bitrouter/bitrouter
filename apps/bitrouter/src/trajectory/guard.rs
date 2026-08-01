@@ -362,6 +362,14 @@ pub(crate) fn validate_persisted_route_intent(
         .get("route.applied_clause_count")
         .copied()
         .ok_or_else(|| anyhow::anyhow!("guarded route intent is missing applied clause count"))?;
+    if event
+        .evidence
+        .structural
+        .get("route.selected_is_protected")
+        .is_some_and(|value| !matches!(value, 0 | 1))
+    {
+        anyhow::bail!("guarded route intent has an invalid selected-tier protection fact")
+    }
     let mut clauses = Vec::new();
     for (index, expected_id) in STABLE_CLAUSE_IDS.iter().enumerate() {
         let prefix = format!("route.clause_{index:02}");

@@ -16,7 +16,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use bitrouter_sdk::Result;
-use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, Usage, UsageOrigin};
+use bitrouter_sdk::event::PipelineEvent;
+use bitrouter_sdk::language_model::{
+    FinishReason, SettlementContext, SettlementRecorder, Usage, UsageOrigin,
+};
+use serde::Serialize;
 
 use crate::metering::db::{ReconciliationStatus, RequestMetric};
 use crate::metering::pricing::{
@@ -30,6 +34,33 @@ pub struct MeteringRecorder {
     store: MeteringStore,
     pricing: Arc<PricingTable>,
     reconciliation_providers: HashSet<String>,
+}
+
+/// Content-free, typed proof that metering successfully persisted its
+/// authoritative request observation. Later settlement recorders consume this
+/// instead of recomputing price or treating absent usage as zero.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MeteringSettlementEvent {
+    pub request_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub usage_origin: UsageOrigin,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cost_micro_usd: Option<u64>,
+    pub duration_ms: u64,
+    pub error_code: Option<String>,
+    pub finish_reason: Option<String>,
+}
+
+impl PipelineEvent for MeteringSettlementEvent {
+    fn event_name(&self) -> &'static str {
+        "metering.settled"
+    }
 }
 
 impl MeteringRecorder {
@@ -107,8 +138,36 @@ impl SettlementRecorder for MeteringRecorder {
             model = %ctx.model_id,
             "metering settlement started"
         );
+        // Preserve the pipeline-observed provenance for downstream authority.
+        // The legacy store normalization below may encode known zero-usage
+        // rejection semantics, but it must not manufacture trajectory evidence.
+        let observed_usage_origin = ctx.usage_origin;
+        let observed_usage_known = observed_usage_origin != UsageOrigin::Unknown;
         Self::normalize_zero_usage_rejection(ctx);
         let charge_evidence = self.charge_evidence(ctx);
+        let cost_micro_usd = charge_evidence
+            .charge_micro_usd
+            .map(|value| {
+                u64::try_from(value).map_err(|_| {
+                    bitrouter_sdk::BitrouterError::internal(
+                        "metering computed a negative request charge",
+                    )
+                })
+            })
+            .transpose()?;
+        let total_tokens = if ctx.usage_origin == UsageOrigin::Unknown {
+            None
+        } else {
+            Some(
+                ctx.prompt_tokens
+                    .checked_add(ctx.completion_tokens)
+                    .ok_or_else(|| {
+                        bitrouter_sdk::BitrouterError::internal(
+                            "metering settlement token total overflow",
+                        )
+                    })?,
+            )
+        };
         if charge_evidence.charge_micro_usd.is_none() {
             // Demoted from `warn` to `debug` — the per-request "finished"
             // log already records `cost_usd` (or its absence) for every
@@ -156,10 +215,41 @@ impl SettlementRecorder for MeteringRecorder {
                 .map(|error| error.error_code().to_string()),
         };
         self.store.record_request(metric).await?;
+        ctx.emit(MeteringSettlementEvent {
+            request_id: ctx.request_id.clone(),
+            provider_id: ctx.provider_id.clone(),
+            model_id: ctx.model_id.clone(),
+            usage_origin: observed_usage_origin,
+            prompt_tokens: observed_usage_known.then_some(ctx.prompt_tokens),
+            completion_tokens: observed_usage_known.then_some(ctx.completion_tokens),
+            reasoning_tokens: observed_usage_known.then_some(ctx.reasoning_tokens),
+            cache_read_tokens: observed_usage_known.then_some(ctx.cache_read_tokens),
+            cache_write_tokens: observed_usage_known.then_some(ctx.cache_write_tokens),
+            total_tokens: observed_usage_known.then_some(total_tokens).flatten(),
+            cost_micro_usd: observed_usage_known.then_some(cost_micro_usd).flatten(),
+            duration_ms: ctx.request_duration_ms,
+            error_code: ctx
+                .error
+                .as_ref()
+                .map(|error| error.error_code().to_owned()),
+            finish_reason: ctx.finish_reason.as_ref().map(finish_reason_kind),
+        });
         tracing::debug!(
             request_id = %ctx.request_id,
             "metering settlement recorded"
         );
         Ok(())
     }
+}
+
+fn finish_reason_kind(reason: &FinishReason) -> String {
+    match reason {
+        FinishReason::Stop => "stop",
+        FinishReason::Length => "length",
+        FinishReason::ToolCalls => "tool_calls",
+        FinishReason::ContentFilter => "content_filter",
+        FinishReason::Other(_) => "other",
+        FinishReason::Error(_) => "error",
+    }
+    .to_owned()
 }
