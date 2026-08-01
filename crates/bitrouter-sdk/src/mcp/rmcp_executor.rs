@@ -709,10 +709,21 @@ fn merge_paginated_cache_hints(
             None => page_ttl_ms,
         });
     }
-    if matches!(page_cache_scope, Some(rmcp::model::CacheScope::Private)) {
-        *cache_scope = Some(rmcp::model::CacheScope::Private);
-    } else if cache_scope.is_none() {
-        *cache_scope = page_cache_scope;
+    // `CacheScope` is non-exhaustive. Keep private dominant, let public fill
+    // only an absent policy, and preserve any future non-public page scope as
+    // restrictive instead of silently treating it as public or ignoring it.
+    if !matches!(*cache_scope, Some(rmcp::model::CacheScope::Private)) {
+        match page_cache_scope {
+            None => {}
+            Some(rmcp::model::CacheScope::Private) => {
+                *cache_scope = Some(rmcp::model::CacheScope::Private);
+            }
+            Some(rmcp::model::CacheScope::Public) if cache_scope.is_none() => {
+                *cache_scope = Some(rmcp::model::CacheScope::Public);
+            }
+            Some(rmcp::model::CacheScope::Public) => {}
+            Some(restrictive) => *cache_scope = Some(restrictive),
+        }
     }
 }
 

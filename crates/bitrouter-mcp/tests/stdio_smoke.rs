@@ -155,6 +155,84 @@ async fn legacy_future_version_uses_fallback_for_following_requests() {
     assert!(list.get("cacheScope").is_none(), "got: {list}");
 }
 
+/// Draft-namespaced metadata is legal extension data on a legacy initialize;
+/// one key alone must not make the request an inline-lifecycle opener.
+#[tokio::test]
+async fn legacy_initialize_with_partial_draft_meta_is_accepted() {
+    let mut server = Server::spawn();
+    let init = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "t", "version": "0" },
+                "_meta": { "io.modelcontextprotocol/clientCapabilities": {} },
+            },
+        }))
+        .await;
+    assert!(init.get("error").is_none(), "initialize failed: {init}");
+    assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
+
+    server
+        .notify(serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .await;
+    let list = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
+        }))
+        .await;
+    assert!(list.get("error").is_none(), "tools/list failed: {list}");
+    let result = &list["result"];
+    assert!(result.get("resultType").is_none(), "got: {result}");
+    assert!(result.get("ttlMs").is_none(), "got: {result}");
+    assert!(result.get("cacheScope").is_none(), "got: {result}");
+}
+
+/// A pre-initialize ping is lifecycle-neutral even when extension metadata is
+/// only partially populated. After it, the connection must still initialize.
+#[tokio::test]
+async fn pre_init_ping_with_partial_draft_meta_then_initializes() {
+    let mut server = Server::spawn();
+    let ping = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "ping",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            } },
+        }))
+        .await;
+    assert!(ping.get("error").is_none(), "ping failed: {ping}");
+    assert_eq!(ping["result"], serde_json::json!({}));
+
+    let init = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "t", "version": "0" },
+            },
+        }))
+        .await;
+    assert!(init.get("error").is_none(), "initialize failed: {init}");
+    assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
+
+    server
+        .notify(serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .await;
+    let list = server
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {},
+        }))
+        .await;
+    assert!(list.get("error").is_none(), "tools/list failed: {list}");
+    let result = &list["result"];
+    assert!(result.get("resultType").is_none(), "got: {result}");
+    assert!(result.get("ttlMs").is_none(), "got: {result}");
+    assert!(result.get("cacheScope").is_none(), "got: {result}");
+}
+
 /// SEP-2575: servers MUST implement `server/discover`. This is how a
 /// `2026-07-28` client opens a stdio connection, so a `-32601` here means no
 /// conformant client can talk to us at all.

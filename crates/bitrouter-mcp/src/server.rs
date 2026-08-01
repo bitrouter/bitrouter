@@ -993,6 +993,15 @@ fn malformed_inline_opener(
     let ClientJsonRpcMessage::Request(request) = message else {
         return None;
     };
+    // These requests belong to stable startup regardless of extension keys in
+    // `_meta`. Replaying them unchanged lets rmcp answer a pre-init ping or
+    // negotiate the legacy initialize instead of guessing an inline lifecycle.
+    if matches!(
+        &request.request,
+        ClientRequest::InitializeRequest(_) | ClientRequest::PingRequest(_)
+    ) {
+        return None;
+    }
     let meta = request.request.get_meta();
     let inline = matches!(&request.request, ClientRequest::DiscoverRequest(_))
         || rmcp::model::RequestMetaObject::DRAFT_REQUIRED_KEYS
