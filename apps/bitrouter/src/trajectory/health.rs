@@ -11,10 +11,11 @@ use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
 const PPM_SCALE: u64 = 1_000_000;
 const MAX_HOLD_REQUESTS: u64 = u32::MAX as u64;
 
-#[derive(Default)]
-struct RequestProgress {
-    routed: bool,
-    settled: bool,
+enum RequestPhase {
+    Started,
+    Routed,
+    RoutedGuarded,
+    Settled,
 }
 
 pub fn reduce(
@@ -24,13 +25,16 @@ pub fn reduce(
     let first = events
         .first()
         .ok_or_else(|| anyhow::anyhow!("trajectory reduction requires at least one event"))?;
+    if first.kind != TrajectoryEventKind::RequestStarted {
+        anyhow::bail!("trajectory episode must begin with RequestStarted")
+    }
     let owner_user_id = &first.owner_user_id;
     let episode_id = &first.episode_id;
     let first_timestamp = chrono::DateTime::parse_from_rfc3339(&first.captured_at)
         .context("parsing first trajectory timestamp")?;
     let mut previous_timestamp = first_timestamp;
     let mut last_timestamp = first_timestamp;
-    let mut requests = BTreeMap::<String, RequestProgress>::new();
+    let mut requests = BTreeMap::<String, RequestPhase>::new();
     let mut completeness = HistoryCompleteness::Complete;
     let mut request_count = 0_u64;
     let mut settled_request_count = 0_u64;
@@ -39,8 +43,8 @@ pub fn reduce(
     let mut consecutive_unprotected_requests = 0_u64;
     let mut recovery_count = 0_u64;
     let mut requests_since_recovery = None;
-    let mut total_tokens = Some(0_u64);
-    let mut settled_cost_micro_usd = Some(0_u64);
+    let mut total_tokens = None;
+    let mut settled_cost_micro_usd = None;
     let mut first_canonical_bytes = None;
     let mut latest_canonical_bytes = None;
     let mut previous_projection: Option<String> = None;
@@ -81,6 +85,15 @@ pub fn reduce(
                     anyhow::bail!("trajectory request '{request_id}' starts more than once")
                 }
                 active_hold_remaining = active_hold_remaining.saturating_sub(1);
+                let canonical_input_bytes = event
+                    .evidence
+                    .structural
+                    .get("request.canonical_input_bytes")
+                    .copied();
+                if request_count == 0 {
+                    first_canonical_bytes = canonical_input_bytes;
+                }
+                latest_canonical_bytes = canonical_input_bytes;
                 request_count = checked_increment(request_count, "request count")?;
                 completeness = merge_completeness(
                     completeness,
@@ -94,28 +107,22 @@ pub fn reduce(
                         event.evidence.categorical.get("correlation.source"),
                     )?,
                 );
-                if let Some(bytes) = event
-                    .evidence
-                    .structural
-                    .get("request.canonical_input_bytes")
-                    .copied()
-                {
-                    if first_canonical_bytes.is_none() {
-                        first_canonical_bytes = Some(bytes);
-                    }
-                    latest_canonical_bytes = Some(bytes);
-                }
-                requests.insert(request_id.to_owned(), RequestProgress::default());
+                requests.insert(request_id.to_owned(), RequestPhase::Started);
             }
             TrajectoryEventKind::RouteIntentRecorded => {
                 let request_id = required_request_id(event)?;
-                let progress = requests.get_mut(request_id).ok_or_else(|| {
+                let phase = requests.get_mut(request_id).ok_or_else(|| {
                     anyhow::anyhow!("route intent references unknown request '{request_id}'")
                 })?;
-                if progress.routed {
-                    anyhow::bail!("trajectory request '{request_id}' has duplicate route intent")
+                match phase {
+                    RequestPhase::Started => *phase = RequestPhase::Routed,
+                    RequestPhase::Routed | RequestPhase::RoutedGuarded => anyhow::bail!(
+                        "trajectory request '{request_id}' has duplicate route intent"
+                    ),
+                    RequestPhase::Settled => anyhow::bail!(
+                        "trajectory request '{request_id}' records intent after settlement"
+                    ),
                 }
-                progress.routed = true;
 
                 let projection = event.evidence.categorical.get("route.projection");
                 let workflow_state = event.evidence.categorical.get("route.workflow_state");
@@ -176,33 +183,52 @@ pub fn reduce(
             }
             TrajectoryEventKind::RequestSettled => {
                 let request_id = required_request_id(event)?;
-                let progress = requests.get_mut(request_id).ok_or_else(|| {
+                let phase = requests.get_mut(request_id).ok_or_else(|| {
                     anyhow::anyhow!("settlement references unknown request '{request_id}'")
                 })?;
-                if progress.settled {
-                    anyhow::bail!("trajectory request '{request_id}' settles more than once")
+                match phase {
+                    RequestPhase::Started => anyhow::bail!(
+                        "trajectory request '{request_id}' settles before route intent"
+                    ),
+                    RequestPhase::Routed | RequestPhase::RoutedGuarded => {
+                        *phase = RequestPhase::Settled;
+                    }
+                    RequestPhase::Settled => {
+                        anyhow::bail!("trajectory request '{request_id}' settles more than once")
+                    }
                 }
-                progress.settled = true;
-                settled_request_count =
-                    checked_increment(settled_request_count, "settled request count")?;
+                let had_settled_requests = settled_request_count > 0;
                 total_tokens = checked_optional_total(
                     total_tokens,
                     event.evidence.structural.get("settlement.total_tokens"),
+                    had_settled_requests,
                     "total token count",
                 )?;
                 settled_cost_micro_usd = checked_optional_total(
                     settled_cost_micro_usd,
                     event.evidence.structural.get("settlement.cost_micro_usd"),
+                    had_settled_requests,
                     "settled cost",
                 )?;
+                settled_request_count =
+                    checked_increment(settled_request_count, "settled request count")?;
             }
             TrajectoryEventKind::GuardActivated => {
                 let request_id = required_request_id(event)?;
-                let progress = requests.get(request_id).ok_or_else(|| {
+                let phase = requests.get_mut(request_id).ok_or_else(|| {
                     anyhow::anyhow!("guard activation references unknown request '{request_id}'")
                 })?;
-                if !progress.routed {
-                    anyhow::bail!("guard activation requires a recorded route intent")
+                match phase {
+                    RequestPhase::Started => {
+                        anyhow::bail!("guard activation requires a recorded route intent")
+                    }
+                    RequestPhase::Routed => *phase = RequestPhase::RoutedGuarded,
+                    RequestPhase::RoutedGuarded => anyhow::bail!(
+                        "trajectory request '{request_id}' has duplicate guard activation"
+                    ),
+                    RequestPhase::Settled => anyhow::bail!(
+                        "trajectory request '{request_id}' activates guard after settlement"
+                    ),
                 }
                 let hold = event
                     .evidence
@@ -224,7 +250,10 @@ pub fn reduce(
         }
     }
 
-    if requests.values().any(|progress| !progress.routed) {
+    if requests
+        .values()
+        .any(|phase| matches!(phase, RequestPhase::Started))
+    {
         completeness = merge_completeness(completeness, HistoryCompleteness::Unknown);
     }
     let unsettled_request_count = request_count
@@ -336,8 +365,12 @@ fn checked_increment(value: u64, field: &str) -> Result<u64> {
 fn checked_optional_total(
     total: Option<u64>,
     value: Option<&u64>,
+    had_prior_values: bool,
     field: &str,
 ) -> Result<Option<u64>> {
+    if !had_prior_values {
+        return Ok(value.copied());
+    }
     match (total, value) {
         (Some(total), Some(value)) => total
             .checked_add(*value)
@@ -445,8 +478,8 @@ mod tests {
         assert_eq!(before_intent.health.request_count, 1);
         assert_eq!(before_intent.health.settled_request_count, 0);
         assert_eq!(before_intent.health.unsettled_request_count, 1);
-        assert_eq!(before_intent.health.total_tokens, Some(0));
-        assert_eq!(before_intent.health.settled_cost_micro_usd, Some(0));
+        assert_eq!(before_intent.health.total_tokens, None);
+        assert_eq!(before_intent.health.settled_cost_micro_usd, None);
 
         let routed = vec![started[0].clone(), intent(2, "r1", "opening", "economy")?];
         assert_eq!(
@@ -558,6 +591,44 @@ mod tests {
                 .context_growth_ppm,
             None
         );
+
+        let mut missing_first = start(1, "r1", 1, "complete", "explicit_root")?;
+        missing_first
+            .evidence
+            .structural
+            .remove("request.canonical_input_bytes");
+        resign(&mut missing_first)?;
+        let missing_first = vec![
+            missing_first,
+            intent(2, "r1", "opening", "low")?,
+            start(3, "r2", 100, "complete", "canonical_prefix")?,
+            intent(4, "r2", "planning", "low")?,
+        ];
+        assert_eq!(
+            reduce(&missing_first, &BTreeSet::new())?
+                .health
+                .context_growth_ppm,
+            None
+        );
+
+        let mut missing_latest = start(3, "r2", 1, "complete", "canonical_prefix")?;
+        missing_latest
+            .evidence
+            .structural
+            .remove("request.canonical_input_bytes");
+        resign(&mut missing_latest)?;
+        let missing_latest = vec![
+            start(1, "r1", 100, "complete", "explicit_root")?,
+            intent(2, "r1", "opening", "low")?,
+            missing_latest,
+            intent(4, "r2", "planning", "low")?,
+        ];
+        assert_eq!(
+            reduce(&missing_latest, &BTreeSet::new())?
+                .health
+                .context_growth_ppm,
+            None
+        );
         Ok(())
     }
 
@@ -635,6 +706,15 @@ mod tests {
 
     #[test]
     fn reducer_rejects_invalid_request_event_lifecycle() -> anyhow::Result<()> {
+        let close_only = vec![event(
+            1,
+            None,
+            TrajectoryEventKind::EpisodeClosed,
+            BTreeMap::new(),
+            BTreeMap::new(),
+        )?];
+        assert!(reduce(&close_only, &BTreeSet::new()).is_err());
+
         assert!(reduce(&[settled(1, "r1", Some(1), Some(1))?], &BTreeSet::new()).is_err());
 
         let duplicate_settlement = vec![
@@ -653,6 +733,42 @@ mod tests {
             intent(3, "r1", "planning", "low")?,
         ];
         assert!(reduce(&duplicate_route, &BTreeSet::new()).is_err());
+
+        let settlement_before_intent = vec![
+            start(1, "r1", 10, "complete", "explicit_root")?,
+            settled(2, "r1", Some(1), Some(1))?,
+        ];
+        assert!(reduce(&settlement_before_intent, &BTreeSet::new()).is_err());
+
+        let intent_after_settlement = vec![
+            start(1, "r1", 10, "complete", "explicit_root")?,
+            intent(2, "r1", "opening", "low")?,
+            settled(3, "r1", Some(1), Some(1))?,
+            intent(4, "r1", "planning", "low")?,
+        ];
+        assert!(reduce(&intent_after_settlement, &BTreeSet::new()).is_err());
+
+        let guard_before_intent = vec![
+            start(1, "r1", 10, "complete", "explicit_root")?,
+            guard(2, "r1", 1)?,
+        ];
+        assert!(reduce(&guard_before_intent, &BTreeSet::new()).is_err());
+
+        let duplicate_guard = vec![
+            start(1, "r1", 10, "complete", "explicit_root")?,
+            intent(2, "r1", "opening", "low")?,
+            guard(3, "r1", 1)?,
+            guard(4, "r1", 1)?,
+        ];
+        assert!(reduce(&duplicate_guard, &BTreeSet::new()).is_err());
+
+        let guard_after_settlement = vec![
+            start(1, "r1", 10, "complete", "explicit_root")?,
+            intent(2, "r1", "opening", "low")?,
+            settled(3, "r1", Some(1), Some(1))?,
+            guard(4, "r1", 1)?,
+        ];
+        assert!(reduce(&guard_after_settlement, &BTreeSet::new()).is_err());
 
         assert!(reduce(&[guard(1, "r1", 2)?], &BTreeSet::new()).is_err());
         Ok(())
