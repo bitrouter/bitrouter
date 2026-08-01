@@ -1354,6 +1354,102 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn late_native_continuation_after_retention_starts_an_incomplete_episode()
+    -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-pruned-parent",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "old root")]),
+                "2026-06-01T00:00:00Z",
+            )
+            .await?;
+        runtime
+            .store()
+            .append_route_intent(
+                "owner-a",
+                route_intent_event(
+                    &root.episode_id,
+                    "request-pruned-parent",
+                    2,
+                    "2026-06-01T00:00:01Z",
+                )?,
+            )
+            .await?;
+        let mut terminal = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: "event-pruned-parent-settled".into(),
+            owner_user_id: "owner-a".into(),
+            episode_id: root.episode_id.clone(),
+            request_id: Some("request-pruned-parent".into()),
+            sequence: 3,
+            kind: TrajectoryEventKind::RequestSettled,
+            evidence: TrajectoryEvidence {
+                structural: BTreeMap::new(),
+                categorical: BTreeMap::new(),
+                digests: BTreeMap::new(),
+            },
+            captured_at: "2026-06-01T00:00:02Z".into(),
+            content_digest: String::new(),
+        };
+        terminal.content_digest = terminal.semantic_digest()?;
+        runtime
+            .store()
+            .settle_request(
+                "owner-a",
+                Settlement {
+                    event: terminal,
+                    status: RequestStatus::Settled,
+                    outbox: None,
+                },
+            )
+            .await?;
+
+        let pruned = runtime
+            .store()
+            .prune_before("2026-07-01T00:00:00Z", false, 10)
+            .await?;
+        assert_eq!(pruned.episode_rows, 1);
+        assert_eq!(pruned.request_rows, 1);
+        assert_eq!(pruned.event_rows, 3);
+        assert!(
+            runtime
+                .store()
+                .resolve_episode_owner(&root.episode_id)
+                .await?
+                .is_none()
+        );
+
+        let late = runtime
+            .begin_request(
+                "owner-a",
+                "request-late-continuation",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![Message::text(Role::User, "continue after retention")],
+                    "request-pruned-parent",
+                ),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        assert_ne!(late.episode_id, root.episode_id);
+        assert_eq!(late.source, CorrelationSource::Unresolved);
+        assert_eq!(late.completeness, HistoryCompleteness::Incomplete);
+        assert!(late.prior_events.is_empty());
+        assert_eq!(
+            runtime
+                .store()
+                .request("owner-a", "request-late-continuation")
+                .await?
+                .and_then(|request| request.native_parent_id),
+            None
+        );
+        Ok(())
+    }
+
     fn route_intent_event(
         episode_id: &str,
         request_id: &str,

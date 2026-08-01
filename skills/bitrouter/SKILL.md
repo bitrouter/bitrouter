@@ -127,6 +127,32 @@ Config search order, lowest-priority last: `./bitrouter.yaml` → `$BITROUTER_HO
 
 Separately, a JSON Schema for the config is committed at `dist/schema/bitrouter.config.schema.json` (regenerated with `cargo run -p dist-helper -- generate-schema`). Add a `# yaml-language-server: $schema=…` header to a YAML config to get IDE autocomplete + inline validation against it.
 
+### Durable trajectory progress control (Local)
+
+Trajectory history is opt-in and task-neutral: it derives progress evidence
+from normal routed requests without task-data injection.
+
+```yaml
+trajectory:
+  enabled: true
+  retention_days: 30
+  outbox_batch_size: 100
+```
+
+Defaults are disabled / 30 days / 100 rows; retention must be positive and the
+batch must be 1–1000. BitRouter fails closed when a signed lock contains
+`progress_guard` but trajectory is disabled. Every trajectory setting is
+restart-only; reload rejects changes to activation, retention, or batch size
+and preserves last-known-good state. The ledger stores structural facts, fixed
+categories, counters, and digests—not prompts, credentials, tool arguments,
+file bodies, or private provider metadata.
+
+Operators use `bitrouter trajectory inspect <EPISODE_ID>`, `replay
+<EPISODE_ID>`, and `prune --before <RFC3339> [--dry-run]`. A pending outbox row
+or non-terminal request preserves its episode; a continuation whose parent was
+already removed starts a new incomplete episode. Read `references/cli.md` →
+*Durable trajectory operations* before pruning or recovery.
+
 **Subscription / OAuth providers.** Different — local login, not env vars:
 
 ```bash
@@ -218,6 +244,7 @@ Read these on demand — don't load them all upfront.
 - **Cloud endpoints:** `https://api.bitrouter.ai/v1` for the OpenAI shape; `https://api.bitrouter.ai` (no `/v1`) for the Anthropic SDK — same asymmetry as Local.
 - **Google's env var is `GEMINI_API_KEY`**, matching Google's own SDKs. `GOOGLE_API_KEY` is not auto-detected; override in `bitrouter.yaml` if you must.
 - **Reload propagates env changes:** `export OPENAI_API_KEY=new...; bitrouter reload` updates the running daemon — no restart needed.
+- **Trajectory settings do not hot-reload.** Changes to `enabled`, `retention_days`, or `outbox_batch_size` are rejected; restart the daemon. Any signed `progress_guard` requires trajectory to be enabled.
 - **`bitrouter providers add/remove/use/test/stats` do not exist.** Provider management is `bitrouter providers list`, `bitrouter providers login <provider>`, and `bitrouter providers logout <provider>`. Edit `bitrouter.yaml` and `bitrouter reload` for config changes.
 - **Model ids vs provider pins:** canonical model ids use slashes (`openai/gpt-4o`). An explicit provider pin uses a colon (`openrouter:openai/gpt-4o`, `claude-code:claude-sonnet-4-6`) and is still supported by the routing table.
 - **No `bitrouter doctor`.** Diagnostics are: `bitrouter status`, `bitrouter route <model>`, `bitrouter models`, `bitrouter providers list`, log file at `~/.bitrouter/bitrouter.log`.

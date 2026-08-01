@@ -42,6 +42,10 @@ use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
     ToolsStatusReport,
 };
+use bitrouter::output::reports::trajectory::{
+    TrajectoryPruneReport, inspect_report as trajectory_inspect_report,
+    replay_report as trajectory_replay_report,
+};
 use bitrouter::output::{CliReport, Output};
 use bitrouter_sdk::config;
 
@@ -252,6 +256,11 @@ enum Command {
     Eval {
         #[command(subcommand)]
         action: EvalAction,
+    },
+    /// Inspect, replay, and retain durable trajectory history in the local database.
+    Trajectory {
+        #[command(subcommand)]
+        action: TrajectoryAction,
     },
     /// Provider management.
     Providers {
@@ -1016,6 +1025,35 @@ enum EvalAction {
 }
 
 #[derive(Subcommand)]
+enum TrajectoryAction {
+    /// Inspect one episode's structural health, route intents, and event digests.
+    Inspect {
+        /// Globally unique trajectory episode id.
+        episode_id: String,
+    },
+    /// Verify one episode and compare persisted live checkpoint evidence with replay.
+    Replay {
+        /// Globally unique trajectory episode id.
+        episode_id: String,
+    },
+    /// Prune delivered outbox rows and retention-expired terminal episodes.
+    Prune {
+        /// Exclusive RFC3339 cutoff.
+        #[arg(long, value_parser = parse_rfc3339_argument)]
+        before: String,
+        /// Report exact eligible counts without mutating the database.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+fn parse_rfc3339_argument(value: &str) -> std::result::Result<String, String> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|_| value.to_owned())
+        .map_err(|error| format!("expected an RFC3339 timestamp: {error}"))
+}
+
+#[derive(Subcommand)]
 enum EvalSubjectAction {
     /// Calculate the canonical evidence digest and write a validated JSON subject.
     Seal {
@@ -1413,6 +1451,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Observe { action } => observe(action, output).await,
         Command::Policy { action } => policy(action, output).await,
         Command::Eval { action } => eval(action, output).await,
+        Command::Trajectory { action } => trajectory(action, output).await,
         Command::Providers { action } => providers(action, output).await,
         Command::Agents { action } => agents_cmd(action, output).await,
         Command::Launch {
@@ -2697,18 +2736,20 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         },
     };
 
-    let trajectory_drain = trajectory_outbox_for_shutdown
-        .drain_after_active_worker()
-        .await;
-    match trajectory_drain {
-        Ok(summary) if summary.failed > 0 => tracing::warn!(
-            attempted = summary.attempted,
-            delivered = summary.delivered,
-            failed = summary.failed,
-            "trajectory outbox drain completed with poison items still pending"
-        ),
-        Ok(_) => {}
-        Err(error) => tracing::warn!(%error, "trajectory outbox shutdown drain failed"),
+    if let Some(publisher) = trajectory_outbox_for_shutdown {
+        match publisher.drain_after_active_worker().await {
+            Ok(summary) if summary.failed > 0 => tracing::warn!(
+                attempted = summary.attempted,
+                delivered = summary.delivered,
+                failed = summary.failed,
+                "trajectory outbox drain completed with poison items still pending"
+            ),
+            Ok(_) => {}
+            Err(_) => tracing::warn!(
+                reason = "shutdown_drain_failed",
+                "trajectory outbox shutdown drain failed"
+            ),
+        }
     }
 
     // Drive the OTel exporter's flush before anything else drops — its
@@ -3483,6 +3524,29 @@ async fn eval(action: EvalAction, output: &Output) -> Result<()> {
     Ok(())
 }
 
+async fn trajectory(action: TrajectoryAction, output: &Output) -> Result<()> {
+    let source = bitrouter::paths::resolve_config(None)?;
+    let config = bitrouter::paths::load_config(&source).await?;
+    let db = bitrouter::db::connect(&config.database.url).await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let store = bitrouter::trajectory::store::TrajectoryStore::new(db);
+    match action {
+        TrajectoryAction::Inspect { episode_id } => {
+            output.emit(&trajectory_inspect_report(&store, &episode_id).await?)?;
+        }
+        TrajectoryAction::Replay { episode_id } => {
+            output.emit(&trajectory_replay_report(&store, &episode_id).await?)?;
+        }
+        TrajectoryAction::Prune { before, dry_run } => {
+            let summary = store
+                .prune_before(&before, dry_run, config.trajectory.outbox_batch_size)
+                .await?;
+            output.emit(&TrajectoryPruneReport::new(before, dry_run, summary))?;
+        }
+    }
+    Ok(())
+}
+
 async fn local_eval_service(config_path: Option<&Path>) -> Result<bitrouter::eval::EvalService> {
     let source = bitrouter::paths::resolve_config(config_path)?;
     let config = bitrouter::paths::load_config(&source).await?;
@@ -4079,6 +4143,59 @@ async fn force_kill(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trajectory_inspect_replay_and_prune_flags_parse() {
+        use clap::Parser;
+
+        let inspect =
+            Cli::try_parse_from(["bitrouter", "trajectory", "inspect", "episode-1", "--json"])
+                .expect("parse trajectory inspect");
+        assert!(inspect.json);
+        assert!(matches!(
+            inspect.command,
+            Some(Command::Trajectory {
+                action: TrajectoryAction::Inspect { episode_id }
+            }) if episode_id == "episode-1"
+        ));
+
+        let replay =
+            Cli::try_parse_from(["bitrouter", "trajectory", "replay", "episode-2", "--human"])
+                .expect("parse trajectory replay");
+        assert!(replay.human);
+        assert!(matches!(
+            replay.command,
+            Some(Command::Trajectory {
+                action: TrajectoryAction::Replay { episode_id }
+            }) if episode_id == "episode-2"
+        ));
+
+        let prune = Cli::try_parse_from([
+            "bitrouter",
+            "trajectory",
+            "prune",
+            "--before",
+            "2026-08-01T00:00:00Z",
+            "--dry-run",
+        ])
+        .expect("parse trajectory prune");
+        assert!(matches!(
+            prune.command,
+            Some(Command::Trajectory {
+                action: TrajectoryAction::Prune { before, dry_run: true }
+            }) if before == "2026-08-01T00:00:00Z"
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "trajectory",
+                "prune",
+                "--before",
+                "not-a-timestamp",
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn reconcile_metering_accepts_explicit_cloud_credentials_file() {

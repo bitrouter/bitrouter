@@ -187,6 +187,20 @@ pub struct StoredRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredEpisode {
+    pub episode_id: String,
+    pub owner_user_id: String,
+    pub correlation_source: String,
+    pub correlation_key_id: String,
+    pub completeness: HistoryCompleteness,
+    pub next_sequence: u64,
+    pub first_captured_at: String,
+    pub last_captured_at: String,
+    pub closed_at: Option<String>,
+    pub latest_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingOutbox {
     pub outbox_id: String,
     pub owner_user_id: String,

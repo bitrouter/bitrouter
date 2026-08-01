@@ -385,13 +385,13 @@ bitrouter trajectory replay <episode-id> [--json]
 bitrouter trajectory prune --before <RFC3339> [--dry-run]
 ```
 
-- [ ] **Step 1: Write failing config tests.** Default `trajectory.enabled` is false. A lock containing `progress_guard` requires it true. Validate positive retention/batch bounds and schema output. Existing config fixtures remain valid unchanged.
-- [ ] **Step 2: Write failing CLI parser/report tests.** Inspect displays correlation source, completeness, current health, active hold, route intents, and event digests. Replay displays live/replayed digest equality or the exact first corrupt event. JSON output is stable and contains no raw task content.
-- [ ] **Step 3: Implement owner-safe pruning.** Delete delivered outbox rows and closed/expired episode indexes/events in bounded transactions. Never prune pending outbox work. `--dry-run` reports exact counts without mutation.
-- [ ] **Step 4: Redact at write time, not display time.** Add tests with API keys, bearer tokens, tool arguments, file bodies, prompt text, and private metadata; none may appear in event JSON, Eval evidence, CLI output, or logs. Digest equality remains usable for ancestry.
-- [ ] **Step 5: Document enablement, guarantees, incomplete-history semantics, metric meaning, replay, and operational recovery. Update the bundled skill because CLI/config/wiring changed.**
-- [ ] **Step 6: Run config, CLI, docs/examples, skill, and pruning tests until GREEN.**
-- [ ] **Step 7: Commit `feat(cli): operate trajectory history`.**
+- [x] **Step 1: Write failing config tests.** Default `trajectory.enabled` is false. A lock containing `progress_guard` requires it true. Validate positive retention/batch bounds and schema output. Existing config fixtures remain valid unchanged.
+- [x] **Step 2: Write failing CLI parser/report tests.** Inspect displays correlation source, completeness, current health, active hold, route intents, and event digests. Replay displays live/replayed digest equality or the exact first corrupt event. JSON output is stable and contains no raw task content.
+- [x] **Step 3: Implement owner-safe pruning.** Delete delivered outbox rows and closed/expired episode indexes/events in bounded transactions. Never prune pending outbox work. `--dry-run` reports exact counts without mutation.
+- [x] **Step 4: Redact at write time, not display time.** Add tests with API keys, bearer tokens, tool arguments, file bodies, prompt text, and private metadata; none may appear in event JSON, Eval evidence, CLI output, or logs. Digest equality remains usable for ancestry.
+- [x] **Step 5: Document enablement, guarantees, incomplete-history semantics, metric meaning, replay, and operational recovery. Update the bundled skill because CLI/config/wiring changed.**
+- [x] **Step 6: Run config, CLI, docs/examples, skill, and pruning tests until GREEN.**
+- [x] **Step 7: Commit `feat(cli): operate trajectory history`.**
 
 ## Task 7: Prove cross-protocol generality and the inflation regression
 

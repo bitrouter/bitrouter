@@ -65,6 +65,7 @@ use crate::policy::{PolicyHook, PolicyStore};
 use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
+use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -85,7 +86,7 @@ pub struct Assembled {
     /// Generic eval exchange used by the local CLI and REST control plane.
     pub eval_service: EvalService,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
-    pub trajectory_outbox_publisher: TrajectoryOutboxPublisher,
+    pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
     /// needs the concrete type to call
@@ -488,38 +489,76 @@ pub async fn build_app_with_path(
     let pending_eval_decisions = PendingEvalDecisionStore::default();
     let eval_store = EvalStore::new(db.clone());
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
-    let trajectory_store = TrajectoryStore::new(db.clone());
-    let trajectory_outbox_publisher = TrajectoryOutboxPublisher::new(
-        trajectory_store.clone(),
-        eval_store.clone(),
-        config.eval.clone(),
-        100,
-    )?;
-    let startup_publication = trajectory_outbox_publisher.drain_pending().await?;
-    if startup_publication.attempted > 0 {
-        tracing::info!(
-            attempted = startup_publication.attempted,
-            delivered = startup_publication.delivered,
-            failed = startup_publication.failed,
-            "drained durable trajectory evaluation outbox at startup"
-        );
-    }
+    let trajectory_services = if config.trajectory.enabled {
+        let trajectory_store = TrajectoryStore::new(db.clone());
+        let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
+            .ok_or_else(|| anyhow::anyhow!("trajectory retention_days exceeds time range"))?;
+        let cutoff = chrono::Utc::now()
+            .checked_sub_signed(retention)
+            .ok_or_else(|| anyhow::anyhow!("trajectory retention cutoff exceeds time range"))?
+            .to_rfc3339();
+        let pruned = trajectory_store
+            .prune_before(&cutoff, false, config.trajectory.outbox_batch_size)
+            .await?;
+        if pruned != crate::trajectory::store::PruneSummary::default() {
+            tracing::info!(
+                cutoff,
+                delivered_outbox_rows = pruned.delivered_outbox_rows,
+                episode_rows = pruned.episode_rows,
+                event_rows = pruned.event_rows,
+                request_rows = pruned.request_rows,
+                "pruned retained trajectory history at startup"
+            );
+        }
+        let publisher = TrajectoryOutboxPublisher::new(
+            trajectory_store.clone(),
+            eval_store.clone(),
+            config.eval.clone(),
+            config.trajectory.outbox_batch_size,
+        )?;
+        let startup_publication = publisher.drain_pending().await?;
+        if startup_publication.attempted > 0 {
+            tracing::info!(
+                attempted = startup_publication.attempted,
+                delivered = startup_publication.delivered,
+                failed = startup_publication.failed,
+                "drained durable trajectory evaluation outbox at startup"
+            );
+        }
+        let home = match config_path.and_then(std::path::Path::parent) {
+            Some(home) => home.to_path_buf(),
+            None => std::env::current_dir().context("resolve trajectory key home")?,
+        };
+        let runtime = Arc::new(TrajectoryRuntime::new(
+            trajectory_store.clone(),
+            Canonicalizer::new(crate::paths::get_or_create_correlation_key(&home)?),
+        ));
+        let settlement = TrajectorySettlementRecorder::new(trajectory_store, publisher.clone());
+        Some((runtime, settlement, publisher))
+    } else {
+        None
+    };
+    let trajectory_runtime = trajectory_services
+        .as_ref()
+        .map(|(runtime, _, _)| runtime.clone());
+    let trajectory_for_eval = trajectory_services
+        .as_ref()
+        .map(|(_, settlement, _)| settlement.clone());
+    let trajectory_outbox_publisher = trajectory_services
+        .as_ref()
+        .map(|(_, _, publisher)| publisher.clone());
     let policy_runtime = crate::policy_lock::PolicyRuntime::new(
         config,
         config_path,
         db.clone(),
         policy_decision_recorder.clone(),
-        // Task 5 assembles the durable store without activating request-time
-        // trajectory routing. Task 6 owns the explicit `trajectory.enabled` opt-in.
-        None,
+        trajectory_runtime,
     )
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
     let eval_store_for_recorder = eval_service.store().clone();
     let pricing_for_eval = pricing.clone();
-    let trajectory_for_eval =
-        TrajectorySettlementRecorder::new(trajectory_store, trajectory_outbox_publisher.clone());
     let db_for_hooks = db.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -565,14 +604,16 @@ pub async fn build_app_with_path(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter"),
             );
-            lm.settlement_recorder(
-                EvalSettlementRecorder::new(
-                    eval_store_for_recorder,
-                    pending_eval_decisions,
-                    pricing_for_eval,
-                )
-                .with_trajectory(trajectory_for_eval),
+            let eval_recorder = EvalSettlementRecorder::new(
+                eval_store_for_recorder,
+                pending_eval_decisions,
+                pricing_for_eval,
             );
+            let eval_recorder = match trajectory_for_eval {
+                Some(trajectory) => eval_recorder.with_trajectory(trajectory),
+                None => eval_recorder,
+            };
+            lm.settlement_recorder(eval_recorder);
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
@@ -1857,24 +1898,257 @@ mod server_tools_tests {
 
 #[cfg(test)]
 mod trajectory_assembly_tests {
-    use super::{Config, build_app};
+    use super::{Config, build_app_with_path};
 
     #[tokio::test]
-    async fn task_five_assembles_durable_services_without_task_six_activation() -> anyhow::Result<()>
-    {
+    async fn trajectory_activation_is_explicit_and_owns_the_existing_key_lifecycle()
+    -> anyhow::Result<()> {
+        let disabled_home = tempfile::tempdir()?;
         let mut config = Config::default();
         config.database.url = "sqlite::memory:".into();
+        let disabled =
+            build_app_with_path(&config, Some(&disabled_home.path().join("bitrouter.yaml")))
+                .await?;
 
-        let assembled = build_app(&config).await?;
+        assert!(!disabled.policy_runtime.trajectory_is_active());
+        assert!(disabled.trajectory_outbox_publisher.is_none());
+        assert!(!disabled_home.path().join("correlation.key").exists());
 
-        assert!(!assembled.policy_runtime.trajectory_is_active());
+        let enabled_home = tempfile::tempdir()?;
+        config.trajectory.enabled = true;
+        config.trajectory.outbox_batch_size = 7;
+        let enabled =
+            build_app_with_path(&config, Some(&enabled_home.path().join("bitrouter.yaml"))).await?;
+
+        assert!(enabled.policy_runtime.trajectory_is_active());
         assert_eq!(
-            assembled
+            enabled
                 .trajectory_outbox_publisher
-                .drain_pending()
+                .as_ref()
+                .map(|publisher| publisher.configured_batch_size()),
+            Some(7)
+        );
+        assert!(enabled_home.path().join("correlation.key").is_file());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enabled_guarded_policy_persists_its_first_route_atomically() -> anyhow::Result<()> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use bitrouter_sdk::caller::CallerContext;
+        use bitrouter_sdk::config::PresetConfig;
+        use bitrouter_sdk::language_model::{
+            ApiProtocol, GenerationParams, Message, ModelSelector, PipelineContext,
+            PipelineRequest, Prompt, Role,
+        };
+
+        use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
+        use crate::trajectory::correlation::CorrelatedRequest;
+        use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+        use crate::trajectory::store::TrajectoryStore;
+
+        let home = tempfile::tempdir()?;
+        let config_path = home.path().join("bitrouter.yaml");
+        let mut config = Config::default();
+        config.database.url = "sqlite::memory:".into();
+        config.trajectory.enabled = true;
+        config.presets.insert(
+            "coding".into(),
+            PresetConfig {
+                model: Some("vendor:strong".into()),
+                policy: Some("coding".into()),
+                ..PresetConfig::default()
+            },
+        );
+        let mut lock = PolicyLock::default();
+        lock.policies.insert(
+            "coding".into(),
+            PolicyDefinition {
+                tiers: BTreeMap::from([
+                    ("economy".into(), "vendor:economy".into()),
+                    ("strong".into(), "vendor:strong".into()),
+                ]),
+                default_tier: Some("economy".into()),
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: vec!["strong".into()],
+                progress_guard: Some(ProgressGuardPolicy {
+                    escalation_tier: "strong".into(),
+                    protected_tiers: BTreeSet::from(["strong".into()]),
+                    max_consecutive_unprotected: Some(3),
+                    max_same_projection_unprotected: None,
+                    max_recovery_count: None,
+                    max_episode_requests: Some(4),
+                    max_episode_elapsed_ms: None,
+                    max_episode_cost_micro_usd: None,
+                    hold_for_requests: 2,
+                    incomplete_history: IncompleteHistoryAction::Observe,
+                }),
+                ..PolicyDefinition::default()
+            },
+        );
+        tokio::fs::write(
+            home.path().join("policy-lock.yaml"),
+            deterministic_yaml(&lock)?,
+        )
+        .await?;
+
+        let assembled = build_app_with_path(&config, Some(&config_path)).await?;
+        let prompt = Prompt {
+            model: "vendor:strong".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "generic request")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let mut request = PipelineRequest::new(
+            "vendor:strong",
+            CallerContext::new("local-key", "local"),
+            prompt,
+        );
+        request.request_id = "request-first".into();
+        request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
+        let mut context = PipelineContext::new(request);
+        assembled
+            .policy_runtime
+            .select_variant("coding", None, &mut context)
+            .await?;
+        let correlated = context
+            .extension::<CorrelatedRequest>()
+            .ok_or_else(|| anyhow::anyhow!("enabled guarded request was not correlated"))?;
+        let events = TrajectoryStore::new(assembled.db)
+            .events_for_episode("local", &correlated.episode_id)
+            .await?;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].request_id.as_deref(), Some("request-first"));
+        assert_eq!(
+            events[1]
+                .evidence
+                .categorical
+                .get("route.policy")
+                .map(String::as_str),
+            Some("coding")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enabled_startup_applies_configured_retention_before_serving() -> anyhow::Result<()> {
+        use std::collections::BTreeMap;
+
+        use bitrouter_sdk::language_model::{ApiProtocol, GenerationParams, Message, Prompt, Role};
+
+        use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
+        use crate::trajectory::correlation::TrajectoryRuntime;
+        use crate::trajectory::store::TrajectoryStore;
+        use crate::trajectory::types::{
+            RequestStatus, Settlement, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent,
+            TrajectoryEventKind, TrajectoryEvidence,
+        };
+
+        let home = tempfile::tempdir()?;
+        let database_path = home.path().join("retention.db");
+        let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+        let db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&db).await?;
+        let runtime = TrajectoryRuntime::new(
+            TrajectoryStore::new(db.clone()),
+            Canonicalizer::new(CorrelationKey::from_bytes([51; 32])?),
+        );
+        let root = runtime
+            .begin_request(
+                "owner-retention",
+                "request-retention",
+                ApiProtocol::ChatCompletions,
+                &Prompt {
+                    model: "inbound".into(),
+                    system: None,
+                    system_provider_metadata: BTreeMap::new(),
+                    messages: vec![Message::text(Role::User, "expired root")],
+                    tools: Vec::new(),
+                    params: GenerationParams::default(),
+                    response_format: None,
+                    tool_choice: None,
+                    stream: false,
+                },
+                "2000-01-01T00:00:00Z",
+            )
+            .await?;
+        let mut route = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: "route-retention".into(),
+            owner_user_id: "owner-retention".into(),
+            episode_id: root.episode_id.clone(),
+            request_id: Some("request-retention".into()),
+            sequence: 2,
+            kind: TrajectoryEventKind::RouteIntentRecorded,
+            evidence: TrajectoryEvidence {
+                structural: BTreeMap::new(),
+                categorical: BTreeMap::from([
+                    (
+                        "route.projection".into(),
+                        "agent_trace/v2|opening|normal".into(),
+                    ),
+                    ("route.selected_tier".into(), "economy".into()),
+                    ("route.workflow_state".into(), "opening".into()),
+                ]),
+                digests: BTreeMap::new(),
+            },
+            captured_at: "2000-01-01T00:00:01Z".into(),
+            content_digest: String::new(),
+        };
+        route.content_digest = route.semantic_digest()?;
+        runtime
+            .store()
+            .append_route_intent("owner-retention", route)
+            .await?;
+        let mut terminal = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: "settle-retention".into(),
+            owner_user_id: "owner-retention".into(),
+            episode_id: root.episode_id.clone(),
+            request_id: Some("request-retention".into()),
+            sequence: 3,
+            kind: TrajectoryEventKind::RequestSettled,
+            evidence: TrajectoryEvidence {
+                structural: BTreeMap::new(),
+                categorical: BTreeMap::new(),
+                digests: BTreeMap::new(),
+            },
+            captured_at: "2000-01-01T00:00:02Z".into(),
+            content_digest: String::new(),
+        };
+        terminal.content_digest = terminal.semantic_digest()?;
+        runtime
+            .store()
+            .settle_request(
+                "owner-retention",
+                Settlement {
+                    event: terminal,
+                    status: RequestStatus::Settled,
+                    outbox: None,
+                },
+            )
+            .await?;
+        drop(runtime);
+        db.close().await?;
+
+        let mut config = Config::default();
+        config.database.url = database_url;
+        config.trajectory.enabled = true;
+        config.trajectory.retention_days = 30;
+        config.trajectory.outbox_batch_size = 1;
+        let assembled =
+            build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
+        assert!(
+            TrajectoryStore::new(assembled.db)
+                .resolve_episode_owner(&root.episode_id)
                 .await?
-                .attempted,
-            0
+                .is_none()
         );
         Ok(())
     }

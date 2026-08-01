@@ -77,6 +77,11 @@ impl TrajectoryOutboxPublisher {
         self.start_worker_if_idle();
     }
 
+    #[cfg(test)]
+    pub(crate) fn configured_batch_size(&self) -> usize {
+        self.batch_size
+    }
+
     fn start_worker_if_idle(&self) {
         if self
             .worker
@@ -110,8 +115,11 @@ impl TrajectoryOutboxPublisher {
             self.worker
                 .concurrent_publications
                 .fetch_sub(1, Ordering::AcqRel);
-            if let Err(error) = result {
-                tracing::warn!(%error, "trajectory outbox publication drain failed");
+            if result.is_err() {
+                tracing::warn!(
+                    reason = "drain_failed",
+                    "trajectory outbox publication drain failed"
+                );
             }
             if self.worker.dirty.swap(false, Ordering::AcqRel) {
                 continue;
@@ -140,21 +148,28 @@ impl TrajectoryOutboxPublisher {
         let mut summary = PublishSummary::default();
         for row in rows {
             summary.attempted = summary.attempted.saturating_add(1);
-            if let Err(error) = self
+            if self
                 .trajectory
                 .record_outbox_attempt(&row.owner_user_id, &row.outbox_id)
                 .await
+                .is_err()
             {
                 summary.failed = summary.failed.saturating_add(1);
-                tracing::warn!(outbox_id = %row.outbox_id, %error, "trajectory outbox attempt could not be recorded");
+                tracing::warn!(
+                    reason = "attempt_record_failed",
+                    "trajectory outbox attempt could not be recorded"
+                );
                 continue;
             }
             match self.publish_one(&row).await {
                 Ok(true) => summary.delivered = summary.delivered.saturating_add(1),
                 Ok(false) => summary.failed = summary.failed.saturating_add(1),
-                Err(error) => {
+                Err(_) => {
                     summary.failed = summary.failed.saturating_add(1);
-                    tracing::warn!(outbox_id = %row.outbox_id, %error, "trajectory outbox item remains pending");
+                    tracing::warn!(
+                        reason = "publication_failed",
+                        "trajectory outbox item remains pending"
+                    );
                 }
             }
         }

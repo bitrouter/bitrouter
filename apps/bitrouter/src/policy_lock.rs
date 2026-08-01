@@ -12,7 +12,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use anyhow::{Context, Result};
 use bitrouter_sdk::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
-    validate_policy_table_config,
+    TrajectoryConfig, validate_policy_table_config,
 };
 use bitrouter_sdk::language_model::{ModelSelector, PipelineContext};
 use sea_orm::DatabaseConnection;
@@ -574,6 +574,14 @@ fn validate_sha256_digest(value: &str, field: &str) -> Result<()> {
 
 pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()> {
     validate_document(document)?;
+    if !config.trajectory.enabled
+        && document
+            .policies
+            .values()
+            .any(|policy| policy.progress_guard.is_some())
+    {
+        anyhow::bail!("signed policy progress_guard requires trajectory.enabled: true")
+    }
     for (name, policy) in &document.policies {
         validate_policy_table_config(&policy.as_table_config(config.policy.mode))
             .map_err(anyhow::Error::from)
@@ -1843,6 +1851,7 @@ pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     db: DatabaseConnection,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
+    trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
 
@@ -1858,6 +1867,7 @@ impl PolicyRuntime {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             db,
             decision_recorder,
+            trajectory_config: config.trajectory.clone(),
             trajectory,
         });
         runtime.reload_for_config(config, config_path).await?;
@@ -1884,6 +1894,16 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
     ) -> Result<PreparedPolicySnapshot> {
+        if config.trajectory != self.trajectory_config {
+            anyhow::bail!(
+                "changing any trajectory setting requires a daemon restart; live policy state was not changed"
+            )
+        }
+        if self.trajectory_config.enabled != self.trajectory.is_some() {
+            anyhow::bail!(
+                "changing trajectory.enabled requires a daemon restart; live policy state was not changed"
+            )
+        }
         let loaded = load_for_config(config, config_path).await?;
         let mut routers = BTreeMap::new();
         if let Some(loaded) = &loaded {
@@ -2367,6 +2387,29 @@ certificates:
     }
 
     #[test]
+    fn progress_guard_requires_explicit_trajectory_activation() -> anyhow::Result<()> {
+        let mut policy = definition();
+        policy.routes.clear();
+        policy.progress_guard = Some(progress_guard());
+        let mut lock = PolicyLock::default();
+        lock.policies.insert("coding".into(), policy);
+
+        let disabled = Config::default();
+        let error = validate_for_config(&disabled, &lock).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("progress_guard requires trajectory.enabled: true"),
+            "got: {error}"
+        );
+
+        let mut enabled = Config::default();
+        enabled.trajectory.enabled = true;
+        validate_for_config(&enabled, &lock)?;
+        Ok(())
+    }
+
+    #[test]
     fn guard_diff_reports_every_changed_field() {
         let mut active = PolicyLock::default();
         let mut policy = definition();
@@ -2685,7 +2728,7 @@ presets:
         let old_config_path = old_dir.path().join("bitrouter.yaml");
         tokio::fs::write(
             &old_config_path,
-            "presets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
+            "trajectory:\n  enabled: true\npresets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
         )
         .await?;
         let old_lock = PolicyLock {
@@ -2724,7 +2767,7 @@ presets:
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
             &config_path,
-            "presets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
+            "trajectory:\n  enabled: true\npresets:\n  coding:\n    model: vendor:strong\n    policy: coding\n",
         )
         .await?;
         let mut guarded_definition = definition();
@@ -2749,19 +2792,21 @@ presets:
         let disabled_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&disabled_db).await?;
         let disabled =
-            PolicyRuntime::new(&config, Some(&config_path), disabled_db.clone(), None, None)
-                .await?;
-        let mut disabled_context = context(http::HeaderMap::new());
-        disabled
-            .select_variant("coding", None, &mut disabled_context)
-            .await?;
+            PolicyRuntime::new(&config, Some(&config_path), disabled_db.clone(), None, None).await;
+        let Err(disabled_error) = disabled else {
+            anyhow::bail!("enabled guarded policy must reject missing trajectory runtime")
+        };
+        assert!(
+            disabled_error
+                .to_string()
+                .contains("requires a daemon restart")
+        );
         assert!(
             TrajectoryStore::new(disabled_db)
                 .request("owner-a", "request-stable")
                 .await?
                 .is_none()
         );
-        assert!(disabled_context.extension::<CorrelatedRequest>().is_none());
 
         let baseline_db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&baseline_db).await?;
@@ -2918,6 +2963,101 @@ presets:
         assert_eq!(
             storage_error.status(),
             http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trajectory_config_change_requires_restart_and_preserves_lkg() -> anyhow::Result<()> {
+        use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
+        use crate::trajectory::correlation::TrajectoryRuntime;
+        use crate::trajectory::store::TrajectoryStore;
+
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let disabled_config = Config::default();
+        let disabled = PolicyRuntime::new(&disabled_config, None, db.clone(), None, None).await?;
+        let mut enabled_config = Config::default();
+        enabled_config.trajectory.enabled = true;
+        let Err(enable_error) = disabled.prepare_for_config(&enabled_config, None).await else {
+            anyhow::bail!("hot enabling trajectory must require restart")
+        };
+        assert!(
+            enable_error
+                .to_string()
+                .contains("requires a daemon restart")
+        );
+        assert!(!disabled.trajectory_is_active());
+
+        let mut disabled_retention_change = disabled_config.clone();
+        disabled_retention_change.trajectory.retention_days = 31;
+        let Err(retention_error) = disabled
+            .prepare_for_config(&disabled_retention_change, None)
+            .await
+        else {
+            anyhow::bail!("changing disabled trajectory retention must require restart")
+        };
+        assert!(
+            retention_error
+                .to_string()
+                .contains("requires a daemon restart")
+        );
+
+        let mut disabled_batch_change = disabled_config.clone();
+        disabled_batch_change.trajectory.outbox_batch_size = 101;
+        let Err(batch_error) = disabled
+            .prepare_for_config(&disabled_batch_change, None)
+            .await
+        else {
+            anyhow::bail!("changing disabled trajectory batch size must require restart")
+        };
+        assert!(
+            batch_error
+                .to_string()
+                .contains("requires a daemon restart")
+        );
+
+        let trajectory = Arc::new(TrajectoryRuntime::new(
+            TrajectoryStore::new(db.clone()),
+            Canonicalizer::new(CorrelationKey::from_bytes([41; 32])?),
+        ));
+        let enabled = PolicyRuntime::new(&enabled_config, None, db, None, Some(trajectory)).await?;
+        let Err(disable_error) = enabled.prepare_for_config(&disabled_config, None).await else {
+            anyhow::bail!("hot disabling trajectory must require restart")
+        };
+        assert!(
+            disable_error
+                .to_string()
+                .contains("requires a daemon restart")
+        );
+        assert!(enabled.trajectory_is_active());
+
+        let mut enabled_retention_change = enabled_config.clone();
+        enabled_retention_change.trajectory.retention_days = 31;
+        let Err(retention_error) = enabled
+            .prepare_for_config(&enabled_retention_change, None)
+            .await
+        else {
+            anyhow::bail!("changing active trajectory retention must require restart")
+        };
+        assert!(
+            retention_error
+                .to_string()
+                .contains("requires a daemon restart")
+        );
+
+        let mut enabled_batch_change = enabled_config;
+        enabled_batch_change.trajectory.outbox_batch_size = 101;
+        let Err(batch_error) = enabled
+            .prepare_for_config(&enabled_batch_change, None)
+            .await
+        else {
+            anyhow::bail!("changing active trajectory batch size must require restart")
+        };
+        assert!(
+            batch_error
+                .to_string()
+                .contains("requires a daemon restart")
         );
         Ok(())
     }
