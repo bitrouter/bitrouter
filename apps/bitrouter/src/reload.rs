@@ -383,9 +383,16 @@ policies:
             .await
             .expect("connect db");
         crate::db::run_migrations(&db).await.expect("migrate db");
-        let runtime = PolicyRuntime::new(&initial, Some(&path), db, None, None)
-            .await
-            .expect("build policy runtime");
+        let runtime = PolicyRuntime::new(
+            &initial,
+            Some(&path),
+            db,
+            None,
+            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            None,
+        )
+        .await
+        .expect("build policy runtime");
         let initial_digest = runtime
             .status(PolicyRuntimeMode::Frozen)
             .digest

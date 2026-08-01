@@ -61,6 +61,14 @@ impl PendingEvalDecisionStore {
             .get(request_id)
             .cloned()
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    }
 }
 
 /// Converts a settled routed request into a generic, redacted eval subject.

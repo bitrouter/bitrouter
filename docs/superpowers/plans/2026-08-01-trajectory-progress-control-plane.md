@@ -449,12 +449,12 @@ the general progress invariant depend on external agent installations.
 
 **Interfaces:** `PolicyRuntime::new` again consumes the same cloneable `PendingEvalDecisionStore` used by `EvalSettlementRecorder`. Routers without `progress_guard` call `with_eval_observer`; guarded routers retain metadata-only observation because trajectory settlement owns their episode evaluation and must not leak duplicate pending entries.
 
-- [ ] **Step 1: Write two failing assembled-App tests.** Send a settled named-policy request with `trajectory.enabled: false`, then with trajectory enabled but no policy guard. In both cases assert exactly one request-scope Eval subject with the selected/baseline tier and policy digest.
-- [ ] **Step 2: Add a guarded control.** A guarded request must emit the trajectory episode evaluation only, with no duplicate request subject and no retained pending decision after settlement.
-- [ ] **Step 3: Run the three tests and capture RED.** Expected RED: both unguarded configurations contain zero request Eval subjects.
-- [ ] **Step 4: Restore the shared pending store through assembly and runtime construction.** Select observer-with-pending only for unguarded named policies; preserve metadata for guarded policies and reload snapshots.
-- [ ] **Step 5: Run assembled-App, policy-lock, policy-table-router, and Eval settlement tests until GREEN.**
-- [ ] **Step 6: Commit `fix(eval): preserve unguarded policy subjects`.**
+- [x] **Step 1: Write two failing assembled-App tests.** Send a settled named-policy request with `trajectory.enabled: false`, then with trajectory enabled but no policy guard. In both cases assert exactly one request-scope Eval subject with the selected/baseline tier and policy digest.
+- [x] **Step 2: Add a guarded control.** A guarded request must emit the trajectory episode evaluation only, with no duplicate request subject and no retained pending decision after settlement.
+- [x] **Step 3: Run the three tests and capture RED.** Expected RED: both unguarded configurations contain zero request Eval subjects.
+- [x] **Step 4: Restore the shared pending store through assembly and runtime construction.** Select observer-with-pending only for unguarded named policies; preserve metadata for guarded policies and reload snapshots.
+- [x] **Step 5: Run assembled-App, policy-lock, policy-table-router, and Eval settlement tests until GREEN.**
+- [x] **Step 6: Commit `fix(eval): preserve unguarded policy subjects`.**
 
 ## Task 10: Terminally settle post-decision routing failures
 

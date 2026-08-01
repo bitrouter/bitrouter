@@ -85,6 +85,8 @@ pub struct Assembled {
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Generic eval exchange used by the local CLI and REST control plane.
     pub eval_service: EvalService,
+    #[cfg(test)]
+    pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
     pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
@@ -554,11 +556,14 @@ pub async fn build_app_with_path(
         config_path,
         db.clone(),
         policy_decision_recorder.clone(),
+        pending_eval_decisions.clone(),
         trajectory_runtime,
     )
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
+    #[cfg(test)]
+    let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let eval_store_for_recorder = eval_service.store().clone();
     let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
@@ -687,6 +692,8 @@ pub async fn build_app_with_path(
         policy_store: policy_store_for_reload,
         policy_runtime,
         eval_service,
+        #[cfg(test)]
+        pending_eval_decisions: pending_eval_decisions_for_tests,
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
@@ -1900,7 +1907,227 @@ mod server_tools_tests {
 
 #[cfg(test)]
 mod trajectory_assembly_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::language_model::{
+        ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
+    };
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     use super::{Config, build_app_with_path};
+    use crate::eval::types::EvalScope;
+    use crate::policy_lock::{
+        LEGACY_POLICY_LOCKFILE_VERSION, PolicyDefinition, PolicyLock, deterministic_yaml,
+        semantic_digest,
+    };
+    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+
+    async fn assemble_named_policy(
+        trajectory_enabled: bool,
+        progress_guard: Option<ProgressGuardPolicy>,
+    ) -> anyhow::Result<(super::Assembled, String)> {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-eval-compat",
+                "object": "chat.completion",
+                "model": "economy-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "complete"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+            })))
+            .mount(&upstream)
+            .await;
+
+        let home = tempfile::tempdir()?;
+        let config_path = home.path().join("bitrouter.yaml");
+        let yaml = format!(
+            r#"
+server:
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+trajectory:
+  enabled: {trajectory_enabled}
+policy:
+  path: "./policy-lock.yaml"
+  mode: frozen
+providers:
+  vendor:
+    api_base: "{upstream_uri}"
+    api_key: test-key
+    api_protocol:
+      - "*": chat_completions
+    models:
+      - id: economy-model
+      - id: strong-model
+presets:
+  coding:
+    model: "vendor:strong-model"
+    policy: coding
+"#,
+            upstream_uri = upstream.uri(),
+        );
+        let config = bitrouter_sdk::config::parse_with(&yaml, |_| None)?;
+        let guarded = progress_guard.is_some();
+        let policy = PolicyDefinition {
+            tiers: BTreeMap::from([
+                ("economy".into(), "vendor:economy-model".into()),
+                ("strong".into(), "vendor:strong-model".into()),
+            ]),
+            routes: if guarded {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([("agent_trace/v2|opening|normal".into(), "economy".into())])
+            },
+            default_tier: Some(if guarded { "economy" } else { "strong" }.into()),
+            tool_use_tier: Some("strong".into()),
+            tool_safe_tiers: vec!["strong".into()],
+            progress_guard,
+            ..PolicyDefinition::default()
+        };
+        let mut lock = if guarded {
+            PolicyLock::default()
+        } else {
+            PolicyLock {
+                lockfile_version: LEGACY_POLICY_LOCKFILE_VERSION,
+                artifact: None,
+                policies: BTreeMap::new(),
+                certificates: BTreeMap::new(),
+            }
+        };
+        lock.policies.insert("coding".into(), policy);
+        let digest = semantic_digest(&lock)?;
+        tokio::fs::write(
+            home.path().join("policy-lock.yaml"),
+            deterministic_yaml(&lock)?,
+        )
+        .await?;
+        let assembled = build_app_with_path(&config, Some(&config_path)).await?;
+
+        let prompt = Prompt {
+            model: "@coding".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "generic request")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let mut request = PipelineRequest::new("@coding", CallerContext::local(), prompt);
+        request.request_id = "request-eval-compat".into();
+        request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
+        assembled
+            .app
+            .language_model()
+            .ok_or_else(|| anyhow::anyhow!("assembled App has no language model pipeline"))?
+            .execute(request)
+            .await?;
+        if let Some(publisher) = &assembled.trajectory_outbox_publisher {
+            publisher.wait_for_idle().await;
+        }
+
+        Ok((assembled, digest))
+    }
+
+    #[tokio::test]
+    async fn disabled_trajectory_preserves_named_policy_request_eval() -> anyhow::Result<()> {
+        let (assembled, digest) = assemble_named_policy(false, None).await?;
+
+        let subjects = assembled
+            .eval_service
+            .store()
+            .list_subjects_for_owner("local")
+            .await?;
+        assert_eq!(subjects.len(), 1);
+        let subject = &subjects[0];
+        assert_eq!(subject.scope, EvalScope::Request);
+        assert_eq!(subject.policy_digest, digest);
+        assert_eq!(subject.decisions.len(), 1);
+        assert_eq!(subject.decisions[0].policy, "coding");
+        assert_eq!(subject.decisions[0].selected_tier, "economy");
+        assert_eq!(
+            subject.decisions[0].baseline_tier.as_deref(),
+            Some("strong")
+        );
+        assert!(
+            assembled
+                .eval_service
+                .store()
+                .list_subjects_for_owner("other-owner")
+                .await?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unguarded_policy_preserves_request_eval_when_trajectory_is_enabled()
+    -> anyhow::Result<()> {
+        let (assembled, digest) = assemble_named_policy(true, None).await?;
+
+        let subjects = assembled
+            .eval_service
+            .store()
+            .list_subjects_for_owner("local")
+            .await?;
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].scope, EvalScope::Request);
+        assert_eq!(subjects[0].policy_digest, digest);
+        assert_eq!(subjects[0].decisions.len(), 1);
+        assert_eq!(subjects[0].decisions[0].policy, "coding");
+        assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
+        assert_eq!(
+            subjects[0].decisions[0].baseline_tier.as_deref(),
+            Some("strong")
+        );
+        assert!(assembled.pending_eval_decisions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guarded_policy_emits_only_episode_eval_without_pending_decision() -> anyhow::Result<()>
+    {
+        let guard = ProgressGuardPolicy {
+            escalation_tier: "strong".into(),
+            protected_tiers: BTreeSet::from(["strong".into()]),
+            max_consecutive_unprotected: Some(3),
+            max_same_projection_unprotected: None,
+            max_recovery_count: None,
+            max_episode_requests: None,
+            max_episode_elapsed_ms: None,
+            max_episode_cost_micro_usd: None,
+            hold_for_requests: 2,
+            incomplete_history: IncompleteHistoryAction::Observe,
+        };
+        let (assembled, digest) = assemble_named_policy(true, Some(guard)).await?;
+
+        let subjects = assembled
+            .eval_service
+            .store()
+            .list_subjects_for_owner("local")
+            .await?;
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].scope, EvalScope::Episode);
+        assert_eq!(subjects[0].policy_digest, digest);
+        assert_eq!(subjects[0].decisions.len(), 1);
+        assert_eq!(subjects[0].decisions[0].policy, "coding");
+        assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
+        assert_eq!(
+            subjects[0].decisions[0].baseline_tier.as_deref(),
+            Some("economy")
+        );
+        assert!(assembled.pending_eval_decisions.is_empty());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn trajectory_activation_is_explicit_and_owns_the_existing_key_lifecycle()
