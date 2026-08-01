@@ -108,13 +108,13 @@ The migration creates:
 - `trajectory_requests`: global `request_id` primary key, owner, episode, start/settlement event IDs, canonical full-input digest, native parent ID when present, protocol, and status. This is an index over immutable events, not a second source of event truth.
 - `trajectory_outbox`: global `outbox_id` primary key, owner, topic, canonical payload JSON/digest, attempts, created timestamp, and optional delivered timestamp.
 
-- [ ] **Step 1: Write failing migration tests.** Run migrations on SQLite memory, assert all four tables and unique indexes exist, rerun idempotently, then run `down` and prove only migration 12 objects disappear.
-- [ ] **Step 2: Write failing validation tests.** Reject unsupported versions, empty/bounded identifiers, invalid RFC3339 timestamps, mismatched event digests, request/episode owner mismatches, duplicate sequence numbers, cross-owner parents, and mutable replacement of an existing event ID.
-- [ ] **Step 3: Implement versioned Serde contracts and canonical SHA-256 event digests.** Persist only bounded structural attributes, numeric measures, categorical state, and digests. Message/content equality uses HMAC-SHA-256 with a stable installation-local correlation key and persists only its key ID; plain task-content hashes are forbidden. Validation rejects credential-shaped attributes using the same policy as Eval Exchange.
-- [ ] **Step 4: Implement transaction-aware store methods.** Add `begin_request`, `append_route_intent`, `settle_request`, `events_for_episode`, `request`, `pending_outbox`, and `mark_outbox_delivered`. Each accepts an owner and enforces it in the query, not after loading.
-- [ ] **Step 5: Prove idempotency and atomicity.** Duplicate identical starts/settlements are no-ops; conflicting duplicates fail. A forced outbox insert failure rolls back settlement and episode-head updates.
-- [ ] **Step 6: Run `cargo test -p bitrouter --all-features trajectory::store` and migration tests until GREEN.**
-- [ ] **Step 7: Commit `feat(trajectory): add durable event ledger`.**
+- [x] **Step 1: Write failing migration tests.** Run migrations on SQLite memory, assert all four tables and unique indexes exist, rerun idempotently, then run `down` and prove only migration 12 objects disappear.
+- [x] **Step 2: Write failing validation tests.** Reject unsupported versions, empty/bounded identifiers, invalid RFC3339 timestamps, mismatched event digests, request/episode owner mismatches, duplicate sequence numbers, cross-owner parents, and mutable replacement of an existing event ID.
+- [x] **Step 3: Implement versioned Serde contracts and canonical SHA-256 event digests.** Persist only bounded structural attributes, numeric measures, categorical state, and digests. Task 1 treats correlation digests plus their key IDs as opaque, already-keyed values and must never accept or hash raw message content; Task 2 owns canonical message HMAC and installation-key lifecycle. Validation rejects credential-shaped attributes using the same policy as Eval Exchange.
+- [x] **Step 4: Implement transaction-aware store methods.** Add `begin_request`, `append_route_intent`, `settle_request`, `events_for_episode`, `request`, `pending_outbox`, and `mark_outbox_delivered`. Each accepts an owner and enforces it in the query, not after loading.
+- [x] **Step 5: Prove idempotency and atomicity.** Duplicate identical starts/settlements are no-ops; conflicting duplicates fail. A forced outbox insert failure rolls back settlement and episode-head updates.
+- [x] **Step 6: Run `cargo test -p bitrouter --all-features trajectory::store` and migration tests until GREEN.**
+- [x] **Step 7: Commit `feat(trajectory): add durable event ledger`.**
 
 ## Task 2: Correlate episodes from native protocol evidence
 
