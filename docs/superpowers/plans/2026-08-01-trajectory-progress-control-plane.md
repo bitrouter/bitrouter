@@ -421,22 +421,128 @@ the general progress invariant depend on external agent installations.
 - [x] **Step 6: Run restart, cross-protocol, policy reload/rollback, Eval outbox, real-agent, and replay integration suites until GREEN.**
 - [x] **Step 7: Commit `test(trajectory): prove progress control`.**
 
-## Task 8: Validate the exact PR tree and record benchmark evidence
+## Task 8: Reconcile native and canonical ancestry evidence
+
+**Files:**
+- Modify: `apps/bitrouter/src/trajectory/store.rs`
+- Modify: `apps/bitrouter/src/trajectory/correlation.rs`
+- Modify: `apps/bitrouter/src/trajectory/guard.rs`
+- Modify: `apps/bitrouter/src/trajectory/replay.rs`
+
+**Interfaces:** Native parent identity remains authoritative for episode selection. Canonical-prefix resolution is nevertheless evaluated independently; a unique different episode or ambiguous prefix sets `correlation.prefix_conflict = 1` and monotonically folds the chosen native episode to `Incomplete`. No caller-supplied metadata resolves the conflict.
+
+- [ ] **Step 1: Write the failing contradiction tests.** Extend `native_parent_resolves_exact_request_and_outranks_conflicting_prefix` so the native episode still wins while `HistoryCompleteness::Incomplete`, `history.completeness = incomplete`, and `correlation.prefix_conflict = 1` are observable. Add matching-native-prefix and ambiguous-prefix controls.
+- [ ] **Step 2: Run `cargo test -p bitrouter --all-features trajectory::correlation::tests::native_parent -- --nocapture`.** Expected RED: the conflicting request is currently `Complete` with no conflict marker.
+- [ ] **Step 3: Resolve prefix evidence alongside the trusted native parent in the existing transaction.** Preserve native selection; mark only contradictory or ambiguous non-empty prefix evidence incomplete. `PrefixResolution::None` remains acceptable for native delta/compacted Responses input.
+- [ ] **Step 4: Prove monotonic replay and guard behavior.** Reconnect to file-backed SQLite, replay the episode, and assert the same incomplete snapshot digest. With `incomplete_history: escalate`, assert a protected route; with `observe`, assert no invented semantic result.
+- [ ] **Step 5: Run focused correlation, store, replay, and guard tests until GREEN.**
+- [ ] **Step 6: Commit `fix(trajectory): expose ancestry conflicts`.**
+
+## Task 9: Restore request Eval compatibility outside guarded trajectories
+
+**Files:**
+- Modify: `apps/bitrouter/src/assemble.rs`
+- Modify: `apps/bitrouter/src/policy_lock.rs`
+- Modify: `apps/bitrouter/src/policy_table_router.rs`
+- Modify: `apps/bitrouter/src/eval/settlement.rs`
+- Test: integration tests in `apps/bitrouter/src/assemble.rs`
+
+**Interfaces:** `PolicyRuntime::new` again consumes the same cloneable `PendingEvalDecisionStore` used by `EvalSettlementRecorder`. Routers without `progress_guard` call `with_eval_observer`; guarded routers retain metadata-only observation because trajectory settlement owns their episode evaluation and must not leak duplicate pending entries.
+
+- [ ] **Step 1: Write two failing assembled-App tests.** Send a settled named-policy request with `trajectory.enabled: false`, then with trajectory enabled but no policy guard. In both cases assert exactly one request-scope Eval subject with the selected/baseline tier and policy digest.
+- [ ] **Step 2: Add a guarded control.** A guarded request must emit the trajectory episode evaluation only, with no duplicate request subject and no retained pending decision after settlement.
+- [ ] **Step 3: Run the three tests and capture RED.** Expected RED: both unguarded configurations contain zero request Eval subjects.
+- [ ] **Step 4: Restore the shared pending store through assembly and runtime construction.** Select observer-with-pending only for unguarded named policies; preserve metadata for guarded policies and reload snapshots.
+- [ ] **Step 5: Run assembled-App, policy-lock, policy-table-router, and Eval settlement tests until GREEN.**
+- [ ] **Step 6: Commit `fix(eval): preserve unguarded policy subjects`.**
+
+## Task 10: Terminally settle post-decision routing failures
+
+**Files:**
+- Modify: `crates/bitrouter-sdk/src/language_model/pipeline.rs`
+- Modify: `crates/bitrouter-sdk/src/language_model/tests.rs`
+- Modify: `apps/bitrouter/src/trajectory/settlement.rs`
+- Modify: `apps/bitrouter/src/trajectory/store.rs`
+- Test: guarded integration tests in `apps/bitrouter/tests/trajectory_progress_control.rs`
+
+**Interfaces:** After Stage 1 succeeds, any Stage-2 error that occurs after a model selector may have durably recorded a route intent. Both streaming and non-streaming paths therefore call the existing `run_settlement(ctx, false, Some(error))` before returning because no response stream has opened yet. Unknown provider usage remains `UsageOrigin::Unknown` with absent token/cost evidence; it is never coerced to zero.
+
+- [ ] **Step 1: Write SDK RED tests for no-route and failing route-hook paths in both execution modes.** Assert every registered settlement recorder runs once with the original error and unknown usage, while pre-request denials still do not fabricate a routed settlement.
+- [ ] **Step 2: Write a guarded App RED test.** Use a signed policy tier whose non-empty provider-qualified model has no routing-table entry. Assert the request currently remains `started` to prove the defect.
+- [ ] **Step 3: Settle Stage-2 failures in both pipeline entrypoints.** Preserve observe ordering: settlement phase and failed request-end occur exactly once.
+- [ ] **Step 4: Prove durable closure.** Assert `RequestStatus::Failed`, one settlement event/outbox record, no numeric token/cost facts, idempotent restart/reconciliation, successful publication, and prune eligibility after the cutoff.
+- [ ] **Step 5: Run SDK pipeline, metering, trajectory settlement/store, publisher, restart, and prune tests until GREEN.**
+- [ ] **Step 6: Commit `fix(pipeline): settle routing failures`.**
+
+## Task 11: Keep streaming Responses identity ledger-compatible
+
+**Files:**
+- Modify: `crates/bitrouter-sdk/src/language_model/protocol/responses.rs`
+- Modify: protocol tests beside the Responses stream state machine
+- Modify: `apps/bitrouter/tests/trajectory_progress_control.rs`
+
+**Interfaces:** Every client-visible `response.id` in one Responses stream uses the stable gateway request ID that trajectory correlation indexes. The upstream response ID remains provider metadata only and never replaces the public continuation identity mid-stream.
+
+- [ ] **Step 1: Write a protocol RED test.** Feed an upstream-native `ResponseStarted` plus terminal completion whose upstream ID differs from the gateway request ID; assert created, in-progress, output, and completed events must expose one gateway ID.
+- [ ] **Step 2: Run the focused Responses protocol test.** Expected RED: terminal `response.completed.response.id` exposes the upstream ID.
+- [ ] **Step 3: Normalize terminal stream events to the gateway identity.** Preserve upstream metadata without making it the next-turn native key.
+- [ ] **Step 4: Add a real streaming Responses-to-Responses HTTP continuation.** Parse the terminal response ID, send it as `previous_response_id`, and assert native-parent correlation selects the original complete episode before and after restart.
+- [ ] **Step 5: Run Responses protocol, stream, HTTP trajectory matrix, and cross-protocol tests until GREEN.**
+- [ ] **Step 6: Commit `fix(responses): stabilize stream identity`.**
+
+## Task 12: Bound prefix-correlation work and index its lookup
+
+**Files:**
+- Modify: `apps/bitrouter/src/trajectory/canonical.rs`
+- Modify: `apps/bitrouter/src/trajectory/store.rs`
+- Modify: `apps/bitrouter/src/db/migration/m20240101_000012_create_trajectory_ledger.rs`
+- Test: canonicalization complexity tests and migration/query-plan tests
+
+**Interfaces:** Canonicalization serializes each typed turn once and incrementally hashes the canonical JSON array. It emits at most `MAX_ANCESTOR_PREFIX_DIGESTS = 256` newest prefix digests; older omitted ancestry fails conservatively to incomplete rather than causing unbounded work. Store resolution performs one indexed owner/digest lookup and restores newest-prefix priority in memory.
+
+- [ ] **Step 1: Write equivalence and work-bound RED tests.** Compare the new incremental result against `serde_json::to_vec(CanonicalPrefix)` for literal small prompts. For 32/64/128/1024-turn prompts, instrument serialized bytes/hasher updates and assert linear input processing plus a hard maximum of 256 emitted prefixes.
+- [ ] **Step 2: Add migration RED coverage.** Require composite `idx_trajectory_requests_owner_full_input_digest (owner_user_id, full_input_digest)` on SQLite, Postgres, and MySQL SQL generation.
+- [ ] **Step 3: Implement incremental canonical-array HMAC.** Serialize the fixed object prefix and every `CanonicalTurn` once, clone/finalize HMAC state only for the newest bounded boundaries, and produce a full-input digest/byte count byte-for-byte compatible with the existing v1 contract.
+- [ ] **Step 4: Replace per-prefix queries with one indexed membership query.** De-duplicate matches, choose the longest supplied prefix, and return `Ambiguous` when that digest maps to multiple episodes.
+- [ ] **Step 5: Prove the SQLite query plan uses the composite index and run large-history correlation tests.** No prompt text or unkeyed digest may enter logs or storage.
+- [ ] **Step 6: Run canonical, store, migration, correlation, cross-protocol, and privacy tests until GREEN.**
+- [ ] **Step 7: Commit `perf(trajectory): bound prefix correlation`.**
+
+## Task 13: Correct outbox delivery audit time and drain index
+
+**Files:**
+- Modify: `apps/bitrouter/src/trajectory/publisher.rs`
+- Modify: `apps/bitrouter/src/trajectory/store.rs`
+- Modify: `apps/bitrouter/src/db/migration/m20240101_000012_create_trajectory_ledger.rs`
+- Test: publisher timing/restart and migration/query-plan tests
+
+**Interfaces:** `delivered_at` is the UTC time at which Eval admission succeeds, not `created_at`. Global drain uses `idx_trajectory_outbox_delivery_order (delivered_at, attempts, created_at, outbox_id)`; owner-scoped inspection remains owner-filtered.
+
+- [ ] **Step 1: Write a RED delivery-time test using distinct deterministic timestamps.** Assert delayed admission records the later successful-delivery time and exact retry does not rewrite it.
+- [ ] **Step 2: Write migration/query-plan RED coverage for the global drain order.** Require an index whose leading column is `delivered_at` and whose remaining columns match the query order.
+- [ ] **Step 3: Capture the admission-success timestamp and pass it to `mark_outbox_delivered`.** Preserve idempotency and restart behavior.
+- [ ] **Step 4: Add the global delivery-order index and retain any separate owner inspection index only when query-plan evidence needs it.**
+- [ ] **Step 5: Run publisher, outbox, migration, retention, and Eval Exchange tests until GREEN.**
+- [ ] **Step 6: Commit `fix(trajectory): correct outbox delivery audit`.**
+
+## Task 14: Validate the exact PR tree and record benchmark evidence
 
 **Files:**
 - Modify: this plan's checkboxes as tasks complete
 - Modify: the single Draft PR description/checklist throughout execution
 - Modify: implementation/docs only for defects found by validation
 
-- [ ] **Step 1: Run focused tests after every task and record the command/result in the PR.**
-- [ ] **Step 2: Run `cargo fmt -- --check`.**
-- [ ] **Step 3: Run `cargo clippy --all-features --all-targets -- -D warnings`.**
-- [ ] **Step 4: Run `cargo nextest run --all-features`; if nextest is unavailable, run `cargo test --all-features` and record the substitution.**
-- [ ] **Step 5: Run `cargo run -p dist-helper -- check`.**
-- [ ] **Step 6: Re-run the benchmark scenarios as external validation.** Compare task outcome, request/turn count, time-to-outcome, exact authoritative cost, recovery recurrence, and model-tier sequence against control and the previous branch. Do not promote benchmark identifiers into product fixtures or policy keys.
-- [ ] **Step 7: Classify the result honestly.** A semantic regression blocks readiness. A pass with unbounded turn/cost inflation also blocks readiness. Missing authoritative cost remains `unknown`; it is not zero and does not erase a decisive trajectory-count regression.
-- [ ] **Step 8: Update the PR description with final scope, commit map, test evidence, benchmark evidence, remaining risks, compatibility notes, and rollout/rollback instructions. Mark ready for review only when every required gate is green.**
-- [ ] **Step 9: Commit final validation/docs fixes using a scoped conventional title; do not create a second PR.**
+- [ ] **Step 1: Generate a fresh full-diff review package and require an independent reviewer to close every Critical/Important finding.** The review at `c199f9a9` found 0 Critical, 5 Important, and 2 Minor; its earlier green gates are invalidated by Tasks 8-13 and cannot be reused.
+- [ ] **Step 2: Run focused tests after every remediation task and record the exact command/result in the PR.**
+- [ ] **Step 3: Run `cargo fmt --all -- --check`.**
+- [ ] **Step 4: Run `cargo clippy --all-features --all-targets -- -D warnings`.**
+- [ ] **Step 5: Run `cargo nextest run --all-features`; if nextest is unavailable, run `cargo test --all-features` and record the substitution.**
+- [ ] **Step 6: Run `cargo run -p dist-helper -- check`.**
+- [ ] **Step 7: Freeze and run a fresh, independent Terminal-Bench 2.1 short13 mechanism lineage.** Use one trial per predeclared case, fresh run IDs/paths/ports/policy database/artifacts, explicit AWS identity and quota proof, non-evaluation canaries, exact request-ID joins, authoritative four-bucket settlement, exact-tag cleanup, and `control+r1+r2[+r3]` only as frozen before launch. Never read, copy, mutate, or reuse the sibling benchmark process or its run-scoped artifacts.
+- [ ] **Step 8: Compare every declared point.** Report task outcome, request/turn count, time-to-outcome, exact authoritative actual/notional cost separately, recovery recurrence, and model-tier sequence. A one-trial short13 result is mechanism evidence only, never a stable model ranking or public score.
+- [ ] **Step 9: Classify the result honestly.** A semantic regression blocks readiness. A pass with unbounded turn/cost inflation also blocks readiness. Missing authoritative cost remains `unknown`; it is not zero and does not erase a decisive trajectory-count regression.
+- [ ] **Step 10: Update the PR description with final scope, commit map, review evidence, test evidence, benchmark evidence, remaining risks, compatibility notes, and rollout/rollback instructions. Mark ready for review only when every required gate is green.**
+- [ ] **Step 11: Commit final validation/docs fixes using a scoped conventional title; do not create a second PR.**
 
 ## Requirement Coverage
 
@@ -453,7 +559,12 @@ the general progress invariant depend on external agent installations.
 | Crash-safe correlation/publication | 1, 2, 5 | transaction rollback and restart/outbox tests |
 | Explainable deterministic decisions | 3, 4, 6 | live/replay digest and RouteIntent clause equality |
 | Privacy and retention | 1, 6 | write-time secret-content redaction and bounded prune tests |
-| Existing behavior compatibility | 4, 6, 7 | guard-disabled legacy lock/config matrix |
+| Existing behavior compatibility | 4, 6, 7, 9 | guard-disabled legacy lock/config and request-Eval matrix |
+| Contradictory ancestry evidence | 2, 7, 8 | native-wins/incomplete conflict, guard, restart, and replay tests |
+| Terminal lifecycle on routing errors | 5, 10 | SDK route-failure settlement plus restart/outbox/prune tests |
+| Streaming Responses continuation | 2, 7, 11 | stable stream ID and native Responses-to-Responses continuation |
+| Bounded authenticated request work | 2, 12 | incremental-HMAC work counters, bounded prefixes, and indexed query plan |
+| Accurate outbox audit and drain | 5, 6, 13 | delivery-time idempotency and global pending-order query plan |
 
 ## Single-PR Delivery Protocol
 
