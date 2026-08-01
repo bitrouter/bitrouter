@@ -278,23 +278,18 @@ fn get_or_create_install_id_locked(home: &Path) -> Result<String> {
 pub fn get_or_create_correlation_key(home: &Path) -> Result<CorrelationKey> {
     ensure_home_directory(home)?;
     with_install_lock(home, || {
-        let installation_id = get_or_create_install_id_locked(home)?;
+        get_or_create_install_id_locked(home)?;
         let path = home.join(CORRELATION_KEY_FILENAME);
         if let Some(secret) = read_correlation_secret(&path)? {
-            return CorrelationKey::from_bytes(&installation_id, secret);
+            return CorrelationKey::from_bytes(secret);
         }
 
         let mut secret = [0_u8; 32];
         rand::rng().fill_bytes(&mut secret);
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
-        if path.exists() {
-            replace_private_file(&path, encoded.as_bytes())
-                .with_context(|| format!("rewriting {}", path.display()))?;
-        } else {
-            create_private_file(&path, encoded.as_bytes())
-                .with_context(|| format!("writing {}", path.display()))?;
-        }
-        CorrelationKey::from_bytes(&installation_id, secret)
+        create_private_file(&path, encoded.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        CorrelationKey::from_bytes(secret)
     })
 }
 
@@ -302,14 +297,13 @@ fn read_correlation_secret(path: &Path) -> Result<Option<[u8; 32]>> {
     let Some(encoded) = read_private_text(path)? else {
         return Ok(None);
     };
-    if encoded.trim().is_empty() {
-        return Ok(None);
-    }
-    let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded.trim())
-    else {
-        return Ok(None);
-    };
-    Ok(decoded.try_into().ok())
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded.trim())
+        .context("existing correlation key is not valid base64")?;
+    let secret = decoded
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("existing correlation key must contain exactly 32 bytes"))?;
+    Ok(Some(secret))
 }
 
 fn with_install_lock<T>(home: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -342,12 +336,12 @@ fn read_private_text(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn repair_private_permissions(path: &Path) -> Result<()> {
+fn repair_private_permissions(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("repairing permissions on {}", path.display()))?;
+        std::fs::set_permissions(_path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("repairing permissions on {}", _path.display()))?;
     }
     Ok(())
 }
@@ -397,13 +391,28 @@ fn publish_private_file(path: &Path, contents: &[u8], replace: bool) -> std::io:
         let _ = std::fs::remove_file(&temporary);
         return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
     }
-    if let Err(error) = std::fs::rename(&temporary, path) {
+    let publication = if replace {
+        atomic_replace(&temporary, path)
+    } else {
+        std::fs::rename(&temporary, path)
+    };
+    if let Err(error) = publication {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
     #[cfg(unix)]
     std::fs::File::open(parent)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    atomicwrites::replace_atomic(source, destination)
 }
 
 /// Resolve the bitrouter home the same way the daemon's runtime artefacts do
@@ -545,22 +554,85 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_partial_private_files_are_recovered_atomically() {
-        let home = unique_tmp("private-file-partial");
+    fn install_id_repair_does_not_change_correlation_key_identity() {
+        let home = unique_tmp("install-id-key-identity");
+        let first = get_or_create_correlation_key(&home).unwrap();
+        let original_key = std::fs::read(home.join(CORRELATION_KEY_FILENAME)).unwrap();
         std::fs::write(home.join(INSTALL_ID_FILENAME), "partial-id").unwrap();
-        std::fs::write(home.join(CORRELATION_KEY_FILENAME), "partial-key").unwrap();
+
+        let repaired = get_or_create_correlation_key(&home).unwrap();
+
+        assert_eq!(first.key_id(), repaired.key_id());
+        let install = std::fs::read_to_string(home.join(INSTALL_ID_FILENAME)).unwrap();
+        assert!(uuid::Uuid::parse_str(install.trim()).is_ok());
+        assert_eq!(
+            std::fs::read(home.join(CORRELATION_KEY_FILENAME)).unwrap(),
+            original_key
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn corrupt_existing_correlation_key_fails_closed_without_replacement() {
+        for (label, contents) in [
+            ("empty", b"".as_slice()),
+            ("not-base64", b"not a key".as_slice()),
+            ("wrong-length", b"c2hvcnQ".as_slice()),
+        ] {
+            let home = unique_tmp(&format!("corrupt-key-{label}"));
+            std::fs::write(
+                home.join(INSTALL_ID_FILENAME),
+                uuid::Uuid::new_v4().to_string(),
+            )
+            .unwrap();
+            std::fs::write(home.join(CORRELATION_KEY_FILENAME), contents).unwrap();
+
+            let error = match get_or_create_correlation_key(&home) {
+                Ok(_) => panic!("an existing invalid correlation key must not rotate"),
+                Err(error) => error,
+            };
+
+            assert!(
+                error.to_string().contains("correlation key"),
+                "{label}: {error}"
+            );
+            assert_eq!(
+                std::fs::read(home.join(CORRELATION_KEY_FILENAME)).unwrap(),
+                contents,
+                "{label} key was replaced"
+            );
+            let _ = std::fs::remove_dir_all(&home);
+        }
+    }
+
+    #[test]
+    fn missing_key_on_existing_install_initializes_once() {
+        let home = unique_tmp("pre-feature-install");
+        let install_id = uuid::Uuid::new_v4().to_string();
+        std::fs::write(home.join(INSTALL_ID_FILENAME), &install_id).unwrap();
 
         let first = get_or_create_correlation_key(&home).unwrap();
+        let encoded = std::fs::read(home.join(CORRELATION_KEY_FILENAME)).unwrap();
         let second = get_or_create_correlation_key(&home).unwrap();
 
         assert_eq!(first.key_id(), second.key_id());
-        let install = std::fs::read_to_string(home.join(INSTALL_ID_FILENAME)).unwrap();
-        assert!(uuid::Uuid::parse_str(install.trim()).is_ok());
-        let encoded = std::fs::read_to_string(home.join(CORRELATION_KEY_FILENAME)).unwrap();
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(encoded.trim())
-            .unwrap();
-        assert_eq!(decoded.len(), 32);
+        assert_eq!(
+            std::fs::read(home.join(CORRELATION_KEY_FILENAME)).unwrap(),
+            encoded
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replacing_private_file_overwrites_existing_destination_on_windows() {
+        let home = unique_tmp("windows-private-replace");
+        let path = home.join("replace.private");
+        std::fs::write(&path, "old").unwrap();
+
+        replace_private_file(&path, b"new").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&home);
     }
 

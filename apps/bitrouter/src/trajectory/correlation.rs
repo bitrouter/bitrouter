@@ -73,6 +73,10 @@ impl TrajectoryRuntime {
     ) -> Result<CorrelatedRequest> {
         let canonical = self.canonicalizer.canonicalize(prompt)?;
         let native_parent_id = native_parent_id(&inbound_protocol, prompt)?;
+        let native_parent_digest = native_parent_id
+            .as_deref()
+            .map(|parent| self.canonicalizer.native_parent_digest(parent))
+            .transpose()?;
         let evidence = correlation_evidence(native_parent_id, &canonical);
         let result = self
             .store
@@ -84,6 +88,7 @@ impl TrajectoryRuntime {
                     event_id: stable_id("request-start", owner_user_id, request_id),
                     correlation_key_id: self.canonicalizer.key_id().to_owned(),
                     native_parent_id: evidence.native_parent_id.clone(),
+                    native_parent_digest,
                     full_input_digest: canonical.full_input_digest,
                     ancestor_prefix_digests: canonical.ancestor_prefix_digests,
                     starts_with_prior_turns: canonical.starts_with_prior_turns,
@@ -200,7 +205,7 @@ mod tests {
     async fn runtime() -> anyhow::Result<(TrajectoryRuntime, sea_orm::DatabaseConnection)> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [21; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([21; 32])?);
         Ok((
             TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), canonicalizer),
             db,
@@ -219,7 +224,7 @@ mod tests {
         );
         let db = crate::db::connect(&url).await?;
         crate::db::run_migrations(&db).await?;
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes("install-a", [21; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([21; 32])?);
         Ok((
             Arc::new(TrajectoryRuntime::new(
                 TrajectoryStore::new(db.clone()),
@@ -341,7 +346,37 @@ mod tests {
             .events_for_episode("owner-c", &unknown.episode_id)
             .await?
             .remove(0);
-        assert_eq!(rejected_event.evidence, unknown_event.evidence);
+        assert_eq!(
+            rejected_event.evidence.structural,
+            unknown_event.evidence.structural
+        );
+        assert_eq!(
+            rejected_event.evidence.categorical,
+            unknown_event.evidence.categorical
+        );
+        assert_ne!(
+            rejected_event.evidence.digests,
+            unknown_event.evidence.digests
+        );
+        for event in [&rejected_event, &unknown_event] {
+            assert_eq!(
+                event
+                    .evidence
+                    .structural
+                    .get("correlation.native_parent_present"),
+                Some(&1)
+            );
+            let digest = event
+                .evidence
+                .digests
+                .get("correlation.native_parent")
+                .ok_or_else(|| anyhow::anyhow!("missing native parent digest"))?;
+            assert!(digest.starts_with("sha256:"));
+        }
+        let rejected_json = serde_json::to_string(&rejected_event)?;
+        let unknown_json = serde_json::to_string(&unknown_event)?;
+        assert!(!rejected_json.contains("request-foreign"));
+        assert!(!unknown_json.contains("request-does-not-exist"));
         assert!(
             runtime
                 .store()
@@ -349,6 +384,70 @@ mod tests {
                 .await?
                 .is_some_and(|request| request.native_parent_id.is_none())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exact_retries_distinguish_rejected_parent_values_and_absence() -> anyhow::Result<()> {
+        let cases = [
+            ("unknown-a", Some("missing-parent-a")),
+            ("unknown-b", Some("missing-parent-b")),
+            ("absent", None),
+        ];
+        for (initial_label, initial_parent) in cases {
+            let (runtime, _) = runtime().await?;
+            let request_id = format!("request-{initial_label}");
+            let initial_prompt = match initial_parent {
+                Some(parent) => {
+                    responses_prompt(vec![Message::text(Role::User, "same input")], parent)
+                }
+                None => prompt(vec![Message::text(Role::User, "same input")]),
+            };
+            runtime
+                .begin_request(
+                    "owner-a",
+                    &request_id,
+                    ApiProtocol::Responses,
+                    &initial_prompt,
+                    "2026-08-01T00:00:00Z",
+                )
+                .await?;
+            runtime
+                .begin_request(
+                    "owner-a",
+                    &request_id,
+                    ApiProtocol::Responses,
+                    &initial_prompt,
+                    "2026-08-01T00:01:00Z",
+                )
+                .await?;
+
+            for (retry_label, retry_parent) in cases {
+                if retry_label == initial_label {
+                    continue;
+                }
+                let retry_prompt = match retry_parent {
+                    Some(parent) => {
+                        responses_prompt(vec![Message::text(Role::User, "same input")], parent)
+                    }
+                    None => prompt(vec![Message::text(Role::User, "same input")]),
+                };
+                let error = runtime
+                    .begin_request(
+                        "owner-a",
+                        &request_id,
+                        ApiProtocol::Responses,
+                        &retry_prompt,
+                        "2026-08-01T00:02:00Z",
+                    )
+                    .await
+                    .expect_err("changed native-parent evidence must conflict");
+                assert!(
+                    error.to_string().contains("different content"),
+                    "{initial_label} -> {retry_label}: {error}"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -586,6 +685,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interleaved_settlements_preserve_latest_started_request_and_contiguous_history()
+    -> anyhow::Result<()> {
+        let (runtime, db) = runtime().await?;
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-r1",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "r1")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        runtime
+            .begin_request(
+                "owner-a",
+                "request-r2",
+                ApiProtocol::Responses,
+                &responses_prompt(vec![Message::text(Role::User, "r2")], "request-r1"),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        for (request_id, event_id, sequence, captured_at) in [
+            ("request-r1", "event-settle-r1", 3, "2026-08-01T00:00:02Z"),
+            ("request-r2", "event-settle-r2", 5, "2026-08-01T00:00:04Z"),
+            ("request-r3", "event-settle-r3", 6, "2026-08-01T00:00:05Z"),
+        ] {
+            if request_id == "request-r2" {
+                runtime
+                    .begin_request(
+                        "owner-a",
+                        "request-r3",
+                        ApiProtocol::Responses,
+                        &responses_prompt(vec![Message::text(Role::User, "r3")], "request-r2"),
+                        "2026-08-01T00:00:03Z",
+                    )
+                    .await?;
+            }
+            let mut event = TrajectoryEvent {
+                schema_version: TRAJECTORY_SCHEMA_VERSION,
+                event_id: event_id.into(),
+                owner_user_id: "owner-a".into(),
+                episode_id: root.episode_id.clone(),
+                request_id: Some(request_id.into()),
+                sequence,
+                kind: TrajectoryEventKind::RequestSettled,
+                evidence: TrajectoryEvidence {
+                    structural: Default::default(),
+                    categorical: Default::default(),
+                    digests: Default::default(),
+                },
+                captured_at: captured_at.into(),
+                content_digest: String::new(),
+            };
+            event.content_digest = event.semantic_digest()?;
+            runtime
+                .store()
+                .settle_request(
+                    "owner-a",
+                    Settlement {
+                        event,
+                        status: RequestStatus::Settled,
+                        outbox: None,
+                    },
+                )
+                .await?;
+        }
+
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &root.episode_id)
+            .await?;
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            (1..=6).collect::<Vec<_>>()
+        );
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT latest_request_id FROM trajectory_episodes WHERE episode_id = '{}'",
+                    root.episode_id
+                ),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing episode"))?;
+        assert_eq!(
+            row.try_get::<String>("", "latest_request_id")?,
+            "request-r3"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn concurrent_native_children_allocate_contiguous_unique_sequences() -> anyhow::Result<()>
     {
         let (runtime, _, _dir) = file_runtime().await?;
@@ -637,6 +833,106 @@ mod tests {
                 .collect::<Vec<_>>(),
             (1..=33).collect::<Vec<_>>()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_identical_explicit_roots_reload_one_deterministic_winner()
+    -> anyhow::Result<()> {
+        let (runtime, db, _dir) = file_runtime().await?;
+        let barrier = Arc::new(tokio::sync::Barrier::new(17));
+        let tasks = (0..16)
+            .map(|_| {
+                let runtime = Arc::clone(&runtime);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    runtime
+                        .begin_request(
+                            "owner-a",
+                            "request-identical-root",
+                            ApiProtocol::Responses,
+                            &prompt(vec![Message::text(Role::User, "same root")]),
+                            "2026-08-01T00:00:00Z",
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait().await;
+        let mut episode_id = None;
+        for task in tasks {
+            let result = task.await??;
+            assert_eq!(
+                episode_id.get_or_insert(result.episode_id.clone()),
+                &result.episode_id
+            );
+        }
+
+        for table in [
+            "trajectory_episodes",
+            "trajectory_events",
+            "trajectory_requests",
+        ] {
+            let row = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    format!("SELECT COUNT(*) AS count FROM {table}"),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing count row"))?;
+            assert_eq!(row.try_get::<i64>("", "count")?, 1, "table {table}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_conflicting_explicit_roots_keep_one_winner_and_reject_the_other()
+    -> anyhow::Result<()> {
+        let (runtime, db, _dir) = file_runtime().await?;
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let tasks = ["first root", "conflicting root"]
+            .into_iter()
+            .map(|text| {
+                let runtime = Arc::clone(&runtime);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    runtime
+                        .begin_request(
+                            "owner-a",
+                            "request-conflicting-root",
+                            ApiProtocol::Responses,
+                            &prompt(vec![Message::text(Role::User, text)]),
+                            "2026-08-01T00:00:00Z",
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait().await;
+        let results = futures::future::try_join_all(tasks).await?;
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let error = results
+            .into_iter()
+            .find_map(Result::err)
+            .ok_or_else(|| anyhow::anyhow!("missing conflicting result"))?;
+        assert!(error.to_string().contains("different content"));
+
+        for table in [
+            "trajectory_episodes",
+            "trajectory_events",
+            "trajectory_requests",
+        ] {
+            let row = db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    format!("SELECT COUNT(*) AS count FROM {table}"),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing count row"))?;
+            assert_eq!(row.try_get::<i64>("", "count")?, 1, "table {table}");
+        }
         Ok(())
     }
 

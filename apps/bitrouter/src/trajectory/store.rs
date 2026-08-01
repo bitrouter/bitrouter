@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
+    IntoActiveModel, QueryFilter, QueryOrder, RuntimeErr, Set, TransactionTrait, sea_query::Expr,
 };
 
 use super::correlation::CorrelationSource;
@@ -117,6 +117,7 @@ pub(crate) struct CorrelateAndBegin {
     pub event_id: String,
     pub correlation_key_id: String,
     pub native_parent_id: Option<String>,
+    pub native_parent_digest: Option<String>,
     pub full_input_digest: KeyedDigest,
     pub ancestor_prefix_digests: Vec<KeyedDigest>,
     pub starts_with_prior_turns: bool,
@@ -134,6 +135,7 @@ pub(crate) struct CorrelateAndBeginResult {
 enum CorrelateAttempt {
     Complete(CorrelateAndBeginResult),
     RetrySequenceReservation,
+    RetryDeterministicStart,
 }
 
 enum PrefixResolution {
@@ -180,15 +182,19 @@ impl TrajectoryStore {
         {
             anyhow::bail!("ancestor prefix digest uses a different correlation key")
         }
+        if let Some(digest) = &input.native_parent_digest {
+            super::types::validate_digest(digest, "native parent digest")?;
+        }
 
-        for _ in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
+        for attempt in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
             match self.correlate_and_begin_once(owner_user_id, &input).await {
                 Ok(CorrelateAttempt::Complete(result)) => return Ok(result),
-                Ok(CorrelateAttempt::RetrySequenceReservation) => {
-                    tokio::task::yield_now().await;
+                Ok(CorrelateAttempt::RetrySequenceReservation)
+                | Ok(CorrelateAttempt::RetryDeterministicStart) => {
+                    tokio::time::sleep(contention_backoff(attempt)).await;
                 }
-                Err(error) if retryable_sequence_contention(&error) => {
-                    tokio::task::yield_now().await;
+                Err(error) if classify_database_error(&error).retryable_contention => {
+                    tokio::time::sleep(contention_backoff(attempt)).await;
                 }
                 Err(error) => return Err(error),
             }
@@ -329,6 +335,10 @@ impl TrajectoryStore {
                         "correlation.prefix_conflict".to_owned(),
                         u64::from(prefix_conflict),
                     ),
+                    (
+                        "correlation.native_parent_present".to_owned(),
+                        u64::from(input.native_parent_digest.is_some()),
+                    ),
                 ]),
                 categorical: std::collections::BTreeMap::from([
                     ("correlation.source".to_owned(), source.as_str().to_owned()),
@@ -337,7 +347,16 @@ impl TrajectoryStore {
                         completeness_name(completeness).to_owned(),
                     ),
                 ]),
-                digests: std::collections::BTreeMap::new(),
+                digests: input
+                    .native_parent_digest
+                    .as_ref()
+                    .map(|digest| {
+                        std::collections::BTreeMap::from([(
+                            "correlation.native_parent".to_owned(),
+                            digest.clone(),
+                        )])
+                    })
+                    .unwrap_or_default(),
             },
             captured_at: input.captured_at.clone(),
             content_digest: String::new(),
@@ -368,7 +387,22 @@ impl TrajectoryStore {
             append_event(&txn, &begin.event).await?;
             insert_request(&txn, owner_user_id, &input.request_id, begin).await?;
         } else {
-            begin_request_in_tx(&txn, owner_user_id, &input.request_id, begin).await?;
+            if let Err(error) =
+                begin_request_in_tx(&txn, owner_user_id, &input.request_id, begin).await
+            {
+                let unique_start_conflict = classify_database_error(&error).unique_violation;
+                if unique_start_conflict {
+                    txn.rollback().await?;
+                    if request_entity::Entity::find_by_id(&input.request_id)
+                        .one(&self.db)
+                        .await?
+                        .is_some()
+                    {
+                        return Ok(CorrelateAttempt::RetryDeterministicStart);
+                    }
+                }
+                return Err(error);
+            }
         }
         txn.commit().await?;
         Ok(CorrelateAttempt::Complete(CorrelateAndBeginResult {
@@ -460,13 +494,7 @@ impl TrajectoryStore {
             .map(|outbox| outbox.outbox_id.clone()));
         active.status = Set(request_status_name(settlement.status).into());
         active.update(&txn).await?;
-        update_episode_head(
-            &txn,
-            episode,
-            &settlement.event,
-            settlement.event.request_id.clone(),
-        )
-        .await?;
+        update_episode_head(&txn, episode, &settlement.event, None).await?;
         if let Some(outbox) = settlement.outbox {
             insert_outbox(&txn, owner_user_id, outbox).await?;
         }
@@ -712,6 +740,16 @@ async fn exact_retry_result(
         .structural
         .get("correlation.starts_with_prior_turns")
         .copied();
+    let native_parent_present = start
+        .evidence
+        .structural
+        .get("correlation.native_parent_present")
+        .copied();
+    let native_parent_digest = start
+        .evidence
+        .digests
+        .get("correlation.native_parent")
+        .map(String::as_str);
     if existing.start_event_id != input.event_id
         || existing.full_input_digest != input.full_input_digest.as_str()
         || existing.native_parent_id != trusted_native_parent_id
@@ -722,6 +760,8 @@ async fn exact_retry_result(
                     .context("too many ancestor prefix digests")?,
             )
         || starts_with_prior_turns != Some(u64::from(input.starts_with_prior_turns))
+        || native_parent_present != Some(u64::from(input.native_parent_digest.is_some()))
+        || native_parent_digest != input.native_parent_digest.as_deref()
         || start.owner_user_id != owner_user_id
         || start.request_id.as_deref() != Some(input.request_id.as_str())
         || start.kind != TrajectoryEventKind::RequestStarted
@@ -839,12 +879,59 @@ async fn reserve_episode_head(
     Ok(result.rows_affected == 1)
 }
 
-fn retryable_sequence_contention(error: &anyhow::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
-    message.contains("database is locked")
-        || message.contains("deadlock detected")
-        || message.contains("serialization failure")
-        || message.contains("could not serialize access")
+#[derive(Default)]
+struct DatabaseErrorClassification {
+    retryable_contention: bool,
+    unique_violation: bool,
+}
+
+fn classify_database_error(error: &anyhow::Error) -> DatabaseErrorClassification {
+    let mut classification = DatabaseErrorClassification::default();
+    for cause in error.chain() {
+        let Some(db_error) = cause.downcast_ref::<DbErr>().and_then(sqlx_database_error) else {
+            continue;
+        };
+        classification.unique_violation |= db_error.is_unique_violation();
+        let code = db_error.code();
+        let code = code.as_deref();
+        let mysql_number = db_error
+            .try_downcast_ref::<sea_orm::SqlxMySqlError>()
+            .map(sea_orm::SqlxMySqlError::number);
+        classification.retryable_contention |= retryable_database_code(code, mysql_number);
+    }
+    classification
+}
+
+fn sqlx_database_error(
+    error: &DbErr,
+) -> Option<&(dyn sea_orm::sqlx::error::DatabaseError + 'static)> {
+    match error {
+        DbErr::Exec(RuntimeErr::SqlxError(sea_orm::SqlxError::Database(error)))
+        | DbErr::Query(RuntimeErr::SqlxError(sea_orm::SqlxError::Database(error))) => {
+            Some(error.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn retryable_database_code(code: Option<&str>, mysql_number: Option<u16>) -> bool {
+    if matches!(code, Some("40001" | "40P01")) || matches!(mysql_number, Some(1205 | 1213)) {
+        return true;
+    }
+    let Some(code) = code else {
+        return false;
+    };
+    if matches!(code, "1205" | "1213") {
+        return true;
+    }
+    code.len() <= 4
+        && code
+            .parse::<i32>()
+            .is_ok_and(|sqlite_code| matches!(sqlite_code & 0xff, 5 | 6))
+}
+
+fn contention_backoff(attempt: usize) -> std::time::Duration {
+    std::time::Duration::from_millis(1_u64 << attempt.min(5))
 }
 
 fn parse_correlation_source(value: &str) -> Result<CorrelationSource> {
@@ -1304,9 +1391,12 @@ fn parse_request_status(value: &str) -> Result<RequestStatus> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::BTreeMap;
+    use std::fmt;
 
-    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    use sea_orm::sqlx::error::{DatabaseError, ErrorKind};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, RuntimeErr, Statement};
 
     use super::*;
     use crate::trajectory::types::*;
@@ -1605,6 +1695,84 @@ mod tests {
         );
         stale.rollback().await?;
         Ok(())
+    }
+
+    #[test]
+    fn database_retry_classification_uses_typed_codes_and_constraint_kind() {
+        for code in ["40001", "40P01", "1205", "1213", "5", "261", "6"] {
+            let classification = classify_database_error(&mock_database_error(code, false));
+            assert!(classification.retryable_contention, "code {code}");
+            assert!(!classification.unique_violation, "code {code}");
+        }
+
+        let arbitrary = classify_database_error(&mock_database_error("23514", false));
+        assert!(!arbitrary.retryable_contention);
+        assert!(!arbitrary.unique_violation);
+
+        let unique = classify_database_error(&mock_database_error("23505", true));
+        assert!(!unique.retryable_contention);
+        assert!(unique.unique_violation);
+
+        let english_only = anyhow::Error::new(DbErr::Exec(RuntimeErr::Internal(
+            "database is locked; deadlock detected".into(),
+        )));
+        let classification = classify_database_error(&english_only);
+        assert!(!classification.retryable_contention);
+        assert!(!classification.unique_violation);
+
+        assert!(contention_backoff(0) < contention_backoff(1));
+        assert!(contention_backoff(1) < contention_backoff(5));
+        assert_eq!(contention_backoff(5), contention_backoff(31));
+    }
+
+    #[derive(Debug)]
+    struct MockDatabaseError {
+        code: &'static str,
+        unique: bool,
+    }
+
+    impl fmt::Display for MockDatabaseError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("opaque database failure")
+        }
+    }
+
+    impl std::error::Error for MockDatabaseError {}
+
+    impl DatabaseError for MockDatabaseError {
+        fn message(&self) -> &str {
+            "opaque database failure"
+        }
+
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.code))
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> ErrorKind {
+            if self.unique {
+                ErrorKind::UniqueViolation
+            } else {
+                ErrorKind::Other
+            }
+        }
+    }
+
+    fn mock_database_error(code: &'static str, unique: bool) -> anyhow::Error {
+        anyhow::Error::new(DbErr::Exec(RuntimeErr::SqlxError(
+            sea_orm::SqlxError::Database(Box::new(MockDatabaseError { code, unique })),
+        )))
     }
 
     async fn store() -> anyhow::Result<TrajectoryStore> {
