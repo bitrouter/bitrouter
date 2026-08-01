@@ -468,6 +468,25 @@ mod tests {
     }
 
     #[test]
+    fn missing_settlement_evidence_permanently_poisons_totals() -> anyhow::Result<()> {
+        let events = vec![
+            start(1, "r1", 40, "complete", "explicit_root")?,
+            intent(2, "r1", "opening", "economy")?,
+            settled(3, "r1", None, None)?,
+            start(4, "r2", 80, "complete", "canonical_prefix")?,
+            intent(5, "r2", "planning", "economy")?,
+            settled(6, "r2", Some(100), Some(200))?,
+        ];
+
+        let snapshot = reduce(&events, &BTreeSet::new())?;
+
+        assert_eq!(snapshot.health.settled_request_count, 2);
+        assert_eq!(snapshot.health.total_tokens, None);
+        assert_eq!(snapshot.health.settled_cost_micro_usd, None);
+        Ok(())
+    }
+
+    #[test]
     fn unmatched_start_is_temporarily_unknown_and_valid_intent_clears_it() -> anyhow::Result<()> {
         let started = vec![start(1, "r1", 40, "complete", "explicit_root")?];
         assert_eq!(

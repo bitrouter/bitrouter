@@ -761,6 +761,8 @@ async fn begin_request_in_tx(
             if input.event.sequence != 1 {
                 anyhow::bail!("first trajectory event must use sequence 1")
             }
+            validate_new_episode_start(&input)?;
+            validate_candidate_history(&[], &input.event)?;
             append_event(txn, &input.event).await?;
             episode_entity::ActiveModel {
                 episode_id: Set(input.episode.episode_id.clone()),
@@ -1340,6 +1342,52 @@ fn validate_episode_start(episode: &EpisodeStart) -> Result<()> {
     validate_opaque(&episode.correlation_source, "correlation_source")
 }
 
+fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
+    let event_completeness = match input
+        .event
+        .evidence
+        .categorical
+        .get("history.completeness")
+        .map(String::as_str)
+    {
+        Some(value) => parse_completeness(value)?,
+        None => HistoryCompleteness::Unknown,
+    };
+    if event_completeness != input.episode.completeness {
+        anyhow::bail!("new trajectory episode completeness disagrees with its start event")
+    }
+
+    let episode_source = parse_correlation_source(&input.episode.correlation_source)?;
+    let event_source = input
+        .event
+        .evidence
+        .categorical
+        .get("correlation.source")
+        .map(|source| parse_correlation_source(source))
+        .transpose()?
+        .unwrap_or(CorrelationSource::Unresolved);
+    if event_source != episode_source {
+        anyhow::bail!("new trajectory episode correlation source disagrees with its start event")
+    }
+
+    let correlation_key_id = input.episode.correlation_key_id.as_str();
+    if input.full_input_digest.key_id() != correlation_key_id {
+        anyhow::bail!("new trajectory episode and full-input digest use different key ids")
+    }
+    if let Some(native_parent_digest) = input
+        .event
+        .evidence
+        .digests
+        .get("correlation.native_parent")
+    {
+        let native_parent_digest = KeyedDigest::parse(native_parent_digest.clone())?;
+        if native_parent_digest.key_id() != correlation_key_id {
+            anyhow::bail!("new trajectory episode and native-parent evidence use different key ids")
+        }
+    }
+    Ok(())
+}
+
 fn validate_outbox(outbox: &OutboxWrite) -> Result<()> {
     validate_opaque(&outbox.outbox_id, "outbox_id")?;
     validate_opaque(&outbox.topic, "outbox.topic")?;
@@ -1543,7 +1591,7 @@ fn parse_request_status(value: &str) -> Result<RequestStatus> {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fmt;
     use std::sync::Arc;
 
@@ -1551,7 +1599,110 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, RuntimeErr, Statement};
 
     use super::*;
+    use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
+
+    #[tokio::test]
+    async fn new_episode_rejects_invalid_start_evidence_without_writes() -> anyhow::Result<()> {
+        for (key, value) in [
+            ("history.completeness", "invalid"),
+            ("correlation.source", "invalid"),
+        ] {
+            let store = store().await?;
+            let mut input = begin("episode-1", "request-1");
+            input
+                .event
+                .evidence
+                .categorical
+                .insert(key.into(), value.into());
+            input.event.content_digest = input.event.semantic_digest()?;
+
+            assert!(store.begin_request("owner-a", input).await.is_err());
+            assert_trajectory_tables_empty(&store).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_episode_rejects_index_event_fact_mismatches_without_writes() -> anyhow::Result<()>
+    {
+        let mut mismatches = Vec::new();
+
+        let mut completeness = begin("episode-1", "request-1");
+        completeness.episode.completeness = HistoryCompleteness::Incomplete;
+        mismatches.push(completeness);
+
+        let mut source = begin("episode-1", "request-1");
+        source.episode.correlation_source = "canonical_prefix".into();
+        mismatches.push(source);
+
+        let mut key = begin("episode-1", "request-1");
+        key.full_input_digest = keyed_digest("key-2", "2");
+        mismatches.push(key);
+
+        let mut event_key = begin("episode-1", "request-1");
+        event_key.event.evidence.digests.insert(
+            "correlation.native_parent".into(),
+            keyed_digest("key-2", "3").into(),
+        );
+        event_key.event.content_digest = event_key.event.semantic_digest()?;
+        mismatches.push(event_key);
+
+        for input in mismatches {
+            let store = store().await?;
+            assert!(store.begin_request("owner-a", input).await.is_err());
+            assert_trajectory_tables_empty(&store).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn valid_incomplete_and_unmatched_new_starts_replay() -> anyhow::Result<()> {
+        let store = store().await?;
+        let mut incomplete = begin("episode-incomplete", "request-incomplete");
+        incomplete.episode.completeness = HistoryCompleteness::Incomplete;
+        incomplete.episode.correlation_source = "unresolved".into();
+        incomplete
+            .event
+            .evidence
+            .categorical
+            .insert("history.completeness".into(), "incomplete".into());
+        incomplete
+            .event
+            .evidence
+            .categorical
+            .insert("correlation.source".into(), "unresolved".into());
+        incomplete.event.content_digest = incomplete.event.semantic_digest()?;
+        store.begin_request("owner-a", incomplete).await?;
+
+        let mut unmatched = begin("episode-unmatched", "request-unmatched");
+        unmatched.episode.completeness = HistoryCompleteness::Unknown;
+        unmatched.episode.correlation_source = "unresolved".into();
+        unmatched
+            .event
+            .evidence
+            .categorical
+            .remove("history.completeness");
+        unmatched
+            .event
+            .evidence
+            .categorical
+            .remove("correlation.source");
+        unmatched.event.content_digest = unmatched.event.semantic_digest()?;
+        store.begin_request("owner-a", unmatched).await?;
+
+        let protected_tiers = BTreeSet::new();
+        let incomplete =
+            replay_episode(&store, "owner-a", "episode-incomplete", &protected_tiers).await?;
+        assert_eq!(
+            incomplete.health.completeness,
+            HistoryCompleteness::Incomplete
+        );
+        let unmatched =
+            replay_episode(&store, "owner-a", "episode-unmatched", &protected_tiers).await?;
+        assert_eq!(unmatched.health.completeness, HistoryCompleteness::Unknown);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn store_is_owner_scoped_and_rejects_cross_owner_episode_parentage() -> anyhow::Result<()>
@@ -2337,6 +2488,26 @@ mod tests {
         )))
     }
 
+    async fn assert_trajectory_tables_empty(store: &TrajectoryStore) -> anyhow::Result<()> {
+        for table in [
+            "trajectory_episodes",
+            "trajectory_events",
+            "trajectory_requests",
+            "trajectory_outbox",
+        ] {
+            let row = store
+                .db
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    format!("SELECT COUNT(*) AS count FROM {table}"),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing {table} count row"))?;
+            assert_eq!(row.try_get::<i64>("", "count")?, 0, "table {table}");
+        }
+        Ok(())
+    }
+
     async fn store() -> anyhow::Result<TrajectoryStore> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
@@ -2355,6 +2526,18 @@ mod tests {
     }
 
     fn begin(episode_id: &str, request_id: &str) -> BeginRequest {
+        let mut start = event(
+            &format!("event-start-{request_id}"),
+            episode_id,
+            Some(request_id),
+            1,
+            TrajectoryEventKind::RequestStarted,
+        );
+        start.evidence.categorical = BTreeMap::from([
+            ("correlation.source".into(), "explicit_root".into()),
+            ("history.completeness".into(), "complete".into()),
+        ]);
+        start.content_digest = start.semantic_digest().unwrap_or_default();
         BeginRequest {
             episode: EpisodeStart {
                 episode_id: episode_id.into(),
@@ -2363,13 +2546,7 @@ mod tests {
                 correlation_source: "explicit_root".into(),
                 completeness: HistoryCompleteness::Complete,
             },
-            event: event(
-                &format!("event-start-{request_id}"),
-                episode_id,
-                Some(request_id),
-                1,
-                TrajectoryEventKind::RequestStarted,
-            ),
+            event: start,
             full_input_digest: keyed_digest("key-1", "2"),
             native_parent_id: None,
             protocol: "responses".into(),
