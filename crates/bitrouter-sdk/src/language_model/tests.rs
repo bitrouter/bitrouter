@@ -178,6 +178,24 @@ impl SettlementRecorder for RoutingFailureRecorder {
     }
 }
 
+struct ErrorCapturingObserveHook(Arc<std::sync::Mutex<Vec<String>>>);
+
+#[async_trait]
+impl ObserveHook for ErrorCapturingObserveHook {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+        if let RequestOutcome::Failed(error) = outcome {
+            match self.0.lock() {
+                Ok(mut errors) => errors.push(error.to_string()),
+                Err(poisoned) => poisoned.into_inner().push(error.to_string()),
+            }
+        }
+    }
+}
+
 struct FailingSettlementRecorder(Arc<AtomicUsize>);
 
 #[async_trait]
@@ -2840,6 +2858,111 @@ impl AuthApplier for AuthRecoveryApplier {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OpaqueAuthFailurePoint {
+    PrepareBody,
+    Apply,
+    Refresh,
+}
+
+impl OpaqueAuthFailurePoint {
+    fn sentinel(self) -> &'static str {
+        match self {
+            Self::PrepareBody => "opaque-prepare-private-sentinel",
+            Self::Apply => "opaque-apply-private-sentinel",
+            Self::Refresh => "opaque-refresh-private-sentinel",
+        }
+    }
+
+    fn safe_diagnostic(self) -> &'static str {
+        match self {
+            Self::PrepareBody => "upstream authentication body preparation failed",
+            Self::Apply => "upstream authentication failed",
+            Self::Refresh => "upstream authentication refresh failed",
+        }
+    }
+}
+
+struct OpaqueFailingAuthApplier(OpaqueAuthFailurePoint);
+
+#[async_trait]
+impl AuthApplier for OpaqueFailingAuthApplier {
+    async fn apply(
+        &self,
+        mut request: reqwest::Request,
+        _target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        if matches!(self.0, OpaqueAuthFailurePoint::Apply) {
+            return Err(BitrouterError::internal(format!(
+                "opaque authentication plugin exposed {}",
+                self.0.sentinel()
+            )));
+        }
+        request.headers_mut().insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_static("Bearer test-wire-credential"),
+        );
+        Ok(request)
+    }
+
+    async fn prepare_body(
+        &self,
+        _body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        if matches!(self.0, OpaqueAuthFailurePoint::PrepareBody) {
+            return Err(BitrouterError::internal(format!(
+                "opaque authentication plugin exposed {}",
+                self.0.sentinel()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        _target: &RoutingTarget,
+        _rejected_authorization: Option<&reqwest::header::HeaderValue>,
+    ) -> Result<bool> {
+        if matches!(self.0, OpaqueAuthFailurePoint::Refresh) {
+            return Err(BitrouterError::internal(format!(
+                "opaque authentication plugin exposed {}",
+                self.0.sentinel()
+            )));
+        }
+        Ok(false)
+    }
+}
+
+fn opaque_auth_executor(point: OpaqueAuthFailurePoint) -> HttpExecutor {
+    let auth =
+        AuthAppliers::new().with("retry-provider", Arc::new(OpaqueFailingAuthApplier(point)));
+    HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)
+        .expect("executor")
+}
+
+async fn opaque_auth_error(
+    point: OpaqueAuthFailurePoint,
+    stream: bool,
+    api_base: String,
+) -> BitrouterError {
+    let executor = opaque_auth_executor(point);
+    let target = auth_retry_target(api_base);
+    let req = if stream { stream_request() } else { request() };
+    let ctx = PipelineContext::new(req.clone());
+    if stream {
+        match executor.execute_stream(&target, &req.prompt, &ctx).await {
+            Ok(_) => panic!("opaque {point:?} failure unexpectedly opened a stream"),
+            Err(error) => error,
+        }
+    } else {
+        executor
+            .execute(&target, &req.prompt, &ctx)
+            .await
+            .expect_err("opaque authentication failure must fail execution")
+    }
+}
+
 fn spawn_auth_retry_server(
     responses: Vec<(&'static str, &'static str)>,
     seen_auths: Arc<std::sync::Mutex<Vec<String>>>,
@@ -3023,6 +3146,107 @@ async fn http_executor_refreshes_auth_and_retries_streaming_401_once() {
     );
     assert_eq!(*rejected.lock().unwrap(), vec!["Bearer stale".to_string()]);
     assert_eq!(text, "ok");
+}
+
+#[tokio::test]
+async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
+    let mut observed = Vec::new();
+    for point in [
+        OpaqueAuthFailurePoint::PrepareBody,
+        OpaqueAuthFailurePoint::Apply,
+    ] {
+        for stream in [false, true] {
+            observed.push((
+                point,
+                stream,
+                opaque_auth_error(point, stream, "http://example.invalid".into()).await,
+            ));
+        }
+    }
+    for stream in [false, true] {
+        let api_base = spawn_auth_retry_server(
+            vec![(
+                "401 Unauthorized",
+                r#"{"error":{"code":"expired","message":"refresh required"}}"#,
+            )],
+            Arc::new(std::sync::Mutex::new(Vec::new())),
+        );
+        observed.push((
+            OpaqueAuthFailurePoint::Refresh,
+            stream,
+            opaque_auth_error(OpaqueAuthFailurePoint::Refresh, stream, api_base).await,
+        ));
+    }
+
+    assert_eq!(observed.len(), 6);
+    for (point, stream, error) in observed {
+        let diagnostic = error.to_string();
+        assert!(
+            !diagnostic.contains(point.sentinel()),
+            "opaque {point:?} secret escaped from stream={stream}: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains(point.safe_diagnostic()),
+            "opaque {point:?} failure lost its safe operation diagnostic for stream={stream}: {diagnostic}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn pipeline_settlement_never_receives_opaque_auth_failure_text() {
+    const SENTINEL: &str = "opaque-apply-private-sentinel";
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["retry-provider"]),
+        Arc::new(opaque_auth_executor(OpaqueAuthFailurePoint::Apply)),
+        |builder| {
+            builder
+                .settlement_recorder(RoutingFailureRecorder(captured.clone()))
+                .observe_hook(ErrorCapturingObserveHook(observed.clone()));
+        },
+    );
+
+    let nonstream_error = pipeline
+        .clone()
+        .execute(request())
+        .await
+        .expect_err("opaque authentication failure must fail non-stream execution");
+    let stream_error = match pipeline.clone().execute_stream(stream_request()).await {
+        Ok(_) => panic!("opaque authentication failure unexpectedly opened a public stream"),
+        Err(error) => error,
+    };
+    pipeline.drain_pending_settlements().await;
+
+    let settlement_errors = captured
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter_map(|snapshot| snapshot.error.as_ref().map(|(_, _, error)| error.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(settlement_errors.len(), 2);
+    assert_eq!(
+        observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len(),
+        2
+    );
+    for diagnostic in [
+        nonstream_error.to_string(),
+        stream_error.to_string(),
+        settlement_errors.join("\n"),
+        observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .join("\n"),
+    ] {
+        assert!(
+            !diagnostic.contains(SENTINEL),
+            "opaque authentication detail reached a caller or settlement surface: {diagnostic}"
+        );
+        assert!(diagnostic.contains("upstream authentication failed"));
+    }
 }
 
 // ===== non-streaming client-disconnect billing (OpenRouter parity) =====

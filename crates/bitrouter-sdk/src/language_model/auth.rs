@@ -18,7 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
-use crate::error::Result;
+use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{ApiProtocol, AuthScheme, RoutingTarget};
 
 const AUTHORITY_DOMAIN: &[u8] = b"bitrouter.transport.credential-authority.v1";
@@ -390,7 +390,9 @@ impl AuthAppliers {
         target: &RoutingTarget,
     ) -> Result<Option<CredentialAuthority>> {
         if let Some(applier) = self.lookup(&target.provider_name) {
-            return applier.continuation_authority(target).await;
+            return applier.continuation_authority(target).await.map_err(|_| {
+                BitrouterError::internal("continuation authentication authority resolution failed")
+            });
         }
         let credential = target
             .api_key_override
@@ -408,7 +410,14 @@ impl AuthAppliers {
         target: &RoutingTarget,
     ) -> Result<Option<ContinuationAuthority>> {
         if let Some(applier) = self.lookup(&target.provider_name) {
-            return applier.continuation_authority_proof(target).await;
+            return applier
+                .continuation_authority_proof(target)
+                .await
+                .map_err(|_| {
+                    BitrouterError::internal(
+                        "continuation authentication authority resolution failed",
+                    )
+                });
         }
         let credential = target
             .api_key_override
