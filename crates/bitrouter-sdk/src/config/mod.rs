@@ -54,6 +54,8 @@ pub struct Config {
     pub eval: EvalConfig,
     /// Durable trajectory progress-control and local operations settings.
     pub trajectory: TrajectoryConfig,
+    /// Durable provider continuation mapping lifecycle.
+    pub continuation: ContinuationConfig,
     /// Upstream providers, keyed by provider id.
     pub providers: HashMap<String, ProviderConfig>,
     /// Explicit virtual-model definitions (Strategy 2.2). Optional —
@@ -113,6 +115,7 @@ impl Default for Config {
             database: DatabaseConfig::default(),
             eval: EvalConfig::default(),
             trajectory: TrajectoryConfig::default(),
+            continuation: ContinuationConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
             presets: HashMap::new(),
@@ -134,6 +137,28 @@ impl Default for Config {
 
 /// Largest accepted durable evaluation publication batch.
 pub const MAX_TRAJECTORY_OUTBOX_BATCH_SIZE: usize = 1_000;
+
+/// Largest continuation rows deleted by one bounded prune operation.
+pub const MAX_CONTINUATION_PRUNE_BATCH_SIZE: usize = 10_000;
+
+/// Always-active durable provider continuation lifecycle settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ContinuationConfig {
+    /// Days before a continuation becomes unusable.
+    pub retention_days: u32,
+    /// Maximum expired rows removed by one prune operation.
+    pub prune_batch_size: usize,
+}
+
+impl Default for ContinuationConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 30,
+            prune_batch_size: 1_000,
+        }
+    }
+}
 
 /// Durable trajectory progress-control settings.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1460,6 +1485,7 @@ where
     resolve_derivations(&mut config)?;
     validate_policy_table(&config)?;
     validate_trajectory_config(&config.trajectory)?;
+    validate_continuation_config(&config.continuation)?;
     // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
     // route at a loopback / private / metadata URL. A typo or a malicious
     // YAML otherwise has the executor send every upstream request — and
@@ -1503,6 +1529,20 @@ fn validate_trajectory_config(config: &TrajectoryConfig) -> Result<()> {
     {
         return Err(BitrouterError::bad_request(format!(
             "trajectory.outbox_batch_size must be between 1 and {MAX_TRAJECTORY_OUTBOX_BATCH_SIZE}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
+    if config.retention_days == 0 {
+        return Err(BitrouterError::bad_request(
+            "continuation.retention_days must be positive".to_owned(),
+        ));
+    }
+    if config.prune_batch_size == 0 || config.prune_batch_size > MAX_CONTINUATION_PRUNE_BATCH_SIZE {
+        return Err(BitrouterError::bad_request(format!(
+            "continuation.prune_batch_size must be between 1 and {MAX_CONTINUATION_PRUNE_BATCH_SIZE}"
         )));
     }
     Ok(())

@@ -19,6 +19,7 @@ pub mod auth;
 pub mod claude_code;
 pub mod cloud;
 pub mod commands;
+pub mod continuation;
 pub mod daemon;
 pub mod db;
 pub mod error_report;

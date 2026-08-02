@@ -83,7 +83,6 @@ mod request_entity {
         pub settlement_outbox_id: Option<String>,
         pub full_input_digest: String,
         pub native_parent_id: Option<String>,
-        pub response_alias_id: Option<String>,
         pub protocol: String,
         pub status: String,
     }
@@ -902,72 +901,6 @@ impl TrajectoryStore {
             .transpose()
     }
 
-    /// Bind a provider response identity to a tracked request through its
-    /// owner-scoped opaque alias. Exact retries are idempotent; rebinding a
-    /// request or alias to a different relation fails closed.
-    pub(crate) async fn bind_response_alias(
-        &self,
-        owner_user_id: &str,
-        request_id: &str,
-        response_alias_id: &str,
-    ) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_opaque(request_id, "request_id")?;
-        validate_opaque(response_alias_id, "response_alias_id")?;
-
-        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
-            let request = request_entity::Entity::find()
-                .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-                .filter(request_entity::Column::RequestId.eq(request_id))
-                .one(&self.db)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'")
-                })?;
-            match request.response_alias_id.as_deref() {
-                Some(existing) if existing == response_alias_id => return Ok(()),
-                Some(_) => anyhow::bail!(
-                    "trajectory request '{request_id}' already has a different response alias"
-                ),
-                None => {}
-            }
-            if request_entity::Entity::find()
-                .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-                .filter(request_entity::Column::ResponseAliasId.eq(response_alias_id))
-                .one(&self.db)
-                .await?
-                .is_some()
-            {
-                anyhow::bail!("trajectory response alias is already bound to another request")
-            }
-            let update = request_entity::Entity::update_many()
-                .col_expr(
-                    request_entity::Column::ResponseAliasId,
-                    Expr::value(response_alias_id.to_owned()),
-                )
-                .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-                .filter(request_entity::Column::RequestId.eq(request_id))
-                .filter(request_entity::Column::ResponseAliasId.is_null())
-                .exec(&self.db)
-                .await;
-            match update {
-                Ok(result) if result.rows_affected == 1 => return Ok(()),
-                Ok(_) => tokio::time::sleep(contention_backoff(attempt)).await,
-                Err(error) => {
-                    let error = anyhow::Error::from(error);
-                    if classify_database_error(&error).retryable_contention {
-                        tokio::time::sleep(contention_backoff(attempt)).await;
-                    } else {
-                        return Err(error);
-                    }
-                }
-            }
-        }
-        anyhow::bail!(
-            "trajectory response alias contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
-        )
-    }
-
     pub(crate) async fn validate_reusable_terminal_settlement(
         &self,
         owner_user_id: &str,
@@ -1772,7 +1705,6 @@ async fn insert_request(
         settlement_outbox_id: Set(None),
         full_input_digest: Set(input.full_input_digest.as_str().to_owned()),
         native_parent_id: Set(input.native_parent_id),
-        response_alias_id: Set(None),
         protocol: Set(input.protocol),
         status: Set(request_status_name(RequestStatus::Started).into()),
     }
@@ -1813,26 +1745,14 @@ async fn find_prefix_episode(
     Ok(PrefixResolution::None)
 }
 
-/// Resolve a native continuation through either the gateway request identity
-/// (legacy/non-streaming path) or a provider-response alias. Both lookups are
-/// owner-scoped; key-epoch validation remains the caller's responsibility once
-/// the parent episode is loaded.
 async fn native_parent_request(
     txn: &DatabaseTransaction,
     owner_user_id: &str,
     native_parent_id: &str,
 ) -> Result<Option<request_entity::Model>> {
-    if let Some(parent) = request_entity::Entity::find()
-        .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-        .filter(request_entity::Column::RequestId.eq(native_parent_id))
-        .one(txn)
-        .await?
-    {
-        return Ok(Some(parent));
-    }
     request_entity::Entity::find()
         .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-        .filter(request_entity::Column::ResponseAliasId.eq(native_parent_id))
+        .filter(request_entity::Column::RequestId.eq(native_parent_id))
         .one(txn)
         .await
         .map_err(Into::into)
@@ -3641,47 +3561,6 @@ mod tests {
             .mark_outbox_delivered("owner-a", "outbox-1", "2026-08-01T00:02:00Z")
             .await?;
         assert!(store.pending_outbox("owner-a").await?.is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn response_alias_binding_is_exact_idempotent_and_owner_scoped() -> anyhow::Result<()> {
-        let store = store().await?;
-        store
-            .begin_request("owner-a", begin("episode-a1", "request-a1"))
-            .await?;
-        store
-            .bind_response_alias("owner-a", "request-a1", "trajectory-request-alias-1")
-            .await?;
-        store
-            .bind_response_alias("owner-a", "request-a1", "trajectory-request-alias-1")
-            .await?;
-        assert!(
-            store
-                .bind_response_alias("owner-a", "request-a1", "trajectory-request-alias-2")
-                .await
-                .is_err(),
-            "a request alias must not be rebound"
-        );
-
-        store
-            .begin_request("owner-a", begin("episode-a2", "request-a2"))
-            .await?;
-        assert!(
-            store
-                .bind_response_alias("owner-a", "request-a2", "trajectory-request-alias-1")
-                .await
-                .is_err(),
-            "one owner must not bind one alias to two requests"
-        );
-
-        let mut owner_b = begin("episode-b", "request-b");
-        owner_b.event.owner_user_id = "owner-b".into();
-        owner_b.event.content_digest = owner_b.event.semantic_digest()?;
-        store.begin_request("owner-b", owner_b).await?;
-        store
-            .bind_response_alias("owner-b", "request-b", "trajectory-request-alias-1")
-            .await?;
         Ok(())
     }
 

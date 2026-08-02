@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
+use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
 use crate::language_model::timing::{
@@ -32,6 +33,65 @@ use crate::plugin::PluginId;
 #[derive(Clone, Default)]
 struct Extensions {
     map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+}
+
+/// A request-local native provider continuation resolved by a route hook.
+/// The executor validates the exact target snapshot before substituting the
+/// native id into the outbound Responses request.
+#[derive(Clone)]
+pub struct ProviderContinuation {
+    response_id: String,
+    provider_name: String,
+    service_id: String,
+    account_label: Option<String>,
+    api_protocol: ApiProtocol,
+    api_base: String,
+    api_key: String,
+    auth_scheme: crate::language_model::types::AuthScheme,
+}
+
+impl ProviderContinuation {
+    /// Bind a native response id to one exact effective routing target.
+    pub fn new(response_id: String, target: &RoutingTarget) -> Self {
+        Self {
+            response_id,
+            provider_name: target.provider_name.clone(),
+            service_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            api_protocol: target.api_protocol.clone(),
+            api_base: target
+                .api_base_override
+                .clone()
+                .unwrap_or_else(|| target.api_base.clone()),
+            api_key: target
+                .api_key_override
+                .clone()
+                .unwrap_or_else(|| target.api_key.clone()),
+            auth_scheme: target.auth_scheme,
+        }
+    }
+
+    pub(crate) fn response_id(&self) -> &str {
+        &self.response_id
+    }
+
+    pub(crate) fn matches_target(&self, target: &RoutingTarget) -> bool {
+        let api_base = target
+            .api_base_override
+            .as_deref()
+            .unwrap_or(target.api_base.as_str());
+        let api_key = target
+            .api_key_override
+            .as_deref()
+            .unwrap_or(target.api_key.as_str());
+        self.provider_name == target.provider_name
+            && self.service_id == target.service_id
+            && self.account_label == target.account_label
+            && self.api_protocol == target.api_protocol
+            && self.api_base == api_base
+            && self.api_key == api_key
+            && self.auth_scheme == target.auth_scheme
+    }
 }
 
 impl Extensions {
@@ -88,6 +148,7 @@ pub struct PipelineContext {
     first_token_timing: Option<FirstTokenTiming>,
     generation_duration_ms: Option<u64>,
     finalized_request_duration_ms: Option<u64>,
+    stream_terminal_succeeded: bool,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -130,6 +191,7 @@ impl PipelineContext {
             first_token_timing: None,
             generation_duration_ms: None,
             finalized_request_duration_ms: None,
+            stream_terminal_succeeded: false,
             metadata: HashMap::new(),
             extensions: Extensions::default(),
             events: EventBus::new(),
@@ -157,6 +219,7 @@ impl PipelineContext {
             first_token_timing: None,
             generation_duration_ms: None,
             finalized_request_duration_ms: None,
+            stream_terminal_succeeded: false,
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
             events: self.events.clone(),
@@ -467,6 +530,7 @@ impl PipelineContext {
             first_semantic_at: None,
             generation_duration_ms: None,
             finish_reason: None,
+            terminal_succeeded: false,
             response_id: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
@@ -488,9 +552,34 @@ impl PipelineContext {
                 exec.result.response_id = stream.response_id.clone();
             }
         }
+        self.stream_terminal_succeeded = stream.terminal_succeeded;
         self.first_token_timing = stream.first_token_timing;
         self.generation_duration_ms = stream.generation_duration_ms;
         self.events.merge_from(stream.events);
+    }
+
+    pub(crate) fn required_finalization_context(
+        &self,
+        streamed: bool,
+    ) -> RequiredFinalizationContext {
+        let target = self.serving_target();
+        let execution = self.execution_result.as_ref();
+        let finish_reason = execution.and_then(|result| result.result.finish_reason.clone());
+        let successful_terminal = if streamed {
+            self.stream_terminal_succeeded
+        } else {
+            execution.is_some() && !matches!(finish_reason, Some(FinishReason::Error(_)))
+        };
+        RequiredFinalizationContext {
+            request_id: self.request_id.clone(),
+            caller: self.caller.clone(),
+            target,
+            inbound_protocol: self.inbound_protocol.clone(),
+            response_id: execution.and_then(|result| result.result.response_id.clone()),
+            finish_reason,
+            streamed,
+            successful_terminal,
+        }
     }
 
     /// Borrow a `SettlementContext` for the Settlement stage. Moves the event
@@ -624,6 +713,7 @@ pub struct StreamContext {
     first_semantic_at: Option<Instant>,
     generation_duration_ms: Option<u64>,
     finish_reason: Option<FinishReason>,
+    terminal_succeeded: bool,
     /// Native Responses continuation id observed on `response.created`.
     /// Request-local only: settlement may derive an opaque owner-bound alias,
     /// but the raw value must never enter durable events or storage.
@@ -644,8 +734,10 @@ impl StreamContext {
             }
             StreamPart::Finish { reason } => {
                 self.finish_reason = Some(reason.clone());
+                self.terminal_succeeded = !matches!(reason, FinishReason::Error(_));
             }
             StreamPart::ResponseCompleted { status, .. } => {
+                self.terminal_succeeded = matches!(status.as_str(), "completed" | "incomplete");
                 self.finish_reason = Some(match status.as_str() {
                     "completed" => FinishReason::Stop,
                     "incomplete" => FinishReason::Length,

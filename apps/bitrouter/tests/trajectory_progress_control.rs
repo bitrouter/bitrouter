@@ -81,17 +81,41 @@ impl HttpHarness {
     }
 
     async fn streaming_responses() -> anyhow::Result<Self> {
-        Self::new_with_upstream(true, InboundProtocol::Responses).await
+        Self::streaming_responses_with_trajectory(true).await
+    }
+
+    async fn streaming_responses_with_trajectory(enabled: bool) -> anyhow::Result<Self> {
+        let mut harness = Self::new_with_upstream(enabled, InboundProtocol::Responses).await?;
+        harness.config.trajectory.enabled = enabled;
+        Ok(harness)
+    }
+
+    async fn streaming_responses_split_authority() -> anyhow::Result<Self> {
+        Self::new_with_upstream_authority(true, InboundProtocol::Responses, false).await
     }
 
     async fn new_with_upstream(
         progress_guard: bool,
         upstream_protocol: InboundProtocol,
     ) -> anyhow::Result<Self> {
+        Self::new_with_upstream_authority(progress_guard, upstream_protocol, true).await
+    }
+
+    async fn new_with_upstream_authority(
+        progress_guard: bool,
+        upstream_protocol: InboundProtocol,
+        shared_responses_authority: bool,
+    ) -> anyhow::Result<Self> {
+        let (economy_route, strong_route) =
+            if upstream_protocol == InboundProtocol::Responses && shared_responses_authority {
+                ("responses:economy-model", "responses:strong-model")
+            } else {
+                ("economy:economy-model", "strong:strong-model")
+            };
         let policy = PolicyDefinition {
             tiers: BTreeMap::from([
-                ("economy".into(), "economy:economy-model".into()),
-                ("strong".into(), "strong:strong-model".into()),
+                ("economy".into(), economy_route.into()),
+                ("strong".into(), strong_route.into()),
             ]),
             default_tier: Some("economy".into()),
             tool_use_tier: Some("strong".into()),
@@ -112,7 +136,8 @@ impl HttpHarness {
         };
         let mut lock = PolicyLock::default();
         lock.policies.insert("auto".into(), policy);
-        Self::with_lock_and_upstream(lock, upstream_protocol).await
+        Self::with_lock_and_upstream_authority(lock, upstream_protocol, shared_responses_authority)
+            .await
     }
 
     async fn with_lock(lock: PolicyLock) -> anyhow::Result<Self> {
@@ -122,6 +147,14 @@ impl HttpHarness {
     async fn with_lock_and_upstream(
         lock: PolicyLock,
         upstream_protocol: InboundProtocol,
+    ) -> anyhow::Result<Self> {
+        Self::with_lock_and_upstream_authority(lock, upstream_protocol, true).await
+    }
+
+    async fn with_lock_and_upstream_authority(
+        lock: PolicyLock,
+        upstream_protocol: InboundProtocol,
+        shared_responses_authority: bool,
     ) -> anyhow::Result<Self> {
         let home = tempfile::tempdir()?;
         let responses_state = (upstream_protocol == InboundProtocol::Responses)
@@ -134,6 +167,58 @@ impl HttpHarness {
             "sqlite://{}?mode=rwc",
             home.path().join("trajectory.db").display()
         );
+        let (providers_yaml, preset_model) =
+            if upstream_protocol == InboundProtocol::Responses && shared_responses_authority {
+                (
+                    format!(
+                        r#"providers:
+  responses:
+    api_base: "{}"
+    api_key: test-key
+    api_protocol:
+      - "*": responses
+    models:
+      - id: economy-model
+      - id: strong-model"#,
+                        economy.uri()
+                    ),
+                    "responses:strong-model",
+                )
+            } else {
+                (
+                    format!(
+                        r#"providers:
+  strong:
+    api_base: "{}"
+    api_key: test-key
+    api_protocol:
+      - "*": {}
+    models:
+      - id: strong-model
+  economy:
+    api_base: "{}"
+    api_key: test-key
+    api_protocol:
+      - "*": {}
+    models:
+      - id: economy-model
+  balanced:
+    api_base: "{}"
+    api_key: test-key
+    api_protocol:
+      - "*": {}
+    models:
+      - id: balanced-model"#,
+                        strong.uri(),
+                        upstream_protocol.persisted_name(),
+                        economy.uri(),
+                        upstream_protocol.persisted_name(),
+                        economy.uri(),
+                        upstream_protocol.persisted_name(),
+                    ),
+                    "strong:strong-model",
+                )
+            };
         let yaml = format!(
             r#"
 server:
@@ -148,39 +233,15 @@ trajectory:
 policy:
   path: "./policy-lock.yaml"
   mode: frozen
-providers:
-  strong:
-    api_base: "{strong_uri}"
-    api_key: test-key
-    api_protocol:
-      - "*": {upstream_protocol}
-    models:
-      - id: strong-model
-  economy:
-    api_base: "{economy_uri}"
-    api_key: test-key
-    api_protocol:
-      - "*": {upstream_protocol}
-    models:
-      - id: economy-model
-  balanced:
-    api_base: "{economy_uri}"
-    api_key: test-key
-    api_protocol:
-      - "*": {upstream_protocol}
-    models:
-      - id: balanced-model
+{providers_yaml}
 presets:
   auto:
-    model: "strong:strong-model"
+    model: "{preset_model}"
     policy: auto
   flex:
-    model: "strong:strong-model"
+    model: "{preset_model}"
     policy: auto
 "#,
-            strong_uri = strong.uri(),
-            economy_uri = economy.uri(),
-            upstream_protocol = upstream_protocol.persisted_name(),
         );
         let config = config::parse_with(&yaml, |_| None)?;
         write_policy_lock(home.path(), &lock).await?;
@@ -290,6 +351,7 @@ struct NativeResponsesState {
     next_id: usize,
     issued: BTreeSet<String>,
     forwarded_parents: Vec<Option<String>>,
+    served_models: Vec<String>,
 }
 
 impl Respond for NativeResponsesStream {
@@ -305,8 +367,14 @@ impl Respond for NativeResponsesStream {
             .get("previous_response_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or(self.model.as_str())
+            .to_owned();
         let mut state = self.state.lock().expect("Responses mock state poisoned");
         state.forwarded_parents.push(previous_response_id.clone());
+        state.served_models.push(model.clone());
         if previous_response_id
             .as_ref()
             .is_some_and(|parent| !state.issued.contains(parent))
@@ -333,7 +401,7 @@ impl Respond for NativeResponsesStream {
             "id": upstream_id,
             "object": "response",
             "status": "completed",
-            "model": self.model,
+            "model": model,
             "output": [item],
             "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
         });
@@ -345,7 +413,7 @@ impl Respond for NativeResponsesStream {
                     "id": upstream_id,
                     "object": "response",
                     "status": "in_progress",
-                    "model": self.model,
+                    "model": model,
                     "output": []
                 }
             }),
@@ -471,10 +539,12 @@ async fn post_fixture(
     previous_response_id: Option<&str>,
 ) -> anyhow::Result<String> {
     let mut body = fixture.body.clone();
-    if protocol == InboundProtocol::Responses
-        && let Some(previous_response_id) = previous_response_id
-    {
-        body["previous_response_id"] = Value::String(previous_response_id.to_owned());
+    if protocol == InboundProtocol::Responses {
+        if let Some(previous_response_id) = previous_response_id {
+            body["previous_response_id"] = Value::String(previous_response_id.to_owned());
+        } else if let Some(object) = body.as_object_mut() {
+            object.remove("previous_response_id");
+        }
     }
     post_body(server, protocol, bearer, &fixture.stage, &body, &[]).await
 }
@@ -568,12 +638,10 @@ async fn trajectory_durable_surfaces(
              UNION ALL SELECT payload_json AS value FROM trajectory_outbox WHERE owner_user_id = ? \
              UNION ALL SELECT request_id AS value FROM trajectory_requests WHERE owner_user_id = ? \
              UNION ALL SELECT COALESCE(native_parent_id, '') AS value FROM trajectory_requests WHERE owner_user_id = ? \
-             UNION ALL SELECT COALESCE(response_alias_id, '') AS value FROM trajectory_requests WHERE owner_user_id = ? \
              UNION ALL SELECT COALESCE(latest_request_id, '') AS value FROM trajectory_episodes WHERE owner_user_id = ? \
              UNION ALL SELECT subject_json AS value FROM eval_subjects WHERE owner_user_id = ? \
              UNION ALL SELECT result_json AS value FROM eval_results WHERE owner_user_id = ?",
             [
-                owner.into(),
                 owner.into(),
                 owner.into(),
                 owner.into(),
@@ -587,6 +655,32 @@ async fn trajectory_durable_surfaces(
     rows.into_iter()
         .map(|row| row.try_get("", "value").map_err(Into::into))
         .collect()
+}
+
+async fn continuation_durable_surfaces(db: &DatabaseConnection) -> anyhow::Result<Vec<String>> {
+    let rows = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT continuation_identity || owner_identity || COALESCE(ciphertext, '') || \
+             COALESCE(nonce, '') || target_fingerprint || key_id AS value \
+             FROM provider_continuations"
+                .to_owned(),
+        ))
+        .await?;
+    rows.into_iter()
+        .map(|row| row.try_get("", "value").map_err(Into::into))
+        .collect()
+}
+
+async fn table_row_count(db: &DatabaseConnection, table: &str) -> anyhow::Result<i64> {
+    let row = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!("SELECT COUNT(*) AS count FROM {table}"),
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("{table} count query returned no row"))?;
+    Ok(row.try_get("", "count")?)
 }
 
 async fn owner_episode_ids(db: &DatabaseConnection, owner: &str) -> anyhow::Result<Vec<String>> {
@@ -1097,14 +1191,10 @@ async fn header_free_chat_messages_and_responses_have_equivalent_progress() -> a
         let requests = fixture_requests(protocol.fixture())?;
         let mut response_ids = Vec::new();
         for request in &requests {
-            let response_id = post_fixture(
-                &server,
-                protocol,
-                &bearer,
-                request,
-                response_ids.last().map(String::as_str),
-            )
-            .await?;
+            // This matrix intentionally uses a Chat-only upstream. A reserved
+            // Responses id has no provider-native mapping in that topology,
+            // so subsequent turns exercise canonical history correlation.
+            let response_id = post_fixture(&server, protocol, &bearer, request, None).await?;
             response_ids.push(response_id);
         }
 
@@ -1121,14 +1211,7 @@ async fn header_free_chat_messages_and_responses_have_equivalent_progress() -> a
                 response_ids.len(),
                 "Responses must return a distinct native id for every request"
             );
-            assert_eq!(diagnostics[0].1, None);
-            for (index, (_, parent)) in diagnostics.iter().enumerate().skip(1) {
-                let parent = parent.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("Responses request {index} lost native parent")
-                })?;
-                assert!(parent.starts_with("trajectory-request-"));
-                assert_ne!(parent, response_ids[index - 1]);
-            }
+            assert!(diagnostics.iter().all(|(_, parent)| parent.is_none()));
         } else {
             assert!(diagnostics.iter().all(|(_, parent)| parent.is_none()));
         }
@@ -1145,7 +1228,7 @@ async fn header_free_chat_messages_and_responses_have_equivalent_progress() -> a
     );
     assert_eq!(
         outcomes[2].1.correlation_sources,
-        ["explicit_root", "native_parent_id", "native_parent_id"]
+        ["explicit_root", "canonical_prefix", "canonical_prefix"]
     );
     assert_eq!(
         chat.selected_tiers,
@@ -1170,7 +1253,8 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
 
     let first_id =
         post_streaming_responses(&first_server, &bearer, "inspect the repository", None).await?;
-    assert!(first_id.starts_with("provider-only-response-"));
+    assert!(first_id.starts_with("brc_"));
+    assert!(!first_id.contains("provider-only-response-"));
     let second_id = post_streaming_responses(
         &first_server,
         &bearer,
@@ -1232,17 +1316,25 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     )
     .await?;
     assert_ne!(second_id, third_id);
-    let forwarded_parents = harness
-        .responses_state
-        .as_ref()
-        .expect("streaming harness has Responses oracle")
-        .lock()
-        .expect("Responses mock state poisoned")
-        .forwarded_parents
-        .clone();
+    let (forwarded_parents, served_models) = {
+        let responses_state = harness
+            .responses_state
+            .as_ref()
+            .expect("streaming harness has Responses oracle")
+            .lock()
+            .expect("Responses mock state poisoned");
+        (
+            responses_state.forwarded_parents.clone(),
+            responses_state.served_models.clone(),
+        )
+    };
     assert_eq!(
         forwarded_parents,
-        [None, Some(first_id.clone()), Some(second_id.clone())],
+        [
+            None,
+            Some("provider-only-response-0".to_owned()),
+            Some("provider-only-response-1".to_owned())
+        ],
         "the assembled app must forward exactly the provider-issued continuation chain"
     );
     assert_eq!(
@@ -1250,6 +1342,15 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
         episode_ids
     );
     let after_restart = normalized_outcome(&restarted_app.db, owner).await?;
+    let selected_models = after_restart
+        .selected_tiers
+        .iter()
+        .map(|tier| format!("{tier}-model"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        served_models, selected_models,
+        "actual serving models must equal the signed policy decisions"
+    );
     assert_eq!(
         after_restart.correlation_sources,
         ["explicit_root", "native_parent_id", "native_parent_id"]
@@ -1270,6 +1371,158 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
             "raw upstream response id escaped after restart"
         );
     }
+    for surface in continuation_durable_surfaces(&restarted_app.db).await? {
+        assert!(
+            !surface.contains("provider-only-response-"),
+            "raw upstream response id escaped continuation encryption"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn streaming_responses_continuation_is_independent_of_trajectory() -> anyhow::Result<()> {
+    let harness = HttpHarness::streaming_responses_with_trajectory(false).await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let owner = "streaming-responses-no-trajectory";
+    let bearer = add_owner(&app.db, owner).await?;
+
+    let first_id =
+        post_streaming_responses(&server, &bearer, "inspect the repository", None).await?;
+    let second_id = post_streaming_responses(&server, &bearer, "continue", Some(&first_id)).await?;
+    assert!(first_id.starts_with("brc_"));
+    assert!(second_id.starts_with("brc_"));
+    assert_ne!(first_id, second_id);
+    assert!(owner_episode_ids(&app.db, owner).await?.is_empty());
+    assert_eq!(
+        harness
+            .responses_state
+            .as_ref()
+            .expect("streaming harness has Responses oracle")
+            .lock()
+            .expect("Responses mock state poisoned")
+            .forwarded_parents,
+        [None, Some("provider-only-response-0".to_owned())]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_responses_request_id_has_no_upstream_or_durable_side_effects() -> anyhow::Result<()>
+{
+    let harness = HttpHarness::streaming_responses().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let bearer = add_owner(&app.db, "invalid-responses-request-id").await?;
+
+    for stream in [false, true] {
+        let response = server
+            .post(InboundProtocol::Responses.endpoint())
+            .add_header("authorization", format!("Bearer {bearer}"))
+            .add_header("x-bitrouter-request-id", "x".repeat(129))
+            .json(&json!({"model": "@auto", "input": "ping", "stream": stream}))
+            .await;
+        assert_eq!(response.status_code().as_u16(), 400);
+    }
+
+    assert!(
+        harness
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    assert!(
+        harness
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+    assert_eq!(table_row_count(&app.db, "trajectory_requests").await?, 0);
+    assert_eq!(table_row_count(&app.db, "provider_continuations").await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn guarded_continuation_fails_before_upstream_when_authority_changes() -> anyhow::Result<()> {
+    let harness = HttpHarness::streaming_responses_split_authority().await?;
+    let app = harness.assemble().await?;
+    let server = server(&app);
+    let owner = "split-authority-continuation";
+    let bearer = add_owner(&app.db, owner).await?;
+    let first_id =
+        post_streaming_responses(&server, &bearer, "inspect the repository", None).await?;
+    let second_id = post_streaming_responses(
+        &server,
+        &bearer,
+        "continue the implementation",
+        Some(&first_id),
+    )
+    .await?;
+
+    let response = server
+        .post(InboundProtocol::Responses.endpoint())
+        .add_header("authorization", format!("Bearer {bearer}"))
+        .json(&json!({
+            "model": "@auto",
+            "stream": true,
+            "input": "review the completed change",
+            "previous_response_id": second_id
+        }))
+        .await;
+    assert_eq!(response.status_code().as_u16(), 400);
+    assert!(response.text().contains("target is unavailable or changed"));
+    assert_eq!(
+        harness
+            .economy
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .len(),
+        2
+    );
+    assert!(
+        harness
+            .strong
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
+        "the changed authority must fail before any strong-provider dispatch"
+    );
+    assert_eq!(table_row_count(&app.db, "provider_continuations").await?, 2);
+    let statuses = trajectory_request_statuses(&app.db, owner).await?;
+    assert_eq!(
+        statuses.iter().filter(|status| *status == "failed").count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| *status == "settled")
+            .count(),
+        2
+    );
+    let events = events_for_only_episode(&app.db, owner).await?;
+    let failed = events
+        .iter()
+        .find(|event| {
+            event.kind == TrajectoryEventKind::RequestSettled
+                && event.evidence.categorical.get("settlement.outcome")
+                    == Some(&"failed".to_owned())
+        })
+        .ok_or_else(|| anyhow::anyhow!("changed-authority request was not settled as failed"))?;
+    assert!(
+        !failed
+            .evidence
+            .categorical
+            .contains_key("settlement.provider")
+    );
+    assert!(!failed.evidence.categorical.contains_key("settlement.model"));
     Ok(())
 }
 
@@ -1573,19 +1826,16 @@ async fn incomplete_conflicting_interleaved_and_owner_histories_are_explicit() -
         ("foreign-parent-owner", parent_id.as_str()),
     ] {
         let bearer = add_owner(&assembled.db, owner).await?;
-        post_body(
-            &server,
-            InboundProtocol::Responses,
-            &bearer,
-            owner,
-            &json!({
+        let response = server
+            .post(InboundProtocol::Responses.endpoint())
+            .add_header("authorization", format!("Bearer {bearer}"))
+            .json(&json!({
                 "model": "@auto",
                 "previous_response_id": raw_parent,
                 "input": "independent root"
-            }),
-            &[],
-        )
-        .await?;
+            }))
+            .await;
+        assert_eq!(response.status_code().as_u16(), 400);
         let events = events_for_only_episode(&assembled.db, owner).await?;
         assert_eq!(
             events[0].evidence.categorical.get("history.completeness"),

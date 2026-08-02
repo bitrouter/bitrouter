@@ -22,7 +22,7 @@ use crate::language_model::routing::{FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::server_tools::toolset::ToolContext;
-use crate::language_model::settlement::{SettlementContext, SettlementRecorder};
+use crate::language_model::settlement::{RequiredFinalizer, SettlementContext, SettlementRecorder};
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
     ExecutionResult, PipelineRequest, PipelineResponse, Prompt, RoutingTarget, StreamPart,
@@ -108,6 +108,7 @@ pub struct Pipeline {
     pub(crate) execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     pub(crate) stream_hooks: Vec<Arc<dyn StreamHook>>,
     pub(crate) settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
+    pub(crate) required_finalizers: Vec<Arc<dyn RequiredFinalizer>>,
     pub(crate) observe_hooks: Vec<Arc<dyn ObserveHook>>,
     pub(crate) routing_table: Arc<dyn RoutingTable>,
     pub(crate) fallback_policy: Arc<dyn FallbackPolicy>,
@@ -375,6 +376,14 @@ impl Pipeline {
         }
 
         // ---- Stage 4: settlement ----
+        if let Err(error) = self.run_required_finalizers(&ctx, false).await {
+            self.run_settlement(&mut ctx, false, Some(error.clone()))
+                .await;
+            self.observe_after(Phase::Settlement, &ctx).await;
+            self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                .await;
+            return Err(error);
+        }
         self.run_settlement(&mut ctx, false, None).await;
         self.observe_after(Phase::Settlement, &ctx).await;
         self.observe_end(&ctx, RequestOutcome::Completed).await;
@@ -529,15 +538,19 @@ impl Pipeline {
                         let processed = guard.processor().process_part(part).await;
                         match processed {
                             Ok(parts) => {
-                                if is_finish {
-                                    guard.finalize(StreamOutcome::Completed).await;
+                                if is_finish
+                                    && let Err(error) =
+                                        guard.finalize(StreamOutcome::Completed).await
+                                {
+                                    yield Err(error);
+                                    break 'pump;
                                 }
                                 for p in parts {
                                     yield Ok(p);
                                 }
                             }
                             Err(abort_err) => {
-                                guard
+                                let _ = guard
                                     .finalize(StreamOutcome::Aborted(abort_err.clone()))
                                     .await;
                                 yield Err(abort_err);
@@ -549,14 +562,16 @@ impl Pipeline {
                         }
                     }
                     Some(Err(e)) => {
-                        guard
+                        let _ = guard
                             .finalize(StreamOutcome::UpstreamError(e.clone()))
                             .await;
                         yield Err(e);
                         break 'pump;
                     }
                     None => {
-                        guard.finalize(StreamOutcome::Completed).await;
+                        if let Err(error) = guard.finalize(StreamOutcome::Completed).await {
+                            yield Err(error);
+                        }
                         break 'pump;
                     }
                 }
@@ -572,6 +587,17 @@ impl Pipeline {
                 HookDecision::Allow => continue,
                 HookDecision::Deny(reason) => return Err(reason.into()),
             }
+        }
+        Ok(())
+    }
+
+    async fn run_required_finalizers(&self, ctx: &PipelineContext, streamed: bool) -> Result<()> {
+        let finalization = ctx.required_finalization_context(streamed);
+        if !finalization.successful_terminal {
+            return Ok(());
+        }
+        for finalizer in &self.required_finalizers {
+            finalizer.finalize(&finalization).await?;
         }
         Ok(())
     }
@@ -1054,7 +1080,7 @@ impl StreamSettlementGuard {
     }
 
     /// Finalise inline on a normal/errored/aborted termination.
-    async fn finalize(&mut self, outcome: StreamOutcome) {
+    async fn finalize(&mut self, outcome: StreamOutcome) -> Result<()> {
         if let Some((processor, ctx)) = self.state.take() {
             // Move finalization out of the response-body future before awaiting
             // it. A client commonly closes the SSE connection immediately after
@@ -1064,11 +1090,17 @@ impl StreamSettlementGuard {
             let latest_attempt = self.latest_attempt.clone();
             let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
             self.pipeline.spawn_stream_finalization(async move {
-                finalize_stream(pipeline, processor, ctx, latest_attempt, outcome).await;
-                let _ = finished_tx.send(());
+                let result =
+                    finalize_stream(pipeline, processor, ctx, latest_attempt, outcome).await;
+                let _ = finished_tx.send(result);
             });
-            let _ = finished_rx.await;
+            return finished_rx.await.map_err(|error| {
+                BitrouterError::internal(format!(
+                    "required stream finalization task ended unexpectedly: {error}"
+                ))
+            })?;
         }
+        Ok(())
     }
 }
 
@@ -1088,17 +1120,30 @@ async fn finalize_stream(
     mut ctx: PipelineContext,
     latest_attempt: SharedStreamAttempt,
     outcome: StreamOutcome,
-) {
+) -> Result<()> {
     let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
     processor.finish(outcome).await;
     sync_execution_target(&mut ctx, &latest_attempt);
     ctx.absorb_stream(processor.into_context());
     ctx.finalize_stream_upstream_duration();
+    if settlement_error.is_none()
+        && let Err(error) = pipeline.run_required_finalizers(&ctx, true).await
+    {
+        pipeline
+            .run_settlement(&mut ctx, true, Some(error.clone()))
+            .await;
+        pipeline.observe_after(Phase::Settlement, &ctx).await;
+        pipeline
+            .observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+            .await;
+        return Err(error);
+    }
     pipeline
         .run_settlement(&mut ctx, true, settlement_error)
         .await;
     pipeline.observe_after(Phase::Settlement, &ctx).await;
     pipeline.observe_end(&ctx, request_outcome).await;
+    Ok(())
 }
 
 impl Drop for StreamSettlementGuard {
@@ -1115,7 +1160,7 @@ impl Drop for StreamSettlementGuard {
             let pipeline = self.pipeline.clone();
             let latest_attempt = self.latest_attempt.clone();
             self.pipeline.spawn_stream_finalization(async move {
-                finalize_stream(
+                let _ = finalize_stream(
                     pipeline,
                     processor,
                     ctx,

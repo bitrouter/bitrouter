@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use base64::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,62 @@ use crate::language_model::types::{
     ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
     set_provider_metadata,
 };
+
+const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
+const MAX_GATEWAY_REQUEST_ID_BYTES: usize = 128;
+
+/// Encode the existing gateway request id into BitRouter's reserved public
+/// Responses continuation namespace.
+pub fn encode_gateway_continuation_id(request_id: &str) -> Result<String> {
+    validate_gateway_request_id(request_id)?;
+    Ok(format!(
+        "{GATEWAY_CONTINUATION_PREFIX}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(request_id.as_bytes())
+    ))
+}
+
+/// Strictly decode a BitRouter public continuation id. Non-reserved provider
+/// ids return `None`; malformed reserved ids fail closed.
+pub fn decode_gateway_continuation_id(value: &str) -> Result<Option<String>> {
+    let Some(payload) = value.strip_prefix(GATEWAY_CONTINUATION_PREFIX) else {
+        return Ok(None);
+    };
+    if payload.is_empty() {
+        return Err(BitrouterError::bad_request(
+            "gateway continuation id has an empty payload",
+        ));
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| BitrouterError::bad_request("gateway continuation id is malformed"))?;
+    let request_id = String::from_utf8(decoded)
+        .map_err(|_| BitrouterError::bad_request("gateway continuation id is not UTF-8"))?;
+    validate_gateway_request_id(&request_id)?;
+    let canonical = encode_gateway_continuation_id(&request_id)?;
+    if canonical != value {
+        return Err(BitrouterError::bad_request(
+            "gateway continuation id is not canonical",
+        ));
+    }
+    Ok(Some(request_id))
+}
+
+fn validate_gateway_request_id(request_id: &str) -> Result<()> {
+    if request_id.is_empty() {
+        return Err(BitrouterError::bad_request("request id must not be empty"));
+    }
+    if request_id.len() > MAX_GATEWAY_REQUEST_ID_BYTES {
+        return Err(BitrouterError::bad_request(format!(
+            "request id exceeds {MAX_GATEWAY_REQUEST_ID_BYTES} bytes"
+        )));
+    }
+    if request_id.chars().any(char::is_control) {
+        return Err(BitrouterError::bad_request(
+            "request id must not contain control characters",
+        ));
+    }
+    Ok(())
+}
 
 /// Synthesize a stable `tool_call_id` for a [`Content::ToolApprovalRequest`]
 /// parsed from a Responses `mcp_approval_request`. That item transmits an
@@ -961,8 +1018,9 @@ impl InboundAdapter for ResponsesAdapter {
         request_id: &str,
     ) -> Result<serde_json::Value> {
         let output = render_output_items(result);
+        let response_id = encode_gateway_continuation_id(request_id)?;
         let mut body = serde_json::json!({
-            "id": request_id,
+            "id": response_id,
             "object": "response",
             "model": prompt.model,
             "status": match &result.finish_reason {
@@ -984,8 +1042,7 @@ impl InboundAdapter for ResponsesAdapter {
 
     fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
         Box::new(ResponsesStreamEncoder {
-            request_id: request_id.to_string(),
-            response_id: None,
+            response_id: encode_gateway_continuation_id(request_id),
             model: model.to_string(),
             seq: 0,
             created: false,
@@ -2423,11 +2480,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
 /// Every event carries a monotonically increasing `sequence_number`.
 /// Never emits `[DONE]` (#454-2).
 struct ResponsesStreamEncoder {
-    request_id: String,
-    /// Native Responses continuation identity, selected only from the opening
-    /// `response.created` metadata. When absent, the gateway request id is the
-    /// stable fallback for the entire client-facing lifecycle.
-    response_id: Option<String>,
+    response_id: Result<String>,
     model: String,
     seq: u64,
     created: bool,
@@ -2533,13 +2586,10 @@ impl ResponsesStreamEncoder {
         }
     }
 
-    fn ensure_created(&mut self, frames: &mut Vec<SseFrame>) {
+    fn ensure_created(&mut self, frames: &mut Vec<SseFrame>) -> Result<()> {
         if !self.created {
+            let response_id = self.response_id.clone()?;
             self.created = true;
-            let response_id = self
-                .response_id
-                .clone()
-                .unwrap_or_else(|| self.request_id.clone());
             let response = serde_json::json!({
                 "id": response_id,
                 "object": "response",
@@ -2560,6 +2610,7 @@ impl ResponsesStreamEncoder {
                 serde_json::json!({ "response": response }),
             ));
         }
+        Ok(())
     }
 
     /// Allocate the next `output_index`, opening a fresh slot. Returns
@@ -2869,16 +2920,7 @@ impl ResponsesStreamEncoder {
 impl StreamEncoder for ResponsesStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
         let mut frames = Vec::new();
-        if let StreamPart::ResponseStarted {
-            id,
-            source_protocol: ApiProtocol::Responses,
-        } = part
-            && !self.created
-            && !id.is_empty()
-        {
-            self.response_id = Some(id.clone());
-        }
-        self.ensure_created(&mut frames);
+        self.ensure_created(&mut frames)?;
         match part {
             StreamPart::File { .. } => {
                 // Responses streaming surfaces generated files on the
@@ -3064,9 +3106,8 @@ impl StreamEncoder for ResponsesStreamEncoder {
             }
             StreamPart::Usage { .. } => {}
             StreamPart::ResponseStarted { .. } => {
-                // A native Responses start selected the client continuation id
-                // before `ensure_created`. Other protocols are metadata-only and
-                // retain the gateway fallback.
+                // Provider response identity is request-local continuation
+                // metadata. The public lifecycle remains on the gateway id.
             }
             StreamPart::Finish { reason } => {
                 // A bare `Finish` (e.g. inbound was Chat Completions / Messages /
@@ -3076,19 +3117,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     FinishReason::Error(_) => "failed",
                     _ => "completed",
                 };
-                let response_id = self
-                    .response_id
-                    .clone()
-                    .unwrap_or_else(|| self.request_id.clone());
+                let response_id = self.response_id.clone()?;
                 self.emit_terminal(&mut frames, status, &response_id, None);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
-                // Identity is fixed by the opening native `ResponseStarted` (or
-                // the gateway fallback). A terminal id never changes it.
-                let response_id = self
-                    .response_id
-                    .clone()
-                    .unwrap_or_else(|| self.request_id.clone());
+                let response_id = self.response_id.clone()?;
                 self.emit_terminal(&mut frames, status, &response_id, usage.clone());
             }
         }
@@ -3101,7 +3134,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let response_id = self
             .response_id
             .clone()
-            .unwrap_or_else(|| self.request_id.clone());
+            .unwrap_or_else(|_| "brc_aW52YWxpZC1yZXF1ZXN0LWlk".to_owned());
         let response = serde_json::json!({
             "id": response_id,
             "object": "response",
@@ -3119,7 +3152,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let response_id = self
             .response_id
             .clone()
-            .unwrap_or_else(|| self.request_id.clone());
+            .unwrap_or_else(|_| "brc_aW52YWxpZC1yZXF1ZXN0LWlk".to_owned());
         let response = serde_json::json!({
             "id": response_id,
             "object": "response",

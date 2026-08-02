@@ -15,6 +15,51 @@ fn defaults_are_sane() {
     assert!(!cfg.trajectory.enabled);
     assert_eq!(cfg.trajectory.retention_days, 30);
     assert_eq!(cfg.trajectory.outbox_batch_size, 100);
+    assert_eq!(cfg.continuation.retention_days, 30);
+    assert_eq!(cfg.continuation.prune_batch_size, 1_000);
+}
+
+#[test]
+fn continuation_config_is_always_active_round_trippable_and_bounded() {
+    let config = parse_with(
+        "continuation:\n  retention_days: 45\n  prune_batch_size: 250\n",
+        |_| None,
+    )
+    .unwrap();
+    assert_eq!(config.continuation.retention_days, 45);
+    assert_eq!(config.continuation.prune_batch_size, 250);
+
+    let encoded = serde_saphyr::to_string(&config.continuation).unwrap();
+    let decoded: ContinuationConfig = serde_saphyr::from_str(&encoded).unwrap();
+    assert_eq!(decoded, config.continuation);
+
+    let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+    let continuation = &schema["properties"]["continuation"];
+    assert!(!continuation.is_null());
+    let rendered = serde_json::to_string(continuation).unwrap();
+    assert!(rendered.contains("retention_days"));
+    assert!(rendered.contains("prune_batch_size"));
+}
+
+#[test]
+fn continuation_config_rejects_unbounded_operational_values() {
+    for (yaml, expected) in [
+        (
+            "continuation:\n  retention_days: 0\n",
+            "continuation.retention_days must be positive",
+        ),
+        (
+            "continuation:\n  prune_batch_size: 0\n",
+            "continuation.prune_batch_size must be between 1 and 10000",
+        ),
+        (
+            "continuation:\n  prune_batch_size: 10001\n",
+            "continuation.prune_batch_size must be between 1 and 10000",
+        ),
+    ] {
+        let error = parse_with(yaml, |_| None).unwrap_err();
+        assert!(error.to_string().contains(expected), "got: {error}");
+    }
 }
 
 #[test]

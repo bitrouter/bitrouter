@@ -16,6 +16,7 @@ use std::sync::Arc;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::auth::AuthAppliers;
 use crate::language_model::context::PipelineContext;
+use crate::language_model::context::ProviderContinuation;
 use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
 use crate::language_model::types::{
     ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, Prompt, RoutingTarget,
@@ -289,6 +290,36 @@ fn parse_upstream_success(
         .map_err(|error| BitrouterError::UpstreamInvalidResponse {
             message: error.to_string(),
         })
+}
+
+fn apply_provider_continuation(
+    body: &mut serde_json::Value,
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) -> Result<()> {
+    let Some(continuation) = ctx.extension::<ProviderContinuation>() else {
+        return Ok(());
+    };
+    if !continuation.matches_target(target) {
+        return Err(BitrouterError::internal(
+            "provider continuation target mismatch",
+        ));
+    }
+    if target.api_protocol != ApiProtocol::Responses {
+        return Err(BitrouterError::internal(
+            "provider continuation requires a Responses target",
+        ));
+    }
+    let Some(object) = body.as_object_mut() else {
+        return Err(BitrouterError::internal(
+            "Responses request body must be an object",
+        ));
+    };
+    object.insert(
+        "previous_response_id".to_owned(),
+        serde_json::Value::String(continuation.response_id().to_owned()),
+    );
+    Ok(())
 }
 
 /// Classify a transport error that surfaces from the SSE decode loop *after*
@@ -854,6 +885,7 @@ impl Executor for HttpExecutor {
         upstream_prompt.stream = false;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         self.shape_request_body(&mut body, target).await?;
+        apply_provider_continuation(&mut body, target, ctx)?;
         let url = transport.endpoint_url(target, false);
         let trace_headers = ctx.take_outbound_trace_headers();
 
@@ -947,6 +979,7 @@ impl Executor for HttpExecutor {
         upstream_prompt.stream = true;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         self.shape_request_body(&mut body, target).await?;
+        apply_provider_continuation(&mut body, target, ctx)?;
         let url = transport.endpoint_url(target, true);
         let trace_headers = ctx.take_outbound_trace_headers();
 
@@ -1518,6 +1551,72 @@ mod beta_forward_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("t")
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_continuation_tests {
+    use super::*;
+    use crate::caller::CallerContext;
+    use crate::language_model::context::ProviderContinuation;
+    use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+
+    fn responses_target(provider: &str) -> RoutingTarget {
+        RoutingTarget {
+            provider_name: provider.into(),
+            service_id: "gpt-5".into(),
+            api_base: "https://api.example/v1".into(),
+            api_key: "key".into(),
+            api_protocol: ApiProtocol::Responses,
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            account_label: Some("primary".into()),
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        }
+    }
+
+    fn context(target: &RoutingTarget) -> PipelineContext {
+        let prompt = Prompt {
+            model: "gpt-5".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "continue")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let mut ctx = PipelineContext::new(PipelineRequest::new(
+            "gpt-5",
+            CallerContext::local(),
+            prompt,
+        ));
+        ctx.insert_extension(Arc::new(ProviderContinuation::new(
+            "resp-native-secret".into(),
+            target,
+        )));
+        ctx
+    }
+
+    #[test]
+    fn continuation_override_rewrites_only_the_bound_responses_target() {
+        let target = responses_target("openai");
+        let ctx = context(&target);
+        let mut body = serde_json::json!({"previous_response_id": "gateway-id"});
+        apply_provider_continuation(&mut body, &target, &ctx).unwrap();
+        assert_eq!(body["previous_response_id"], "resp-native-secret");
+
+        let error = apply_provider_continuation(
+            &mut serde_json::json!({"previous_response_id": "gateway-id"}),
+            &responses_target("other"),
+            &ctx,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("target mismatch"));
     }
 }
 
