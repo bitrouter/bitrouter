@@ -14,7 +14,7 @@ use crate::caller::CallerContext;
 use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
-use crate::language_model::ContinuationAuthority;
+use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::timing::FirstTokenKind;
 use crate::language_model::types::{ApiProtocol, FinishReason, RoutingTarget, UsageOrigin};
 

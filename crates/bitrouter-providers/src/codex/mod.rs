@@ -40,8 +40,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::header::{HeaderName, HeaderValue};
 
+use bitrouter_sdk::language_model::auth::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::language_model::types::RoutingTarget;
-use bitrouter_sdk::language_model::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::auth_code::AuthCodeError;

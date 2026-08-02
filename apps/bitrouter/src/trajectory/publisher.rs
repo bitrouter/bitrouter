@@ -244,8 +244,9 @@ impl TrajectoryOutboxPublisher {
         if admission.status != AdmissionStatus::Admitted {
             return Ok(false);
         }
+        let delivered_at = chrono::Utc::now().to_rfc3339();
         self.trajectory
-            .mark_outbox_delivered(&row.owner_user_id, &row.outbox_id, &row.created_at)
+            .mark_outbox_delivered(&row.owner_user_id, &row.outbox_id, &delivered_at)
             .await?;
         Ok(true)
     }

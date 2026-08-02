@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
-use crate::language_model::ContinuationAuthority;
+use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;

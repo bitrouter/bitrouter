@@ -58,7 +58,8 @@ mod tests {
     use super::Migrator;
 
     use super::m20240101_000012_create_trajectory_ledger::{
-        Migration, trajectory_requests_owner_full_input_digest_index,
+        Migration, trajectory_outbox_delivery_order_index,
+        trajectory_requests_owner_full_input_digest_index,
     };
     use super::m20240101_000013_create_continuation_registry::{
         Migration as ContinuationMigration, provider_continuations_table,
@@ -262,6 +263,7 @@ mod tests {
             "idx_trajectory_requests_owner_episode",
             "idx_trajectory_requests_owner_full_input_digest",
             "idx_trajectory_outbox_pending",
+            "idx_trajectory_outbox_delivery_order",
         ] {
             let rows = db
                 .query_all(Statement::from_string(
@@ -307,6 +309,92 @@ mod tests {
             details.contains("idx_trajectory_requests_owner_full_input_digest"),
             "prefix membership query did not use the composite owner/digest index: {details}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trajectory_global_outbox_drain_uses_delivery_order_index() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let manager = SchemaManager::new(&db);
+        Migration.up(&manager).await?;
+
+        let details = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "EXPLAIN QUERY PLAN SELECT outbox_id FROM trajectory_outbox WHERE delivered_at IS NULL ORDER BY attempts, created_at, outbox_id LIMIT 10".to_owned(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "detail"))
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+
+        assert!(
+            details.contains("idx_trajectory_outbox_delivery_order"),
+            "global outbox drain did not use the delivery-order index: {details}"
+        );
+        assert!(
+            !details.contains("USE TEMP B-TREE FOR ORDER BY"),
+            "global outbox drain still sorts outside the index: {details}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trajectory_owner_outbox_inspection_keeps_its_owner_index() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let manager = SchemaManager::new(&db);
+        Migration.up(&manager).await?;
+
+        let details = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "EXPLAIN QUERY PLAN SELECT outbox_id FROM trajectory_outbox WHERE owner_user_id = 'owner-a' AND delivered_at IS NULL ORDER BY attempts, created_at, outbox_id".to_owned(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "detail"))
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+
+        assert!(
+            details.contains("idx_trajectory_outbox_pending"),
+            "owner outbox inspection did not retain its owner index: {details}"
+        );
+        assert!(
+            !details.contains("USE TEMP B-TREE FOR ORDER BY"),
+            "owner outbox inspection still sorts outside the index: {details}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn trajectory_outbox_delivery_index_sql_is_portable_and_query_ordered() -> anyhow::Result<()> {
+        let statements = [
+            trajectory_outbox_delivery_order_index().to_string(SqliteQueryBuilder),
+            trajectory_outbox_delivery_order_index().to_string(PostgresQueryBuilder),
+            trajectory_outbox_delivery_order_index().to_string(MysqlQueryBuilder),
+        ];
+        for statement in statements {
+            let sql = statement.to_ascii_lowercase();
+            let delivered = sql.rfind("delivered_at").ok_or_else(|| {
+                anyhow::anyhow!("delivered-at column missing from index SQL: {statement}")
+            })?;
+            let attempts = sql.rfind("attempts").ok_or_else(|| {
+                anyhow::anyhow!("attempts column missing from index SQL: {statement}")
+            })?;
+            let created = sql.rfind("created_at").ok_or_else(|| {
+                anyhow::anyhow!("created-at column missing from index SQL: {statement}")
+            })?;
+            let outbox = sql.rfind("outbox_id").ok_or_else(|| {
+                anyhow::anyhow!("outbox-id column missing from index SQL: {statement}")
+            })?;
+            assert!(sql.contains("idx_trajectory_outbox_delivery_order"));
+            assert!(
+                delivered < attempts && attempts < created && created < outbox,
+                "delivery index columns must match the global drain order: {statement}"
+            );
+        }
         Ok(())
     }
 

@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use bitrouter_sdk::error::{BitrouterError, Result as PipelineResult};
+use bitrouter_sdk::language_model::auth::ContinuationAuthority;
 use bitrouter_sdk::language_model::context::{
     PipelineContext, ProviderContinuation, RequireContinuationAuthority,
 };
@@ -21,9 +22,7 @@ use bitrouter_sdk::language_model::settlement::{
     RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizationReceipt,
     RequiredFinalizer,
 };
-use bitrouter_sdk::language_model::{
-    ApiProtocol, AuthAppliers, ContinuationAuthority, RoutingTarget,
-};
+use bitrouter_sdk::language_model::{ApiProtocol, AuthAppliers, RoutingTarget};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -2320,6 +2319,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
     use bitrouter_sdk::caller::CallerContext;
+    use bitrouter_sdk::language_model::auth::{AppliedAuth, AuthApplier, CredentialAuthority};
     use bitrouter_sdk::language_model::context::{PipelineContext, ProviderContinuation};
     use bitrouter_sdk::language_model::hooks::{
         ObserveHook, RequestOutcome, RouteHook, StreamHook,
@@ -2329,11 +2329,11 @@ mod tests {
         SettlementRecorder,
     };
     use bitrouter_sdk::language_model::{
-        ApiProtocol, AppliedAuth, AuthApplier, AuthAppliers, Content, CredentialAuthority,
-        ExecutionResult, Executor, FinishReason, GenerateResult, GenerationParams, HttpExecutor,
-        Message, MockExecutor, MockResponse, Pipeline, PipelineBuilder, PipelineRequest, Prompt,
-        Role, RoutingTarget, StaticRoutingTable, StreamAction, StreamContext, StreamInterest,
-        StreamOutcome, StreamPart, StreamPartStream, Tool, ToolResultOutput, Usage,
+        ApiProtocol, AuthAppliers, Content, ExecutionResult, Executor, FinishReason,
+        GenerateResult, GenerationParams, HttpExecutor, Message, MockExecutor, MockResponse,
+        Pipeline, PipelineBuilder, PipelineRequest, Prompt, Role, RoutingTarget,
+        StaticRoutingTable, StreamAction, StreamContext, StreamInterest, StreamOutcome, StreamPart,
+        StreamPartStream, Tool, ToolResultOutput, Usage,
     };
     use bitrouter_sdk::server::{AppState, build_router};
     use chrono::{TimeDelta, TimeZone, Utc};

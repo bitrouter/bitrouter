@@ -148,7 +148,6 @@ pub(crate) struct OutboxBatchItem {
     pub owner_user_id: String,
     pub topic: String,
     pub payload: Option<super::types::OutboxPayload>,
-    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -1015,6 +1014,7 @@ impl TrajectoryStore {
             .filter(outbox_entity::Column::DeliveredAt.is_null())
             .order_by_asc(outbox_entity::Column::Attempts)
             .order_by_asc(outbox_entity::Column::CreatedAt)
+            .order_by_asc(outbox_entity::Column::OutboxId)
             .all(&self.db)
             .await?
             .into_iter()
@@ -1082,18 +1082,32 @@ impl TrajectoryStore {
     ) -> Result<()> {
         validate_owner(owner_user_id)?;
         validate_timestamp(delivered_at, "delivered_at")?;
-        let Some(row) = outbox_entity::Entity::find()
+        let updated = outbox_entity::Entity::update_many()
+            .col_expr(
+                outbox_entity::Column::DeliveredAt,
+                Expr::value(Some(delivered_at.to_owned())),
+            )
+            .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(outbox_entity::Column::OutboxId.eq(outbox_id))
+            .filter(outbox_entity::Column::DeliveredAt.is_null())
+            .exec(&self.db)
+            .await?;
+        if updated.rows_affected == 1 {
+            return Ok(());
+        }
+        if updated.rows_affected > 1 {
+            anyhow::bail!("owner-scoped trajectory outbox delivery updated multiple rows")
+        }
+        match outbox_entity::Entity::find()
             .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(outbox_entity::Column::OutboxId.eq(outbox_id))
             .one(&self.db)
             .await?
-        else {
-            anyhow::bail!("unknown owner-scoped trajectory outbox '{outbox_id}'")
-        };
-        let mut active = row.into_active_model();
-        active.delivered_at = Set(Some(delivered_at.to_owned()));
-        active.update(&self.db).await?;
-        Ok(())
+        {
+            Some(row) if row.delivered_at.is_some() => Ok(()),
+            Some(_) => anyhow::bail!("trajectory outbox '{outbox_id}' was not marked delivered"),
+            None => anyhow::bail!("unknown owner-scoped trajectory outbox '{outbox_id}'"),
+        }
     }
 
     /// Resolve the owner of a globally unique episode for the local operator
@@ -2830,7 +2844,6 @@ fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
         owner_user_id: row.owner_user_id,
         topic: row.topic,
         payload,
-        created_at: row.created_at,
     }
 }
 
@@ -3573,6 +3586,46 @@ mod tests {
             .mark_outbox_delivered("owner-a", "outbox-1", "2026-08-01T00:02:00Z")
             .await?;
         assert!(store.pending_outbox("owner-a").await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn marking_delivery_twice_preserves_the_first_success_time() -> anyhow::Result<()> {
+        let store = store().await?;
+        store
+            .begin_request("owner-a", begin("episode-1", "request-1"))
+            .await?;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event("episode-1", "request-1", 2, "event-route-1"),
+            )
+            .await?;
+        store
+            .settle_request(
+                "owner-a",
+                settlement("episode-1", "request-1", "event-settle-1", "outbox-1"),
+            )
+            .await?;
+
+        store
+            .mark_outbox_delivered("owner-a", "outbox-1", "2026-08-01T00:02:00Z")
+            .await?;
+        store
+            .mark_outbox_delivered("owner-a", "outbox-1", "2026-08-01T00:03:00Z")
+            .await?;
+        let delivered_at = store
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT delivered_at FROM trajectory_outbox WHERE outbox_id = 'outbox-1'"
+                    .to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("delivered outbox row missing"))?
+            .try_get::<String>("", "delivered_at")?;
+
+        assert_eq!(delivered_at, "2026-08-01T00:02:00Z");
         Ok(())
     }
 
