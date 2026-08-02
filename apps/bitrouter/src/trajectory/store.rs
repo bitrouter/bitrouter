@@ -128,6 +128,7 @@ pub(crate) struct CorrelateAndBegin {
     pub native_parent_digest: Option<KeyedDigest>,
     pub full_input_digest: KeyedDigest,
     pub ancestor_prefix_digests: Vec<KeyedDigest>,
+    pub ancestor_prefixes_truncated: bool,
     pub starts_with_prior_turns: bool,
     pub canonical_input_bytes: u64,
     pub protocol: String,
@@ -333,20 +334,22 @@ impl TrajectoryStore {
                     trusted_native_parent_id = Some(parent.request_id.clone());
                     let episode = owned_episode(&txn, owner_user_id, &parent.episode_id).await?;
                     if episode.correlation_key_id == input.correlation_key_id {
-                        prefix_conflict = match find_prefix_episode(
+                        let prefix_resolution = find_prefix_episode(
                             &txn,
                             owner_user_id,
                             &input.ancestor_prefix_digests,
                         )
-                        .await?
-                        {
+                        .await?;
+                        prefix_conflict = match &prefix_resolution {
                             PrefixResolution::Unique(prefix_episode) => {
                                 prefix_episode.episode_id != episode.episode_id
                             }
                             PrefixResolution::Ambiguous => true,
                             PrefixResolution::None => false,
                         };
-                        let completeness = if prefix_conflict {
+                        let omitted_ancestry_unresolved = input.ancestor_prefixes_truncated
+                            && matches!(prefix_resolution, PrefixResolution::None);
+                        let completeness = if prefix_conflict || omitted_ancestry_unresolved {
                             HistoryCompleteness::Incomplete
                         } else {
                             parse_completeness(&episode.history_completeness)?
@@ -448,6 +451,10 @@ impl TrajectoryStore {
                     (
                         "correlation.starts_with_prior_turns".to_owned(),
                         u64::from(input.starts_with_prior_turns),
+                    ),
+                    (
+                        "correlation.ancestor_prefixes_truncated".to_owned(),
+                        u64::from(input.ancestor_prefixes_truncated),
                     ),
                     (
                         "correlation.prefix_conflict".to_owned(),
@@ -1808,6 +1815,11 @@ async fn exact_retry_result(
         .structural
         .get("correlation.starts_with_prior_turns")
         .copied();
+    let ancestor_prefixes_truncated = start
+        .evidence
+        .structural
+        .get("correlation.ancestor_prefixes_truncated")
+        .copied();
     let native_parent_present = start
         .evidence
         .structural
@@ -1832,6 +1844,7 @@ async fn exact_retry_result(
                     .context("too many ancestor prefix digests")?,
             )
         || starts_with_prior_turns != Some(u64::from(input.starts_with_prior_turns))
+        || ancestor_prefixes_truncated != Some(u64::from(input.ancestor_prefixes_truncated))
         || native_parent_present != Some(u64::from(input.native_parent_digest.is_some()))
         || native_parent_digest != input.native_parent_digest.as_ref().map(KeyedDigest::as_str)
         || canonical_input_bytes != Some(input.canonical_input_bytes)
@@ -2975,6 +2988,18 @@ mod tests {
             3
         );
 
+        let mut changed_canonical_window =
+            correlate_input("request-1", "episode-1", "start-1", route.clone());
+        changed_canonical_window.ancestor_prefixes_truncated = true;
+        let conflict = store
+            .correlate_and_begin("owner-a", changed_canonical_window)
+            .await
+            .err()
+            .ok_or_else(|| {
+                anyhow::anyhow!("exact retry accepted changed canonical-window truncation")
+            })?;
+        assert!(conflict.to_string().contains("different content"));
+
         let mut changed_policy = route.clone();
         changed_policy.policy_digest =
             "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into();
@@ -3787,6 +3812,7 @@ mod tests {
             native_parent_digest: Some(keyed_digest("key-2", "3")),
             full_input_digest: keyed_digest("key-1", "1"),
             ancestor_prefix_digests: Vec::new(),
+            ancestor_prefixes_truncated: false,
             starts_with_prior_turns: false,
             canonical_input_bytes: 1,
             protocol: "responses".into(),
@@ -5215,6 +5241,7 @@ mod tests {
             native_parent_digest: None,
             full_input_digest: keyed_digest("key-1", "7"),
             ancestor_prefix_digests: Vec::new(),
+            ancestor_prefixes_truncated: false,
             starts_with_prior_turns: false,
             canonical_input_bytes: 10,
             protocol: "chat_completions".into(),

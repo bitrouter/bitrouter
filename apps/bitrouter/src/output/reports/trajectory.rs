@@ -494,6 +494,7 @@ mod tests {
                         "1".repeat(64)
                     ))?,
                     ancestor_prefix_digests: Vec::new(),
+                    ancestor_prefixes_truncated: false,
                     starts_with_prior_turns: false,
                     canonical_input_bytes: 64,
                     protocol: "chat_completions".into(),

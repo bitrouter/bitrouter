@@ -1231,6 +1231,7 @@ mod tests {
             native_parent_digest: None,
             full_input_digest: keyed_digest('7'),
             ancestor_prefix_digests: Vec::new(),
+            ancestor_prefixes_truncated: false,
             starts_with_prior_turns: false,
             canonical_input_bytes: 10,
             protocol: "chat_completions".into(),
