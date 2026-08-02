@@ -7352,6 +7352,256 @@ mod tests {
 
     struct NativeIdStealingRecorder(Arc<std::sync::Mutex<Vec<String>>>);
 
+    struct EchoingResumeErrorResponder {
+        calls: Arc<AtomicUsize>,
+        native_id: &'static str,
+        credential: &'static str,
+    }
+
+    struct RefreshingEchoErrorResponder {
+        calls: Arc<AtomicUsize>,
+        native_id: &'static str,
+        old_credential: &'static str,
+        new_credential: &'static str,
+        old_encoded_credential: &'static str,
+        new_encoded_credential: &'static str,
+    }
+
+    struct StreamingPlainEchoErrorResponder {
+        calls: Arc<AtomicUsize>,
+        native_id: &'static str,
+        credential: &'static str,
+    }
+
+    struct StreamingSseEchoErrorResponder {
+        calls: Arc<AtomicUsize>,
+        native_id: &'static str,
+        credential: &'static str,
+    }
+
+    impl Respond for StreamingSseEchoErrorResponder {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let body = if call == 0 {
+                [
+                    serde_json::json!({
+                        "type": "response.created",
+                        "response": {"id": self.native_id, "status": "in_progress"}
+                    }),
+                    serde_json::json!({
+                        "type": "response.completed",
+                        "response": {"id": self.native_id, "status": "completed", "output": []}
+                    }),
+                ]
+                .iter()
+                .map(|event| {
+                    format!(
+                        "event: {}\ndata: {event}\n\n",
+                        event["type"].as_str().unwrap_or("response.event")
+                    )
+                })
+                .collect::<String>()
+            } else {
+                let unknown_type = format!("future-{}-{}", self.native_id, self.credential);
+                let unknown = serde_json::json!({"type": unknown_type});
+                let event = serde_json::json!({
+                    "type": "response.failed",
+                    "response": {
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": format!(
+                                "failed parent={} credential={} repeated={}",
+                                self.native_id, self.credential, self.native_id
+                            )
+                        }
+                    }
+                });
+                format!(
+                    "event: response.future\ndata: {unknown}\n\nevent: response.failed\ndata: {event}\n\n"
+                )
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+    }
+
+    impl Respond for StreamingPlainEchoErrorResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                let events = [
+                    serde_json::json!({
+                        "type": "response.created",
+                        "response": {"id": self.native_id, "status": "in_progress"}
+                    }),
+                    serde_json::json!({
+                        "type": "response.completed",
+                        "response": {"id": self.native_id, "status": "completed", "output": []}
+                    }),
+                ];
+                let body = events
+                    .iter()
+                    .map(|event| {
+                        format!(
+                            "event: {}\ndata: {event}\n\n",
+                            event["type"].as_str().unwrap_or("response.event")
+                        )
+                    })
+                    .collect::<String>();
+                return ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body);
+            }
+
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|error| serde_json::json!({"parse_error": error.to_string()}));
+            let echoed_parent = body
+                .get("previous_response_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("missing-parent");
+            ResponseTemplate::new(400).set_body_string(format!(
+                "parent={echoed_parent}; credential={}; padding={}; repeated={echoed_parent}; credential={}",
+                self.credential,
+                "x".repeat(1_500),
+                self.credential
+            ))
+        }
+    }
+
+    impl Respond for RefreshingEchoErrorResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": self.native_id,
+                    "status": "completed",
+                    "output": []
+                }));
+            }
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|error| serde_json::json!({"parse_error": error.to_string()}));
+            let echoed_parent = body
+                .get("previous_response_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("missing-parent");
+            if call == 1 {
+                return ResponseTemplate::new(401).set_body_string(format!(
+                    "expired {} for {echoed_parent}",
+                    self.old_credential
+                ));
+            }
+            ResponseTemplate::new(400).set_body_string(format!(
+                "parent={echoed_parent}; old={}; new={}; old_raw={}; new_raw={}; repeated={echoed_parent}",
+                self.old_credential,
+                self.new_credential,
+                self.old_encoded_credential,
+                self.new_encoded_credential,
+            ))
+        }
+    }
+
+    struct RefreshingCustomAuthApplier {
+        generation: Arc<AtomicUsize>,
+        old_credential: &'static str,
+        new_credential: &'static str,
+    }
+
+    impl RefreshingCustomAuthApplier {
+        fn credential(&self) -> &'static str {
+            if self.generation.load(Ordering::SeqCst) == 0 {
+                self.old_credential
+            } else {
+                self.new_credential
+            }
+        }
+
+        fn authority() -> ContinuationAuthority {
+            ContinuationAuthority::new(
+                CredentialAuthority::derive("test/refreshing-custom-auth", "stable-principal"),
+                bitrouter_sdk::language_model::types::AuthScheme::Bearer,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl AuthApplier for RefreshingCustomAuthApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            let credential = reqwest::header::HeaderValue::from_static(self.credential());
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer stable-principal-proof"),
+            );
+            request.headers_mut().insert("x-provider-auth", credential);
+            request
+                .url_mut()
+                .query_pairs_mut()
+                .append_pair("access_token", self.credential());
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> PipelineResult<AppliedAuth> {
+            Ok(AppliedAuth::proven_with_scheme(
+                self.apply(request, target).await?,
+                Self::authority().credential().clone(),
+                bitrouter_sdk::language_model::types::AuthScheme::Bearer,
+            ))
+        }
+
+        async fn continuation_authority_proof(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<ContinuationAuthority>> {
+            Ok(Some(Self::authority()))
+        }
+
+        async fn refresh_after_unauthorized(
+            &self,
+            _target: &RoutingTarget,
+            _rejected_authorization: Option<&reqwest::header::HeaderValue>,
+        ) -> PipelineResult<bool> {
+            self.generation.store(1, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    impl Respond for EchoingResumeErrorResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                return ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": self.native_id,
+                    "status": "completed",
+                    "output": []
+                }));
+            }
+
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|error| serde_json::json!({"parse_error": error.to_string()}));
+            let echoed_parent = body
+                .get("previous_response_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("missing-parent");
+            ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {
+                    "message": format!(
+                        "rejected {echoed_parent}; again={echoed_parent}; credential={}",
+                        self.credential
+                    ),
+                    "nested": [echoed_parent, {"credential": self.credential}]
+                }
+            }))
+        }
+    }
+
     struct CapturedLogWriter(Arc<std::sync::Mutex<Vec<u8>>>);
 
     impl Write for CapturedLogWriter {
@@ -7657,6 +7907,397 @@ mod tests {
             !snapshot.contains(NATIVE_SENTINEL),
             "generic settlement recorder exfiltrated a native Responses id: {snapshot}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumed_http_error_scrubs_native_parent_and_credential_before_public_surfaces()
+    -> anyhow::Result<()> {
+        const NATIVE_SENTINEL: &str = "native-resume-private-sentinel";
+        const CREDENTIAL_SENTINEL: &str = "credential-private-sentinel";
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(EchoingResumeErrorResponder {
+                calls: Arc::new(AtomicUsize::new(0)),
+                native_id: NATIVE_SENTINEL,
+                credential: CREDENTIAL_SENTINEL,
+            })
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(63).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let mut upstream_target = target(CREDENTIAL_SENTINEL);
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let recorder_snapshots = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(NativeIdStealingRecorder(recorder_snapshots.clone()));
+        let pipeline = Arc::new(builder.build()?);
+
+        let captured_logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_sink = captured_logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || CapturedLogWriter(log_sink.clone()))
+            .finish();
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let root_request_id = "resume-error-privacy-root";
+        pipeline
+            .clone()
+            .execute(nonstream_tool_request(root_request_id, None))
+            .await?;
+        let public_id = encode_gateway_continuation_id(root_request_id)?;
+        let error = pipeline
+            .clone()
+            .execute(nonstream_tool_request(
+                "resume-error-privacy-child",
+                Some(&public_id),
+            ))
+            .await
+            .expect_err("echoed resume error must fail");
+        pipeline.drain_pending_settlements().await;
+
+        let recorder_output = recorder_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .join("\n");
+        let outputs = [
+            error.to_string(),
+            recorder_output.clone(),
+            String::from_utf8(
+                captured_logs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            )?,
+        ];
+        for output in outputs {
+            assert!(
+                !output.contains(NATIVE_SENTINEL),
+                "native continuation leaked through a public error surface: {output}"
+            );
+            assert!(
+                !output.contains(CREDENTIAL_SENTINEL),
+                "credential leaked through a public error surface: {output}"
+            );
+        }
+        assert!(
+            recorder_output.contains(&public_id),
+            "available public continuation handle was not substituted into the classified error: {recorder_output}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumed_nonstream_public_http_json_scrubs_native_parent_and_credential()
+    -> anyhow::Result<()> {
+        const NATIVE_SENTINEL: &str = "native-public-http-private-sentinel";
+        const CREDENTIAL_SENTINEL: &str = "credential-public-http-private-sentinel";
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(EchoingResumeErrorResponder {
+                calls: Arc::new(AtomicUsize::new(0)),
+                native_id: NATIVE_SENTINEL,
+                credential: CREDENTIAL_SENTINEL,
+            })
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(67).await?;
+        let runtime = ContinuationRuntime::new(registry);
+        let mut upstream_target = target(CREDENTIAL_SENTINEL);
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime);
+        let pipeline = Arc::new(builder.build()?);
+        let app = build_router(app_state(pipeline.clone()));
+
+        let root_request_id = "resume-public-http-privacy-root";
+        let root_response = app
+            .clone()
+            .oneshot(responses_http_request(root_request_id, false))
+            .await?;
+        assert_eq!(root_response.status(), axum::http::StatusCode::OK);
+        let _ = axum::body::to_bytes(root_response.into_body(), usize::MAX).await?;
+        pipeline.drain_pending_settlements().await;
+
+        let public_id = encode_gateway_continuation_id(root_request_id)?;
+        let resume_request = HttpRequest::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("content-type", "application/json")
+            .header("x-bitrouter-request-id", "resume-public-http-privacy-child")
+            .body(Body::from(
+                serde_json::json!({
+                    "model": "gpt-5",
+                    "input": "continue",
+                    "stream": false,
+                    "previous_response_id": public_id.clone(),
+                })
+                .to_string(),
+            ))?;
+        let response = app.oneshot(resume_request).await?;
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body = String::from_utf8(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await?
+                .to_vec(),
+        )?;
+
+        assert!(!body.contains(NATIVE_SENTINEL), "native id leaked: {body}");
+        assert!(
+            !body.contains(CREDENTIAL_SENTINEL),
+            "credential leaked: {body}"
+        );
+        assert!(
+            body.contains(&public_id),
+            "public continuation handle was not retained: {body}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumed_http_error_scrubs_old_and_refreshed_dynamic_wire_credentials()
+    -> anyhow::Result<()> {
+        const NATIVE_SENTINEL: &str = "native-refresh-private-sentinel";
+        const OLD_CREDENTIAL: &str = "old/refresh+private%credential";
+        const NEW_CREDENTIAL: &str = "new/refresh+private%credential";
+        const OLD_ENCODED_CREDENTIAL: &str = "old%2Frefresh%2Bprivate%25credential";
+        const NEW_ENCODED_CREDENTIAL: &str = "new%2Frefresh%2Bprivate%25credential";
+        let upstream = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(RefreshingEchoErrorResponder {
+                calls: calls.clone(),
+                native_id: NATIVE_SENTINEL,
+                old_credential: OLD_CREDENTIAL,
+                new_credential: NEW_CREDENTIAL,
+                old_encoded_credential: OLD_ENCODED_CREDENTIAL,
+                new_encoded_credential: NEW_ENCODED_CREDENTIAL,
+            })
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(64).await?;
+        let generation = Arc::new(AtomicUsize::new(0));
+        let pipeline = dynamic_auth_pipeline(
+            registry,
+            &upstream,
+            Arc::new(RefreshingCustomAuthApplier {
+                generation,
+                old_credential: OLD_CREDENTIAL,
+                new_credential: NEW_CREDENTIAL,
+            }),
+        )?;
+        let root_request_id = "resume-refresh-privacy-root";
+        pipeline
+            .clone()
+            .execute(nonstream_tool_request(root_request_id, None))
+            .await?;
+        let public_id = encode_gateway_continuation_id(root_request_id)?;
+        let error = pipeline
+            .execute(nonstream_tool_request(
+                "resume-refresh-privacy-child",
+                Some(&public_id),
+            ))
+            .await
+            .expect_err("refreshed request must surface its final upstream rejection");
+        let classified = format!("{error:?}");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        for sensitive in [
+            NATIVE_SENTINEL,
+            OLD_CREDENTIAL,
+            NEW_CREDENTIAL,
+            OLD_ENCODED_CREDENTIAL,
+            NEW_ENCODED_CREDENTIAL,
+        ] {
+            assert!(
+                !classified.contains(sensitive),
+                "refreshed wire secret leaked through classified error: {classified}"
+            );
+        }
+        assert!(
+            classified.contains(&public_id),
+            "native continuation was not replaced with the available public handle: {classified}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumed_stream_http_plain_error_scrubs_before_bounded_classification()
+    -> anyhow::Result<()> {
+        const NATIVE_SENTINEL: &str = "native-stream-private-sentinel";
+        const CREDENTIAL_SENTINEL: &str = "credential-stream-private-sentinel";
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(StreamingPlainEchoErrorResponder {
+                calls: Arc::new(AtomicUsize::new(0)),
+                native_id: NATIVE_SENTINEL,
+                credential: CREDENTIAL_SENTINEL,
+            })
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(65).await?;
+        let runtime = ContinuationRuntime::new(registry);
+        let mut upstream_target = target(CREDENTIAL_SENTINEL);
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let recorder_snapshots = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(NativeIdStealingRecorder(recorder_snapshots.clone()));
+        let pipeline = Arc::new(builder.build()?);
+
+        let root_request_id = "resume-stream-privacy-root";
+        drain_stream(pipeline.clone(), tool_request(root_request_id, None)).await?;
+        let public_id = encode_gateway_continuation_id(root_request_id)?;
+        let error = match pipeline
+            .clone()
+            .execute_stream(tool_request(
+                "resume-stream-privacy-child",
+                Some(&public_id),
+            ))
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => anyhow::bail!("plain upstream rejection returned a stream"),
+        };
+        pipeline.drain_pending_settlements().await;
+        let classified = format!("{error:?}");
+        let recorder_output = recorder_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .join("\n");
+        for output in [&classified, &recorder_output] {
+            assert!(
+                !output.contains(NATIVE_SENTINEL),
+                "native id leaked: {output}"
+            );
+            assert!(
+                !output.contains(CREDENTIAL_SENTINEL),
+                "credential leaked: {output}"
+            );
+        }
+        assert!(classified.contains(&public_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumed_stream_http_success_status_sse_error_scrubs_typed_decoder_error()
+    -> anyhow::Result<()> {
+        const NATIVE_SENTINEL: &str = "native-sse-error-private-sentinel";
+        const CREDENTIAL_SENTINEL: &str = "credential-sse-error-private-sentinel";
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(StreamingSseEchoErrorResponder {
+                calls: Arc::new(AtomicUsize::new(0)),
+                native_id: NATIVE_SENTINEL,
+                credential: CREDENTIAL_SENTINEL,
+            })
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(66).await?;
+        let runtime = ContinuationRuntime::new(registry);
+        let mut upstream_target = target(CREDENTIAL_SENTINEL);
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let recorder_snapshots = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(NativeIdStealingRecorder(recorder_snapshots.clone()));
+        let pipeline = Arc::new(builder.build()?);
+
+        let captured_logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_sink = captured_logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || CapturedLogWriter(log_sink.clone()))
+            .finish();
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let root_request_id = "resume-sse-error-privacy-root";
+        drain_stream(pipeline.clone(), tool_request(root_request_id, None)).await?;
+        let public_id = encode_gateway_continuation_id(root_request_id)?;
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request(
+                "resume-sse-error-privacy-child",
+                Some(&public_id),
+            ))
+            .await?;
+        let mut caller_errors = Vec::new();
+        while let Some(part) = stream.next().await {
+            if let Err(error) = part {
+                caller_errors.push(format!("{error:?}"));
+            }
+        }
+        pipeline.drain_pending_settlements().await;
+        let recorder_output = recorder_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .join("\n");
+        let caller_output = caller_errors.join("\n");
+        let log_output = String::from_utf8(
+            captured_logs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )?;
+
+        assert!(
+            caller_output.contains("UpstreamInvalidResponse"),
+            "existing decoder error classification was not preserved: {caller_output}"
+        );
+        for output in [&caller_output, &recorder_output, &log_output] {
+            assert!(
+                !output.contains(NATIVE_SENTINEL),
+                "native id leaked: {output}"
+            );
+            assert!(
+                !output.contains(CREDENTIAL_SENTINEL),
+                "credential leaked: {output}"
+            );
+        }
+        assert!(caller_output.contains(&public_id));
+        assert!(recorder_output.contains(&public_id));
         Ok(())
     }
 

@@ -2498,7 +2498,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
             }
             // genuinely unknown, forward-compatible event — ignore (#432)
             _ => {
-                tracing::debug!(event_type, "ignoring unknown responses stream event");
+                tracing::debug!("ignoring unknown responses stream event");
             }
         }
         Ok(parts)

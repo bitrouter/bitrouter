@@ -805,8 +805,8 @@ fn parse_content(value: &serde_json::Value) -> Result<Vec<Content>> {
                     }
                     // Unknown block types are skipped, not fatal — forward
                     // compatibility (an explicit decision, not a catch-all bug).
-                    other => {
-                        tracing::debug!(block_type = other, "skipping unknown anthropic block");
+                    _ => {
+                        tracing::debug!("skipping unknown anthropic block");
                     }
                 }
             }
