@@ -38,6 +38,7 @@ const CIPHER_VERSION: i32 = 1;
 const NONCE_BYTES: usize = 12;
 const PUBLICATION_GENERATION_BYTES: usize = 16;
 const PUBLICATION_PROVISIONAL: &str = "provisional";
+const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
 
 #[derive(Clone)]
@@ -202,11 +203,36 @@ pub struct ContinuationRegistry {
     /// `publication_generation` are the durable ownership authority; this map
     /// lets the originating attempt retry an owner-aware CAS compensation.
     ///
-    /// A hard process crash after activation but before the terminal reaches
-    /// the socket remains the intentionally documented at-least-once delivery
-    /// exception: there is no process left to perform the compensating delete.
+    /// A hard process crash after the downstream acknowledgement and durable
+    /// activation but before the terminal reaches the socket remains the
+    /// intentionally documented at-least-once delivery exception: there is no
+    /// process left to perform the compensating delete.
     pending_publications: Arc<Mutex<HashMap<u64, PendingPublication>>>,
     pending_bind_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
+    #[cfg(test)]
+    ambiguous_insert_fault: Arc<Mutex<Option<Arc<AmbiguousInsertFault>>>>,
+    #[cfg(test)]
+    maintenance_fault: Arc<Mutex<Option<Arc<MaintenanceFault>>>>,
+}
+
+#[cfg(test)]
+struct AmbiguousInsertFault {
+    committed: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaintenanceFaultKind {
+    Scrub,
+    Purge,
+}
+
+#[cfg(test)]
+struct MaintenanceFault {
+    kind: MaintenanceFaultKind,
+    snapshot_read: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 #[derive(Clone)]
@@ -251,7 +277,81 @@ impl ContinuationRegistry {
             prune_batch_size,
             pending_publications: Arc::new(Mutex::new(HashMap::new())),
             pending_bind_locks: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(test)]
+            ambiguous_insert_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            maintenance_fault: Arc::new(Mutex::new(None)),
         })
+    }
+
+    #[cfg(test)]
+    fn inject_ambiguous_insert_after_commit(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let fault = Arc::new(AmbiguousInsertFault {
+            committed: Mutex::new(Some(committed_tx)),
+            release: tokio::sync::Mutex::new(Some(release_rx)),
+        });
+        match self.ambiguous_insert_fault.lock() {
+            Ok(mut installed) => *installed = Some(fault),
+            Err(poisoned) => *poisoned.into_inner() = Some(fault),
+        }
+        (committed_rx, release_tx)
+    }
+
+    #[cfg(test)]
+    fn pause_maintenance_after_snapshot(
+        &self,
+        kind: MaintenanceFaultKind,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (snapshot_read_tx, snapshot_read_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let fault = Arc::new(MaintenanceFault {
+            kind,
+            snapshot_read: Mutex::new(Some(snapshot_read_tx)),
+            release: tokio::sync::Mutex::new(Some(release_rx)),
+        });
+        match self.maintenance_fault.lock() {
+            Ok(mut installed) => *installed = Some(fault),
+            Err(poisoned) => *poisoned.into_inner() = Some(fault),
+        }
+        (snapshot_read_rx, release_tx)
+    }
+
+    #[cfg(test)]
+    async fn wait_at_maintenance_snapshot(&self, kind: MaintenanceFaultKind) {
+        let fault = {
+            let mut installed = match self.maintenance_fault.lock() {
+                Ok(installed) => installed,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if installed.as_ref().is_some_and(|fault| fault.kind == kind) {
+                installed.take()
+            } else {
+                None
+            }
+        };
+        let Some(fault) = fault else {
+            return;
+        };
+        let snapshot_read = match fault.snapshot_read.lock() {
+            Ok(mut snapshot_read) => snapshot_read.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(snapshot_read) = snapshot_read {
+            let _ = snapshot_read.send(());
+        }
+        if let Some(release) = fault.release.lock().await.take() {
+            let _ = release.await;
+        }
     }
 
     pub fn database(&self) -> &DatabaseConnection {
@@ -318,7 +418,7 @@ impl ContinuationRegistry {
         }
         let key = self.keys.load()?;
         match row.publication_state.as_str() {
-            PUBLICATION_ACTIVE => {
+            PUBLICATION_DELIVERING | PUBLICATION_ACTIVE => {
                 row = self
                     .transition_publication_state(&key, &row, PUBLICATION_PROVISIONAL)
                     .await?;
@@ -397,24 +497,96 @@ impl ContinuationRegistry {
         }
         match row.publication_state.as_str() {
             PUBLICATION_PROVISIONAL => {
-                self.transition_publication_state(&key, &row, PUBLICATION_ACTIVE)
+                self.transition_publication_state(&key, &row, PUBLICATION_DELIVERING)
                     .await?;
             }
-            PUBLICATION_ACTIVE => {
+            PUBLICATION_DELIVERING => {
                 decrypt_row(&key, &row)?;
             }
+            PUBLICATION_ACTIVE => anyhow::bail!(
+                "continuation publication was already active before delivery acknowledgement"
+            ),
             state => anyhow::bail!("unsupported continuation publication state '{state}'"),
         }
 
-        let delivery_result = delivery.wait_for_delivery().await;
+        let delivery_result = delivery.wait_for_delivery_acknowledgement().await;
         if delivery_result.as_ref().is_ok_and(|delivered| *delivered) {
-            self.clear_pending_publication(delivery_attempt_id, &publication.generation);
-            return Ok(true);
+            let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+                .one(&self.db)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("delivering continuation disappeared before activation")
+                })?;
+            let activation = if row.publication_generation != publication.generation {
+                Err(anyhow::anyhow!(
+                    "delivering continuation generation ownership changed"
+                ))
+            } else if row.publication_state != PUBLICATION_DELIVERING {
+                Err(anyhow::anyhow!(
+                    "continuation left delivering state before activation"
+                ))
+            } else {
+                self.transition_publication_state(&key, &row, PUBLICATION_ACTIVE)
+                    .await
+            };
+            match activation {
+                Ok(_) => {
+                    let activation_observed = delivery.complete_activation(Ok(()));
+                    if activation_observed && delivery.wait_for_terminal_commit().await {
+                        self.clear_pending_publication(
+                            delivery_attempt_id,
+                            &publication.generation,
+                        );
+                        return Ok(true);
+                    }
+                    match self.compensate_owned_publication(&publication).await {
+                        Ok(()) => {
+                            self.clear_pending_publication(
+                                delivery_attempt_id,
+                                &publication.generation,
+                            );
+                            return Ok(false);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Err(activation_error) => {
+                    let compensation = self.compensate_owned_publication(&publication).await;
+                    if compensation.is_ok() {
+                        self.clear_pending_publication(
+                            delivery_attempt_id,
+                            &publication.generation,
+                        );
+                    }
+                    let error = match compensation {
+                        Ok(()) => activation_error,
+                        Err(compensation_error) => anyhow::anyhow!(
+                            "{activation_error}; compensating failed activation: {compensation_error}"
+                        ),
+                    };
+                    let _ = delivery.complete_activation(Err(BitrouterError::internal(format!(
+                        "activating provider continuation publication: {error}"
+                    ))));
+                    return Err(error);
+                }
+            }
         }
 
-        self.compensate_owned_publication(&publication).await?;
-        self.clear_pending_publication(delivery_attempt_id, &publication.generation);
-        delivery_result.map_err(anyhow::Error::from)
+        match self.compensate_owned_publication(&publication).await {
+            Ok(()) => {
+                self.clear_pending_publication(delivery_attempt_id, &publication.generation);
+                if delivery.complete_activation(Ok(())) {
+                    let _ = delivery.wait_for_terminal_commit().await;
+                }
+                delivery_result.map_err(anyhow::Error::from)
+            }
+            Err(error) => {
+                let _ = delivery.complete_activation(Err(BitrouterError::internal(format!(
+                    "compensating provider continuation publication: {error}"
+                ))));
+                Err(error)
+            }
+        }
     }
 
     async fn transition_publication_state(
@@ -425,9 +597,11 @@ impl ContinuationRegistry {
     ) -> Result<continuation_entity::Model> {
         if !matches!(
             row.publication_state.as_str(),
-            PUBLICATION_PROVISIONAL | PUBLICATION_ACTIVE
-        ) || !matches!(next_state, PUBLICATION_PROVISIONAL | PUBLICATION_ACTIVE)
-        {
+            PUBLICATION_PROVISIONAL | PUBLICATION_DELIVERING | PUBLICATION_ACTIVE
+        ) || !matches!(
+            next_state,
+            PUBLICATION_PROVISIONAL | PUBLICATION_DELIVERING | PUBLICATION_ACTIVE
+        ) {
             anyhow::bail!("unsupported continuation publication state transition");
         }
         let old_ciphertext = row
@@ -637,9 +811,37 @@ impl ContinuationRegistry {
             expires_at: Set(expires_at),
             purge_after: Set(purge_after),
             publication_state: Set(state.to_owned()),
-            publication_generation: Set(generation),
+            publication_generation: Set(generation.clone()),
         };
-        match model.insert(&self.db).await {
+        let insert_result = model.insert(&self.db).await;
+        #[cfg(test)]
+        let insert_result = match insert_result {
+            Ok(model) => {
+                let fault = match self.ambiguous_insert_fault.lock() {
+                    Ok(mut fault) => fault.take(),
+                    Err(poisoned) => poisoned.into_inner().take(),
+                };
+                if let Some(fault) = fault {
+                    let committed = match fault.committed.lock() {
+                        Ok(mut committed) => committed.take(),
+                        Err(poisoned) => poisoned.into_inner().take(),
+                    };
+                    if let Some(committed) = committed {
+                        let _ = committed.send(());
+                    }
+                    if let Some(release) = fault.release.lock().await.take() {
+                        let _ = release.await;
+                    }
+                    Err(sea_orm::DbErr::Custom(
+                        "injected ambiguous insert result after commit".to_owned(),
+                    ))
+                } else {
+                    Ok(model)
+                }
+            }
+            Err(error) => Err(error),
+        };
+        match insert_result {
             Ok(_) => Ok(BindOutcome::Inserted),
             Err(insert_error) => {
                 let existing = continuation_entity::Entity::find_by_id(&continuation_identity)
@@ -652,9 +854,21 @@ impl ContinuationRegistry {
                 if existing_plaintext == provider_response_id
                     && existing.target_fingerprint == target_fingerprint
                 {
+                    if existing.publication_generation == generation {
+                        return match existing.publication_state.as_str() {
+                            PUBLICATION_PROVISIONAL
+                            | PUBLICATION_DELIVERING
+                            | PUBLICATION_ACTIVE => Ok(BindOutcome::Inserted),
+                            state => anyhow::bail!(
+                                "unsupported continuation publication state '{state}'"
+                            ),
+                        };
+                    }
                     match existing.publication_state.as_str() {
                         PUBLICATION_ACTIVE => Ok(BindOutcome::ExistingActive),
-                        PUBLICATION_PROVISIONAL => Ok(BindOutcome::ExistingProvisional),
+                        PUBLICATION_PROVISIONAL | PUBLICATION_DELIVERING => {
+                            Ok(BindOutcome::ExistingProvisional)
+                        }
                         state => {
                             anyhow::bail!("unsupported continuation publication state '{state}'")
                         }
@@ -679,49 +893,42 @@ impl ContinuationRegistry {
         // rollback, including the old precheck-to-insert TOCTOU window.
         let identity_lock = self.pending_identity_lock(&continuation_identity);
         let _identity_guard = identity_lock.lock().await;
-        let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
-            .one(&self.db)
-            .await?
-        else {
-            return Ok(ContinuationResolution::Missing);
-        };
-        let locally_pending = {
-            let publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
+        loop {
+            let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
+                .one(&self.db)
+                .await?
+            else {
+                return Ok(ContinuationResolution::Missing);
             };
-            publications.values().any(|publication| {
-                publication.continuation_identity == continuation_identity
-                    && publication.generation == row.publication_generation
-            })
-        };
-        if locally_pending {
-            return Ok(ContinuationResolution::Missing);
+            if row.publication_state != PUBLICATION_ACTIVE {
+                return Ok(ContinuationResolution::Missing);
+            }
+            let expected_owner = key.owner_identity(owner_user_id)?;
+            if row.owner_identity != expected_owner {
+                anyhow::bail!("continuation owner identity mismatch");
+            }
+            if row.key_id != key.key_id {
+                anyhow::bail!("continuation key epoch mismatch");
+            }
+            if row.cipher_version != CIPHER_VERSION {
+                anyhow::bail!("unsupported continuation cipher version");
+            }
+            let expires_at = parse_timestamp(&row.expires_at)?;
+            if now >= expires_at {
+                if self.scrub_expired(&row).await? {
+                    return Ok(ContinuationResolution::Expired);
+                }
+                // A different generation replaced the stale snapshot. Reload
+                // it rather than reporting or mutating the superseded row.
+                continue;
+            }
+            let provider_response_id = decrypt_row(&key, &row)?;
+            return Ok(ContinuationResolution::Active(ResolvedContinuation {
+                provider_response_id,
+                target_fingerprint: row.target_fingerprint,
+                key,
+            }));
         }
-        if row.publication_state != PUBLICATION_ACTIVE {
-            return Ok(ContinuationResolution::Missing);
-        }
-        let expected_owner = key.owner_identity(owner_user_id)?;
-        if row.owner_identity != expected_owner {
-            anyhow::bail!("continuation owner identity mismatch");
-        }
-        if row.key_id != key.key_id {
-            anyhow::bail!("continuation key epoch mismatch");
-        }
-        if row.cipher_version != CIPHER_VERSION {
-            anyhow::bail!("unsupported continuation cipher version");
-        }
-        let expires_at = parse_timestamp(&row.expires_at)?;
-        if now >= expires_at {
-            self.scrub_expired(&row.continuation_identity).await?;
-            return Ok(ContinuationResolution::Expired);
-        }
-        let provider_response_id = decrypt_row(&key, &row)?;
-        Ok(ContinuationResolution::Active(ResolvedContinuation {
-            provider_response_id,
-            target_fingerprint: row.target_fingerprint,
-            key,
-        }))
     }
 
     pub async fn prune(&self, now: DateTime<Utc>) -> Result<u64> {
@@ -734,39 +941,46 @@ impl ContinuationRegistry {
             .all(&self.db)
             .await?;
         for row in expired {
-            self.scrub_expired(&row.continuation_identity).await?;
+            self.scrub_expired(&row).await?;
         }
 
-        let purge_ids = continuation_entity::Entity::find()
-            .select_only()
-            .column(continuation_entity::Column::ContinuationIdentity)
+        let purge_rows = continuation_entity::Entity::find()
             .filter(continuation_entity::Column::PurgeAfter.lte(now))
             .order_by_asc(continuation_entity::Column::PurgeAfter)
             .limit(self.prune_batch_size)
-            .into_tuple::<String>()
             .all(&self.db)
             .await?;
-        if purge_ids.is_empty() {
-            return Ok(0);
+        #[cfg(test)]
+        self.wait_at_maintenance_snapshot(MaintenanceFaultKind::Purge)
+            .await;
+        let mut rows_affected = 0;
+        for row in purge_rows {
+            let result = continuation_entity::Entity::delete_many()
+                .filter(continuation_snapshot_condition(&row))
+                .exec(&self.db)
+                .await?;
+            rows_affected += result.rows_affected;
         }
-        let result = continuation_entity::Entity::delete_many()
-            .filter(continuation_entity::Column::ContinuationIdentity.is_in(purge_ids))
-            .exec(&self.db)
-            .await?;
-        Ok(result.rows_affected)
+        Ok(rows_affected)
     }
 
-    async fn scrub_expired(&self, continuation_identity: &str) -> Result<()> {
-        let model = continuation_entity::ActiveModel {
-            continuation_identity: sea_orm::ActiveValue::Unchanged(
-                continuation_identity.to_owned(),
-            ),
-            ciphertext: Set(None),
-            nonce: Set(None),
-            ..Default::default()
-        };
-        model.update(&self.db).await?;
-        Ok(())
+    async fn scrub_expired(&self, row: &continuation_entity::Model) -> Result<bool> {
+        #[cfg(test)]
+        self.wait_at_maintenance_snapshot(MaintenanceFaultKind::Scrub)
+            .await;
+        let result = continuation_entity::Entity::update_many()
+            .col_expr(
+                continuation_entity::Column::Ciphertext,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .col_expr(
+                continuation_entity::Column::Nonce,
+                sea_orm::sea_query::Expr::value(Option::<String>::None),
+            )
+            .filter(continuation_snapshot_condition(row))
+            .exec(&self.db)
+            .await?;
+        Ok(result.rows_affected == 1)
     }
 
     async fn ensure_key_epoch(&self, key: &ContinuationKey, now: DateTime<Utc>) -> Result<()> {
@@ -796,6 +1010,35 @@ impl ContinuationRegistry {
             anyhow::bail!("continuation key epoch mismatch");
         }
         Ok(())
+    }
+}
+
+fn continuation_snapshot_condition(row: &continuation_entity::Model) -> sea_orm::Condition {
+    let condition = sea_orm::Condition::all()
+        .add(
+            continuation_entity::Column::ContinuationIdentity.eq(row.continuation_identity.clone()),
+        )
+        .add(continuation_entity::Column::OwnerIdentity.eq(row.owner_identity.clone()))
+        .add(continuation_entity::Column::TargetFingerprint.eq(row.target_fingerprint.clone()))
+        .add(continuation_entity::Column::KeyId.eq(row.key_id.clone()))
+        .add(continuation_entity::Column::CipherVersion.eq(row.cipher_version))
+        .add(continuation_entity::Column::CreatedAt.eq(row.created_at.clone()))
+        .add(continuation_entity::Column::ExpiresAt.eq(row.expires_at.clone()))
+        .add(continuation_entity::Column::PurgeAfter.eq(row.purge_after.clone()))
+        .add(continuation_entity::Column::PublicationState.eq(row.publication_state.clone()))
+        .add(
+            continuation_entity::Column::PublicationGeneration
+                .eq(row.publication_generation.clone()),
+        );
+    let condition = match &row.ciphertext {
+        Some(ciphertext) => {
+            condition.add(continuation_entity::Column::Ciphertext.eq(ciphertext.clone()))
+        }
+        None => condition.add(continuation_entity::Column::Ciphertext.is_null()),
+    };
+    match &row.nonce {
+        Some(nonce) => condition.add(continuation_entity::Column::Nonce.eq(nonce.clone())),
+        None => condition.add(continuation_entity::Column::Nonce.is_null()),
     }
 }
 
@@ -1230,6 +1473,27 @@ mod tests {
         )
     }
 
+    async fn independent_file_registries(
+        secret: u8,
+    ) -> anyhow::Result<(
+        tempfile::TempDir,
+        ContinuationRegistry,
+        ContinuationRegistry,
+    )> {
+        let directory = tempfile::tempdir()?;
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("continuations.db").display()
+        );
+        let first_db = crate::db::connect(&database_url).await?;
+        crate::db::run_migrations(&first_db).await?;
+        let second_db = crate::db::connect(&database_url).await?;
+        let keys = ContinuationKeySource::fixed(ContinuationKey::from_bytes([secret; 32])?);
+        let first = ContinuationRegistry::new(first_db, keys.clone(), 30, 10)?;
+        let second = ContinuationRegistry::new(second_db, keys, 30, 10)?;
+        Ok((directory, first, second))
+    }
+
     fn app_state(pipeline: Arc<Pipeline>) -> AppState {
         AppState {
             language_model: pipeline,
@@ -1547,6 +1811,177 @@ mod tests {
                 .await?,
             ContinuationResolution::Missing
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_scrub_never_redacts_a_rebound_generation() -> anyhow::Result<()> {
+        let (_directory, stale_registry, rebinding_registry) =
+            independent_file_registries(59).await?;
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
+        let maintenance_at = created_at + TimeDelta::try_days(31).unwrap();
+        stale_registry
+            .bind(
+                "owner",
+                "scrub-race",
+                "provider-old",
+                &target("credential"),
+                &static_authority("credential"),
+                created_at,
+            )
+            .await?;
+        let (snapshot_read, release) =
+            stale_registry.pause_maintenance_after_snapshot(MaintenanceFaultKind::Scrub);
+        let resolving_registry = stale_registry.clone();
+        let resolve = tokio::spawn(async move {
+            resolving_registry
+                .resolve("owner", "scrub-race", maintenance_at)
+                .await
+        });
+        snapshot_read.await?;
+
+        let continuation_identity = rebinding_registry
+            .keys
+            .load()?
+            .continuation_identity("owner", "scrub-race")?;
+        continuation_entity::Entity::delete_by_id(continuation_identity)
+            .exec(rebinding_registry.database())
+            .await?;
+        rebinding_registry
+            .bind(
+                "owner",
+                "scrub-race",
+                "provider-new",
+                &target("credential"),
+                &static_authority("credential"),
+                maintenance_at,
+            )
+            .await?;
+        release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("scrub release closed"))?;
+
+        let resolved = resolve
+            .await
+            .expect("resolve task joins")
+            .expect("stale scrub must not redact the rebound generation");
+        let ContinuationResolution::Active(resolved) = resolved else {
+            panic!("stale scrub must reload the rebound active generation")
+        };
+        assert_eq!(resolved.provider_response_id, "provider-new");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_scrub_never_redacts_a_rebound_generation() -> anyhow::Result<()> {
+        let (_directory, stale_registry, rebinding_registry) =
+            independent_file_registries(60).await?;
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
+        let maintenance_at = created_at + TimeDelta::try_days(31).unwrap();
+        stale_registry
+            .bind(
+                "owner",
+                "batch-scrub-race",
+                "provider-old",
+                &target("credential"),
+                &static_authority("credential"),
+                created_at,
+            )
+            .await?;
+        let (snapshot_read, release) =
+            stale_registry.pause_maintenance_after_snapshot(MaintenanceFaultKind::Scrub);
+        let pruning_registry = stale_registry.clone();
+        let prune = tokio::spawn(async move { pruning_registry.prune(maintenance_at).await });
+        snapshot_read.await?;
+
+        let continuation_identity = rebinding_registry
+            .keys
+            .load()?
+            .continuation_identity("owner", "batch-scrub-race")?;
+        continuation_entity::Entity::delete_by_id(continuation_identity)
+            .exec(rebinding_registry.database())
+            .await?;
+        rebinding_registry
+            .bind(
+                "owner",
+                "batch-scrub-race",
+                "provider-new",
+                &target("credential"),
+                &static_authority("credential"),
+                maintenance_at,
+            )
+            .await?;
+        release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("batch scrub release closed"))?;
+        assert_eq!(prune.await??, 0);
+
+        let resolved = rebinding_registry
+            .resolve("owner", "batch-scrub-race", maintenance_at)
+            .await
+            .expect("batch scrub must not redact the rebound generation");
+        let ContinuationResolution::Active(resolved) = resolved else {
+            panic!("batch scrub redacted the rebound active generation")
+        };
+        assert_eq!(resolved.provider_response_id, "provider-new");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn purge_never_deletes_a_rebound_generation() -> anyhow::Result<()> {
+        let (_directory, stale_registry, rebinding_registry) =
+            independent_file_registries(61).await?;
+        let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
+        let maintenance_at = created_at + TimeDelta::try_days(61).unwrap();
+        stale_registry
+            .bind(
+                "owner",
+                "purge-race",
+                "provider-old",
+                &target("credential"),
+                &static_authority("credential"),
+                created_at,
+            )
+            .await?;
+        let (snapshot_read, release) =
+            stale_registry.pause_maintenance_after_snapshot(MaintenanceFaultKind::Purge);
+        let pruning_registry = stale_registry.clone();
+        let prune = tokio::spawn(async move { pruning_registry.prune(maintenance_at).await });
+        snapshot_read.await?;
+
+        let continuation_identity = rebinding_registry
+            .keys
+            .load()?
+            .continuation_identity("owner", "purge-race")?;
+        continuation_entity::Entity::delete_by_id(continuation_identity)
+            .exec(rebinding_registry.database())
+            .await?;
+        rebinding_registry
+            .bind(
+                "owner",
+                "purge-race",
+                "provider-new",
+                &target("credential"),
+                &static_authority("credential"),
+                maintenance_at,
+            )
+            .await?;
+        release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("purge release closed"))?;
+        assert_eq!(
+            prune.await??,
+            0,
+            "a stale purge snapshot must report no deleted row"
+        );
+
+        let resolved = rebinding_registry
+            .resolve("owner", "purge-race", maintenance_at)
+            .await?;
+        let ContinuationResolution::Active(resolved) = resolved else {
+            panic!("stale purge deleted the rebound active generation")
+        };
+        assert_eq!(resolved.provider_response_id, "provider-new");
         Ok(())
     }
 
@@ -2025,6 +2460,302 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn independent_registry_cannot_resolve_delivery_ready_before_acknowledgement()
+    -> anyhow::Result<()> {
+        let (_directory, owner_registry, observer_registry) =
+            independent_file_registries(53).await?;
+        let runtime = ContinuationRuntime::new(owner_registry);
+        let attempt = finalization_context("cross-registry-ready", 410, "provider-ready");
+        runtime.finalize(&attempt).await?;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new(ready_tx, ack_rx);
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+
+        let public_id = encode_gateway_continuation_id("cross-registry-ready")?;
+        assert_eq!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "delivery readiness is not proof that downstream accepted the terminal"
+        );
+
+        ack_tx
+            .send(DeliveryAcknowledgement::Failed(BitrouterError::internal(
+                "terminal encoding failed",
+            )))
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        commit
+            .await?
+            .expect_err("a negative acknowledgement must fail the commit");
+        assert_eq!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "negative acknowledgement must leave no resolvable publication"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn independent_registry_never_observes_early_delivery_drop_as_active()
+    -> anyhow::Result<()> {
+        let (_directory, owner_registry, observer_registry) =
+            independent_file_registries(63).await?;
+        let runtime = ContinuationRuntime::new(owner_registry);
+        let attempt = finalization_context("cross-registry-drop", 419, "provider-early-drop");
+        runtime.finalize(&attempt).await?;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new(ready_tx, ack_rx);
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        drop(ack_tx);
+
+        let public_id = encode_gateway_continuation_id("cross-registry-drop")?;
+        assert_eq!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "dropping before acknowledgement must never expose Active"
+        );
+        assert!(!commit.await??);
+        assert_eq!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "early drop compensation must remove durable pre-delivery state"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dropped_delivery_after_ack_compensates_owned_activation() -> anyhow::Result<()> {
+        let (_directory, owner_registry, observer_registry) =
+            independent_file_registries(54).await?;
+        let runtime = ContinuationRuntime::new(owner_registry);
+        let attempt = finalization_context("drop-after-ack", 411, "provider-drop-after-ack");
+        runtime.finalize(&attempt).await?;
+        let public_id = encode_gateway_continuation_id("drop-after-ack")?;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        drop(activation_rx);
+        drop(terminal_tx);
+
+        assert!(!commit.await??);
+        assert_eq!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "dropping the delivery future after ack must compensate its owned generation"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dropped_terminal_commit_after_active_cas_compensates_owned_activation()
+    -> anyhow::Result<()> {
+        let (_directory, owner_registry, observer_registry) =
+            independent_file_registries(55).await?;
+        let runtime = ContinuationRuntime::new(owner_registry);
+        let attempt = finalization_context("drop-after-active", 412, "provider-drop-after-active");
+        runtime.finalize(&attempt).await?;
+        let public_id = encode_gateway_continuation_id("drop-after-active")?;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        activation_rx.await??;
+        assert!(matches!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+        drop(terminal_tx);
+
+        assert!(!commit.await??);
+        assert_eq!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "an unobserved completion must not strand the active generation"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn committed_terminal_is_immediately_active_to_independent_registry() -> anyhow::Result<()>
+    {
+        let (_directory, owner_registry, observer_registry) =
+            independent_file_registries(56).await?;
+        let runtime = ContinuationRuntime::new(owner_registry);
+        let attempt = finalization_context("terminal-committed", 413, "provider-committed");
+        runtime.finalize(&attempt).await?;
+        let public_id = encode_gateway_continuation_id("terminal-committed")?;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        activation_rx.await??;
+        terminal_tx
+            .send(())
+            .map_err(|_| anyhow::anyhow!("terminal commit receiver closed"))?;
+        assert!(commit.await??);
+
+        assert!(matches!(
+            observer_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn acknowledged_attempt_never_activates_a_rebound_foreign_generation()
+    -> anyhow::Result<()> {
+        let (_directory, first_registry, second_registry) = independent_file_registries(62).await?;
+        let first_runtime = ContinuationRuntime::new(first_registry.clone());
+        let second_runtime = ContinuationRuntime::new(second_registry.clone());
+        let first = finalization_context("ack-rebind", 417, "provider-ack-rebind");
+        let second = finalization_context("ack-rebind", 418, "provider-ack-rebind");
+        first_runtime.finalize(&first).await?;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = first_runtime.clone();
+        let committing_attempt = first.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+
+        let public_id = encode_gateway_continuation_id("ack-rebind")?;
+        let continuation_identity = first_registry
+            .keys
+            .load()?
+            .continuation_identity("owner", &public_id)?;
+        continuation_entity::Entity::delete_by_id(continuation_identity)
+            .exec(second_registry.database())
+            .await?;
+        second_runtime.finalize(&second).await?;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        activation_rx
+            .await?
+            .expect_err("foreign generation must reject activation");
+        drop(terminal_tx);
+        commit
+            .await?
+            .expect_err("the stale acknowledged attempt must fail closed");
+        assert_eq!(
+            second_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "stale acknowledgement must not activate the rebound provisional row"
+        );
+
+        commit_delivered(&second_runtime, &second).await?;
+        assert!(matches!(
+            second_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn failed_compensation_keeps_retryable_row_ownership_and_visibility_mask()
     -> anyhow::Result<()> {
         let registry = registry(45).await?;
@@ -2094,8 +2825,31 @@ mod tests {
             ))
             .await?;
 
-        commit_disconnected(&runtime, &attempt)
-            .await
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        activation_rx.await??;
+        drop(terminal_tx);
+        commit
+            .await?
             .expect_err("forced active compensation failure must propagate");
         registry
             .database()
@@ -2278,6 +3032,94 @@ mod tests {
             0,
             "the duplicate attempt must not replace the first row's rollback token"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ambiguous_committed_insert_same_generation_retains_rollback_ownership()
+    -> anyhow::Result<()> {
+        let (_directory, registry, restarted_registry) = independent_file_registries(57).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("ambiguous-owned", 414, "provider-ambiguous-owned");
+        let (committed, release) = registry.inject_ambiguous_insert_after_commit();
+        let finalizing_runtime = runtime.clone();
+        let finalizing_attempt = attempt.clone();
+        let finalize =
+            tokio::spawn(async move { finalizing_runtime.finalize(&finalizing_attempt).await });
+
+        committed.await?;
+        release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("ambiguous insert release closed"))?;
+        finalize
+            .await?
+            .expect("rereading the same durable generation must retain ownership");
+        assert!(
+            registry
+                .pending_publications
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&attempt.delivery_attempt_id),
+            "ambiguous success must preserve the rollback generation"
+        );
+
+        runtime.rollback(&attempt).await?;
+        assert_eq!(
+            restarted_registry
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("ambiguous-owned")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "tracked rollback must clean ambiguous committed state across restart"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ambiguous_insert_never_adopts_rebound_foreign_generation() -> anyhow::Result<()> {
+        let (_directory, first_registry, second_registry) = independent_file_registries(58).await?;
+        let first_runtime = ContinuationRuntime::new(first_registry.clone());
+        let second_runtime = ContinuationRuntime::new(second_registry.clone());
+        let first = finalization_context("ambiguous-foreign", 415, "provider-ambiguous-foreign");
+        let second = finalization_context("ambiguous-foreign", 416, "provider-ambiguous-foreign");
+        let (committed, release) = first_registry.inject_ambiguous_insert_after_commit();
+        let finalizing_runtime = first_runtime.clone();
+        let finalizing_attempt = first.clone();
+        let finalize =
+            tokio::spawn(async move { finalizing_runtime.finalize(&finalizing_attempt).await });
+
+        committed.await?;
+        let continuation_identity = first_registry.keys.load()?.continuation_identity(
+            "owner",
+            &encode_gateway_continuation_id("ambiguous-foreign")?,
+        )?;
+        continuation_entity::Entity::delete_by_id(continuation_identity)
+            .exec(second_registry.database())
+            .await?;
+        second_runtime.finalize(&second).await?;
+        release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("ambiguous insert release closed"))?;
+        finalize
+            .await?
+            .expect_err("a different durable generation must remain foreign");
+
+        first_runtime.rollback(&first).await?;
+        assert_eq!(
+            second_registry
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("ambiguous-foreign")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "foreign provisional ownership remains unpublished"
+        );
+        second_runtime.rollback(&second).await?;
         Ok(())
     }
 

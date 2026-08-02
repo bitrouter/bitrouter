@@ -44,20 +44,36 @@ struct StreamingExecution {
 pub(crate) struct DeliveryPermit {
     ready: tokio::sync::oneshot::Receiver<Result<()>>,
     acknowledged: Option<tokio::sync::oneshot::Sender<DeliveryAcknowledgement>>,
+    activation_completed: tokio::sync::oneshot::Receiver<Result<()>>,
+    terminal_committed: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl DeliveryPermit {
     pub(crate) async fn deliver(mut self) -> Result<()> {
         match self.ready.await {
             Ok(Ok(())) => {
-                // No await follows this send. The same poll that observes the
-                // activation-ready signal authorizes the payload returned by
-                // the caller immediately after this future becomes Ready.
+                // Activation follows the acknowledgement. Once it completes,
+                // the terminal-commit signal and Ready return happen in this
+                // same poll with no intervening await.
                 let acknowledged = self
                     .acknowledged
                     .take()
                     .is_some_and(|ack| ack.send(DeliveryAcknowledgement::Delivered).is_ok());
                 if acknowledged {
+                    self.activation_completed.await.map_err(|error| {
+                        BitrouterError::internal(format!(
+                            "delivery activation ended unexpectedly: {error}"
+                        ))
+                    })??;
+                    self.terminal_committed
+                        .take()
+                        .ok_or_else(|| {
+                            BitrouterError::internal("delivery terminal commit was already used")
+                        })?
+                        .send(())
+                        .map_err(|_| {
+                            BitrouterError::internal("delivery terminal commit receiver closed")
+                        })?;
                     Ok(())
                 } else {
                     Err(BitrouterError::internal(
@@ -81,6 +97,20 @@ impl DeliveryPermit {
                     .take()
                     .is_some_and(|ack| ack.send(DeliveryAcknowledgement::Failed(failure)).is_ok());
                 if acknowledged {
+                    self.activation_completed.await.map_err(|error| {
+                        BitrouterError::internal(format!(
+                            "delivery compensation ended unexpectedly: {error}"
+                        ))
+                    })??;
+                    self.terminal_committed
+                        .take()
+                        .ok_or_else(|| {
+                            BitrouterError::internal("delivery terminal commit was already used")
+                        })?
+                        .send(())
+                        .map_err(|_| {
+                            BitrouterError::internal("delivery terminal commit receiver closed")
+                        })?;
                     Ok(())
                 } else {
                     Err(BitrouterError::internal(
@@ -115,12 +145,21 @@ enum DeliveryAuthorizationOutcome {
 fn delivery_handshake() -> (DeliveryPermit, RequiredDeliveryHandshake) {
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let (acknowledged_tx, acknowledged_rx) = tokio::sync::oneshot::channel();
+    let (activation_completed_tx, activation_completed_rx) = tokio::sync::oneshot::channel();
+    let (terminal_committed_tx, terminal_committed_rx) = tokio::sync::oneshot::channel();
     (
         DeliveryPermit {
             ready: ready_rx,
             acknowledged: Some(acknowledged_tx),
+            activation_completed: activation_completed_rx,
+            terminal_committed: Some(terminal_committed_tx),
         },
-        RequiredDeliveryHandshake::new(ready_tx, acknowledged_rx),
+        RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            acknowledged_rx,
+            activation_completed_tx,
+            terminal_committed_rx,
+        ),
     )
 }
 
@@ -1946,5 +1985,55 @@ mod stream_outcome_tests {
             outcome,
             Err(BitrouterError::Internal(message)) if message == "terminal encoder failed"
         ));
+    }
+
+    #[tokio::test]
+    async fn delivered_permit_waits_for_finalizer_post_ack_commit() {
+        let (permit, delivery) = delivery_handshake();
+        let (ack_observed_tx, ack_observed_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let authorization = tokio::spawn(async move {
+            let delivered = delivery.wait_for_delivery_acknowledgement().await?;
+            let _ = ack_observed_tx.send(());
+            let _ = finish_rx.await;
+            assert!(delivery.complete_activation(Ok(())));
+            assert!(delivery.wait_for_terminal_commit().await);
+            Ok::<bool, BitrouterError>(delivered)
+        });
+        let mut delivery_result = tokio::spawn(async move { permit.deliver().await });
+
+        ack_observed_rx
+            .await
+            .expect("finalizer observes downstream acknowledgement");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut delivery_result,)
+                .await
+                .is_err(),
+            "successful terminal must wait for the finalizer's post-ack durable commit"
+        );
+        finish_tx.send(()).expect("release finalizer");
+        assert!(authorization.await.expect("authorization joins").unwrap());
+        delivery_result
+            .await
+            .expect("delivery task joins")
+            .expect("delivery succeeds");
+    }
+
+    #[tokio::test]
+    async fn dropping_permit_after_activation_signal_closes_terminal_commit() {
+        let (permit, delivery) = delivery_handshake();
+        let mut authorization = Box::pin(async move {
+            assert!(delivery.wait_for_delivery_acknowledgement().await?);
+            assert!(delivery.complete_activation(Ok(())));
+            Ok::<bool, BitrouterError>(delivery.wait_for_terminal_commit().await)
+        });
+        assert!(futures::poll!(authorization.as_mut()).is_pending());
+
+        let mut deliver = Box::pin(permit.deliver());
+        assert!(futures::poll!(deliver.as_mut()).is_pending());
+        assert!(futures::poll!(authorization.as_mut()).is_pending());
+        drop(deliver);
+
+        assert!(!authorization.await.expect("authorization remains valid"));
     }
 }

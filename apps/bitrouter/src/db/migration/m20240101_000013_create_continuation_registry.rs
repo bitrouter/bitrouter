@@ -135,7 +135,11 @@ pub(crate) fn provider_continuations_table() -> TableCreateStatement {
                 .string()
                 .not_null(),
         )
-        .check(Expr::col(ProviderContinuations::PublicationState).is_in(["provisional", "active"]))
+        .check(Expr::col(ProviderContinuations::PublicationState).is_in([
+            "provisional",
+            "delivering",
+            "active",
+        ]))
         .check(Expr::col(ProviderContinuations::PublicationGeneration).ne(""))
         .to_owned()
 }
