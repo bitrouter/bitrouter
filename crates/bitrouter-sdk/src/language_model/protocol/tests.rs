@@ -2824,9 +2824,9 @@ fn streaming_decoders_emit_response_started_once() {
         })
         .unwrap();
     assert!(
-        first
-            .iter()
-            .any(|p| matches!(p, StreamPart::ResponseStarted { id } if id == "chatcmpl-stream1")),
+        first.iter().any(
+            |p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "chatcmpl-stream1")
+        ),
         "Chat Completions first chunk emits ResponseStarted; got {first:?}"
     );
     let second = dec
@@ -2862,7 +2862,7 @@ fn streaming_decoders_emit_response_started_once() {
     assert!(
         parts
             .iter()
-            .any(|p| matches!(p, StreamPart::ResponseStarted { id } if id == "msg_stream1")),
+            .any(|p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "msg_stream1")),
         "Anthropic message_start emits ResponseStarted; got {parts:?}"
     );
 
@@ -2882,7 +2882,7 @@ fn streaming_decoders_emit_response_started_once() {
     assert!(
         parts
             .iter()
-            .any(|p| matches!(p, StreamPart::ResponseStarted { id } if id == "google-stream1")),
+            .any(|p| matches!(p, StreamPart::ResponseStarted { id, .. } if id == "google-stream1")),
         "Google first chunk emits ResponseStarted; got {parts:?}"
     );
 }
@@ -2900,6 +2900,7 @@ fn chat_encoder_role_survives_leading_response_started() {
     let started = enc
         .encode(&StreamPart::ResponseStarted {
             id: "chatcmpl-upstream".to_string(),
+            source_protocol: ApiProtocol::ChatCompletions,
         })
         .unwrap();
     assert!(
@@ -3908,12 +3909,11 @@ fn responses_stream_tool_call_lifecycle() {
     assert_eq!(output[0]["arguments"], "{\"cmd\":\"ls\"}");
 }
 
-/// A native Responses upstream id remains provider metadata on the canonical
-/// stream parts, but every client-visible lifecycle response uses the gateway
-/// request id. Otherwise the terminal id cannot be used as the next turn's
-/// `previous_response_id` by gateway-owned continuation storage.
+/// A native Responses upstream id is the provider continuation identity, so it
+/// must replace the gateway fallback before any client lifecycle frame is
+/// emitted and remain stable through every terminal status.
 #[test]
-fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
+fn responses_stream_keeps_provider_id_across_native_lifecycle() {
     let adapter = adapter_for(ApiProtocol::Responses);
 
     // decode: response.completed → ResponseCompleted
@@ -3932,7 +3932,9 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
     };
     let parts = decoder.decode(&event).unwrap();
     match parts.first() {
-        Some(StreamPart::ResponseCompleted { id, status, usage }) => {
+        Some(StreamPart::ResponseCompleted {
+            id, status, usage, ..
+        }) => {
             assert_eq!(id, "resp_xyz");
             assert_eq!(status, "completed");
             assert_eq!(usage.as_ref().unwrap().prompt_tokens, 12);
@@ -3942,12 +3944,12 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
     }
 
     // Re-encode a native lifecycle whose provider id differs from the gateway
-    // identity. The upstream id remains available on the canonical parts above,
-    // but must never replace the client continuation identity.
+    // fallback. The first frame must already use the provider continuation id.
     let mut encoder = adapter.stream_encoder("gateway-request-id", "gpt-5");
     let mut frames = encoder
         .encode(&StreamPart::ResponseStarted {
             id: "resp_xyz".to_string(),
+            source_protocol: ApiProtocol::Responses,
         })
         .unwrap();
     frames.extend(
@@ -3961,6 +3963,7 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
         encoder
             .encode(&StreamPart::ResponseCompleted {
                 id: "resp_xyz".to_string(),
+                source_protocol: ApiProtocol::Responses,
                 status: "completed".to_string(),
                 usage: Some(Usage {
                     prompt_tokens: 12,
@@ -3981,7 +3984,7 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        response_ids, ["gateway-request-id"; 3],
+        response_ids, ["resp_xyz"; 3],
         "created, in-progress, and completed must expose one continuation id"
     );
     let completed = frames.iter().find_map(|f| match f {
@@ -3991,22 +3994,24 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
         _ => None,
     });
     let completed = completed.expect("response.completed event emitted");
-    assert_eq!(completed["response"]["id"], "gateway-request-id");
+    assert_eq!(completed["response"]["id"], "resp_xyz");
     assert_eq!(completed["response"]["status"], "completed");
     assert_eq!(completed["response"]["usage"]["input_tokens"], 12);
 
     for status in ["incomplete", "failed"] {
-        let gateway_id = format!("gateway-{status}");
-        let mut encoder = adapter.stream_encoder(&gateway_id, "gpt-5");
+        let mut encoder = adapter.stream_encoder(&format!("gateway-{status}"), "gpt-5");
+        let provider_id = format!("provider-{status}");
         let mut frames = encoder
             .encode(&StreamPart::ResponseStarted {
-                id: format!("provider-{status}"),
+                id: provider_id.clone(),
+                source_protocol: ApiProtocol::Responses,
             })
             .unwrap();
         frames.extend(
             encoder
                 .encode(&StreamPart::ResponseCompleted {
-                    id: format!("provider-{status}"),
+                    id: provider_id.clone(),
+                    source_protocol: ApiProtocol::Responses,
                     status: status.to_string(),
                     usage: None,
                 })
@@ -4021,13 +4026,14 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(response_ids, vec![gateway_id; 3], "status={status}");
+        assert_eq!(response_ids, vec![provider_id; 3], "status={status}");
     }
 
     let mut encoder = adapter.stream_encoder("gateway-error", "gpt-5");
     let mut failed = encoder
         .encode(&StreamPart::ResponseStarted {
             id: "provider-error".to_string(),
+            source_protocol: ApiProtocol::Responses,
         })
         .unwrap();
     failed.extend(encoder.encode_error("provider failed"));
@@ -4040,11 +4046,102 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(failed_ids, ["gateway-error"; 3]);
+    assert_eq!(failed_ids, ["provider-error"; 3]);
     assert!(failed.iter().any(|frame| matches!(
         frame,
         SseFrame::Event { event, .. } if event.as_deref() == Some("response.failed")
     )));
+}
+
+#[test]
+fn responses_stream_uses_gateway_id_without_native_start() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut encoder = adapter.stream_encoder("gateway-fallback", "gpt-5");
+    let frames = encoder
+        .encode(&StreamPart::ResponseCompleted {
+            id: "provider-terminal-only".to_string(),
+            source_protocol: ApiProtocol::Responses,
+            status: "completed".to_string(),
+            usage: None,
+        })
+        .unwrap();
+    let response_ids = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            SseFrame::Event { data, .. } => serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|event| event["response"]["id"].as_str().map(ToOwned::to_owned)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(response_ids, ["gateway-fallback"; 3]);
+}
+
+#[test]
+fn responses_created_surfaces_native_response_started() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let parts = decoder
+        .decode(&SseEvent {
+            event: Some("response.created".to_string()),
+            data: serde_json::json!({
+                "type": "response.created",
+                "response": {"id": "provider-native", "status": "in_progress"}
+            })
+            .to_string(),
+        })
+        .unwrap();
+    assert_eq!(
+        parts,
+        [StreamPart::ResponseStarted {
+            id: "provider-native".to_string(),
+            source_protocol: ApiProtocol::Responses,
+        }]
+    );
+}
+
+#[test]
+fn responses_stream_uses_gateway_id_for_chat_upstream() {
+    let mut chat_decoder = adapter_for(ApiProtocol::ChatCompletions).stream_decoder();
+    let chat_parts = chat_decoder
+        .decode(&SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "id": "chatcmpl-provider",
+                "choices": [{"index": 0, "delta": {"content": "answer"}}]
+            })
+            .to_string(),
+        })
+        .unwrap();
+    assert!(
+        chat_parts
+            .iter()
+            .any(|part| matches!(part, StreamPart::ResponseStarted { .. }))
+    );
+
+    let mut encoder =
+        adapter_for(ApiProtocol::Responses).stream_encoder("gateway-cross-protocol", "gpt-5");
+    let mut frames = Vec::new();
+    for part in chat_parts {
+        frames.extend(encoder.encode(&part).unwrap());
+    }
+    frames.extend(
+        encoder
+            .encode(&StreamPart::Finish {
+                reason: FinishReason::Stop,
+            })
+            .unwrap(),
+    );
+    let response_ids = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            SseFrame::Event { data, .. } => serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|event| event["response"]["id"].as_str().map(ToOwned::to_owned)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(response_ids, ["gateway-cross-protocol"; 3]);
 }
 
 /// Upstreams that omit the SSE `event:` line (OpenRouter, vanilla OpenAI

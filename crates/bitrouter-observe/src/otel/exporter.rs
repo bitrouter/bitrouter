@@ -705,7 +705,8 @@ impl ObserveHook for OtelExporter {
                         );
                     });
                 }
-                StreamPart::ResponseStarted { id } | StreamPart::ResponseCompleted { id, .. } => {
+                StreamPart::ResponseStarted { id, .. }
+                | StreamPart::ResponseCompleted { id, .. } => {
                     // The upstream response id, surfaced by the decoder near
                     // the start of the stream (`ResponseStarted`, emitted by
                     // Chat Completions / Messages / Generate Content) or on the terminal
@@ -2083,6 +2084,7 @@ mod hop_tests {
                 vec![
                     StreamPart::ResponseStarted {
                         id: "chatcmpl-streamed".into(),
+                        source_protocol: ApiProtocol::ChatCompletions,
                     },
                     StreamPart::TextDelta {
                         text: "hello".into(),
@@ -2356,6 +2358,7 @@ mod hop_tests {
                 &stream_ctx,
                 &StreamPart::ResponseCompleted {
                     id: "resp_streamed_xyz".to_string(),
+                    source_protocol: ApiProtocol::Responses,
                     status: "completed".to_string(),
                     usage: None,
                 },
@@ -2398,6 +2401,7 @@ mod hop_tests {
                 &stream_ctx,
                 &StreamPart::ResponseStarted {
                     id: "chatcmpl-streamed".to_string(),
+                    source_protocol: ApiProtocol::ChatCompletions,
                 },
             )
             .await;

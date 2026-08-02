@@ -1455,7 +1455,10 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                 .filter(|s| !s.is_empty())
         {
             self.response_started_emitted = true;
-            parts.push(StreamPart::ResponseStarted { id: id.to_string() });
+            parts.push(StreamPart::ResponseStarted {
+                id: id.to_string(),
+                source_protocol: ApiProtocol::GenerateContent,
+            });
         }
         if let Some(candidate) = chunk
             .get("candidates")

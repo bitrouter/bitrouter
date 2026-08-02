@@ -477,21 +477,26 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 - [x] **Step 5: Run SDK pipeline, metering, trajectory settlement/store, publisher, restart, and prune tests until GREEN.**
 - [x] **Step 6: Commit `fix(pipeline): settle routing failures`.**
 
-## Task 11: Keep streaming Responses identity ledger-compatible
+## Task 11: Preserve native Responses continuation identity
 
 **Files:**
-- Modify: `crates/bitrouter-sdk/src/language_model/protocol/responses.rs`
-- Modify: protocol tests beside the Responses stream state machine
+- Modify: `crates/bitrouter-sdk/src/language_model/{types,context,settlement}.rs`
+- Modify: built-in protocol decoders and `protocol/responses.rs`
+- Modify: `apps/bitrouter/src/trajectory/{correlation,settlement,store}.rs`
+- Modify: `apps/bitrouter/src/db/migration/m20240101_000012_create_trajectory_ledger.rs`
+- Modify: `crates/bitrouter-observe/src/otel/exporter.rs`
+- Test: SDK protocol/context tests, trajectory store/correlation/migration tests
 - Modify: `apps/bitrouter/tests/trajectory_progress_control.rs`
 
-**Interfaces:** Every client-visible `response.id` in one Responses stream uses the stable gateway request ID that trajectory correlation indexes. The upstream response ID remains provider metadata only and never replaces the public continuation identity mid-stream.
+**Interfaces:** A native Responses-to-Responses stream exposes the provider-issued response ID consistently from `response.created` through its terminal lifecycle because that is the provider-valid `previous_response_id`. Cross-protocol streams, and native streams without an opening `response.created`, use the gateway request ID consistently as a fallback. Canonical response lifecycle metadata carries source-protocol provenance so a Chat, Messages, or Generate Content ID cannot be mistaken for a Responses continuation ID. The raw provider ID lives only in request-local pipeline/settlement state; trajectory persistence stores a unique owner-scoped HMAC alias and resolves native parents through either the primary request identity or that alias, retaining owner isolation and key-epoch fail-closed behavior.
 
-- [x] **Step 1: Write a protocol RED test.** Feed an upstream-native `ResponseStarted` plus terminal completion whose upstream ID differs from the gateway request ID; assert created, in-progress, output, and completed events must expose one gateway ID.
-- [x] **Step 2: Run the focused Responses protocol test.** Expected RED: terminal `response.completed.response.id` exposes the upstream ID.
-- [x] **Step 3: Normalize terminal stream events to the gateway identity.** Preserve upstream metadata without making it the next-turn native key.
-- [x] **Step 4: Add a real streaming Responses-to-Responses HTTP continuation.** Parse the terminal response ID, send it as `previous_response_id`, and assert native-parent correlation selects the original complete episode before and after restart.
-- [x] **Step 5: Run Responses protocol, stream, HTTP trajectory matrix, and cross-protocol tests until GREEN.**
-- [x] **Step 6: Commit `fix(responses): stabilize stream identity`.**
+- [x] **Step 1: Write protocol RED tests.** Assert native Responses uses the provider ID across created/in-progress/terminal/error frames, missing native start uses the gateway fallback, cross-protocol start metadata cannot replace it, and `response.created` decodes to typed provenance.
+- [x] **Step 2: Capture behavioral RED.** The existing encoder exposed gateway IDs for the native lifecycle and the Responses decoder dropped `response.created`.
+- [x] **Step 3: Preserve typed native identity.** Add source-protocol provenance to canonical start/completion metadata; select the native ID before emitting created/in-progress and keep the selected identity stable through all terminal paths.
+- [x] **Step 4: Add an opaque ledger alias.** Carry the raw native ID only through `StreamContext`/`SettlementContext`, bind `response_alias_id = request_identity(owner, provider_response_id)`, and resolve native parents by owner-scoped primary identity or alias. Exact retries are idempotent; conflicting rebinding, cross-owner use, and key rotation fail closed.
+- [x] **Step 5: Strengthen assembled HTTP continuation.** Use a stateful provider oracle that rejects every `previous_response_id` it did not issue, assert the exact forwarded chain across app restart, one complete episode, successful settlement/publication, migration uniqueness, and absence of the raw provider ID from ledger, outbox, and Eval surfaces.
+- [x] **Step 6: Run Responses protocol/context, trajectory store/correlation/migration, assembled HTTP restart, privacy, cross-protocol, Clippy, and full nextest verification until GREEN.**
+- [x] **Step 7: Commit `fix(responses): preserve native continuation`.**
 
 ## Task 12: Bound prefix-correlation work and index its lookup
 

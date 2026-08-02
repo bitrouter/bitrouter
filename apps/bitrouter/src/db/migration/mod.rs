@@ -82,6 +82,7 @@ mod tests {
             "idx_trajectory_episodes_owner_correlation",
             "idx_trajectory_events_episode_sequence",
             "idx_trajectory_requests_owner_episode",
+            "idx_trajectory_requests_owner_response_alias",
             "idx_trajectory_outbox_pending",
         ] {
             let rows = db
@@ -94,6 +95,31 @@ mod tests {
                 .await?;
             assert_eq!(rows.len(), 1, "missing index {index}");
         }
+        let request_columns = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA table_info('trajectory_requests')".to_owned(),
+            ))
+            .await?;
+        let response_alias = request_columns
+            .iter()
+            .find(|row| row.try_get::<String>("", "name").as_deref() == Ok("response_alias_id"))
+            .ok_or_else(|| anyhow::anyhow!("trajectory response alias column is missing"))?;
+        assert_eq!(response_alias.try_get::<i64>("", "notnull")?, 0);
+        let request_indexes = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA index_list('trajectory_requests')".to_owned(),
+            ))
+            .await?;
+        let response_alias_index = request_indexes
+            .iter()
+            .find(|row| {
+                row.try_get::<String>("", "name").as_deref()
+                    == Ok("idx_trajectory_requests_owner_response_alias")
+            })
+            .ok_or_else(|| anyhow::anyhow!("trajectory response alias index is missing"))?;
+        assert_eq!(response_alias_index.try_get::<i64>("", "unique")?, 1);
 
         migration.down(&manager).await?;
         for table in [

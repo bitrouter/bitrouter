@@ -1551,7 +1551,10 @@ impl StreamDecoder for ChatStreamDecoder {
                 .filter(|s| !s.is_empty())
         {
             self.response_started_emitted = true;
-            parts.push(StreamPart::ResponseStarted { id: id.to_string() });
+            parts.push(StreamPart::ResponseStarted {
+                id: id.to_string(),
+                source_protocol: ApiProtocol::ChatCompletions,
+            });
         }
         if let Some(choice) = chunk
             .get("choices")

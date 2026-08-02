@@ -717,12 +717,13 @@ impl HttpExecutor {
                     provider_metadata: Default::default(),
                 }),
                 StreamPart::Usage { usage: reported } => usage = Some(reported),
-                StreamPart::ResponseStarted { id } => response_id = Some(id),
+                StreamPart::ResponseStarted { id, .. } => response_id = Some(id),
                 StreamPart::Finish { reason } => finish_reason = Some(reason),
                 StreamPart::ResponseCompleted {
                     id,
                     status,
                     usage: reported,
+                    ..
                 } => {
                     response_id = Some(id);
                     if reported.is_some() {

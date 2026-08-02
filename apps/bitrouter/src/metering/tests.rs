@@ -52,6 +52,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         generation_duration_ms: None,
         first_token_kind: None,
         finish_reason: None,
+        response_id: None,
         error: None,
         events: bitrouter_sdk::EventBus::new(),
     }
