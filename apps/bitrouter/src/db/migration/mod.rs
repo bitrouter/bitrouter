@@ -21,7 +21,6 @@ pub mod m20240101_000010_create_eval_exchange;
 pub mod m20240101_000011_scope_eval_exchange;
 pub mod m20240101_000012_create_trajectory_ledger;
 pub mod m20240101_000013_create_continuation_registry;
-pub mod m20240101_000014_add_continuation_publication_state;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -46,7 +45,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000011_scope_eval_exchange::Migration),
             Box::new(m20240101_000012_create_trajectory_ledger::Migration),
             Box::new(m20240101_000013_create_continuation_registry::Migration),
-            Box::new(m20240101_000014_add_continuation_publication_state::Migration),
         ]
     }
 }
@@ -54,11 +52,15 @@ impl MigratorTrait for Migrator {
 #[cfg(test)]
 mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-    use sea_orm_migration::{MigrationTrait, SchemaManager};
+    use sea_orm_migration::prelude::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+    use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
+
+    use super::Migrator;
 
     use super::m20240101_000012_create_trajectory_ledger::Migration;
-    use super::m20240101_000013_create_continuation_registry::Migration as ContinuationMigration;
-    use super::m20240101_000014_add_continuation_publication_state::Migration as ContinuationStateMigration;
+    use super::m20240101_000013_create_continuation_registry::{
+        Migration as ContinuationMigration, provider_continuations_table,
+    };
 
     #[tokio::test]
     async fn continuation_registry_migration_is_bounded_and_private() -> anyhow::Result<()> {
@@ -91,6 +93,8 @@ mod tests {
             "created_at",
             "expires_at",
             "purge_after",
+            "publication_state",
+            "publication_generation",
         ] {
             assert!(columns.iter().any(|column| column == required));
         }
@@ -105,29 +109,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn continuation_publication_state_migration_backfills_existing_rows() -> anyhow::Result<()>
+    async fn continuation_registry_rejects_illegal_state_and_empty_generation() -> anyhow::Result<()>
     {
         let db = crate::db::connect("sqlite::memory:").await?;
         let manager = SchemaManager::new(&db);
         ContinuationMigration.up(&manager).await?;
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after) VALUES ('c', 'o', 't', 'k', 1, 'now', 'later', 'latest')".to_owned(),
-        ))
-        .await?;
 
-        ContinuationStateMigration.up(&manager).await?;
-        let row = db
-            .query_one(Statement::from_string(
+        let illegal_state = db
+            .execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
-                "SELECT publication_state FROM provider_continuations WHERE continuation_identity = 'c'".to_owned(),
+                "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation) VALUES ('c1', 'o', 't', 'k', 1, 'now', 'later', 'latest', 'forged', 'generation')".to_owned(),
+            ))
+            .await;
+        assert!(
+            illegal_state.is_err(),
+            "the database must reject publication states outside provisional/active"
+        );
+
+        let empty_generation = db
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation) VALUES ('c2', 'o', 't', 'k', 1, 'now', 'later', 'latest', 'active', '')".to_owned(),
+            ))
+            .await;
+        assert!(
+            empty_generation.is_err(),
+            "the database must reject empty publication generation tokens"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn continuation_registry_sql_is_portable_and_has_no_unauthenticated_backfill()
+    -> anyhow::Result<()> {
+        let statements = [
+            provider_continuations_table().to_string(SqliteQueryBuilder),
+            provider_continuations_table().to_string(PostgresQueryBuilder),
+            provider_continuations_table().to_string(MysqlQueryBuilder),
+        ];
+        for statement in statements {
+            let sql = statement.to_ascii_lowercase();
+            assert!(sql.contains("publication_state"));
+            assert!(sql.contains("publication_generation"));
+            assert!(sql.contains("check"));
+            assert!(sql.contains("provisional"));
+            assert!(sql.contains("active"));
+            assert!(sql.contains("publication_generation") && sql.contains("<>"));
+            assert!(
+                !sql.contains("default"),
+                "unpublished migration 013 must require authenticated values instead of backfilling an unauthenticated default: {statement}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_migrator_ends_with_the_authenticated_continuation_schema() -> anyhow::Result<()>
+    {
+        let migrations = Migrator::migrations();
+        assert_eq!(
+            migrations.last().map(|migration| migration.name()),
+            Some("m20240101_000013_create_continuation_registry"),
+            "the unpublished state-only 014 migration must not survive in the final sequence"
+        );
+
+        let db = crate::db::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        let columns = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA table_info('provider_continuations')".to_owned(),
             ))
             .await?
-            .expect("seeded row");
-        assert_eq!(row.try_get::<String>("", "publication_state")?, "active");
-
-        ContinuationStateMigration.down(&manager).await?;
-        ContinuationMigration.down(&manager).await?;
+            .into_iter()
+            .filter_map(|row| row.try_get::<String>("", "name").ok())
+            .collect::<Vec<_>>();
+        assert!(columns.iter().any(|column| column == "publication_state"));
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "publication_generation")
+        );
         Ok(())
     }
 

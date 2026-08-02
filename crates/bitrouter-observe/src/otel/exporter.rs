@@ -1221,6 +1221,8 @@ mod hop_tests {
 
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::error::BitrouterError;
+    use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
+    use bitrouter_sdk::language_model::protocol::{OutboundAdapter, SseEvent};
     use bitrouter_sdk::language_model::{
         ApiProtocol, Content, DenyReason, FinishReason, GenerateResult, GenerationParams,
         HookDecision, Message, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
@@ -1627,6 +1629,57 @@ mod hop_tests {
         let exported = format!("{spans:#?}");
         assert!(!exported.contains("native-nonstream-sentinel"));
         assert!(exported.contains(&public_id));
+    }
+
+    #[tokio::test]
+    async fn responses_mismatch_native_ids_never_enter_failed_stream_spans() {
+        const CREATED_SENTINEL: &str = "native-created-otel-private-sentinel";
+        const TERMINAL_SENTINEL: &str = "native-terminal-otel-private-sentinel";
+        let mut decoder = ResponsesAdapter.stream_decoder();
+        decoder
+            .decode(&SseEvent {
+                event: Some("response.created".into()),
+                data: serde_json::json!({
+                    "type": "response.created",
+                    "response": {"id": CREATED_SENTINEL, "status": "in_progress"}
+                })
+                .to_string(),
+            })
+            .expect("created event decodes");
+        let error = decoder
+            .decode(&SseEvent {
+                event: Some("response.completed".into()),
+                data: serde_json::json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": TERMINAL_SENTINEL,
+                        "status": "completed",
+                        "output": []
+                    }
+                })
+                .to_string(),
+            })
+            .expect_err("mismatched terminal id must fail");
+
+        let (exporter, captured) = make_test_exporter();
+        let ctx = PipelineContext::new(fresh_request());
+        let mut target = fresh_target("openai");
+        target.api_protocol = ApiProtocol::Responses;
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::Failed(&error))
+            .await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Failed(error))
+            .await;
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        let exported = format!("{spans:#?}");
+        assert!(exported.contains("Responses terminal id"));
+        assert!(!exported.contains(CREATED_SENTINEL));
+        assert!(!exported.contains(TERMINAL_SENTINEL));
     }
 
     #[tokio::test]

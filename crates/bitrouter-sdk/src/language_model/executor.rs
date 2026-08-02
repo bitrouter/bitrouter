@@ -641,11 +641,13 @@ impl HttpExecutor {
         let applied = self
             .apply_auth(request, input.target, input.transport)
             .await?;
-        let (mut request, credential_authority) = applied.into_parts();
-        validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
-        input.ctx.record_credential_authority(credential_authority);
+        let (mut request, mut credential_authority) = applied.into_parts();
         merge_outbound_trace_headers(&mut request, input.trace_headers);
         inject_outbound_request_id(&mut request, input.ctx)?;
+        credential_authority =
+            credential_authority.filter(|authority| authority.validates_final_request(&request));
+        validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
+        input.ctx.record_credential_authority(credential_authority);
         Ok(request)
     }
 
@@ -864,10 +866,10 @@ impl HttpExecutor {
 
 /// Merge any outbound headers that an `ObserveHook::on_hop_start` stashed
 /// on the context (typically W3C `traceparent` / `tracestate`) into the
-/// outbound request, **after** auth has been applied so observability
-/// never silently overrides credential headers. Caller-set headers do
-/// overwrite same-name auth headers — but the propagator-injected set
-/// only ever names W3C trace headers, which auth appliers never touch.
+/// outbound request after auth has been applied. `PipelineContext` admits
+/// only exact W3C trace field names into this map; the executor nevertheless
+/// revalidates final wire authentication after this merge and request-id
+/// injection, immediately before returning the request for dispatch.
 ///
 /// Spec: <https://www.w3.org/TR/trace-context/>
 fn merge_outbound_trace_headers(request: &mut reqwest::Request, headers: Option<&http::HeaderMap>) {

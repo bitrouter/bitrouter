@@ -195,9 +195,10 @@ pub trait ObserveHook: Send + Sync {
     /// Called when a single upstream hop starts — once per attempt in the
     /// fallback chain. Default: no-op.
     ///
-    /// The observer may write outbound HTTP headers via
-    /// [`PipelineContext::set_outbound_trace_headers`]; the executor merges
-    /// them into the request just before issuing it. This is the seam
+    /// The observer may write exact W3C `traceparent` / `tracestate` fields via
+    /// [`PipelineContext::set_outbound_trace_headers`]; every other field name
+    /// is ignored. The executor merges the retained fields into the request
+    /// just before issuing it. This is the seam
     /// through which W3C trace-context propagation (`traceparent` /
     /// `tracestate`) reaches upstream providers without coupling the SDK to
     /// OpenTelemetry types.
