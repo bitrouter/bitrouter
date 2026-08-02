@@ -81,6 +81,7 @@ impl ServerToolLoop {
                 let mut buffered: Vec<BufferedCall> = Vec::new();
                 let mut assistant_text = String::new();
                 let mut finish: Option<FinishReason> = None;
+                let mut response_completion = None;
 
                 // Forward narration in real time; buffer tool-call deltas;
                 // accumulate usage; capture (but suppress) the terminal.
@@ -98,7 +99,12 @@ impl ServerToolLoop {
                             had_usage = true;
                         }
                         StreamPart::Finish { reason } => finish = Some(reason),
-                        StreamPart::ResponseCompleted { usage, .. } => {
+                        StreamPart::ResponseCompleted {
+                            id,
+                            source_protocol,
+                            status,
+                            usage,
+                        } => {
                             // The Responses decoder carries usage only here (never
                             // a standalone `Usage` part), so it must be folded in
                             // or the loop under-bills a Responses upstream.
@@ -109,6 +115,7 @@ impl ServerToolLoop {
                             if finish.is_none() {
                                 finish = Some(FinishReason::Stop);
                             }
+                            response_completion = Some((id, source_protocol, status));
                         }
                         StreamPart::ToolCallDelta {
                             id,
@@ -166,9 +173,22 @@ impl ServerToolLoop {
                     if had_usage {
                         yield Ok(StreamPart::Usage { usage: total });
                     }
-                    yield Ok(StreamPart::Finish {
-                        reason: finish.unwrap_or(FinishReason::Stop),
-                    });
+                    if let Some((id, source_protocol, status)) = response_completion {
+                        // Preserve typed proof that this exposed terminal came
+                        // from the final provider Responses completion. Usage
+                        // remains on the consolidated `Usage` part above so
+                        // cross-protocol framing stays unchanged.
+                        yield Ok(StreamPart::ResponseCompleted {
+                            id,
+                            source_protocol,
+                            status,
+                            usage: None,
+                        });
+                    } else {
+                        yield Ok(StreamPart::Finish {
+                            reason: finish.unwrap_or(FinishReason::Stop),
+                        });
+                    }
                     return;
                 }
 

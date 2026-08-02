@@ -33,8 +33,8 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use reqwest::header::{HeaderName, HeaderValue};
 
-use bitrouter_sdk::language_model::AuthApplier;
 use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::language_model::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::credential_store::{CredentialStore, DEFAULT_LABEL, OAuthToken};
@@ -42,6 +42,12 @@ use exchange::{CopilotToken, TOKEN_EXCHANGE_URL, exchange_for_copilot_token_at};
 
 /// Provider id used throughout the codebase. Matches the TOML filename stem.
 pub const PROVIDER_ID: &str = "github-copilot";
+
+#[derive(Clone)]
+struct CopilotAuth {
+    token: CopilotToken,
+    continuation_authority: CredentialAuthority,
+}
 
 /// `AuthApplier` for `provider_name == "github-copilot"`.
 ///
@@ -63,7 +69,7 @@ pub struct CopilotAuthApplier {
     /// Source of the GitHub OAuth access token (`ghu_…`).
     token_store_path: std::path::PathBuf,
     /// In-memory cache of the last-issued Copilot token.
-    cache: Arc<Mutex<Option<CopilotToken>>>,
+    cache: Arc<Mutex<Option<CopilotAuth>>>,
 }
 
 impl CopilotAuthApplier {
@@ -99,15 +105,15 @@ impl CopilotAuthApplier {
         }
     }
 
-    fn cached_if_fresh(&self) -> Option<CopilotToken> {
+    fn cached_if_fresh(&self) -> Option<CopilotAuth> {
         let guard = self.cache.lock().ok()?;
-        let token = guard.as_ref()?;
-        token.is_fresh().then(|| token.clone())
+        let auth = guard.as_ref()?;
+        auth.token.is_fresh().then(|| auth.clone())
     }
 
-    fn store_in_cache(&self, token: &CopilotToken) {
+    fn store_in_cache(&self, auth: &CopilotAuth) {
         if let Ok(mut guard) = self.cache.lock() {
-            *guard = Some(token.clone());
+            *guard = Some(auth.clone());
         }
     }
 
@@ -135,11 +141,13 @@ impl CopilotAuthApplier {
 
     /// Resolve a current Copilot Bearer token, doing the exchange + caching
     /// it on demand. Exposed for tests; the production path is [`Self::apply`].
-    pub async fn obtain_copilot_token(&self) -> Result<CopilotToken> {
+    async fn obtain_copilot_auth(&self) -> Result<CopilotAuth> {
         if let Some(cached) = self.cached_if_fresh() {
             return Ok(cached);
         }
         let github = self.read_github_token()?;
+        let continuation_authority =
+            CredentialAuthority::derive("github-copilot/stored-github-token", &github.access_token);
         let url = self.exchange_url.as_deref().unwrap_or(TOKEN_EXCHANGE_URL);
         let token = exchange_for_copilot_token_at(&self.exchange_client, url, &github.access_token)
             .await
@@ -147,15 +155,30 @@ impl CopilotAuthApplier {
                 status: 502,
                 message: format!("GitHub→Copilot token exchange failed: {e}"),
             })?;
-        self.store_in_cache(&token);
-        Ok(token)
+        let auth = CopilotAuth {
+            token,
+            continuation_authority,
+        };
+        self.store_in_cache(&auth);
+        Ok(auth)
+    }
+
+    /// Resolve a current Copilot Bearer token, doing the exchange + caching
+    /// it on demand. Exposed for tests; the production path is [`Self::apply`].
+    pub async fn obtain_copilot_token(&self) -> Result<CopilotToken> {
+        Ok(self.obtain_copilot_auth().await?.token)
     }
 
     /// Replace the in-memory cached Copilot token. Tests use this to seed a
     /// known-fresh token without touching the network.
     #[cfg(test)]
     pub fn cache_for_test(&self, token: CopilotToken) {
-        self.store_in_cache(&token);
+        let continuation_authority =
+            CredentialAuthority::derive("github-copilot/test-copilot-token", &token.token);
+        self.store_in_cache(&CopilotAuth {
+            token,
+            continuation_authority,
+        });
     }
 }
 
@@ -163,11 +186,22 @@ impl CopilotAuthApplier {
 impl AuthApplier for CopilotAuthApplier {
     async fn apply(
         &self,
+        request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
         mut request: reqwest::Request,
         _target: &RoutingTarget,
-    ) -> Result<reqwest::Request> {
-        let token = self.obtain_copilot_token().await?;
-        let bearer = format!("Bearer {}", token.token);
+    ) -> Result<AppliedAuth> {
+        let auth = self.obtain_copilot_auth().await?;
+        let bearer = format!("Bearer {}", auth.token.token);
         let value = HeaderValue::from_str(&bearer).map_err(|e| {
             BitrouterError::internal(format!("invalid Copilot bearer for Authorization: {e}"))
         })?;
@@ -183,7 +217,16 @@ impl AuthApplier for CopilotAuthApplier {
             })?;
             request.headers_mut().insert(name, value);
         }
-        Ok(request)
+        Ok(AppliedAuth::proven(request, auth.continuation_authority))
+    }
+
+    async fn continuation_authority(
+        &self,
+        _target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        Ok(Some(
+            self.obtain_copilot_auth().await?.continuation_authority,
+        ))
     }
 }
 

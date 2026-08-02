@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
+use crate::language_model::CredentialAuthority;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
@@ -48,11 +49,22 @@ pub struct ProviderContinuation {
     api_base: String,
     api_key: String,
     auth_scheme: crate::language_model::types::AuthScheme,
+    credential_authority: CredentialAuthority,
 }
+
+/// Request-scoped marker requiring the selected native Responses target to
+/// prove the stable credential authority used by its exact outbound request.
+/// Non-Responses fallback targets deliberately ignore this requirement.
+#[derive(Debug, Default)]
+pub struct RequireContinuationAuthority;
 
 impl ProviderContinuation {
     /// Bind a native response id to one exact effective routing target.
-    pub fn new(response_id: String, target: &RoutingTarget) -> Self {
+    pub fn new(
+        response_id: String,
+        target: &RoutingTarget,
+        credential_authority: CredentialAuthority,
+    ) -> Self {
         Self {
             response_id,
             provider_name: target.provider_name.clone(),
@@ -68,6 +80,7 @@ impl ProviderContinuation {
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
             auth_scheme: target.auth_scheme,
+            credential_authority,
         }
     }
 
@@ -91,6 +104,10 @@ impl ProviderContinuation {
             && self.api_base == api_base
             && self.api_key == api_key
             && self.auth_scheme == target.auth_scheme
+    }
+
+    pub(crate) fn credential_authority(&self) -> &CredentialAuthority {
+        &self.credential_authority
     }
 }
 
@@ -149,6 +166,11 @@ pub struct PipelineContext {
     generation_duration_ms: Option<u64>,
     finalized_request_duration_ms: Option<u64>,
     stream_terminal_succeeded: bool,
+    stream_native_response_completed: bool,
+    /// Stable redaction-safe authority returned atomically with the latest
+    /// authenticated transport request. Server-tool prompt forks share this
+    /// slot, so finalization sees the proof used by the actual final round.
+    credential_authority: Arc<Mutex<Option<CredentialAuthority>>>,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -192,6 +214,8 @@ impl PipelineContext {
             generation_duration_ms: None,
             finalized_request_duration_ms: None,
             stream_terminal_succeeded: false,
+            stream_native_response_completed: false,
+            credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
             extensions: Extensions::default(),
             events: EventBus::new(),
@@ -220,6 +244,8 @@ impl PipelineContext {
             generation_duration_ms: None,
             finalized_request_duration_ms: None,
             stream_terminal_succeeded: false,
+            stream_native_response_completed: false,
+            credential_authority: self.credential_authority.clone(),
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
             events: self.events.clone(),
@@ -251,6 +277,20 @@ impl PipelineContext {
 
     fn last_attempted_target(&self) -> Option<RoutingTarget> {
         match self.last_attempted_target.lock() {
+            Ok(current) => current.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub(crate) fn record_credential_authority(&self, authority: Option<CredentialAuthority>) {
+        match self.credential_authority.lock() {
+            Ok(mut current) => *current = authority,
+            Err(poisoned) => *poisoned.into_inner() = authority,
+        }
+    }
+
+    fn credential_authority(&self) -> Option<CredentialAuthority> {
+        match self.credential_authority.lock() {
             Ok(current) => current.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
@@ -531,6 +571,7 @@ impl PipelineContext {
             generation_duration_ms: None,
             finish_reason: None,
             terminal_succeeded: false,
+            native_response_completed: false,
             response_id: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
@@ -553,6 +594,7 @@ impl PipelineContext {
             }
         }
         self.stream_terminal_succeeded = stream.terminal_succeeded;
+        self.stream_native_response_completed = stream.native_response_completed;
         self.first_token_timing = stream.first_token_timing;
         self.generation_duration_ms = stream.generation_duration_ms;
         self.events.merge_from(stream.events);
@@ -579,6 +621,8 @@ impl PipelineContext {
             finish_reason,
             streamed,
             successful_terminal,
+            native_response_completed: !streamed || self.stream_native_response_completed,
+            credential_authority: self.credential_authority(),
         }
     }
 
@@ -714,6 +758,9 @@ pub struct StreamContext {
     generation_duration_ms: Option<u64>,
     finish_reason: Option<FinishReason>,
     terminal_succeeded: bool,
+    /// True only after a successful terminal emitted by a native Responses
+    /// provider. Router-synthetic `Finish` parts deliberately cannot set it.
+    native_response_completed: bool,
     /// Native Responses continuation id observed on `response.created`.
     /// Request-local only: settlement may derive an opaque owner-bound alias,
     /// but the raw value must never enter durable events or storage.
@@ -731,13 +778,25 @@ impl StreamContext {
                 source_protocol: ApiProtocol::Responses,
             } if !id.is_empty() => {
                 self.response_id = Some(id.clone());
+                self.native_response_completed = false;
             }
             StreamPart::Finish { reason } => {
                 self.finish_reason = Some(reason.clone());
                 self.terminal_succeeded = !matches!(reason, FinishReason::Error(_));
             }
-            StreamPart::ResponseCompleted { status, .. } => {
-                self.terminal_succeeded = matches!(status.as_str(), "completed" | "incomplete");
+            StreamPart::ResponseCompleted {
+                id,
+                source_protocol,
+                status,
+                ..
+            } => {
+                let successful = matches!(status.as_str(), "completed" | "incomplete");
+                self.terminal_succeeded = successful;
+                self.native_response_completed =
+                    successful && *source_protocol == ApiProtocol::Responses && !id.is_empty();
+                if *source_protocol == ApiProtocol::Responses && !id.is_empty() {
+                    self.response_id = Some(id.clone());
+                }
                 self.finish_reason = Some(match status.as_str() {
                     "completed" => FinishReason::Stop,
                     "incomplete" => FinishReason::Length,

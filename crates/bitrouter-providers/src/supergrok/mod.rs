@@ -34,10 +34,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine;
 use reqwest::header::HeaderValue;
 
-use bitrouter_sdk::language_model::AuthApplier;
 use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::language_model::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::auth_code::AuthCodeError;
@@ -206,6 +207,17 @@ impl SuperGrokAuthApplier {
     fn label_for<'a>(&self, target: &'a RoutingTarget) -> &'a str {
         target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
     }
+
+    fn continuation_authority(token: &OAuthToken) -> Option<CredentialAuthority> {
+        let payload = token.access_token.split('.').nth(1)?;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()?;
+        let payload: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+        let subject = payload.get("sub")?.as_str()?.trim();
+        (!subject.is_empty())
+            .then(|| CredentialAuthority::derive("supergrok/oidc-subject", subject))
+    }
 }
 
 fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
@@ -228,9 +240,20 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
 impl AuthApplier for SuperGrokAuthApplier {
     async fn apply(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<AppliedAuth> {
         let label = self.label_for(target);
         let token = self.resolve_token(label).await?;
         let bearer = format!("Bearer {}", token.access_token);
@@ -240,7 +263,18 @@ impl AuthApplier for SuperGrokAuthApplier {
         request
             .headers_mut()
             .insert(reqwest::header::AUTHORIZATION, auth);
-        Ok(request)
+        Ok(match Self::continuation_authority(&token) {
+            Some(authority) => AppliedAuth::proven(request, authority),
+            None => AppliedAuth::unproven(request),
+        })
+    }
+
+    async fn continuation_authority(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        let token = self.resolve_token(self.label_for(target)).await?;
+        Ok(Self::continuation_authority(&token))
     }
 }
 

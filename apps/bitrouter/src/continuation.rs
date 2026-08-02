@@ -7,13 +7,17 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use bitrouter_sdk::error::{BitrouterError, Result as PipelineResult};
-use bitrouter_sdk::language_model::context::{PipelineContext, ProviderContinuation};
+use bitrouter_sdk::language_model::context::{
+    PipelineContext, ProviderContinuation, RequireContinuationAuthority,
+};
 use bitrouter_sdk::language_model::hooks::RouteHook;
 use bitrouter_sdk::language_model::protocol::responses::{
     decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
 use bitrouter_sdk::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
-use bitrouter_sdk::language_model::{ApiProtocol, RoutingTarget};
+use bitrouter_sdk::language_model::{
+    ApiProtocol, AuthAppliers, CredentialAuthority, RoutingTarget,
+};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -68,17 +72,18 @@ impl ContinuationKey {
         Ok(format!("continuation-request-{}", hex::encode(digest)))
     }
 
-    fn target_fingerprint(&self, target: &RoutingTarget) -> Result<String> {
+    fn target_fingerprint(
+        &self,
+        target: &RoutingTarget,
+        credential_authority: &CredentialAuthority,
+    ) -> Result<String> {
         let api_base = target
             .api_base_override
             .as_deref()
             .unwrap_or(target.api_base.as_str());
-        let api_key = target
-            .api_key_override
-            .as_deref()
-            .unwrap_or(target.api_key.as_str());
         let account = target.account_label.as_deref().unwrap_or("");
         let protocol = target.api_protocol.to_string();
+        let credential_authority = hex::encode(credential_authority.proof_bytes());
         let auth_scheme = match target.auth_scheme {
             bitrouter_sdk::language_model::types::AuthScheme::XApiKey => "x-api-key",
             bitrouter_sdk::language_model::types::AuthScheme::Bearer => "bearer",
@@ -92,7 +97,7 @@ impl ContinuationKey {
                 protocol.as_str(),
                 api_base,
                 auth_scheme,
-                api_key,
+                credential_authority.as_str(),
             ],
         )?;
         Ok(format!("continuation-target-{}", hex::encode(digest)))
@@ -163,8 +168,12 @@ pub struct ResolvedContinuation {
 }
 
 impl ResolvedContinuation {
-    pub fn matches_target(&self, target: &RoutingTarget) -> Result<bool> {
-        Ok(self.key.target_fingerprint(target)? == self.target_fingerprint)
+    pub fn matches_target(
+        &self,
+        target: &RoutingTarget,
+        credential_authority: &CredentialAuthority,
+    ) -> Result<bool> {
+        Ok(self.key.target_fingerprint(target, credential_authority)? == self.target_fingerprint)
     }
 }
 
@@ -213,13 +222,14 @@ impl ContinuationRegistry {
         gateway_request_id: &str,
         provider_response_id: &str,
         target: &RoutingTarget,
+        credential_authority: &CredentialAuthority,
         now: DateTime<Utc>,
     ) -> Result<()> {
         let key = self.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let owner_identity = key.owner_identity(owner_user_id)?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
-        let target_fingerprint = key.target_fingerprint(target)?;
+        let target_fingerprint = key.target_fingerprint(target, credential_authority)?;
         let created_at = timestamp(now);
         let expires_at = timestamp(
             now.checked_add_signed(self.retention)
@@ -389,11 +399,22 @@ impl ContinuationRegistry {
 #[derive(Clone)]
 pub struct ContinuationRuntime {
     registry: ContinuationRegistry,
+    auth_appliers: AuthAppliers,
 }
 
 impl ContinuationRuntime {
     pub fn new(registry: ContinuationRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            auth_appliers: AuthAppliers::new(),
+        }
+    }
+
+    pub fn with_auth_appliers(registry: ContinuationRegistry, auth_appliers: AuthAppliers) -> Self {
+        Self {
+            registry,
+            auth_appliers,
+        }
     }
 
     pub fn registry(&self) -> &ContinuationRegistry {
@@ -411,6 +432,7 @@ impl RouteHook for ContinuationRuntime {
         if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
             return Ok(());
         }
+        ctx.insert_extension(Arc::new(RequireContinuationAuthority));
         let Some(previous_response_id) = ctx
             .prompt()
             .params
@@ -449,16 +471,34 @@ impl RouteHook for ContinuationRuntime {
             ContinuationResolution::Active(active) => {
                 let mut selected = None;
                 for target in chain.iter() {
-                    if active.matches_target(target).map_err(|error| {
-                        BitrouterError::internal(format!(
-                            "validating provider continuation target: {error}"
-                        ))
-                    })? {
-                        selected = Some(target.clone());
+                    if target.api_protocol != ApiProtocol::Responses {
+                        continue;
+                    }
+                    let credential_authority = self
+                        .auth_appliers
+                        .continuation_authority(target)
+                        .await
+                        .map_err(|error| {
+                            BitrouterError::internal(format!(
+                                "resolving provider continuation authority: {error}"
+                            ))
+                        })?;
+                    let Some(credential_authority) = credential_authority else {
+                        continue;
+                    };
+                    if active
+                        .matches_target(target, &credential_authority)
+                        .map_err(|error| {
+                            BitrouterError::internal(format!(
+                                "validating provider continuation target: {error}"
+                            ))
+                        })?
+                    {
+                        selected = Some((target.clone(), credential_authority));
                         break;
                     }
                 }
-                let selected = selected.ok_or_else(|| {
+                let (selected, credential_authority) = selected.ok_or_else(|| {
                     BitrouterError::bad_request(
                         "provider continuation target is unavailable or changed",
                     )
@@ -468,6 +508,7 @@ impl RouteHook for ContinuationRuntime {
                 ctx.insert_extension(Arc::new(ProviderContinuation::new(
                     active.provider_response_id,
                     &selected,
+                    credential_authority,
                 )));
                 Ok(())
             }
@@ -487,6 +528,9 @@ impl RequiredFinalizer for ContinuationRuntime {
         if !ctx.successful_terminal || ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return Ok(());
         }
+        if ctx.streamed && !ctx.native_response_completed {
+            return Ok(());
+        }
         let Some(target) = ctx.target.as_ref() else {
             return Err(BitrouterError::internal(
                 "successful Responses continuation has no serving target",
@@ -500,6 +544,24 @@ impl RequiredFinalizer for ContinuationRuntime {
                 "native Responses completion did not provide a continuation id",
             )
         })?;
+        let credential_authority = match ctx.credential_authority.as_ref() {
+            Some(authority) => authority.clone(),
+            None if self.auth_appliers.lookup(&target.provider_name).is_none() => self
+                .auth_appliers
+                .continuation_authority(target)
+                .await
+                .map_err(|error| {
+                    BitrouterError::internal(format!(
+                        "resolving static continuation authority: {error}"
+                    ))
+                })?
+                .ok_or_else(|| BitrouterError::internal("continuation authority unavailable"))?,
+            None => {
+                return Err(BitrouterError::internal(
+                    "continuation authority unavailable for dynamic authentication",
+                ));
+            }
+        };
         let public_continuation_id = encode_gateway_continuation_id(&ctx.request_id)?;
         let now = Utc::now();
         self.registry.prune(now).await.map_err(|error| {
@@ -511,6 +573,7 @@ impl RequiredFinalizer for ContinuationRuntime {
                 &public_continuation_id,
                 provider_response_id,
                 target,
+                &credential_authority,
                 now,
             )
             .await
@@ -666,9 +729,9 @@ mod tests {
         RequiredFinalizationContext, RequiredFinalizer,
     };
     use bitrouter_sdk::language_model::{
-        ApiProtocol, GenerationParams, HttpExecutor, Message, MockExecutor, MockResponse,
-        PipelineBuilder, PipelineRequest, Prompt, Role, RoutingTarget, StaticRoutingTable,
-        StreamPart, Tool, ToolResultOutput,
+        ApiProtocol, AppliedAuth, AuthApplier, AuthAppliers, GenerationParams, HttpExecutor,
+        Message, MockExecutor, MockResponse, Pipeline, PipelineBuilder, PipelineRequest, Prompt,
+        Role, RoutingTarget, StaticRoutingTable, StreamPart, Tool, ToolResultOutput,
     };
     use chrono::{TimeDelta, TimeZone, Utc};
     use futures::StreamExt;
@@ -695,6 +758,10 @@ mod tests {
         }
     }
 
+    fn static_authority(api_key: &str) -> CredentialAuthority {
+        CredentialAuthority::derive("static-transport-credential", api_key)
+    }
+
     async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
@@ -716,6 +783,7 @@ mod tests {
                 "gateway-request-a",
                 "resp-provider-secret",
                 &target("credential-a"),
+                &static_authority("credential-a"),
                 now,
             )
             .await?;
@@ -727,8 +795,10 @@ mod tests {
             anyhow::bail!("expected active continuation")
         };
         assert_eq!(active.provider_response_id, "resp-provider-secret");
-        assert!(active.matches_target(&target("credential-a"))?);
-        assert!(!active.matches_target(&target("credential-b"))?);
+        assert!(active.matches_target(&target("credential-a"), &static_authority("credential-a"))?);
+        assert!(
+            !active.matches_target(&target("credential-b"), &static_authority("credential-b"))?
+        );
         assert_eq!(
             registry
                 .resolve("owner-b", "gateway-request-a", now)
@@ -769,7 +839,17 @@ mod tests {
         let registry = registry(8).await?;
         let now = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
         let bound_target = target("credential");
-        let bind = || registry.bind("owner", "gateway", "resp-same", &bound_target, now);
+        let authority = static_authority("credential");
+        let bind = || {
+            registry.bind(
+                "owner",
+                "gateway",
+                "resp-same",
+                &bound_target,
+                &authority,
+                now,
+            )
+        };
         let (left, right) = tokio::join!(bind(), bind());
         left?;
         right?;
@@ -779,6 +859,7 @@ mod tests {
                 "gateway",
                 "resp-different",
                 &target("credential"),
+                &static_authority("credential"),
                 now,
             )
             .await
@@ -806,6 +887,7 @@ mod tests {
                 "gateway-tamper",
                 "resp-secret",
                 &target("credential"),
+                &static_authority("credential"),
                 now,
             )
             .await?;
@@ -829,6 +911,7 @@ mod tests {
                 "gateway-expiry",
                 "resp-expiry",
                 &target("credential"),
+                &static_authority("credential"),
                 now,
             )
             .await?;
@@ -899,7 +982,14 @@ mod tests {
         let bound = target("credential-a");
         let public_id = encode_gateway_continuation_id("prior-request")?;
         registry
-            .bind("owner", &public_id, "resp-final", &bound, now)
+            .bind(
+                "owner",
+                &public_id,
+                "resp-final",
+                &bound,
+                &static_authority("credential-a"),
+                now,
+            )
             .await?;
         let runtime = ContinuationRuntime::new(registry);
         let mut selected_tier = bound.clone();
@@ -921,7 +1011,14 @@ mod tests {
         let bound = target("credential-a");
         let public_id = encode_gateway_continuation_id("prior-request")?;
         registry
-            .bind("owner", &public_id, "resp-final", &bound, Utc::now())
+            .bind(
+                "owner",
+                &public_id,
+                "resp-final",
+                &bound,
+                &static_authority("credential-a"),
+                Utc::now(),
+            )
             .await?;
         let runtime = ContinuationRuntime::new(registry);
 
@@ -946,6 +1043,39 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("unavailable or changed"));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_continuation_skips_broken_non_responses_authority() -> anyhow::Result<()> {
+        let registry = registry(24).await?;
+        let bound = target("credential-a");
+        let public_id = encode_gateway_continuation_id("mixed-prior-request")?;
+        registry
+            .bind(
+                "owner",
+                &public_id,
+                "resp-final",
+                &bound,
+                &static_authority("credential-a"),
+                Utc::now(),
+            )
+            .await?;
+        let auth =
+            AuthAppliers::new().with("broken-messages", Arc::new(FailingAuthorityAuthApplier));
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, auth);
+        let mut messages = bound.clone();
+        messages.provider_name = "broken-messages".into();
+        messages.api_protocol = ApiProtocol::Messages;
+        let mut chain = vec![messages, bound.clone()];
+        let mut ctx = continuation_context(&public_id);
+
+        runtime.resolve(&mut chain, &mut ctx).await?;
+
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, bound.provider_name);
+        assert_eq!(chain[0].service_id, bound.service_id);
+        assert!(ctx.extension::<ProviderContinuation>().is_some());
         Ok(())
     }
 
@@ -986,6 +1116,8 @@ mod tests {
                 finish_reason: Some(bitrouter_sdk::language_model::FinishReason::Stop),
                 streamed: true,
                 successful_terminal: true,
+                native_response_completed: true,
+                credential_authority: Some(static_authority("credential")),
             })
             .await?;
         let resolved = registry
@@ -1097,6 +1229,208 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct DynamicAuthState {
+        calls: Vec<(Option<String>, Option<String>)>,
+    }
+
+    struct DynamicAuthResponder(Arc<std::sync::Mutex<DynamicAuthState>>);
+
+    impl Respond for DynamicAuthResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|error| serde_json::json!({"parse_error": error.to_string()}));
+            let authorization = request
+                .headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let previous = body
+                .get("previous_response_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            let mut state = self.0.lock().expect("dynamic auth state poisoned");
+            state.calls.push((authorization, previous));
+            let response_id = if state.calls.len() == 1 {
+                "dynamic-provider-root"
+            } else {
+                "dynamic-provider-resumed"
+            };
+            drop(state);
+
+            let events = [
+                serde_json::json!({
+                    "type": "response.created",
+                    "response": {"id": response_id, "status": "in_progress"}
+                }),
+                serde_json::json!({
+                    "type": "response.output_text.delta",
+                    "delta": "done"
+                }),
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": {"id": response_id, "status": "completed", "output": []}
+                }),
+            ];
+            let sse = events
+                .iter()
+                .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"]))
+                .collect::<String>();
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse)
+        }
+    }
+
+    struct DynamicAuthApplier {
+        credential: String,
+    }
+
+    #[async_trait]
+    impl AuthApplier for DynamicAuthApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            let value =
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.credential))
+                    .map_err(|error| BitrouterError::internal(format!("test bearer: {error}")))?;
+            request
+                .headers_mut()
+                .insert(reqwest::header::AUTHORIZATION, value);
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> PipelineResult<AppliedAuth> {
+            Ok(AppliedAuth::proven(
+                self.apply(request, target).await?,
+                CredentialAuthority::derive("test/dynamic-principal", &self.credential),
+            ))
+        }
+
+        async fn continuation_authority(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<CredentialAuthority>> {
+            Ok(Some(CredentialAuthority::derive(
+                "test/dynamic-principal",
+                &self.credential,
+            )))
+        }
+    }
+
+    struct UnsupportedDynamicAuthApplier;
+
+    #[async_trait]
+    impl AuthApplier for UnsupportedDynamicAuthApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer unsupported"),
+            );
+            Ok(request)
+        }
+    }
+
+    struct FailingAuthorityAuthApplier;
+
+    #[async_trait]
+    impl AuthApplier for FailingAuthorityAuthApplier {
+        async fn apply(
+            &self,
+            request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            Ok(request)
+        }
+
+        async fn continuation_authority(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<CredentialAuthority>> {
+            Err(BitrouterError::internal(
+                "broken non-Responses credential store",
+            ))
+        }
+    }
+
+    struct RacedDynamicAuthApplier;
+
+    #[async_trait]
+    impl AuthApplier for RacedDynamicAuthApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer principal-b"),
+            );
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> PipelineResult<AppliedAuth> {
+            Ok(AppliedAuth::proven(
+                self.apply(request, target).await?,
+                CredentialAuthority::derive("test/dynamic-principal", "principal-b"),
+            ))
+        }
+
+        async fn continuation_authority(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<CredentialAuthority>> {
+            Ok(Some(CredentialAuthority::derive(
+                "test/dynamic-principal",
+                "principal-a",
+            )))
+        }
+    }
+
+    fn dynamic_auth_pipeline(
+        registry: ContinuationRegistry,
+        upstream: &MockServer,
+        applier: Arc<dyn AuthApplier>,
+    ) -> anyhow::Result<Arc<Pipeline>> {
+        let mut upstream_target = target("static-placeholder");
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let auth = AuthAppliers::new().with("openai", applier);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, auth.clone());
+        let executor =
+            HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)?;
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(executor))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime);
+        Ok(Arc::new(builder.build()?))
+    }
+
+    async fn drain_stream(pipeline: Arc<Pipeline>, request: PipelineRequest) -> PipelineResult<()> {
+        let mut stream = pipeline.execute_stream(request).await?;
+        while let Some(part) = stream.next().await {
+            part?;
+        }
+        Ok(())
+    }
+
     struct SearchTool;
 
     #[async_trait]
@@ -1123,6 +1457,37 @@ mod tests {
             Ok(ToolResultOutput::Text {
                 value: "search-result".into(),
             })
+        }
+
+        fn owns(&self, name: &str) -> bool {
+            name == "search"
+        }
+    }
+
+    struct FailingSearchTool;
+
+    #[async_trait]
+    impl bitrouter_sdk::language_model::server_tools::toolset::RouterToolset for FailingSearchTool {
+        async fn list_tools(
+            &self,
+            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+        ) -> PipelineResult<Vec<Tool>> {
+            Ok(vec![Tool::Function {
+                name: "search".into(),
+                description: None,
+                parameters: serde_json::json!({"type": "object"}),
+                strict: None,
+                provider_metadata: Default::default(),
+            }])
+        }
+
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _arguments: &str,
+            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+        ) -> PipelineResult<ToolResultOutput> {
+            Err(BitrouterError::internal("synthetic search failure"))
         }
 
         fn owns(&self, name: &str) -> bool {
@@ -1232,6 +1597,300 @@ mod tests {
         Ok(())
     }
 
+    async fn assert_synthetic_server_tool_terminal_is_not_resumable(
+        request_id: &str,
+        expected_reason: &str,
+        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+    ) -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ToolRoundResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(18).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let mut upstream_target = target("credential");
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let server_loop = Arc::new(
+            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
+                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
+                    tool,
+                ]),
+                config,
+                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+            ),
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .server_tool_loop(server_loop);
+        let pipeline = Arc::new(builder.build()?);
+
+        let mut first = pipeline
+            .clone()
+            .execute_stream(tool_request(request_id, None))
+            .await?;
+        let mut terminal_reason = None;
+        while let Some(part) = first.next().await {
+            if let StreamPart::Finish {
+                reason: bitrouter_sdk::language_model::FinishReason::Other(reason),
+            } = part?
+            {
+                terminal_reason = Some(reason);
+            }
+        }
+        assert_eq!(terminal_reason.as_deref(), Some(expected_reason));
+
+        let public_id = encode_gateway_continuation_id(request_id)?;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "router-synthetic termination must not publish an intermediate provider id"
+        );
+        let resume = pipeline
+            .execute_stream(tool_request("synthetic-resume", Some(&public_id)))
+            .await;
+        let error = match resume {
+            Ok(_) => anyhow::bail!("synthetic public id unexpectedly became resumable"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("mapping is unavailable"));
+        let state = state.lock().expect("tool round state poisoned");
+        assert_eq!(
+            state.calls, 1,
+            "resume must fail before forwarding a stale native id upstream"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn max_tool_iterations_does_not_publish_intermediate_continuation() -> anyhow::Result<()>
+    {
+        let config = bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+            max_iterations: 0,
+            ..Default::default()
+        };
+        assert_synthetic_server_tool_terminal_is_not_resumable(
+            "max-tool-request",
+            "max_tool_iterations",
+            config,
+            Arc::new(SearchTool),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()> {
+        let config = bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+            max_consecutive_errors: 1,
+            ..Default::default()
+        };
+        assert_synthetic_server_tool_terminal_is_not_resumable(
+            "tool-error-request",
+            "tool_errors",
+            config,
+            Arc::new(FailingSearchTool),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn unchanged_dynamic_authority_resumes_across_restart() -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(DynamicAuthResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+        let registry = registry(20).await?;
+
+        drain_stream(
+            dynamic_auth_pipeline(
+                registry.clone(),
+                &upstream,
+                Arc::new(DynamicAuthApplier {
+                    credential: "principal-a".into(),
+                }),
+            )?,
+            tool_request("dynamic-root", None),
+        )
+        .await?;
+        let public_id = encode_gateway_continuation_id("dynamic-root")?;
+        drain_stream(
+            dynamic_auth_pipeline(
+                registry,
+                &upstream,
+                Arc::new(DynamicAuthApplier {
+                    credential: "principal-a".into(),
+                }),
+            )?,
+            tool_request("dynamic-resume", Some(&public_id)),
+        )
+        .await?;
+
+        let state = state.lock().expect("dynamic auth state poisoned");
+        assert_eq!(
+            state.calls.as_slice(),
+            [
+                (Some("Bearer principal-a".into()), None),
+                (
+                    Some("Bearer principal-a".into()),
+                    Some("dynamic-provider-root".into())
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replaced_dynamic_authority_rejects_before_upstream() -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(DynamicAuthResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+        let registry = registry(21).await?;
+        drain_stream(
+            dynamic_auth_pipeline(
+                registry.clone(),
+                &upstream,
+                Arc::new(DynamicAuthApplier {
+                    credential: "principal-a".into(),
+                }),
+            )?,
+            tool_request("dynamic-replaced-root", None),
+        )
+        .await?;
+        let public_id = encode_gateway_continuation_id("dynamic-replaced-root")?;
+
+        let result = dynamic_auth_pipeline(
+            registry,
+            &upstream,
+            Arc::new(DynamicAuthApplier {
+                credential: "principal-b".into(),
+            }),
+        )?
+        .execute_stream(tool_request("dynamic-replaced-resume", Some(&public_id)))
+        .await;
+        let error = match result {
+            Ok(_) => anyhow::bail!("replaced dynamic authority reached upstream"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unavailable or changed"));
+        let state = state.lock().expect("dynamic auth state poisoned");
+        assert_eq!(
+            state.calls.len(),
+            1,
+            "replacement must fail before upstream"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_dynamic_authority_never_publishes_resumable_root() -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(DynamicAuthResponder(state))
+            .mount(&upstream)
+            .await;
+        let registry = registry(22).await?;
+        let pipeline = dynamic_auth_pipeline(
+            registry.clone(),
+            &upstream,
+            Arc::new(UnsupportedDynamicAuthApplier),
+        )?;
+        let result = pipeline
+            .execute_stream(tool_request("unsupported-dynamic-root", None))
+            .await;
+        let failure = match result {
+            Ok(_) => anyhow::bail!("unsupported dynamic authority reached upstream"),
+            Err(error) => error,
+        };
+        assert!(
+            failure
+                .to_string()
+                .contains("continuation authority unavailable")
+        );
+        assert_eq!(
+            upstream
+                .received_requests()
+                .await
+                .map_or(0, |requests| requests.len()),
+            0,
+            "unsupported authority must fail before upstream"
+        );
+        assert_eq!(
+            registry
+                .resolve(
+                    "tool-owner",
+                    &encode_gateway_continuation_id("unsupported-dynamic-root")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dynamic_authority_race_rejects_before_upstream_dispatch() -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(DynamicAuthResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+        let registry = registry(23).await?;
+        drain_stream(
+            dynamic_auth_pipeline(
+                registry.clone(),
+                &upstream,
+                Arc::new(DynamicAuthApplier {
+                    credential: "principal-a".into(),
+                }),
+            )?,
+            tool_request("dynamic-race-root", None),
+        )
+        .await?;
+        let public_id = encode_gateway_continuation_id("dynamic-race-root")?;
+
+        let result = dynamic_auth_pipeline(registry, &upstream, Arc::new(RacedDynamicAuthApplier))?
+            .execute_stream(tool_request("dynamic-race-resume", Some(&public_id)))
+            .await;
+        let error = match result {
+            Ok(_) => anyhow::bail!("raced dynamic authority reached upstream"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("credential authority changed"));
+        assert_eq!(
+            state
+                .lock()
+                .expect("dynamic auth state poisoned")
+                .calls
+                .len(),
+            1,
+            "authority race must fail before upstream"
+        );
+        Ok(())
+    }
+
     async fn assert_finalizer_failure_precedes_terminal(
         registry: ContinuationRegistry,
         expected_error: &str,
@@ -1247,8 +1906,11 @@ mod tests {
             StreamPart::TextDelta {
                 text: "not yet successful".into(),
             },
-            StreamPart::Finish {
-                reason: bitrouter_sdk::language_model::FinishReason::Stop,
+            StreamPart::ResponseCompleted {
+                id: "provider-final".into(),
+                source_protocol: ApiProtocol::Responses,
+                status: "completed".into(),
+                usage: None,
             },
         ])]));
         let mut builder = PipelineBuilder::new();
@@ -1302,6 +1964,7 @@ mod tests {
                 "bootstrap",
                 "provider-bootstrap",
                 &target("credential"),
+                &static_authority("credential"),
                 Utc::now(),
             )
             .await?;

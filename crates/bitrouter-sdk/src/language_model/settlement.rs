@@ -13,6 +13,7 @@ use crate::caller::CallerContext;
 use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
+use crate::language_model::CredentialAuthority;
 use crate::language_model::timing::FirstTokenKind;
 use crate::language_model::types::{ApiProtocol, FinishReason, RoutingTarget, UsageOrigin};
 
@@ -35,6 +36,12 @@ pub struct RequiredFinalizationContext {
     pub streamed: bool,
     /// True only when the pipeline observed a clean successful terminal.
     pub successful_terminal: bool,
+    /// True only when a streamed native Responses provider supplied the clean
+    /// terminal completion. Router-synthetic finishes never set this proof.
+    pub native_response_completed: bool,
+    /// Redaction-safe stable authority returned with the exact authenticated
+    /// transport request that produced this response.
+    pub credential_authority: Option<CredentialAuthority>,
 }
 
 /// A success-critical finalizer. Unlike ordinary settlement recorders, an
