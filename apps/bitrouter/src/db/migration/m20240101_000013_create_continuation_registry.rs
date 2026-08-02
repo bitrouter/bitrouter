@@ -24,6 +24,17 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
+                    .name("idx_provider_continuations_reconciliation")
+                    .if_not_exists()
+                    .table(ProviderContinuations::Table)
+                    .col(ProviderContinuations::PublicationState)
+                    .col(ProviderContinuations::PublicationLeaseUntil)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
                     .name("idx_provider_continuations_purge_after")
                     .if_not_exists()
                     .table(ProviderContinuations::Table)
@@ -135,12 +146,24 @@ pub(crate) fn provider_continuations_table() -> TableCreateStatement {
                 .string()
                 .not_null(),
         )
+        .col(
+            ColumnDef::new(ProviderContinuations::PublicationInstanceId)
+                .string()
+                .not_null(),
+        )
+        .col(
+            ColumnDef::new(ProviderContinuations::PublicationLeaseUntil)
+                .string()
+                .not_null(),
+        )
         .check(Expr::col(ProviderContinuations::PublicationState).is_in([
             "provisional",
             "delivering",
             "active",
         ]))
         .check(Expr::col(ProviderContinuations::PublicationGeneration).ne(""))
+        .check(Expr::col(ProviderContinuations::PublicationInstanceId).ne(""))
+        .check(Expr::col(ProviderContinuations::PublicationLeaseUntil).ne(""))
         .to_owned()
 }
 
@@ -159,6 +182,8 @@ enum ProviderContinuations {
     PurgeAfter,
     PublicationState,
     PublicationGeneration,
+    PublicationInstanceId,
+    PublicationLeaseUntil,
 }
 
 #[derive(DeriveIden)]

@@ -25,7 +25,7 @@ use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::server_tools::toolset::ToolContext;
 use crate::language_model::settlement::{
     DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
-    RequiredFinalizer, SettlementContext, SettlementRecorder,
+    RequiredFinalizationReceipt, RequiredFinalizer, SettlementContext, SettlementRecorder,
 };
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
@@ -382,6 +382,11 @@ impl Pipeline {
         };
         while taken.join_next().await.is_some() {
             drained += 1;
+        }
+        for finalizer in &self.required_finalizers {
+            if let Err(error) = finalizer.drain_pending_work().await {
+                tracing::error!(error = %error, "RequiredFinalizer background drain failed");
+            }
         }
 
         drained
@@ -745,7 +750,7 @@ impl Pipeline {
         let guard = StreamSettlementGuard {
             pipeline: self.clone(),
             latest_attempt,
-            started_required_finalizers: 0,
+            required_finalizer_receipt: None,
             state: Some(StreamDeliveryState::Pending(Box::new(
                 PendingStreamDelivery {
                     processor: Some(processor),
@@ -847,7 +852,7 @@ impl Pipeline {
             guard.disarm();
             return Ok(guard);
         }
-        guard.started = self
+        guard.receipt = self
             .prepare_required_finalizer_tracked(&finalization)
             .await?;
         Ok(guard)
@@ -856,35 +861,45 @@ impl Pipeline {
     async fn prepare_required_finalizer_tracked(
         &self,
         finalization: &RequiredFinalizationContext,
-    ) -> Result<usize> {
+    ) -> Result<Option<RequiredFinalizationReceipt>> {
         let Some(finalizer) = self.required_finalizers.first().cloned() else {
-            return Ok(0);
+            return Ok(None);
         };
         let task_finalization = finalization.clone();
+        let receipt = RequiredFinalizationReceipt::new();
+        let task_receipt = receipt.clone();
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         self.spawn_stream_finalization(async move {
-            match finalizer.finalize(&task_finalization).await {
+            match finalizer
+                .finalize_with_receipt(&task_finalization, &task_receipt)
+                .await
+            {
                 Ok(()) => {
-                    if prepared_tx.send(Ok(())).is_err()
-                        && let Err(error) = finalizer.rollback(&task_finalization).await
+                    if prepared_tx.send(Ok(receipt)).is_err()
+                        && let Err(error) = finalizer
+                            .rollback_with_receipt(&task_finalization, &task_receipt)
+                            .await
                     {
                         tracing::error!(error = %error, "RequiredFinalizer rollback failed");
                     }
                 }
                 Err(error) => {
-                    if let Err(rollback_error) = finalizer.rollback(&task_finalization).await {
+                    if let Err(rollback_error) = finalizer
+                        .rollback_with_receipt(&task_finalization, &task_receipt)
+                        .await
+                    {
                         tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
                     }
                     let _ = prepared_tx.send(Err(error));
                 }
             }
         });
-        prepared_rx.await.map_err(|error| {
+        let receipt = prepared_rx.await.map_err(|error| {
             BitrouterError::internal(format!(
                 "required finalizer preparation ended unexpectedly: {error}"
             ))
         })??;
-        Ok(1)
+        Ok(Some(receipt))
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
@@ -1350,7 +1365,7 @@ struct RequiredFinalizationGuard {
     finalizers: Vec<Arc<dyn RequiredFinalizer>>,
     finalization: RequiredFinalizationContext,
     pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
-    started: usize,
+    receipt: Option<RequiredFinalizationReceipt>,
     armed: bool,
 }
 
@@ -1364,14 +1379,14 @@ impl RequiredFinalizationGuard {
             finalizers,
             finalization,
             pending_settlements,
-            started: 0,
+            receipt: None,
             armed: true,
         }
     }
 
     fn disarm(&mut self) {
         self.armed = false;
-        self.started = 0;
+        self.receipt = None;
     }
 
     fn begin_delivery(
@@ -1384,33 +1399,39 @@ impl RequiredFinalizationGuard {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         let finalizers = self.finalizers.clone();
         let finalization = self.finalization.clone();
-        let started = self.started;
+        let receipt = self.receipt.clone();
         self.disarm();
         let authorization = async move {
-            let authorization_result = if started == 0 {
-                delivery.wait_for_delivery().await
-            } else {
-                finalizers[0].commit(&finalization, &delivery).await
+            let authorization_result = match receipt.as_ref() {
+                Some(receipt) => {
+                    finalizers[0]
+                        .commit_with_receipt(&finalization, receipt, &delivery)
+                        .await
+                }
+                None => delivery.wait_for_delivery().await,
             };
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
                     delivery.reject(error.clone());
-                    for finalizer in finalizers.iter().take(started).rev() {
-                        if let Err(rollback_error) = finalizer.rollback(&finalization).await {
-                            tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
-                        }
+                    if let Some(receipt) = receipt.as_ref()
+                        && let Err(rollback_error) = finalizers[0]
+                            .rollback_with_receipt(&finalization, receipt)
+                            .await
+                    {
+                        tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
                     }
                     let _ = outcome_tx.send(DeliveryAuthorizationOutcome::Failed(error));
                     return;
                 }
             };
-            if !delivered {
-                for finalizer in finalizers.iter().take(started).rev() {
-                    if let Err(error) = finalizer.rollback(&finalization).await {
-                        tracing::error!(error = %error, "RequiredFinalizer rollback failed");
-                    }
-                }
+            if !delivered
+                && let Some(receipt) = receipt.as_ref()
+                && let Err(error) = finalizers[0]
+                    .rollback_with_receipt(&finalization, receipt)
+                    .await
+            {
+                tracing::error!(error = %error, "RequiredFinalizer rollback failed");
             }
             let _ = outcome_tx.send(if delivered {
                 DeliveryAuthorizationOutcome::Delivered
@@ -1436,18 +1457,20 @@ impl RequiredFinalizationGuard {
 
 impl Drop for RequiredFinalizationGuard {
     fn drop(&mut self) {
-        if !self.armed || self.started == 0 {
+        if !self.armed || self.receipt.is_none() {
             return;
         }
         let finalizers = self.finalizers.clone();
         let finalization = self.finalization.clone();
-        let started = self.started;
+        let receipt = self.receipt.clone();
         self.disarm();
         let rollback = async move {
-            for finalizer in finalizers.iter().take(started).rev() {
-                if let Err(error) = finalizer.rollback(&finalization).await {
-                    tracing::error!(error = %error, "RequiredFinalizer rollback failed");
-                }
+            if let Some(receipt) = receipt.as_ref()
+                && let Err(error) = finalizers[0]
+                    .rollback_with_receipt(&finalization, receipt)
+                    .await
+            {
+                tracing::error!(error = %error, "RequiredFinalizer rollback failed");
             }
         }
         .instrument(tracing::Span::current());
@@ -1472,7 +1495,7 @@ impl Drop for RequiredFinalizationGuard {
 struct StreamSettlementGuard {
     pipeline: Arc<Pipeline>,
     latest_attempt: SharedStreamAttempt,
-    started_required_finalizers: usize,
+    required_finalizer_receipt: Option<RequiredFinalizationReceipt>,
     /// Owned until the terminal is ready to be returned. Cancellation at any
     /// await leaves this state available to `Drop`, which reclassifies the
     /// request as disconnected and never runs required finalizers.
@@ -1605,7 +1628,7 @@ impl StreamSettlementGuard {
         if !finalization.successful_terminal {
             return Ok(());
         }
-        self.started_required_finalizers = self
+        self.required_finalizer_receipt = self
             .pipeline
             .prepare_required_finalizer_tracked(&finalization)
             .await?;
@@ -1653,10 +1676,9 @@ impl StreamSettlementGuard {
             };
             let settlement_error = error.clone();
             let pipeline = self.pipeline.clone();
-            let started = self.started_required_finalizers;
-            self.started_required_finalizers = 0;
+            let receipt = self.required_finalizer_receipt.take();
             self.pipeline.spawn_stream_finalization(async move {
-                rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
                 settle_prepared_stream(
                     pipeline.clone(),
                     *ctx,
@@ -1682,23 +1704,23 @@ impl StreamSettlementGuard {
             return Ok(None);
         }
         let pipeline = self.pipeline.clone();
-        let started = self.started_required_finalizers;
-        self.started_required_finalizers = 0;
+        let receipt = self.required_finalizer_receipt.take();
         let finalization = ctx.required_finalization_context(true);
         let (permit, delivery) = delivery_handshake();
         self.pipeline.spawn_stream_finalization(async move {
-            let authorization_result = if started == 0 {
-                delivery.wait_for_delivery().await
-            } else {
-                pipeline.required_finalizers[0]
-                    .commit(&finalization, &delivery)
-                    .await
+            let authorization_result = match receipt.as_ref() {
+                Some(receipt) => {
+                    pipeline.required_finalizers[0]
+                        .commit_with_receipt(&finalization, receipt, &delivery)
+                        .await
+                }
+                None => delivery.wait_for_delivery().await,
             };
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
                     delivery.reject(error.clone());
-                    rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                    rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
                     settle_prepared_stream(
                         pipeline.clone(),
                         *ctx,
@@ -1712,7 +1734,7 @@ impl StreamSettlementGuard {
             if delivered {
                 settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
             } else {
-                rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
                 settle_prepared_stream(pipeline, *ctx, None, RequestOutcome::ClientDisconnected)
                     .await;
             }
@@ -1738,20 +1760,21 @@ fn stream_terminal_metadata(outcome: &StreamOutcome) -> (Option<BitrouterError>,
     }
 }
 
-async fn rollback_required_finalizers(
+async fn rollback_required_finalizer(
     pipeline: &Pipeline,
     ctx: &PipelineContext,
     streamed: bool,
-    started: usize,
+    receipt: Option<RequiredFinalizationReceipt>,
 ) {
-    if started == 0 {
+    let Some(receipt) = receipt.as_ref() else {
         return;
-    }
+    };
     let finalization = ctx.required_finalization_context(streamed);
-    for finalizer in pipeline.required_finalizers.iter().take(started).rev() {
-        if let Err(error) = finalizer.rollback(&finalization).await {
-            tracing::error!(error = %error, "RequiredFinalizer rollback failed");
-        }
+    if let Err(error) = pipeline.required_finalizers[0]
+        .rollback_with_receipt(&finalization, receipt)
+        .await
+    {
+        tracing::error!(error = %error, "RequiredFinalizer rollback failed");
     }
 }
 
@@ -1828,10 +1851,9 @@ impl Drop for StreamSettlementGuard {
             }
             Some(StreamDeliveryState::Ready(ctx)) => {
                 let pipeline = self.pipeline.clone();
-                let started = self.started_required_finalizers;
-                self.started_required_finalizers = 0;
+                let receipt = self.required_finalizer_receipt.take();
                 self.pipeline.spawn_stream_finalization(async move {
-                    rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                    rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
                     settle_prepared_stream(
                         pipeline.clone(),
                         *ctx,

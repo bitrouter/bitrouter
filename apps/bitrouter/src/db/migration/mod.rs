@@ -95,12 +95,21 @@ mod tests {
             "purge_after",
             "publication_state",
             "publication_generation",
+            "publication_instance_id",
+            "publication_lease_until",
         ] {
             assert!(columns.iter().any(|column| column == required));
         }
         for forbidden in ["owner_user_id", "request_id", "provider_response_id"] {
             assert!(!columns.iter().any(|column| column == forbidden));
         }
+        let indexes = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_provider_continuations_reconciliation'".to_owned(),
+            ))
+            .await?;
+        assert_eq!(indexes.len(), 1);
 
         migration.down(&manager).await?;
         assert!(!manager.has_table("provider_continuations").await?);
@@ -118,7 +127,7 @@ mod tests {
         let illegal_state = db
             .execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
-                "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation) VALUES ('c1', 'o', 't', 'k', 1, 'now', 'later', 'latest', 'forged', 'generation')".to_owned(),
+                "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation, publication_instance_id, publication_lease_until) VALUES ('c1', 'o', 't', 'k', 1, 'now', 'later', 'latest', 'forged', 'generation', 'instance', 'lease')".to_owned(),
             ))
             .await;
         assert!(
@@ -129,13 +138,26 @@ mod tests {
         let empty_generation = db
             .execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
-                "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation) VALUES ('c2', 'o', 't', 'k', 1, 'now', 'later', 'latest', 'active', '')".to_owned(),
+                "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation, publication_instance_id, publication_lease_until) VALUES ('c2', 'o', 't', 'k', 1, 'now', 'later', 'latest', 'active', '', 'instance', 'lease')".to_owned(),
             ))
             .await;
         assert!(
             empty_generation.is_err(),
             "the database must reject empty publication generation tokens"
         );
+        for (identity, instance, lease) in [("c3", "", "lease"), ("c4", "instance", "")] {
+            let empty_fence = db
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after, publication_state, publication_generation, publication_instance_id, publication_lease_until) VALUES (?, 'o', 't', 'k', 1, 'now', 'later', 'latest', 'active', 'generation', ?, ?)",
+                    [identity.into(), instance.into(), lease.into()],
+                ))
+                .await;
+            assert!(
+                empty_fence.is_err(),
+                "the database must reject empty publication fencing tokens"
+            );
+        }
         Ok(())
     }
 
@@ -151,11 +173,15 @@ mod tests {
             let sql = statement.to_ascii_lowercase();
             assert!(sql.contains("publication_state"));
             assert!(sql.contains("publication_generation"));
+            assert!(sql.contains("publication_instance_id"));
+            assert!(sql.contains("publication_lease_until"));
             assert!(sql.contains("check"));
             assert!(sql.contains("provisional"));
             assert!(sql.contains("delivering"));
             assert!(sql.contains("active"));
             assert!(sql.contains("publication_generation") && sql.contains("<>"));
+            assert!(sql.contains("publication_instance_id") && sql.contains("<>"));
+            assert!(sql.contains("publication_lease_until") && sql.contains("<>"));
             assert!(
                 !sql.contains("default"),
                 "unpublished migration 013 must require authenticated values instead of backfilling an unauthenticated default: {statement}"
@@ -190,6 +216,16 @@ mod tests {
             columns
                 .iter()
                 .any(|column| column == "publication_generation")
+        );
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "publication_instance_id")
+        );
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "publication_lease_until")
         );
         Ok(())
     }

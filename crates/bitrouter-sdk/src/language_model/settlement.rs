@@ -48,6 +48,26 @@ pub struct RequiredFinalizationContext {
     pub credential_authority: Option<ContinuationAuthority>,
 }
 
+/// Opaque identity for one required-finalizer invocation.
+///
+/// The pipeline creates a fresh receipt for every call and carries that same
+/// identity through prepare, commit, and every rollback path. Finalizers may
+/// retain a clone to prove that later compensation belongs to the invocation
+/// that actually acquired provisional ownership.
+#[derive(Clone)]
+pub struct RequiredFinalizationReceipt(Arc<()>);
+
+impl RequiredFinalizationReceipt {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(()))
+    }
+
+    /// Whether both receipts name the same finalizer invocation.
+    pub fn same_invocation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// The synchronous delivery rendezvous handed to a required finalizer after
 /// its provisional work has completed. A finalizer with post-acknowledgement
 /// durable work may use [`Self::wait_for_delivery_acknowledgement`], announce
@@ -199,10 +219,31 @@ pub trait RequiredFinalizer: Send + Sync {
     /// Finalize durable success state.
     async fn finalize(&self, ctx: &RequiredFinalizationContext) -> Result<()>;
 
+    /// Receipt-aware preparation used by the production pipeline.
+    ///
+    /// The default preserves source and behavior compatibility for finalizers
+    /// that do not own provisional state per invocation.
+    async fn finalize_with_receipt(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        _receipt: &RequiredFinalizationReceipt,
+    ) -> Result<()> {
+        self.finalize(ctx).await
+    }
+
     /// Compensate a finalizer that started before downstream delivery was
     /// cancelled. Default is a no-op for finalizers with no provisional state.
     async fn rollback(&self, _ctx: &RequiredFinalizationContext) -> Result<()> {
         Ok(())
+    }
+
+    /// Receipt-aware compensation used by every production rollback path.
+    async fn rollback_with_receipt(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        _receipt: &RequiredFinalizationReceipt,
+    ) -> Result<()> {
+        self.rollback(ctx).await
     }
 
     /// Activate provisional state and wait for the actual downstream delivery
@@ -214,6 +255,23 @@ pub trait RequiredFinalizer: Send + Sync {
         delivery: &RequiredDeliveryHandshake,
     ) -> Result<bool> {
         delivery.wait_for_delivery().await
+    }
+
+    /// Receipt-aware activation used by the production pipeline.
+    async fn commit_with_receipt(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        receipt: &RequiredFinalizationReceipt,
+        delivery: &RequiredDeliveryHandshake,
+    ) -> Result<bool> {
+        let _ = receipt;
+        self.commit(ctx, delivery).await
+    }
+
+    /// Drain and stop any bounded background work owned by this finalizer.
+    /// The default is a no-op for finalizers without background lifecycle.
+    async fn drain_pending_work(&self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -335,6 +393,18 @@ mod tests {
     use crate::caller::CallerContext;
     use crate::event::EventBus;
     use crate::language_model::types::{ServerToolCall, ServerToolKind, ServerToolStatus};
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn required_finalization_receipt_is_cloneable_send_sync_invocation_identity() {
+        assert_send_sync::<RequiredFinalizationReceipt>();
+        let first = RequiredFinalizationReceipt::new();
+        let first_clone = first.clone();
+        let second = RequiredFinalizationReceipt::new();
+        assert!(first.same_invocation(&first_clone));
+        assert!(!first.same_invocation(&second));
+    }
 
     fn make_settlement_context() -> SettlementContext {
         SettlementContext {
