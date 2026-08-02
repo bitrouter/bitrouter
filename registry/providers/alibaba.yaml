@@ -25,15 +25,19 @@ models:
     pricing:
       input_tokens:
         no_cache: 2.5
+        cache_read: 0.5
+        cache_write: 3.125
       output_tokens:
         text: 7.5
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen3.7-plus
     pricing:
       input_tokens:
-        no_cache: 0.4
+        no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
       output_tokens:
-        text: 1.6
+        text: 3
       context_tiers:
         - above_input_tokens: 256000
           input_tokens:
@@ -45,6 +49,8 @@ models:
     pricing:
       input_tokens:
         no_cache: 0.5
+        cache_read: 0.05
+        cache_write: 0.625
       output_tokens:
         text: 3
       context_tiers:
@@ -57,9 +63,10 @@ models:
     provider_model_id: qwen3.6-flash
     pricing:
       input_tokens:
-        no_cache: 0.25
+        no_cache: 0.1875
+        cache_write: 0.234375
       output_tokens:
-        text: 1.5
+        text: 1.125
       context_tiers:
         - above_input_tokens: 256000
           input_tokens:

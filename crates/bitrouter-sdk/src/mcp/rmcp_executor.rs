@@ -7,11 +7,11 @@
 //! (`-32601`). The MCP spec method catalogue is at
 //! <https://modelcontextprotocol.io/specification/2025-06-18>.
 //!
-//! Connections are pooled per server-name and lazily initialised. The first
-//! request to each server triggers the MCP `initialize` handshake (handled
-//! transparently by rmcp's `serve()`); subsequent requests reuse the same
-//! [`RunningService`]. There is no idle eviction in v1.0 — the pool grows to
-//! the number of distinct servers reached.
+//! Connections are pooled per server-name and lazily started through the
+//! configured lifecycle: legacy `initialize` for `latest`, or
+//! `server/discover` with narrowly-defined legacy fallback for `2026-07-28`.
+//! Subsequent requests reuse the same [`RunningService`]. There is no idle
+//! eviction in v1.0 — the pool grows to the number of distinct servers reached.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, ElicitRequestParams,
     ElicitResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams, Implementation,
-    ProgressNotificationParam, ReadResourceRequestParams, ServerResult,
+    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ServerResult,
 };
 #[expect(
     deprecated,
@@ -32,7 +32,8 @@ use rmcp::model::{
 )]
 use rmcp::model::{CreateMessageRequestParams, CreateMessageResult, ListRootsResult};
 use rmcp::service::{
-    NotificationContext, Peer, PeerRequestOptions, RequestContext, RoleClient, RunningService,
+    ClientCacheConfig, ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer,
+    PeerRequestOptions, RequestContext, RoleClient, RunningService,
 };
 use tokio::sync::{Mutex, broadcast};
 
@@ -56,12 +57,15 @@ struct BitrouterMcpClient {
     server_name: String,
     progress: Arc<ProgressDispatcher>,
     invalidation: Arc<broadcast::Sender<InvalidationEvent>>,
+    /// Version and lifecycle to select when starting the upstream connection.
+    protocol_version: ProtocolVersion,
 }
 
 impl ClientHandler for BitrouterMcpClient {
     fn get_info(&self) -> ClientInfo {
         let mut info = ClientInfo::default();
         info.client_info = Implementation::new("bitrouter", env!("CARGO_PKG_VERSION"));
+        info.protocol_version = self.protocol_version.clone();
         info
     }
 
@@ -205,7 +209,15 @@ struct PooledConnection {
     progress: Arc<ProgressDispatcher>,
 }
 
-/// Pooled rmcp client used by [`RmcpExecutor`].
+/// Pooled rmcp client used by [`RmcpExecutor`], keyed by server name.
+///
+/// The key is deliberately *only* the server name: upstream credentials come
+/// from static per-server config (see [`connect`]), so one pooled connection
+/// carries exactly one upstream principal and every downstream caller of that
+/// server shares it. Anything that makes the upstream identity vary per caller
+/// — forwarding a caller's own token upstream, say — invalidates that and must
+/// widen this key, because SEP-2549 `private`-scoped responses and any
+/// per-principal upstream state would otherwise be shared across callers.
 type Pool = Mutex<HashMap<String, PooledConnection>>;
 
 /// Broadcast capacity for the invalidation channel. Sized to absorb a burst
@@ -218,6 +230,7 @@ const INVALIDATION_CHANNEL_CAPACITY: usize = 256;
 pub struct RmcpExecutor {
     pool: Pool,
     invalidation_tx: Arc<broadcast::Sender<InvalidationEvent>>,
+    protocol_version: ProtocolVersion,
 }
 
 impl Default for RmcpExecutor {
@@ -226,14 +239,33 @@ impl Default for RmcpExecutor {
         Self {
             pool: Default::default(),
             invalidation_tx: Arc::new(tx),
+            protocol_version: ProtocolVersion::LATEST,
         }
     }
 }
 
 impl RmcpExecutor {
-    /// Fresh executor with an empty connection pool.
+    /// Fresh executor with an empty connection pool, dialing upstreams at
+    /// [`ProtocolVersion::LATEST`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Select `version` and its startup lifecycle instead of
+    /// [`ProtocolVersion::LATEST`].
+    ///
+    /// `LATEST` uses the legacy `initialize` path. `2026-07-28` uses
+    /// `server/discover` and falls back to legacy initialization only when the
+    /// peer returns `METHOD_NOT_FOUND`; any other discovery error fails the
+    /// connection. The modern version also permits `tools/call` to return MRTR
+    /// `input_required` or a Tasks handle, which `map_call_tool_result` turns
+    /// into explicit errors.
+    ///
+    /// Applies to connections opened after this call; pooled ones keep the
+    /// version they negotiated.
+    pub fn with_protocol_version(mut self, version: ProtocolVersion) -> Self {
+        self.protocol_version = version;
+        self
     }
 
     /// Subscribe to upstream cache-invalidation notifications. Each
@@ -245,9 +277,9 @@ impl RmcpExecutor {
     }
 
     /// Drop the pooled connection for `server_name`, if any. The next request
-    /// for that server will re-dial — running the MCP `initialize` handshake
-    /// against the upstream again and (for HTTP transports) rebuilding the
-    /// transport with whatever headers the new connect call supplies.
+    /// for that server will re-dial — running the configured MCP startup
+    /// lifecycle again and (for HTTP transports) rebuilding the transport with
+    /// whatever headers the new connect call supplies.
     ///
     /// The SDK does not interpret *when* to evict — that policy lives in a
     /// downstream decorator. The canonical use case is an OAuth-refresh
@@ -275,7 +307,7 @@ impl RmcpExecutor {
             return Ok(existing);
         }
         // Slow path: dial. We drop the lock across the network round-trip so
-        // a slow `initialize` against one server can't block lookups for
+        // a slow startup against one server can't block lookups for
         // another. If two requests race to dial the same server, both will
         // dial; the second one's value silently replaces the first in the
         // pool — fine because either RunningService is correct.
@@ -284,8 +316,20 @@ impl RmcpExecutor {
             server_name: server_name.to_string(),
             progress: progress.clone(),
             invalidation: self.invalidation_tx.clone(),
+            protocol_version: self.protocol_version.clone(),
         };
         let service = connect(server_name, transport, client).await?;
+        // rmcp 3.x allocates a per-`Peer` SEP-2549 response cache that is
+        // *enabled by default*. We already cache upstream results one layer up
+        // in `CachingExecutor`, which rmcp's cannot replace: ours evicts on
+        // `notifications/*_list_changed`, bounds itself per server with an LRU,
+        // and keys by aggregate member. Stacking the two would also inherit
+        // rmcp's `serve_stale_on_error: true` — a failed re-fetch silently
+        // returning a stale response underneath us. One cache, ours.
+        service
+            .peer()
+            .set_response_cache_config(ClientCacheConfig::disabled())
+            .await;
         let entry = PooledConnection {
             service: Arc::new(service),
             progress,
@@ -298,11 +342,43 @@ impl RmcpExecutor {
     }
 }
 
+/// How to open a connection for the protocol version the executor is
+/// configured to request.
+///
+/// MCP `2026-07-28` removed the `initialize` handshake (SEP-2575): a client on
+/// that version opens with `server/discover` and then sends self-contained
+/// requests. Declaring `2026-07-28` inside an `initialize` — a method the
+/// version does not define — would be incoherent, and a conformant non-rmcp
+/// server would reject it outright.
+///
+/// So the opt-in switches lifecycle, not just the version string:
+///
+/// - `latest` keeps rmcp's plain `serve` (the `initialize` handshake), exactly
+///   as every release before this one.
+/// - `2026-07-28` uses [`ClientLifecycleMode::Auto`], which probes
+///   `server/discover` and falls back to `initialize` only when the peer
+///   answers `METHOD_NOT_FOUND` — so pointing the opt-in at a server that has
+///   not caught up still connects.
+///
+/// This is the reason to accept `Auto`'s one weakness (a server that rejects an
+/// unknown method with something other than `METHOD_NOT_FOUND` gets no
+/// fallback): on the `2026-07-28` path there is no correct alternative, and the
+/// default path never reaches this branch.
+fn lifecycle_for(version: &ProtocolVersion) -> Option<ClientLifecycleMode> {
+    (version.as_str() >= ProtocolVersion::V_2026_07_28.as_str()).then(|| {
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![version.clone()],
+            legacy_version: Some(ProtocolVersion::LATEST),
+        }
+    })
+}
+
 async fn connect(
     server_name: &str,
     transport: &McpTransport,
     client: BitrouterMcpClient,
 ) -> Result<RunningService<RoleClient, BitrouterMcpClient>> {
+    let lifecycle = lifecycle_for(&client.protocol_version);
     match transport {
         McpTransport::Http { url, headers } => {
             // Streamable HTTP transport per the MCP spec
@@ -333,10 +409,11 @@ async fn connect(
                 )
                 .custom_headers(header_map);
             let transport = rmcp::transport::StreamableHttpClientTransport::from_config(cfg);
-            client
-                .serve(transport)
-                .await
-                .map_err(|e| map_initialize_error(server_name, e))
+            match lifecycle {
+                Some(lifecycle) => client.serve_with_lifecycle(transport, lifecycle).await,
+                None => client.serve(transport).await,
+            }
+            .map_err(|e| map_initialize_error(server_name, e))
         }
         McpTransport::Stdio { command, args, env } => {
             // stdio child-process transport per the MCP spec
@@ -348,10 +425,11 @@ async fn connect(
             }
             let transport = rmcp::transport::TokioChildProcess::new(cmd)
                 .map_err(|e| upstream(server_name, format!("spawning '{command}': {e}")))?;
-            client
-                .serve(transport)
-                .await
-                .map_err(|e| map_initialize_error(server_name, e))
+            match lifecycle {
+                Some(lifecycle) => client.serve_with_lifecycle(transport, lifecycle).await,
+                None => client.serve(transport).await,
+            }
+            .map_err(|e| map_initialize_error(server_name, e))
         }
     }
 }
@@ -549,19 +627,12 @@ fn stream_tools_call(
                     }
                 }
                 call_result = &mut call_fut => {
-                    match call_result {
-                        Ok(ServerResult::CallToolResult(result)) => {
-                            let value = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
+                    match call_result.and_then(|r| map_call_tool_result(&server_name, r)) {
+                        Ok(value) => {
                             yield Ok(McpStreamPart::Final(McpResponse {
                                 request_id,
                                 result: value,
                             }));
-                        }
-                        Ok(other) => {
-                            yield Err(upstream(
-                                &server_name,
-                                format!("tools/call: unexpected server result {other:?}"),
-                            ));
                         }
                         Err(e) => yield Err(e),
                     }
@@ -572,38 +643,157 @@ fn stream_tools_call(
     }
 }
 
+/// Map a `tools/call` response into the final result JSON, or a typed error.
+///
+/// Shared by the streaming and non-streaming paths so they agree exactly — at
+/// MCP `2026-07-28` a server may answer `tools/call` with something other than
+/// a `CallToolResult`, and the two paths would otherwise diverge (rmcp's
+/// high-level `call_tool` silently drives MRTR rounds, while the raw
+/// `send_cancellable_request` the streaming path needs for its progress token
+/// does not).
+///
+/// Neither non-final shape is one this gateway can carry:
+///
+/// - **MRTR `input_required` (SEP-2322)** asks the client to fulfil
+///   `sampling/createMessage`, `elicitation/create`, or `roots/list` and retry.
+///   Those are precisely the three server→client requests
+///   [`BitrouterMcpClient`] rejects with `-32601`, for the same reason: the
+///   inbound client connected statelessly, with no channel back. Driving the
+///   rounds would only produce a rejection per input request and then fail, so
+///   we say so directly instead.
+/// - **Tasks `resultType: "task"` (SEP-2663)** hands back a task id to poll.
+///   Polling is a lifecycle this executor does not implement yet — see
+///   `docs/MCP_2026_07_28_SPEC.md` (D1) — so we surface the task id rather
+///   than stranding the caller on an opaque failure.
+///
+/// Both follow the module's existing stance on server→client relaying: an
+/// explicit, diagnosable rejection beats a silent default.
+fn map_call_tool_result(server: &str, result: ServerResult) -> Result<serde_json::Value> {
+    match result {
+        ServerResult::CallToolResult(result) => serde_json::to_value(&result)
+            .map_err(|e| BitrouterError::internal(format!("mcp '{server}' tools/call: {e}"))),
+        ServerResult::InputRequiredResult(_) => Err(upstream(
+            server,
+            "tools/call returned an MRTR 'input_required' result (SEP-2322). The bitrouter \
+             gateway cannot fulfil server→client requests — the inbound client connected \
+             statelessly — so the round cannot be completed. Configure a direct MCP client \
+             connection if you need multi-round-trip tools.",
+        )),
+        ServerResult::CreateTaskResult(result) => Err(upstream(
+            server,
+            format!(
+                "tools/call was materialized as task '{}' (SEP-2663 Tasks extension). The \
+                 bitrouter gateway does not poll tasks; the call was not completed.",
+                result.task.task_id
+            ),
+        )),
+        other => Err(upstream(
+            server,
+            format!("tools/call: unexpected server result {other:?}"),
+        )),
+    }
+}
+
+/// Fold one page's cache policy into the aggregate policy for a paginated
+/// result. The aggregate can never be shared or kept fresh more broadly than
+/// any page it contains.
+fn merge_paginated_cache_hints(
+    ttl_ms: &mut Option<u64>,
+    cache_scope: &mut Option<rmcp::model::CacheScope>,
+    page_ttl_ms: Option<u64>,
+    page_cache_scope: Option<rmcp::model::CacheScope>,
+) {
+    if let Some(page_ttl_ms) = page_ttl_ms {
+        *ttl_ms = Some(match *ttl_ms {
+            Some(current) => current.min(page_ttl_ms),
+            None => page_ttl_ms,
+        });
+    }
+    // `CacheScope` is non-exhaustive. Keep private dominant, let public fill
+    // only an absent policy, and preserve any future non-public page scope as
+    // restrictive instead of silently treating it as public or ignoring it.
+    if !matches!(*cache_scope, Some(rmcp::model::CacheScope::Private)) {
+        match page_cache_scope {
+            None => {}
+            Some(rmcp::model::CacheScope::Private) => {
+                *cache_scope = Some(rmcp::model::CacheScope::Private);
+            }
+            Some(rmcp::model::CacheScope::Public) if cache_scope.is_none() => {
+                *cache_scope = Some(rmcp::model::CacheScope::Public);
+            }
+            Some(rmcp::model::CacheScope::Public) => {}
+            Some(restrictive) => *cache_scope = Some(restrictive),
+        }
+    }
+}
+
 async fn dispatch(
     peer: &Peer<RoleClient>,
     server: &str,
     request: &McpRequest,
 ) -> Result<serde_json::Value> {
     let method = request.method.as_str();
-    match method {
-        "tools/list" => {
-            let tools = peer
-                .list_all_tools()
+
+    /// Aggregate every page of a paginated list method while **preserving the
+    /// rest of the result envelope**.
+    ///
+    /// rmcp's `list_all_*` helpers return only the item `Vec`, which meant we
+    /// used to rebuild the response as a bare `{"tools": [...]}` — silently
+    /// dropping the SEP-2549 `ttlMs` / `cacheScope` hints that `2026-07-28`
+    /// *requires* on exactly these methods, along with `resultType` and
+    /// `_meta`. `CachingExecutor` reads those hints, so the gateway was
+    /// discarding the upstream's cache policy before anything could honour it.
+    ///
+    /// The pages compose into one logical result, so their cache policies are
+    /// merged conservatively: private scope wins and the shortest TTL governs
+    /// the whole aggregate. `next_cursor` is cleared because the aggregate has
+    /// no further pages.
+    macro_rules! list_all_preserving {
+        ($call:ident, $items:ident) => {{
+            let mut result = peer
+                .$call(None)
                 .await
                 .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "tools": tools }))
-        }
+            let mut cursor = result.next_cursor.take();
+            while let Some(next) = cursor {
+                let mut page = peer
+                    .$call(Some(
+                        rmcp::model::PaginatedRequestParams::default().with_cursor(Some(next)),
+                    ))
+                    .await
+                    .map_err(|e| map_service_error(server, method, e))?;
+                merge_paginated_cache_hints(
+                    &mut result.ttl_ms,
+                    &mut result.cache_scope,
+                    page.ttl_ms,
+                    page.cache_scope,
+                );
+                result.$items.append(&mut page.$items);
+                cursor = page.next_cursor;
+            }
+            serde_json::to_value(&result).map_err(|e| {
+                BitrouterError::internal(format!("mcp '{server}' {method} serialise: {e}"))
+            })
+        }};
+    }
+
+    match method {
+        "tools/list" => list_all_preserving!(list_tools, tools),
         "tools/call" => {
             let params: CallToolRequestParams = serde_json::from_value(request.params.clone())
                 .map_err(|e| bad_params(server, method, e))?;
+            // Deliberately *not* rmcp's high-level `call_tool`: that drives
+            // MRTR rounds through the local handler (which rejects every one)
+            // and reports a bare `UnexpectedResponse` for tasks. Sending the
+            // request directly lets `map_call_tool_result` give both this path
+            // and the streaming path the same explanation.
             let result = peer
-                .call_tool(params)
+                .send_request(ClientRequest::CallToolRequest(CallToolRequest::new(params)))
                 .await
                 .map_err(|e| map_service_error(server, method, e))?;
-            serde_json::to_value(&result).map_err(|e| {
-                BitrouterError::internal(format!("mcp '{server}' tools/call serialise: {e}"))
-            })
+            map_call_tool_result(server, result)
         }
-        "resources/list" => {
-            let resources = peer
-                .list_all_resources()
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "resources": resources }))
-        }
+        "resources/list" => list_all_preserving!(list_resources, resources),
         "resources/read" => {
             let params: ReadResourceRequestParams = serde_json::from_value(request.params.clone())
                 .map_err(|e| bad_params(server, method, e))?;
@@ -616,19 +806,9 @@ async fn dispatch(
             })
         }
         "resources/templates/list" => {
-            let templates = peer
-                .list_all_resource_templates()
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "resourceTemplates": templates }))
+            list_all_preserving!(list_resource_templates, resource_templates)
         }
-        "prompts/list" => {
-            let prompts = peer
-                .list_all_prompts()
-                .await
-                .map_err(|e| map_service_error(server, method, e))?;
-            Ok(serde_json::json!({ "prompts": prompts }))
-        }
+        "prompts/list" => list_all_preserving!(list_prompts, prompts),
         "prompts/get" => {
             let params: GetPromptRequestParams = serde_json::from_value(request.params.clone())
                 .map_err(|e| bad_params(server, method, e))?;
@@ -666,6 +846,110 @@ mod tests {
     #[test]
     fn executor_constructs_with_empty_pool() {
         let _ = RmcpExecutor::new();
+    }
+
+    fn client_for(exec: &RmcpExecutor) -> BitrouterMcpClient {
+        BitrouterMcpClient {
+            server_name: "srv".into(),
+            progress: Arc::new(ProgressDispatcher::new()),
+            invalidation: exec.invalidation_tx.clone(),
+            protocol_version: exec.protocol_version.clone(),
+        }
+    }
+
+    /// The default must stay `LATEST`: opting an upstream into `2026-07-28`
+    /// lets it answer `tools/call` with shapes this gateway can only turn into
+    /// errors, so it has to be a choice someone makes.
+    #[test]
+    fn upstream_startup_uses_latest_by_default() {
+        let exec = RmcpExecutor::new();
+        assert_eq!(
+            client_for(&exec).get_info().protocol_version,
+            ProtocolVersion::LATEST,
+        );
+    }
+
+    #[test]
+    fn configured_protocol_version_is_carried_into_client_info() {
+        let exec = RmcpExecutor::new().with_protocol_version(ProtocolVersion::V_2026_07_28);
+        assert_eq!(
+            client_for(&exec).get_info().protocol_version,
+            ProtocolVersion::V_2026_07_28,
+        );
+    }
+
+    /// Build a `ServerResult` from JSON. The rmcp result types are
+    /// `#[non_exhaustive]` with custom `resultType`-discriminating
+    /// deserializers, so going through the wire shape is both the only
+    /// cross-crate route and a faithful match for what a real upstream sends.
+    fn server_result(json: serde_json::Value) -> ServerResult {
+        serde_json::from_value(json).expect("valid ServerResult")
+    }
+
+    #[test]
+    fn tools_call_maps_a_complete_result_to_its_json() {
+        let result = server_result(serde_json::json!({
+            "resultType": "complete",
+            "content": [{ "type": "text", "text": "hi" }],
+        }));
+        let value = map_call_tool_result("srv", result).expect("complete result maps to json");
+        assert_eq!(value["content"][0]["text"], "hi");
+    }
+
+    /// MRTR asks us to fulfil a server→client request and retry. This gateway
+    /// rejects all three such requests by design, so the round can never
+    /// complete — the caller deserves that explanation, not a bare
+    /// "unexpected server result".
+    #[test]
+    fn tools_call_maps_mrtr_input_required_to_an_explained_error() {
+        let result = server_result(serde_json::json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "confirm": {
+                    "method": "elicitation/create",
+                    // `properties` is required on an elicitation schema —
+                    // omit it and the whole result silently degrades to
+                    // `CustomResult` via the untagged union.
+                    "params": {
+                        "message": "ok?",
+                        "requestedSchema": { "type": "object", "properties": {} }
+                    }
+                }
+            },
+            "requestState": "opaque",
+        }));
+        let err = map_call_tool_result("srv", result).expect_err("input_required is an error");
+        let msg = err.to_string();
+        // Assert on text unique to the MRTR arm — the catch-all would also
+        // mention "input_required" via the result's `Debug`, so a looser
+        // assertion would pass even if the variant fell through.
+        assert!(msg.contains("SEP-2322"), "{msg}");
+        assert!(
+            msg.contains("cannot fulfil server→client requests"),
+            "{msg}"
+        );
+        assert!(msg.contains("srv"), "{msg}");
+    }
+
+    /// SEP-2663: the task id is the one thing that makes the failure
+    /// actionable, so it must survive into the error.
+    #[test]
+    fn tools_call_maps_a_task_result_to_an_error_naming_the_task() {
+        let result = server_result(serde_json::json!({
+            "resultType": "task",
+            "taskId": "task-42",
+            "status": "working",
+            "createdAt": "2026-07-28T00:00:00Z",
+            "lastUpdatedAt": "2026-07-28T00:00:00Z",
+            "ttlMs": 60000,
+        }));
+        let err = map_call_tool_result("srv", result).expect_err("task is an error");
+        let msg = err.to_string();
+        // As above: "task-42" alone would also appear in the catch-all's
+        // `Debug` output, so pin text only the Tasks arm produces.
+        assert!(msg.contains("SEP-2663"), "{msg}");
+        assert!(msg.contains("materialized as task 'task-42'"), "{msg}");
+        assert!(msg.contains("srv"), "{msg}");
     }
 
     #[tokio::test]

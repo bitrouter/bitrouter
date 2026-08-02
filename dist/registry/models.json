@@ -703,6 +703,159 @@
       "release_date": "2026-05-28"
     },
     {
+      "description": "Anthropic's Claude Opus 5.",
+      "family": "claude-opus",
+      "id": "anthropic/claude-opus-5",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "knowledge_cutoff": "2026-05-31",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "Anthropic: Claude Opus 5",
+      "open_weights": false,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "anthropic",
+          "provider_model_id": "claude-opus-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "atlascloud",
+          "provider_model_id": "anthropic/claude-opus-5-ccmax"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "anthropic.claude-opus-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "claude-opus-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-opus-5"
+        },
+        {
+          "api_protocol": "anthropic",
+          "provider": "claude-code",
+          "provider_model_id": "claude-opus-5"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "claude-opus-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "claude-opus-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-opus-5"
+        }
+      ],
+      "release_date": "2026-07-24"
+    },
+    {
       "description": "Anthropic's Claude Sonnet 4.6.",
       "family": "claude-sonnet",
       "id": "anthropic/claude-sonnet-4.6",
@@ -1108,11 +1261,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.14,
-              "no_cache": 0.28
+              "cache_read": 0.5,
+              "no_cache": 1.0
             },
             "output_tokens": {
-              "text": 0.42
+              "text": 1.0
             }
           },
           "provider": "chutes",
@@ -1143,10 +1296,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.2288
+              "cache_read": 0.1345,
+              "no_cache": 0.269
             },
             "output_tokens": {
-              "text": 0.3432
+              "text": 0.4
             }
           },
           "provider": "openrouter",
@@ -1381,7 +1535,7 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.028,
+              "cache_read": 0.0028,
               "no_cache": 0.14
             },
             "output_tokens": {
@@ -1449,11 +1603,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.09
+              "cache_read": 0.028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 0.18
+              "text": 0.28
             }
           },
           "provider": "openrouter",
@@ -1480,11 +1634,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.0197,
-              "no_cache": 0.0983
+              "cache_read": 0.028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 0.1966
+              "text": 0.28
             }
           },
           "provider": "qianfan",
@@ -1693,11 +1847,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
+              "cache_read": 0.003625,
+              "no_cache": 0.435
             },
             "output_tokens": {
-              "text": 3.48
+              "text": 0.87
             }
           },
           "provider": "deepseek",
@@ -2936,11 +3090,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
+              "cache_read": 0.06,
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 2.4
+              "text": 1.2
             }
           },
           "provider": "minimax",
@@ -2956,11 +3110,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
+              "cache_read": 0.06,
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 2.4
+              "text": 1.2
             }
           },
           "provider": "minimax_cn",
@@ -3279,10 +3433,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.375
+              "cache_read": 0.095,
+              "no_cache": 0.57
             },
             "output_tokens": {
-              "text": 2.025
+              "text": 2.85
             }
           },
           "provider": "openrouter",
@@ -3487,11 +3642,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.475,
-              "no_cache": 0.95
+              "cache_read": 0.33,
+              "no_cache": 0.66
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 3.5
             }
           },
           "provider": "chutes",
@@ -3580,11 +3735,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.144,
-              "no_cache": 0.66
+              "cache_read": 0.0992,
+              "no_cache": 0.589
             },
             "output_tokens": {
-              "text": 3.41
+              "text": 2.48
             }
           },
           "provider": "openrouter",
@@ -3612,11 +3767,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.144,
-              "no_cache": 0.684
+              "cache_read": 0.16,
+              "no_cache": 0.95
             },
             "output_tokens": {
-              "text": 3.42
+              "text": 4.0
             }
           },
           "provider": "qianfan",
@@ -3765,10 +3920,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.84
+              "cache_read": 0.15,
+              "no_cache": 0.73
             },
             "output_tokens": {
-              "text": 3.99
+              "text": 3.5
             }
           },
           "provider": "ambient",
@@ -3885,11 +4041,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1296,
-              "no_cache": 0.612
+              "cache_read": 0.15,
+              "no_cache": 0.73
             },
             "output_tokens": {
-              "text": 3.069
+              "text": 3.5
             }
           },
           "provider": "openrouter",
@@ -4013,6 +4169,46 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.5,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "phala",
+          "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.5,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "redpill",
           "provider_model_id": "moonshotai/kimi-k3"
         }
       ],
@@ -4487,12 +4683,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.022,
+              "cache_write": 0.275,
+              "no_cache": 0.22
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.32
             }
           },
           "provider": "aws-bedrock",
@@ -4508,11 +4704,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 1.0
+              "cache_read": 0.02,
+              "no_cache": 0.2
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.2
             }
           },
           "provider": "azure",
@@ -4571,12 +4767,12 @@
               }
             ],
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.2
             }
           },
           "provider": "openai",
@@ -4596,14 +4792,19 @@
         },
         {
           "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "gpt-5.6-luna"
+        },
+        {
+          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.2
             }
           },
           "provider": "opencode-zen",
@@ -4617,12 +4818,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 0.6
             }
           },
           "provider": "openrouter",
@@ -4654,12 +4855,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 0.55,
+              "cache_write": 6.88,
+              "no_cache": 5.5
             },
             "output_tokens": {
-              "text": 30.0
+              "text": 33.0
             }
           },
           "provider": "aws-bedrock",
@@ -4821,12 +5022,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 3.125,
-              "no_cache": 2.5
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 13.2
             }
           },
           "provider": "aws-bedrock",
@@ -4842,11 +5043,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "no_cache": 2.5
+              "cache_read": 0.2,
+              "no_cache": 2.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 12.0
             }
           },
           "provider": "azure",
@@ -4905,12 +5106,12 @@
               }
             ],
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 3.125,
-              "no_cache": 2.5
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 12.0
             }
           },
           "provider": "openai",
@@ -4951,12 +5152,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 3.125,
-              "no_cache": 2.5
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 6.0
             }
           },
           "provider": "openrouter",
@@ -5239,10 +5440,10 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.15,
-              "no_cache": 0.285
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 2.4
+              "text": 2.0
             }
           },
           "provider": "openrouter",
@@ -5394,10 +5595,11 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.25
+              "cache_write": 0.234375,
+              "no_cache": 0.1875
             },
             "output_tokens": {
-              "text": 1.5
+              "text": 1.125
             }
           },
           "provider": "alibaba",
@@ -5425,10 +5627,11 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.165
+              "cache_write": 0.234375,
+              "no_cache": 0.1875
             },
             "output_tokens": {
-              "text": 0.99
+              "text": 1.125
             }
           },
           "provider": "alibaba_cn",
@@ -5501,6 +5704,8 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
               "no_cache": 2.5
             },
             "output_tokens": {
@@ -5521,10 +5726,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "no_cache": 1.65
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
             },
             "output_tokens": {
-              "text": 4.951
+              "text": 7.5
             }
           },
           "provider": "alibaba_cn",
@@ -5575,6 +5782,7 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.25,
+              "cache_write": 3.125,
               "no_cache": 2.5
             },
             "output_tokens": {
@@ -5589,6 +5797,7 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.25,
+              "cache_write": 1.5625,
               "no_cache": 1.25
             },
             "output_tokens": {
@@ -5611,12 +5820,12 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 1.5625,
-              "no_cache": 1.25
+              "cache_read": 0.295,
+              "cache_write": 1.84375,
+              "no_cache": 1.475
             },
             "output_tokens": {
-              "text": 3.75
+              "text": 4.425
             }
           },
           "provider": "openrouter",
@@ -5660,10 +5869,12 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.4
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
             },
             "output_tokens": {
-              "text": 1.6
+              "text": 3.0
             }
           },
           "provider": "alibaba",
@@ -5691,10 +5902,12 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.276
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
             },
             "output_tokens": {
-              "text": 1.101
+              "text": 3.0
             }
           },
           "provider": "alibaba_cn",
@@ -5813,8 +6026,7 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.09
+              "no_cache": 0.1
             },
             "output_tokens": {
               "text": 0.3
@@ -5860,11 +6072,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.019,
-              "no_cache": 0.096
+              "cache_read": 0.02,
+              "no_cache": 0.1
             },
             "output_tokens": {
-              "text": 0.288
+              "text": 0.3
             }
           },
           "provider": "stepfun",
@@ -5884,11 +6096,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.019,
-              "no_cache": 0.096
+              "cache_read": 0.02,
+              "no_cache": 0.1
             },
             "output_tokens": {
-              "text": 0.288
+              "text": 0.3
             }
           },
           "provider": "stepfun_cn",
@@ -5948,12 +6160,12 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.04,
+              "cache_read": 0.03,
               "cache_write": 0.0,
-              "no_cache": 0.2
+              "no_cache": 0.19
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.14
             }
           },
           "provider": "ambient",
@@ -6004,11 +6216,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.04,
-              "no_cache": 0.2
+              "cache_read": 0.037,
+              "no_cache": 0.185
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.11
             }
           },
           "provider": "stepfun",
@@ -6027,11 +6239,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.04,
-              "no_cache": 0.2
+              "cache_read": 0.037,
+              "no_cache": 0.185
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.11
             }
           },
           "provider": "stepfun_cn",
@@ -6111,11 +6323,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 0.2
+              "cache_read": 0.033,
+              "no_cache": 0.132
             },
             "output_tokens": {
-              "text": 0.8
+              "text": 0.528
             }
           },
           "provider": "openrouter",
@@ -6529,7 +6741,7 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
+              "cache_read": 0.3,
               "no_cache": 2.0
             },
             "output_tokens": {
@@ -6562,7 +6774,7 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
+              "cache_read": 0.3,
               "no_cache": 2.0
             },
             "output_tokens": {
@@ -6756,11 +6968,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.08,
-              "no_cache": 0.4
+              "cache_read": 0.0028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 2.0
+              "text": 0.28
             }
           },
           "provider": "xiaomi",
@@ -6885,11 +7097,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
+              "cache_read": 0.0036,
+              "no_cache": 0.435
             },
             "output_tokens": {
-              "text": 3.0
+              "text": 0.87
             }
           },
           "provider": "xiaomi",
@@ -7008,7 +7220,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.0,
+              "cache_read": 2.25,
               "cache_write": 0.0,
               "no_cache": 2.25
             },
@@ -7254,11 +7466,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
+              "cache_read": 0.2,
+              "no_cache": 0.95
             },
             "output_tokens": {
-              "text": 1.92
+              "text": 2.55
             }
           },
           "provider": "openrouter",
@@ -7468,11 +7680,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.525,
-              "no_cache": 1.05
+              "cache_read": 0.49,
+              "no_cache": 0.98
             },
             "output_tokens": {
-              "text": 3.5
+              "text": 3.08
             }
           },
           "provider": "chutes",
@@ -7536,11 +7748,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.182,
-              "no_cache": 0.98
+              "cache_read": 0.1794,
+              "no_cache": 0.966
             },
             "output_tokens": {
-              "text": 3.08
+              "text": 3.036
             }
           },
           "provider": "openrouter",
@@ -7568,11 +7780,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.182,
-              "no_cache": 0.98
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "output_tokens": {
-              "text": 3.08
+              "text": 4.4
             }
           },
           "provider": "qianfan",
@@ -7776,9 +7988,9 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.26,
+              "cache_read": 0.2,
               "cache_write": 0.0,
-              "no_cache": 1.4
+              "no_cache": 1.05
             },
             "output_tokens": {
               "text": 4.4
@@ -7873,11 +8085,11 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.18,
-              "no_cache": 1.0
+              "cache_read": 0.208,
+              "no_cache": 1.12
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 3.52
             }
           },
           "provider": "openrouter",
@@ -7891,7 +8103,7 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.7,
+              "cache_read": 0.26,
               "no_cache": 1.4
             },
             "output_tokens": {
@@ -7905,11 +8117,11 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.181,
-              "no_cache": 0.97
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "output_tokens": {
-              "text": 3.07
+              "text": 4.4
             }
           },
           "provider": "qianfan",
@@ -7923,7 +8135,7 @@
           ],
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.7,
+              "cache_read": 0.26,
               "no_cache": 1.4
             },
             "output_tokens": {
@@ -8011,6 +8223,7 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.375,
               "no_cache": 1.5
             },
             "output_tokens": {

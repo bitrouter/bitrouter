@@ -55,6 +55,24 @@ pub mod config_routing;
 #[cfg(feature = "mcp")]
 pub mod rmcp_executor;
 
+/// The rmcp [`ProtocolVersion`](rmcp::model::ProtocolVersion) a
+/// [`crate::config::McpUpstreamProtocol`] selects.
+///
+/// Lives here rather than as a `From` impl in `config` so the config module
+/// stays free of an rmcp dependency — `config` is compiled without the `mcp`
+/// feature too.
+#[cfg(all(feature = "config_file", feature = "mcp"))]
+pub fn upstream_protocol_version(
+    setting: crate::config::McpUpstreamProtocol,
+) -> rmcp::model::ProtocolVersion {
+    match setting {
+        crate::config::McpUpstreamProtocol::Latest => rmcp::model::ProtocolVersion::LATEST,
+        crate::config::McpUpstreamProtocol::V2026_07_28 => {
+            rmcp::model::ProtocolVersion::V_2026_07_28
+        }
+    }
+}
+
 // Per CLAUDE.md guideline #2 we do not `pub use` from these submodules.
 // Downstream code reaches the types directly:
 // - `mcp::transport::{McpServerConfig, McpTransport}`

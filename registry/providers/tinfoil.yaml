@@ -47,6 +47,7 @@ models:
     pricing:
       input_tokens:
         no_cache: 1.5
+        cache_read: 0.375
       output_tokens:
         text: 5.25
 status: active

@@ -1214,3 +1214,28 @@ upstream:
         "existing deployments must retain immediate fallback by default"
     );
 }
+
+#[test]
+fn mcp_upstream_protocol_defaults_to_latest() {
+    // Absent `mcp:` and present-but-silent `mcp:` must agree, and both must
+    // leave upstream dialing on the pre-upgrade version.
+    assert_eq!(
+        Config::default().mcp.upstream_protocol,
+        McpUpstreamProtocol::Latest
+    );
+    let cfg = parse("mcp:\n  cache:\n    enabled: true\n").expect("parse");
+    assert_eq!(cfg.mcp.upstream_protocol, McpUpstreamProtocol::Latest);
+}
+
+#[test]
+fn mcp_upstream_protocol_opts_in_by_version_string() {
+    let cfg = parse("mcp:\n  upstream_protocol: \"2026-07-28\"\n").expect("parse");
+    assert_eq!(cfg.mcp.upstream_protocol, McpUpstreamProtocol::V2026_07_28);
+
+    // The version is spelled as itself, so an unknown one is a config error
+    // rather than a silent downgrade to the default.
+    assert!(
+        parse("mcp:\n  upstream_protocol: \"2099-01-01\"\n").is_err(),
+        "unknown protocol version must not parse"
+    );
+}

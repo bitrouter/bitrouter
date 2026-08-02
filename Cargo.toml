@@ -87,7 +87,7 @@ schemars = "1"
 
 # MCP (sdk `mcp` feature) — official Rust MCP SDK.
 # Source: <https://github.com/modelcontextprotocol/rust-sdk>
-rmcp = { version = "2.2", default-features = false, features = [
+rmcp = { version = "3.0", default-features = false, features = [
     "client",
     "reqwest",
     "transport-streamable-http-client-reqwest",

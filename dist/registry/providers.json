@@ -30,6 +30,8 @@
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
               "no_cache": 2.5
             },
             "output_tokens": {
@@ -61,10 +63,12 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.4
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
             },
             "output_tokens": {
-              "text": 1.6
+              "text": 3.0
             }
           },
           "provider_model_id": "qwen3.7-plus",
@@ -92,6 +96,8 @@
               }
             ],
             "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
               "no_cache": 0.5
             },
             "output_tokens": {
@@ -123,10 +129,11 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.25
+              "cache_write": 0.234375,
+              "no_cache": 0.1875
             },
             "output_tokens": {
-              "text": 1.5
+              "text": 1.125
             }
           },
           "provider_model_id": "qwen3.6-flash",
@@ -256,10 +263,12 @@
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
-              "no_cache": 1.65
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
             },
             "output_tokens": {
-              "text": 4.951
+              "text": 7.5
             }
           },
           "provider_model_id": "qwen3.7-max",
@@ -287,10 +296,12 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.276
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
             },
             "output_tokens": {
-              "text": 1.101
+              "text": 3.0
             }
           },
           "provider_model_id": "qwen3.7-plus",
@@ -318,10 +329,12 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.276
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
             },
             "output_tokens": {
-              "text": 1.651
+              "text": 3.0
             }
           },
           "provider_model_id": "qwen3.6-plus",
@@ -349,10 +362,11 @@
               }
             ],
             "input_tokens": {
-              "no_cache": 0.165
+              "cache_write": 0.234375,
+              "no_cache": 0.1875
             },
             "output_tokens": {
-              "text": 0.99
+              "text": 1.125
             }
           },
           "provider_model_id": "qwen3.6-flash",
@@ -685,10 +699,11 @@
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.84
+              "cache_read": 0.15,
+              "no_cache": 0.73
             },
             "output_tokens": {
-              "text": 3.99
+              "text": 3.5
             }
           },
           "provider_model_id": "moonshotai/kimi-k2.7-code",
@@ -719,9 +734,9 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.26,
+              "cache_read": 0.2,
               "cache_write": 0.0,
-              "no_cache": 1.4
+              "no_cache": 1.05
             },
             "output_tokens": {
               "text": 4.4
@@ -737,12 +752,12 @@
           "id": "stepfun/step-3.7-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.04,
+              "cache_read": 0.03,
               "cache_write": 0.0,
-              "no_cache": 0.2
+              "no_cache": 0.19
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.14
             }
           },
           "provider_model_id": "stepfun/step-3.7-flash",
@@ -998,6 +1013,24 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "anthropic",
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "claude-opus-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "anthropic",
@@ -1246,6 +1279,20 @@
             }
           },
           "provider_model_id": "xai/grok-4.3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "anthropic/claude-opus-5-ccmax"
         }
       ],
       "name": "atlascloud",
@@ -1567,12 +1614,12 @@
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.022,
+              "cache_write": 0.275,
+              "no_cache": 0.22
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.32
             }
           },
           "provider_model_id": "openai.gpt-5.6-luna",
@@ -1588,12 +1635,12 @@
           "id": "openai/gpt-5.6-sol",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
+              "cache_read": 0.55,
+              "cache_write": 6.88,
+              "no_cache": 5.5
             },
             "output_tokens": {
-              "text": 30.0
+              "text": 33.0
             }
           },
           "provider_model_id": "openai.gpt-5.6-sol",
@@ -1609,15 +1656,36 @@
           "id": "openai/gpt-5.6-terra",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 3.125,
-              "no_cache": 2.5
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 13.2
             }
           },
           "provider_model_id": "openai.gpt-5.6-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "anthropic.claude-opus-5",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -1965,11 +2033,11 @@
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 1.0
+              "cache_read": 0.02,
+              "no_cache": 0.2
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.2
             }
           },
           "provider_model_id": "gpt-5.6-luna",
@@ -2005,14 +2073,35 @@
           "id": "openai/gpt-5.6-terra",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "no_cache": 2.5
+              "cache_read": 0.2,
+              "no_cache": 2.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 12.0
             }
           },
           "provider_model_id": "gpt-5.6-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "claude-opus-5",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -2736,6 +2825,21 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "anthropic/claude-opus-5"
         }
       ],
       "name": "bitrouter",
@@ -2814,10 +2918,10 @@
           "id": "openai/gpt-oss-120b",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.25
+              "no_cache": 0.35
             },
             "output_tokens": {
-              "text": 0.69
+              "text": 0.75
             }
           },
           "provider_model_id": "gpt-oss-120b",
@@ -2846,7 +2950,7 @@
           "id": "z-ai/glm-4.7",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.0,
+              "cache_read": 2.25,
               "cache_write": 0.0,
               "no_cache": 2.25
             },
@@ -2915,11 +3019,11 @@
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.475,
-              "no_cache": 0.95
+              "cache_read": 0.33,
+              "no_cache": 0.66
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 3.5
             }
           },
           "provider_model_id": "moonshotai/Kimi-K2.6-TEE",
@@ -2936,11 +3040,11 @@
           "id": "z-ai/glm-5.1",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.525,
-              "no_cache": 1.05
+              "cache_read": 0.49,
+              "no_cache": 0.98
             },
             "output_tokens": {
-              "text": 3.5
+              "text": 3.08
             }
           },
           "provider_model_id": "zai-org/GLM-5.1-TEE",
@@ -2978,11 +3082,11 @@
           "id": "deepseek/deepseek-v3.2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.14,
-              "no_cache": 0.28
+              "cache_read": 0.5,
+              "no_cache": 1.0
             },
             "output_tokens": {
-              "text": 0.42
+              "text": 1.0
             }
           },
           "provider_model_id": "deepseek-ai/DeepSeek-V3.2-TEE",
@@ -3129,6 +3233,11 @@
           "api_protocol": "anthropic",
           "id": "anthropic/claude-fable-5",
           "provider_model_id": "claude-fable-5"
+        },
+        {
+          "api_protocol": "anthropic",
+          "id": "anthropic/claude-opus-5",
+          "provider_model_id": "claude-opus-5"
         }
       ],
       "name": "claude-code",
@@ -3169,11 +3278,11 @@
           "id": "deepseek/deepseek-v4-pro",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.145,
-              "no_cache": 1.74
+              "cache_read": 0.003625,
+              "no_cache": 0.435
             },
             "output_tokens": {
-              "text": 3.48
+              "text": 0.87
             }
           },
           "provider_model_id": "deepseek-v4-pro",
@@ -3193,7 +3302,7 @@
           "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.028,
+              "cache_read": 0.0028,
               "no_cache": 0.14
             },
             "output_tokens": {
@@ -3331,6 +3440,11 @@
           "api_protocol": "openai",
           "id": "openai/gpt-5.6-terra",
           "provider_model_id": "gpt-5.6-terra"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-opus-5",
+          "provider_model_id": "claude-opus-5"
         }
       ],
       "name": "github-copilot",
@@ -3363,6 +3477,7 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.25,
+              "cache_write": 3.125,
               "no_cache": 2.5
             },
             "output_tokens": {
@@ -3822,11 +3937,11 @@
           "id": "minimax/minimax-m3",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
+              "cache_read": 0.06,
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 2.4
+              "text": 1.2
             }
           },
           "provider_model_id": "MiniMax-M3",
@@ -3924,11 +4039,11 @@
           "id": "minimax/minimax-m3",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
+              "cache_read": 0.06,
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 2.4
+              "text": 1.2
             }
           },
           "provider_model_id": "MiniMax-M3",
@@ -4178,6 +4293,7 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.25,
+              "cache_write": 1.5625,
               "no_cache": 1.25
             },
             "output_tokens": {
@@ -4473,12 +4589,12 @@
               }
             ],
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 3.125,
-              "no_cache": 2.5
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 12.0
             }
           },
           "provider_model_id": "gpt-5.6-terra",
@@ -4517,12 +4633,12 @@
               }
             ],
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.2
             }
           },
           "provider_model_id": "gpt-5.6-luna",
@@ -4849,6 +4965,11 @@
           "api_protocol": "openai",
           "id": "tencent/hy3",
           "provider_model_id": "hy3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-5.6-luna",
+          "provider_model_id": "gpt-5.6-luna"
         }
       ],
       "name": "opencode-go",
@@ -5273,12 +5394,12 @@
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 1.2
             }
           },
           "provider_model_id": "gpt-5.6-luna"
@@ -5326,6 +5447,21 @@
             }
           },
           "provider_model_id": "kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "claude-opus-5"
         }
       ],
       "name": "opencode-zen",
@@ -5368,11 +5504,11 @@
           "id": "moonshotai/kimi-k2.7-code",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1296,
-              "no_cache": 0.612
+              "cache_read": 0.15,
+              "no_cache": 0.73
             },
             "output_tokens": {
-              "text": 3.069
+              "text": 3.5
             }
           },
           "provider_model_id": "moonshotai/kimi-k2.7-code"
@@ -5386,10 +5522,11 @@
           "id": "moonshotai/kimi-k2.5",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.375
+              "cache_read": 0.095,
+              "no_cache": 0.57
             },
             "output_tokens": {
-              "text": 2.025
+              "text": 2.85
             }
           },
           "provider_model_id": "moonshotai/kimi-k2.5"
@@ -5403,11 +5540,11 @@
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.144,
-              "no_cache": 0.66
+              "cache_read": 0.0992,
+              "no_cache": 0.589
             },
             "output_tokens": {
-              "text": 3.41
+              "text": 2.48
             }
           },
           "provider_model_id": "moonshotai/kimi-k2.6"
@@ -5533,11 +5670,11 @@
           "id": "z-ai/glm-5.1",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.182,
-              "no_cache": 0.98
+              "cache_read": 0.1794,
+              "no_cache": 0.966
             },
             "output_tokens": {
-              "text": 3.08
+              "text": 3.036
             }
           },
           "provider_model_id": "z-ai/glm-5.1"
@@ -5551,11 +5688,11 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.18,
-              "no_cache": 1.0
+              "cache_read": 0.208,
+              "no_cache": 1.12
             },
             "output_tokens": {
-              "text": 4.0
+              "text": 3.52
             }
           },
           "provider_model_id": "z-ai/glm-5.2"
@@ -5569,11 +5706,11 @@
           "id": "z-ai/glm-5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
+              "cache_read": 0.2,
+              "no_cache": 0.95
             },
             "output_tokens": {
-              "text": 1.92
+              "text": 2.55
             }
           },
           "provider_model_id": "z-ai/glm-5"
@@ -5587,10 +5724,10 @@
           "id": "openai/gpt-oss-120b",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.039
+              "no_cache": 0.037
             },
             "output_tokens": {
-              "text": 0.18
+              "text": 0.17
             }
           },
           "provider_model_id": "openai/gpt-oss-120b"
@@ -5826,8 +5963,7 @@
           "id": "stepfun/step-3.5-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.09
+              "no_cache": 0.1
             },
             "output_tokens": {
               "text": 0.3
@@ -5863,12 +5999,12 @@
           "id": "qwen/qwen3.7-max",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 1.5625,
-              "no_cache": 1.25
+              "cache_read": 0.295,
+              "cache_write": 1.84375,
+              "no_cache": 1.475
             },
             "output_tokens": {
-              "text": 3.75
+              "text": 4.425
             }
           },
           "provider_model_id": "qwen/qwen3.7-max"
@@ -5918,11 +6054,11 @@
           "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.02,
-              "no_cache": 0.09
+              "cache_read": 0.028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 0.18
+              "text": 0.28
             }
           },
           "provider_model_id": "deepseek/deepseek-v4-flash"
@@ -5954,10 +6090,11 @@
           "id": "deepseek/deepseek-v3.2",
           "pricing": {
             "input_tokens": {
-              "no_cache": 0.2288
+              "cache_read": 0.1345,
+              "no_cache": 0.269
             },
             "output_tokens": {
-              "text": 0.3432
+              "text": 0.4
             }
           },
           "provider_model_id": "deepseek/deepseek-v3.2"
@@ -6134,10 +6271,10 @@
           "pricing": {
             "input_tokens": {
               "cache_read": 0.15,
-              "no_cache": 0.285
+              "no_cache": 0.3
             },
             "output_tokens": {
-              "text": 2.4
+              "text": 2.0
             }
           },
           "provider_model_id": "qwen/qwen3.6-27b"
@@ -6168,11 +6305,11 @@
           "id": "tencent/hy3",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 0.2
+              "cache_read": 0.033,
+              "no_cache": 0.132
             },
             "output_tokens": {
-              "text": 0.8
+              "text": 0.528
             }
           },
           "provider_model_id": "tencent/hy3"
@@ -6204,12 +6341,12 @@
           "id": "openai/gpt-5.6-luna",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 1.25,
-              "no_cache": 1.0
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
             },
             "output_tokens": {
-              "text": 6.0
+              "text": 0.6
             }
           },
           "provider_model_id": "openai/gpt-5.6-luna"
@@ -6242,12 +6379,12 @@
           "id": "openai/gpt-5.6-terra",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 3.125,
-              "no_cache": 2.5
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
             },
             "output_tokens": {
-              "text": 15.0
+              "text": 6.0
             }
           },
           "provider_model_id": "openai/gpt-5.6-terra"
@@ -6261,7 +6398,7 @@
           "id": "x-ai/grok-4.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
+              "cache_read": 0.3,
               "no_cache": 2.0
             },
             "output_tokens": {
@@ -6305,6 +6442,25 @@
             }
           },
           "provider_model_id": "meituan/longcat-2.0"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "anthropic/claude-opus-5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider_model_id": "anthropic/claude-opus-5"
         }
       ],
       "name": "openrouter",
@@ -6392,6 +6548,26 @@
           "api_protocol": "openai",
           "capabilities": [
             "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.5,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
             "tools"
           ],
           "id": "z-ai/glm-5.1",
@@ -6415,7 +6591,7 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.7,
+              "cache_read": 0.26,
               "no_cache": 1.4
             },
             "output_tokens": {
@@ -6484,11 +6660,11 @@
           "id": "deepseek/deepseek-v4-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.0197,
-              "no_cache": 0.0983
+              "cache_read": 0.028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 0.1966
+              "text": 0.28
             }
           },
           "provider_model_id": "deepseek-v4-flash"
@@ -6498,11 +6674,11 @@
           "id": "moonshotai/kimi-k2.6",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.144,
-              "no_cache": 0.684
+              "cache_read": 0.16,
+              "no_cache": 0.95
             },
             "output_tokens": {
-              "text": 3.42
+              "text": 4.0
             }
           },
           "provider_model_id": "kimi-k2.6"
@@ -6526,11 +6702,11 @@
           "id": "z-ai/glm-5.1",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.182,
-              "no_cache": 0.98
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "output_tokens": {
-              "text": 3.08
+              "text": 4.4
             }
           },
           "provider_model_id": "glm-5.1"
@@ -6540,11 +6716,11 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.181,
-              "no_cache": 0.97
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "output_tokens": {
-              "text": 3.07
+              "text": 4.4
             }
           },
           "provider_model_id": "glm-5.2"
@@ -6778,6 +6954,26 @@
           "api_protocol": "openai",
           "capabilities": [
             "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.5,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k3"
+        },
+        {
+          "api_protocol": "openai",
+          "capabilities": [
+            "reasoning",
             "tools"
           ],
           "id": "z-ai/glm-5.1",
@@ -6801,7 +6997,7 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.7,
+              "cache_read": 0.26,
               "no_cache": 1.4
             },
             "output_tokens": {
@@ -7312,11 +7508,11 @@
           "id": "stepfun/step-3.7-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.04,
-              "no_cache": 0.2
+              "cache_read": 0.037,
+              "no_cache": 0.185
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.11
             }
           },
           "provider_model_id": "step-3.7-flash",
@@ -7336,11 +7532,11 @@
           "id": "stepfun/step-3.5-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.019,
-              "no_cache": 0.096
+              "cache_read": 0.02,
+              "no_cache": 0.1
             },
             "output_tokens": {
-              "text": 0.288
+              "text": 0.3
             }
           },
           "provider_model_id": "step-3.5-flash",
@@ -7387,11 +7583,11 @@
           "id": "stepfun/step-3.7-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.04,
-              "no_cache": 0.2
+              "cache_read": 0.037,
+              "no_cache": 0.185
             },
             "output_tokens": {
-              "text": 1.15
+              "text": 1.11
             }
           },
           "provider_model_id": "step-3.7-flash",
@@ -7411,11 +7607,11 @@
           "id": "stepfun/step-3.5-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.019,
-              "no_cache": 0.096
+              "cache_read": 0.02,
+              "no_cache": 0.1
             },
             "output_tokens": {
-              "text": 0.288
+              "text": 0.3
             }
           },
           "provider_model_id": "step-3.5-flash",
@@ -8364,6 +8560,7 @@
           "id": "z-ai/glm-5.2",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.375,
               "no_cache": 1.5
             },
             "output_tokens": {
@@ -8498,7 +8695,7 @@
           "id": "x-ai/grok-4.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.5,
+              "cache_read": 0.3,
               "no_cache": 2.0
             },
             "output_tokens": {
@@ -8642,11 +8839,11 @@
           "id": "xiaomi/mimo-v2.5-pro",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
+              "cache_read": 0.0036,
+              "no_cache": 0.435
             },
             "output_tokens": {
-              "text": 3.0
+              "text": 0.87
             }
           },
           "provider_model_id": "mimo-v2.5-pro",
@@ -8667,11 +8864,11 @@
           "id": "xiaomi/mimo-v2.5",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.08,
-              "no_cache": 0.4
+              "cache_read": 0.0028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 2.0
+              "text": 0.28
             }
           },
           "provider_model_id": "mimo-v2.5",
@@ -8693,11 +8890,11 @@
           "id": "xiaomi/mimo-v2-pro",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.0
+              "cache_read": 0.0036,
+              "no_cache": 0.435
             },
             "output_tokens": {
-              "text": 3.0
+              "text": 0.87
             }
           },
           "provider_model_id": "mimo-v2-pro",
@@ -8719,11 +8916,11 @@
           "id": "xiaomi/mimo-v2-omni",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.08,
-              "no_cache": 0.4
+              "cache_read": 0.0028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 2.0
+              "text": 0.28
             }
           },
           "provider_model_id": "mimo-v2-omni",
@@ -8745,11 +8942,11 @@
           "id": "xiaomi/mimo-v2-flash",
           "pricing": {
             "input_tokens": {
-              "cache_read": 0.01,
-              "no_cache": 0.1
+              "cache_read": 0.0028,
+              "no_cache": 0.14
             },
             "output_tokens": {
-              "text": 0.3
+              "text": 0.28
             }
           },
           "provider_model_id": "mimo-v2-flash",

@@ -8,8 +8,9 @@
 //! Cache entries expire on TTL. When the inner executor is hooked up to a
 //! `notifications/*_list_changed` source via
 //! [`CachingExecutor::with_invalidation`], affected entries are also evicted
-//! on demand. The TTL on each entry honours the MCP spec's `ttlMs`
-//! cache-control hint when present in the upstream `_meta`.
+//! on demand. The TTL on each entry honours the MCP spec's SEP-2549
+//! `ttlMs` / `cacheScope` cache-control hints when the upstream supplies them
+//! — see `extract_cache_hint`.
 //!
 //! Caching applies per [`McpTarget::Direct`] member; when used inside an
 //! [`super::aggregating_executor::AggregatingExecutor`], the cache key
@@ -269,9 +270,8 @@ fn apply_invalidation(
     }
 }
 
-/// Identify which method the executor will cache for, if any, and the TTL to
-/// stamp on the entry. Honours the MCP spec's `_meta.ttlMs` cache-control
-/// hint when present (`upstream_hint`).
+/// Identify which method the executor will cache for, if any. The TTL to stamp
+/// on the entry comes from [`extract_cache_hint`].
 fn cached_method(method: &str) -> Option<&'static str> {
     match method {
         "tools/list" => Some("tools/list"),
@@ -282,12 +282,46 @@ fn cached_method(method: &str) -> Option<&'static str> {
     }
 }
 
-fn extract_ttl_hint(result: &serde_json::Value) -> Option<Duration> {
-    let ms = result
-        .get("_meta")
-        .and_then(|m| m.get("ttlMs"))
-        .and_then(|v| v.as_u64())?;
-    Some(Duration::from_millis(ms))
+/// What an upstream's SEP-2549 cache-control hint tells us to do with a result.
+enum CacheHint {
+    /// Do not cache at all. Either the upstream scoped the result `private`, or
+    /// it gave a TTL of zero (spec: "immediately stale").
+    Uncacheable,
+    /// Cache it. `Some(ttl)` when the upstream supplied one, `None` to fall
+    /// back to our configured per-method default.
+    Cacheable(Option<Duration>),
+}
+
+/// Read the SEP-2549 cache-control hint off an upstream result.
+///
+/// `ttlMs` and `cacheScope` are **top-level fields on the result**, siblings of
+/// `_meta` — not nested inside it (MCP `2026-07-28` schema; rmcp models them on
+/// `ListToolsResult`/`ReadResourceResult` et al). Servers that shipped the
+/// earlier draft put `ttlMs` under `_meta`, so that location is still honoured
+/// as a fallback.
+///
+/// `cacheScope: "private"` means only the requesting user's client may cache
+/// the response. Our cache sits behind a connection pool keyed by server name
+/// alone, so a cached entry is visible to *every* downstream caller — which is
+/// exactly what `private` forbids. We therefore decline to cache those results
+/// rather than trying to partition them.
+///
+/// Per spec a negative `ttlMs` is treated as `0` rather than an error, matching
+/// rmcp's `deserialize_ttl_ms`.
+fn extract_cache_hint(result: &serde_json::Value) -> CacheHint {
+    if result.get("cacheScope").and_then(|v| v.as_str()) == Some("private") {
+        return CacheHint::Uncacheable;
+    }
+    let raw = result
+        .get("ttlMs")
+        .or_else(|| result.get("_meta").and_then(|m| m.get("ttlMs")))
+        .and_then(|v| v.as_i64());
+    match raw {
+        // Negative clamps to zero, and zero means immediately stale.
+        Some(ms) if ms <= 0 => CacheHint::Uncacheable,
+        Some(ms) => CacheHint::Cacheable(Some(Duration::from_millis(ms as u64))),
+        None => CacheHint::Cacheable(None),
+    }
 }
 
 fn params_hash(params: &serde_json::Value) -> u64 {
@@ -377,8 +411,18 @@ impl<E: Executor + 'static> Executor for CachingExecutor<E> {
             "mcp cache: miss",
         );
         let response = self.inner.execute(target, request).await?;
-        let ttl = extract_ttl_hint(&response.result).unwrap_or(default_ttl);
-        self.cache_insert(key, response.result.clone(), ttl);
+        match extract_cache_hint(&response.result) {
+            CacheHint::Uncacheable => {
+                tracing::debug!(
+                    server = %key.server_name,
+                    method = %key.method,
+                    "mcp cache: upstream declined caching (private scope or zero ttl)",
+                );
+            }
+            CacheHint::Cacheable(hint) => {
+                self.cache_insert(key, response.result.clone(), hint.unwrap_or(default_ttl));
+            }
+        }
         Ok(response)
     }
 
@@ -422,21 +466,21 @@ impl<E: Executor + 'static> Executor for CachingExecutor<E> {
         let max_entries = self.ttls.max_entries_per_server;
         let key_for_stream = key.clone();
         let wrapped = inner_stream.map(move |item| {
-            if let Ok(McpStreamPart::Final(ref response)) = item {
-                let ttl = extract_ttl_hint(&response.result).unwrap_or(default_ttl);
-                if let Ok(mut map) = caches.lock() {
-                    let sc = map
-                        .entry(key_for_stream.server_name.clone())
-                        .or_insert_with(|| ServerCache::new(max_entries));
-                    sc.insert(
-                        key_for_stream.clone(),
-                        CacheEntry {
-                            value: response.result.clone(),
-                            inserted_at: Instant::now(),
-                            ttl,
-                        },
-                    );
-                }
+            if let Ok(McpStreamPart::Final(ref response)) = item
+                && let CacheHint::Cacheable(hint) = extract_cache_hint(&response.result)
+                && let Ok(mut map) = caches.lock()
+            {
+                let sc = map
+                    .entry(key_for_stream.server_name.clone())
+                    .or_insert_with(|| ServerCache::new(max_entries));
+                sc.insert(
+                    key_for_stream.clone(),
+                    CacheEntry {
+                        value: response.result.clone(),
+                        inserted_at: Instant::now(),
+                        ttl: hint.unwrap_or(default_ttl),
+                    },
+                );
             }
             item
         });
@@ -632,13 +676,87 @@ mod tests {
         );
     }
 
+    /// SEP-2549 puts `ttlMs` at the *top level* of the result, beside `_meta`
+    /// rather than inside it. Reading the wrong location is silent — the cache
+    /// just falls back to its configured default — so pin both spellings.
+    #[test]
+    fn cache_hint_reads_top_level_ttl_ms_and_falls_back_to_meta() {
+        let ttl = |v: serde_json::Value| match extract_cache_hint(&v) {
+            CacheHint::Cacheable(hint) => hint,
+            CacheHint::Uncacheable => panic!("expected cacheable, got uncacheable"),
+        };
+
+        // The shipped SEP-2549 shape.
+        assert_eq!(
+            ttl(serde_json::json!({ "tools": [], "ttlMs": 50 })),
+            Some(Duration::from_millis(50)),
+        );
+        // The earlier draft shape, still honoured as a fallback.
+        assert_eq!(
+            ttl(serde_json::json!({ "tools": [], "_meta": { "ttlMs": 50 } })),
+            Some(Duration::from_millis(50)),
+        );
+        // Top level wins when a server somehow sends both.
+        assert_eq!(
+            ttl(serde_json::json!({
+                "ttlMs": 50,
+                "_meta": { "ttlMs": 9000 }
+            })),
+            Some(Duration::from_millis(50)),
+        );
+        // No hint at all → fall back to the configured default.
+        assert_eq!(ttl(serde_json::json!({ "tools": [] })), None);
+    }
+
+    #[test]
+    fn cache_hint_declines_private_scope_and_non_positive_ttl() {
+        let uncacheable =
+            |v: serde_json::Value| matches!(extract_cache_hint(&v), CacheHint::Uncacheable);
+
+        // `private` means only the requesting user's client may cache. Our
+        // cache is shared across every downstream caller, so we must not.
+        assert!(uncacheable(
+            serde_json::json!({ "tools": [], "cacheScope": "private" })
+        ));
+        // ...even when the upstream also supplies a generous TTL.
+        assert!(uncacheable(serde_json::json!({
+            "cacheScope": "private",
+            "ttlMs": 60_000
+        })));
+        // `public` is the default and stays cacheable.
+        assert!(!uncacheable(
+            serde_json::json!({ "tools": [], "cacheScope": "public" })
+        ));
+        // Zero means immediately stale.
+        assert!(uncacheable(serde_json::json!({ "ttlMs": 0 })));
+        // Per spec a negative value is clamped to zero, not an error.
+        assert!(uncacheable(serde_json::json!({ "ttlMs": -42 })));
+    }
+
+    #[tokio::test]
+    async fn private_scoped_result_is_not_cached() {
+        let inner = Arc::new(CountingExecutor {
+            calls: AtomicUsize::new(0),
+            value: serde_json::json!({ "tools": [], "cacheScope": "private" }),
+        });
+        let exec = CachingExecutor::new(inner.clone(), CacheTtls::default());
+        for _ in 0..2 {
+            let _ = exec
+                .execute(&target("a"), &list_req("a", "tools/list"))
+                .await
+                .unwrap();
+        }
+        // Both calls went upstream — no entry was ever stamped.
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2);
+    }
+
     #[tokio::test]
     async fn upstream_ttl_hint_is_honoured() {
         let inner = Arc::new(CountingExecutor {
             calls: AtomicUsize::new(0),
             value: serde_json::json!({
                 "tools": [],
-                "_meta": { "ttlMs": 50 }
+                "ttlMs": 50
             }),
         });
         let exec = CachingExecutor::new(inner.clone(), CacheTtls::default());

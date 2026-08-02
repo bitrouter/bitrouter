@@ -49,3 +49,8 @@ bitrouter-cloud-sdk.workspace = true
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+# Dev-only, for `tests/gateway_roundtrip.rs`: drives this crate's stdio server
+# with the gateway's own MCP *client* so both halves are exercised against each
+# other over a real transport. No dependency cycle — `bitrouter-sdk` does not
+# depend on this crate.
+bitrouter-sdk = { workspace = true, features = ["mcp"] }

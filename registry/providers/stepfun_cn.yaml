@@ -22,20 +22,20 @@ models:
     provider_model_id: step-3.7-flash
     pricing:
       input_tokens:
-        no_cache: 0.2
-        cache_read: 0.04
+        no_cache: 0.185
+        cache_read: 0.037
       output_tokens:
-        text: 1.15
+        text: 1.11
     capabilities:
       - structured_outputs
   - id: stepfun/step-3.5-flash
     provider_model_id: step-3.5-flash
     pricing:
       input_tokens:
-        no_cache: 0.096
-        cache_read: 0.019
+        no_cache: 0.1
+        cache_read: 0.02
       output_tokens:
-        text: 0.288
+        text: 0.3
     capabilities:
       - reasoning
       - tools

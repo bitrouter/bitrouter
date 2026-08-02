@@ -21,6 +21,23 @@
 //!   the escalation branch is never taken — the default, guaranteed path stays
 //!   the HumanBridge / deny fallback. A failed/declined round-trip maps to
 //!   `Deny` (never silently "allow").
+//!
+//! ## This seam is legacy-lifecycle only
+//!
+//! MCP `2026-07-28` removed server-initiated requests, replacing them with
+//! Multi Round-Trip Requests (SEP-2322): a server that needs input returns an
+//! `InputRequiredResult` and the client retries with `inputResponses`. There is
+//! no channel on which to issue `elicitation/create` to a client on that
+//! version, so this seam is inert there **by construction** — capability
+//! detection reads the `initialize` handshake info, which a stateless client
+//! never produces, so `can_escalate` stays `false` and the HumanBridge / deny
+//! fallback takes every gated permission.
+//!
+//! That is the correct behavior, not a gap to paper over: see the note on
+//! `BitrouterMcp::record_escalation` for why widening the capability read would
+//! make things worse. Carrying escalation onto the modern lifecycle means
+//! returning an MRTR `InputRequiredResult` from the fleet tools instead — a
+//! different design, tracked in `docs/MCP_2026_07_28_SPEC.md`.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -32,14 +49,20 @@ use rmcp::service::Peer;
 
 /// Whether a connecting client declared a capability that lets a gated
 /// permission be routed back to it for a decision — plain elicitation
-/// (`capabilities.elicitation`) or task-augmented elicitation
-/// (`capabilities.tasks.requests.elicitation.create`, SEP-1686 / SEP-2577).
+/// (`capabilities.elicitation`) or the Tasks extension
+/// (`capabilities.extensions["io.modelcontextprotocol/tasks"]`, SEP-2663).
+///
+/// `supports_tasks` is coarser than the `tasks.requests.elicitation.create`
+/// probe it replaces: SEP-2663 moved Tasks off a dedicated capability field
+/// into the SEP-1724 extensions map, which carries no per-request granularity,
+/// so "declares the extension" no longer implies "will answer an
+/// `elicitation/create`". We accept that looseness because the failure mode is
+/// bounded — a client that declares Tasks but never answers leaves
+/// [`EscalationState::escalate`] to time out or error, and both map to `Deny`
+/// (see the fail-safe note in the module docs), so a false positive costs
+/// latency rather than safety.
 pub fn client_supports_escalation(caps: &ClientCapabilities) -> bool {
-    caps.elicitation.is_some()
-        || caps
-            .tasks
-            .as_ref()
-            .is_some_and(|t| t.supports_elicitation_create())
+    caps.elicitation.is_some() || caps.supports_tasks()
 }
 
 /// A gated permission to put to the human via the orchestrator conversation.
@@ -211,14 +234,21 @@ mod tests {
             serde_json::json!({ "elicitation": {} })
         )));
 
-        // Task-augmented elicitation (`tasks.requests.elicitation.create`).
+        // The Tasks extension, declared through the SEP-2663 extensions map.
         assert!(client_supports_escalation(&caps(serde_json::json!({
-            "tasks": { "requests": { "elicitation": { "create": {} } } }
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
         }))));
 
-        // Tasks present but without elicitation/create → not escalatable.
+        // A different extension → not escalatable.
         assert!(!client_supports_escalation(&caps(serde_json::json!({
-            "tasks": { "requests": {} }
+            "extensions": { "io.modelcontextprotocol/ui": {} }
+        }))));
+
+        // The pre-SEP-2663 `capabilities.tasks` field is no longer a
+        // declaration — a client still sending it reads as no capability, and
+        // falls back to the HumanBridge / deny path.
+        assert!(!client_supports_escalation(&caps(serde_json::json!({
+            "tasks": { "requests": { "elicitation": { "create": {} } } }
         }))));
     }
 

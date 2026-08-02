@@ -42,6 +42,7 @@ models:
       input_tokens:
         no_cache: 1.25
         cache_read: 0.25
+        cache_write: 1.5625
       output_tokens:
         text: 3.75
   - id: qwen/qwen3.5-122b-a10b

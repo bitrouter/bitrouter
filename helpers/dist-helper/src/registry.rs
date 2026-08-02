@@ -3104,7 +3104,7 @@ api_base: https://api.acme.test/v1
             "qwen/qwen3.7-max",
             "Qwen/Qwen3.7-Max",
             2.5,
-            (Some(0.25), None),
+            (Some(0.25), Some(3.125)),
             7.5,
         );
 
@@ -3150,9 +3150,9 @@ api_base: https://api.acme.test/v1
             "Qianfan International",
             "z-ai/glm-5.2",
             "glm-5.2",
-            0.97,
-            (Some(0.181), None),
-            3.07,
+            1.4,
+            (Some(0.26), None),
+            4.4,
         );
     }
 

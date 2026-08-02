@@ -19,6 +19,7 @@ models:
       input_tokens:
         no_cache: 2.5
         cache_read: 0.25
+        cache_write: 3.125
       output_tokens:
         text: 7.5
   - id: deepseek/deepseek-v4-pro

@@ -17,9 +17,9 @@ models:
     provider_model_id: gpt-oss-120b
     pricing:
       input_tokens:
-        no_cache: 0.25
+        no_cache: 0.35
       output_tokens:
-        text: 0.69
+        text: 0.75
     capabilities:
       - reasoning
       - structured_outputs
@@ -36,7 +36,7 @@ models:
     pricing:
       input_tokens:
         no_cache: 2.25
-        cache_read: 0
+        cache_read: 2.25
         cache_write: 0
       output_tokens:
         text: 2.75

@@ -10,8 +10,12 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolResult, ClientJsonRpcMessage, ClientRequest, ContentBlock, ErrorData, GetMeta,
+    ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
+};
 use rmcp::service::RequestContext;
+use rmcp::transport::Transport;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 
 use crate::backend::{Backend, BackendError, CallerAuth, CompleteRequest};
@@ -638,6 +642,18 @@ impl BitrouterMcp {
     /// Reads the capabilities the client declared at `initialize` (available on
     /// the recorded peer handshake info). A no-op when no escalation state is
     /// wired (public profile) or before the peer info is recorded.
+    ///
+    /// Reading `peer_info` — rather than `ctx.client_capabilities()`, which
+    /// would also see the per-request `_meta` capabilities of a `2026-07-28`
+    /// client — is deliberate, and must stay that way. Escalation delivers its
+    /// question as a server→client `elicitation/create`, and `2026-07-28`
+    /// removed server-initiated requests entirely in favour of MRTR (SEP-2322):
+    /// on a stateless connection there is no channel to ask on. Detecting the
+    /// capability there would route a gated permission into a round-trip that
+    /// cannot be answered, and our fail-safe would turn that into `Deny` —
+    /// strictly worse than the HumanBridge prompt the no-op leaves in place.
+    /// Making this seam work on the modern lifecycle means rebuilding it as an
+    /// MRTR `InputRequiredResult`, not widening the capability read.
     fn record_escalation(&self, ctx: &RequestContext<RoleServer>) {
         if let Some(escalation) = &self.caps.escalation
             && let Some(info) = ctx.peer.peer_info()
@@ -761,11 +777,61 @@ impl Builder {
     }
 }
 
+/// How long a client may treat our `tools/list` as fresh (SEP-2549).
+///
+/// The router is frozen at [`Builder::build`] from the wired capabilities and
+/// never varies per caller or over a connection's life, so this is bounded only
+/// by how quickly a client should notice a *restarted* server with a different
+/// profile. Five minutes keeps a re-dial cheap without pinning a stale list.
+const TOOLS_LIST_TTL_MS: u64 = 5 * 60 * 1000;
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BitrouterMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            // Without this the identity defaults to `Implementation::from_build_env()`,
+            // which resolves against *rmcp's* build environment — every client
+            // asking who we are (via `server/discover`, `initialize`, or the
+            // SEP-2575 `io.modelcontextprotocol/serverInfo` result metadata)
+            // would be told it is talking to "rmcp". The client half of the
+            // gateway has always identified itself; this is the matching half.
+            .with_server_info(rmcp::model::Implementation::new(
+                "bitrouter",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(self.instructions())
+    }
+
+    /// Same as the `#[tool_handler]`-generated implementation (the macro skips
+    /// generating one when the impl already defines it), plus SEP-2549 cache
+    /// hints for peers that negotiated `2026-07-28`.
+    ///
+    /// `cacheScope: public` is accurate here and worth stating explicitly: the
+    /// tool set is fixed at [`Builder::build`] from the wired capabilities, so
+    /// every caller of a given server instance sees the same list. It would
+    /// *not* be accurate if tool visibility ever became caller-dependent — that
+    /// change must revisit this scope.
+    ///
+    /// The hints are version-gated because rmcp only strips `resultType` for
+    /// legacy peers (`ServerResult::strip_result_type_for_legacy_peer`), not
+    /// `ttlMs`/`cacheScope`; emitting them unconditionally would send
+    /// draft-only fields to a `2025-11-25` client.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, McpError> {
+        let draft = context
+            .protocol_version()
+            .is_some_and(|v| v.as_str() >= rmcp::model::ProtocolVersion::V_2026_07_28.as_str());
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: draft.then_some(TOOLS_LIST_TTL_MS),
+            cache_scope: draft.then_some(rmcp::model::CacheScope::Public),
+        })
     }
 }
 
@@ -839,6 +905,17 @@ async fn require_bearer(
 /// change — take a handler factory, keep the profile strictly loopback and
 /// incompatible with the cloud backend, and prefer modeling that read-only
 /// data as MCP resources over widening the tool surface.
+///
+/// That invariant is now load-bearing for a second reason. Under SEP-2567 a
+/// peer negotiating `2026-07-28` is **always served statelessly**, regardless
+/// of `StreamableHttpServerConfig::legacy_session_mode` — each request gets a
+/// fresh handler from the factory below, so nothing connection-scoped
+/// survives between requests. The orchestrator tools are exactly the
+/// connection-scoped ones (`EscalationState` captures the live server→client
+/// peer at the first fleet call), and they stay correct only because stdio
+/// sessions are long-lived. Adding a stateful tool to this HTTP profile would
+/// therefore break under draft-version clients even though it works today
+/// against `2025-11-25`.
 fn build_http_router(
     backend: Arc<dyn Backend>,
     require_auth: bool,
@@ -876,6 +953,67 @@ pub async fn serve_http_on(
     Ok(())
 }
 
+/// Transport wrapper that replays one message already read during stdio
+/// lifecycle preflight, then delegates every operation to rmcp's transport.
+struct PrefetchedTransport<T> {
+    first: Option<ClientJsonRpcMessage>,
+    inner: T,
+}
+
+impl<T> Transport<RoleServer> for PrefetchedTransport<T>
+where
+    T: Transport<RoleServer>,
+{
+    type Error = T::Error;
+
+    fn send(
+        &mut self,
+        item: ServerJsonRpcMessage,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send + 'static {
+        self.inner.send(item)
+    }
+
+    async fn receive(&mut self) -> Option<ClientJsonRpcMessage> {
+        match self.first.take() {
+            Some(first) => Some(first),
+            None => self.inner.receive().await,
+        }
+    }
+
+    fn close(&mut self) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.close()
+    }
+}
+
+/// Identify an inline-lifecycle opener whose `_meta` announces that lifecycle
+/// but does not contain its required client context.
+fn malformed_inline_opener(
+    message: &ClientJsonRpcMessage,
+) -> Option<(RequestId, Vec<&'static str>)> {
+    let ClientJsonRpcMessage::Request(request) = message else {
+        return None;
+    };
+    // These requests belong to stable startup regardless of extension keys in
+    // `_meta`. Replaying them unchanged lets rmcp answer a pre-init ping or
+    // negotiate the legacy initialize instead of guessing an inline lifecycle.
+    if matches!(
+        &request.request,
+        ClientRequest::InitializeRequest(_) | ClientRequest::PingRequest(_)
+    ) {
+        return None;
+    }
+    let meta = request.request.get_meta();
+    let inline = matches!(&request.request, ClientRequest::DiscoverRequest(_))
+        || rmcp::model::RequestMetaObject::DRAFT_REQUIRED_KEYS
+            .iter()
+            .any(|key| meta.contains_key(*key));
+    if !inline {
+        return None;
+    }
+    let missing = meta.missing_required_keys(&ProtocolVersion::V_2026_07_28);
+    (!missing.is_empty()).then(|| (request.id.clone(), missing))
+}
+
 /// Serve `server` over stdio until the client disconnects. `cost_footer`, when
 /// given, annotates successful `complete` / `status` results with one spend
 /// line (the HTTP transport is multi-tenant and gets no footer).
@@ -883,12 +1021,47 @@ pub async fn serve_stdio(
     server: BitrouterMcp,
     cost_footer: Option<Arc<dyn CostFooter>>,
 ) -> anyhow::Result<()> {
-    use rmcp::{ServiceExt, transport::stdio};
+    use rmcp::ServiceExt;
+    use rmcp::transport::async_rw::AsyncRwTransport;
     let server = match cost_footer {
         Some(footer) => server.with_cost_footer(footer),
         None => server,
     };
-    let service = server.serve(stdio()).await?;
+    let mut transport =
+        AsyncRwTransport::<RoleServer, _, _>::new_server(tokio::io::stdin(), tokio::io::stdout());
+    let first = loop {
+        let Some(message) = transport.receive().await else {
+            return Ok(());
+        };
+        let Some((id, missing)) = malformed_inline_opener(&message) else {
+            break message;
+        };
+        transport
+            .send(ServerJsonRpcMessage::error(
+                ErrorData::invalid_params(
+                    format!(
+                        "request _meta is missing or has malformed required fields: {}",
+                        missing.join(", ")
+                    ),
+                    None,
+                ),
+                Some(id),
+            ))
+            .await?;
+    };
+    // rmcp 3.1's normal startup accepts both lifecycle openers. A legacy
+    // `initialize` negotiates and stores the agreed fallback version; a
+    // self-contained modern request enables required per-request metadata for
+    // the rest of the connection. Keeping those transitions inside rmcp is
+    // essential — direct mode intentionally bypasses both. The preflight above
+    // preserves the JSON-RPC `-32602` response for a malformed modern opener;
+    // rmcp's startup otherwise closes before it can dispatch that request.
+    let service = server
+        .serve(PrefetchedTransport {
+            first: Some(first),
+            inner: transport,
+        })
+        .await?;
     service.waiting().await?;
     Ok(())
 }
