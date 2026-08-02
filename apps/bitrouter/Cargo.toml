@@ -89,7 +89,7 @@ tui = [
 ]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"
 futures.workspace = true
 tempfile.workspace = true
