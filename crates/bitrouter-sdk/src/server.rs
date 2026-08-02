@@ -713,10 +713,25 @@ async fn handle(
         // completion and settle even if the client disconnects (axum drops this
         // handler future on disconnect). The upstream bills us for the accepted
         // request regardless, so the customer must be billed too.
-        match state.language_model.clone().execute_detached(req).await {
-            Ok(resp) => match adapter.render_response(&resp.result, &prompt, &resp.request_id) {
-                Ok(json) => Json(json).into_response(),
-                Err(e) => e.into_response(),
+        match state
+            .language_model
+            .clone()
+            .execute_detached_prepared(req)
+            .await
+        {
+            Ok(prepared) => match adapter.render_response(
+                &prepared.response.result,
+                &prompt,
+                &prepared.response.request_id,
+            ) {
+                Ok(json) => match prepared.delivery.deliver().await {
+                    Ok(()) => Json(json).into_response(),
+                    Err(error) => error.into_response(),
+                },
+                Err(e) => match prepared.delivery.fail(e.clone()).await {
+                    Ok(()) => e.into_response(),
+                    Err(authorization_error) => authorization_error.into_response(),
+                },
             },
             Err(e) => e.into_response(),
         }
@@ -776,7 +791,7 @@ async fn stream_response(
     // response is constructed. Pre-stream failures therefore retain their real
     // HTTP status (notably upstream 429) instead of being trapped inside an
     // already-committed HTTP 200 event stream.
-    let mut parts = match pipeline.execute_stream(req).await {
+    let mut parts = match pipeline.execute_stream_prepared(req).await {
         Ok(parts) => parts,
         Err(error) => return error.into_response(),
     };
@@ -784,14 +799,126 @@ async fn stream_response(
     let frame_stream = async_stream::stream! {
         while let Some(item) = parts.next().await {
             match item {
-                Ok(part) => {
+                Ok(prepared) => {
+                    let crate::language_model::pipeline::PreparedStreamPart {
+                        part,
+                        mut delivery,
+                    } = prepared;
                     match encoder.encode(&part) {
-                        Ok(frames) => {
-                            for f in frames {
-                                yield f;
+                        Ok(mut frames) => {
+                            if let Some(permit) = delivery.take() {
+                                // A canonical success terminal ends the
+                                // prepared stream. Expand both that part and
+                                // `encoder.finish()` first, then authorize only
+                                // the final wire frame. Earlier expansion
+                                // frames remain provisional if the body drops.
+                                match parts.next().await {
+                                    None => {}
+                                    Some(Err(error)) => {
+                                        if let Err(authorization_error) =
+                                            permit.fail(error.clone()).await
+                                        {
+                                            for frame in encoder
+                                                .encode_bitrouter_error(&authorization_error)
+                                            {
+                                                yield frame;
+                                            }
+                                            return;
+                                        }
+                                        for frame in encoder.encode_bitrouter_error(&error) {
+                                            yield frame;
+                                        }
+                                        return;
+                                    }
+                                    Some(Ok(_)) => {
+                                        let error = BitrouterError::internal(
+                                            "prepared stream continued after success terminal",
+                                        );
+                                        if let Err(authorization_error) =
+                                            permit.fail(error.clone()).await
+                                        {
+                                            for frame in encoder
+                                                .encode_bitrouter_error(&authorization_error)
+                                            {
+                                                yield frame;
+                                            }
+                                            return;
+                                        }
+                                        for frame in encoder.encode_bitrouter_error(
+                                            &error,
+                                        ) {
+                                            yield frame;
+                                        }
+                                        return;
+                                    }
+                                }
+                                match encoder.finish() {
+                                    Ok(finish_frames) => frames.extend(finish_frames),
+                                    Err(error) => {
+                                        if let Err(authorization_error) =
+                                            permit.fail(error.clone()).await
+                                        {
+                                            for frame in encoder
+                                                .encode_bitrouter_error(&authorization_error)
+                                            {
+                                                yield frame;
+                                            }
+                                            return;
+                                        }
+                                        for frame in encoder.encode_bitrouter_error(&error) {
+                                            yield frame;
+                                        }
+                                        return;
+                                    }
+                                }
+                                let Some(last) = frames.len().checked_sub(1) else {
+                                    // Zero wire frames cannot prove delivery.
+                                    let error = BitrouterError::internal(
+                                        "successful terminal encoded to zero wire frames",
+                                    );
+                                    if let Err(authorization_error) = permit.fail(error.clone()).await
+                                    {
+                                        for frame in
+                                            encoder.encode_bitrouter_error(&authorization_error)
+                                        {
+                                            yield frame;
+                                        }
+                                        return;
+                                    }
+                                    for frame in encoder.encode_bitrouter_error(&error) {
+                                        yield frame;
+                                    }
+                                    return;
+                                };
+                                let mut permit = Some(permit);
+                                for (index, frame) in frames.into_iter().enumerate() {
+                                    if index == last
+                                        && let Some(permit) = permit.take()
+                                        && let Err(error) = permit.deliver().await
+                                    {
+                                        for error_frame in encoder.encode_bitrouter_error(&error) {
+                                            yield error_frame;
+                                        }
+                                        return;
+                                    }
+                                    yield frame;
+                                }
+                                return;
+                            }
+                            for frame in frames {
+                                yield frame;
                             }
                         }
                         Err(error) => {
+                            if let Some(permit) = delivery.take()
+                                && let Err(authorization_error) =
+                                    permit.fail(error.clone()).await
+                            {
+                                for frame in encoder.encode_bitrouter_error(&authorization_error) {
+                                    yield frame;
+                                }
+                                return;
+                            }
                             for f in encoder.encode_bitrouter_error(&error) {
                                 yield f;
                             }

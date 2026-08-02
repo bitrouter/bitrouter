@@ -15,7 +15,9 @@ use bitrouter_sdk::language_model::hooks::RouteHook;
 use bitrouter_sdk::language_model::protocol::responses::{
     decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
-use bitrouter_sdk::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
+use bitrouter_sdk::language_model::settlement::{
+    RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizer,
+};
 use bitrouter_sdk::language_model::{
     ApiProtocol, AuthAppliers, ContinuationAuthority, RoutingTarget,
 };
@@ -34,6 +36,8 @@ const KEY_ID_DOMAIN: &[u8] = b"bitrouter.continuation.key-id.v1";
 const AEAD_AAD_DOMAIN: &[u8] = b"bitrouter.continuation.aead.v1";
 const CIPHER_VERSION: i32 = 1;
 const NONCE_BYTES: usize = 12;
+const PUBLICATION_PROVISIONAL: &str = "provisional";
+const PUBLICATION_ACTIVE: &str = "active";
 
 #[derive(Clone)]
 pub struct ContinuationKey {
@@ -192,11 +196,13 @@ pub struct ContinuationRegistry {
     keys: ContinuationKeySource,
     retention: TimeDelta,
     prune_batch_size: u64,
-    /// Process-local delivery barrier. Normal cancellation and graceful
-    /// shutdown are compensated by tracked rollback before this mask is
-    /// removed. A hard process crash after the encrypted row insert is an
-    /// intentionally documented at-least-once ambiguity: the provider already
-    /// completed, so the orphaned mapping may be visible after restart.
+    /// Process-local ownership of provisional rows. Visibility is determined
+    /// by the durable `publication_state`, while this map identifies the
+    /// delivery attempt allowed to activate or compensate each row.
+    ///
+    /// A hard process crash after activation but before the terminal reaches
+    /// the socket remains the intentionally documented at-least-once delivery
+    /// exception: there is no process left to perform the compensating delete.
     pending_publications: Arc<Mutex<HashMap<String, PendingPublication>>>,
     pending_bind_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
 }
@@ -204,13 +210,23 @@ pub struct ContinuationRegistry {
 #[derive(Default)]
 struct PendingPublication {
     attempts: HashSet<u64>,
-    row_created: bool,
-    published: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindOutcome {
+    Inserted,
+    ExistingActive,
+    ExistingProvisional,
 }
 
 struct PendingBindAttempt {
     now: DateTime<Utc>,
     delivery_attempt_id: u64,
+}
+
+struct BindPublication {
+    now: DateTime<Utc>,
+    state: &'static str,
 }
 
 impl ContinuationRegistry {
@@ -238,18 +254,6 @@ impl ContinuationRegistry {
         &self.db
     }
 
-    fn is_pending_identity(&self, continuation_identity: &str) -> bool {
-        match self.pending_publications.lock() {
-            Ok(publications) => publications
-                .get(continuation_identity)
-                .is_some_and(|publication| !publication.published),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .get(continuation_identity)
-                .is_some_and(|publication| !publication.published),
-        }
-    }
-
     fn pending_identity_lock(&self, continuation_identity: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = match self.pending_bind_locks.lock() {
             Ok(locks) => locks,
@@ -262,32 +266,6 @@ impl ContinuationRegistry {
         let lock = Arc::new(tokio::sync::Mutex::new(()));
         locks.insert(continuation_identity.to_owned(), Arc::downgrade(&lock));
         lock
-    }
-
-    fn publish_pending(&self, delivery_attempt_id: u64) {
-        let mut publications = match self.pending_publications.lock() {
-            Ok(publications) => publications,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let identity = publications.iter().find_map(|(identity, publication)| {
-            publication
-                .attempts
-                .contains(&delivery_attempt_id)
-                .then(|| identity.clone())
-        });
-        let Some(identity) = identity else {
-            return;
-        };
-        let remove = publications.get_mut(&identity).is_some_and(|publication| {
-            if !publication.attempts.remove(&delivery_attempt_id) {
-                return false;
-            }
-            publication.published = true;
-            publication.attempts.is_empty()
-        });
-        if remove {
-            publications.remove(&identity);
-        }
     }
 
     async fn rollback_pending(&self, delivery_attempt_id: u64) -> Result<()> {
@@ -310,7 +288,7 @@ impl ContinuationRegistry {
         // callers and request ids retain full DB concurrency.
         let identity_lock = self.pending_identity_lock(&identity);
         let _bind_guard = identity_lock.lock().await;
-        let delete = {
+        let is_last_attempt = {
             let mut publications = match self.pending_publications.lock() {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
@@ -318,31 +296,134 @@ impl ContinuationRegistry {
             let Some(publication) = publications.get_mut(&identity) else {
                 return Ok(());
             };
-            if !publication.attempts.remove(&delivery_attempt_id) {
+            if !publication.attempts.contains(&delivery_attempt_id) {
                 return Ok(());
             }
-            if !publication.attempts.is_empty() {
+            if publication.attempts.len() > 1 {
+                publication.attempts.remove(&delivery_attempt_id);
                 return Ok(());
             }
-            if publication.published || !publication.row_created {
-                publications.remove(&identity);
-                return Ok(());
-            }
-            // Keep the unpublished marker installed until the delete commits,
-            // so a concurrent resolve cannot observe provisional DB state.
             true
         };
-        if delete {
-            continuation_entity::Entity::delete_by_id(identity.clone())
+        if is_last_attempt {
+            // Keep ownership installed until the conditional delete commits.
+            // An error or cancellation therefore leaves the same attempt able
+            // to retry and same-process resolve still sees durable provisional
+            // state as Missing.
+            continuation_entity::Entity::delete_many()
+                .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
+                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
                 .exec(&self.db)
                 .await?;
             let mut publications = match self.pending_publications.lock() {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            publications.remove(&identity);
+            if let Some(publication) = publications.get_mut(&identity) {
+                publication.attempts.remove(&delivery_attempt_id);
+                if publication.attempts.is_empty() {
+                    publications.remove(&identity);
+                }
+            }
         }
         Ok(())
+    }
+
+    async fn activate_pending(
+        &self,
+        delivery_attempt_id: u64,
+        delivery: &RequiredDeliveryHandshake,
+    ) -> Result<bool> {
+        let identity = {
+            let publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            publications.iter().find_map(|(identity, publication)| {
+                publication
+                    .attempts
+                    .contains(&delivery_attempt_id)
+                    .then(|| identity.clone())
+            })
+        };
+        let Some(identity) = identity else {
+            // Idempotent preparation against an already-active row owns no
+            // durable transition but must still use the delivery rendezvous.
+            return delivery
+                .wait_for_delivery()
+                .await
+                .map_err(anyhow::Error::from);
+        };
+        let identity_lock = self.pending_identity_lock(&identity);
+        let _identity_guard = identity_lock.lock().await;
+        let activated = continuation_entity::Entity::update_many()
+            .col_expr(
+                continuation_entity::Column::PublicationState,
+                sea_orm::sea_query::Expr::value(PUBLICATION_ACTIVE),
+            )
+            .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
+            .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
+            .exec(&self.db)
+            .await?;
+        if activated.rows_affected == 0 {
+            let state = continuation_entity::Entity::find_by_id(&identity)
+                .select_only()
+                .column(continuation_entity::Column::PublicationState)
+                .into_tuple::<String>()
+                .one(&self.db)
+                .await?;
+            if state.as_deref() != Some(PUBLICATION_ACTIVE) {
+                anyhow::bail!("provisional continuation disappeared before activation");
+            }
+        }
+
+        let delivery_result = delivery.wait_for_delivery().await;
+        if delivery_result.as_ref().is_ok_and(|delivered| *delivered) {
+            let mut publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            publications.remove(&identity);
+            return Ok(true);
+        }
+
+        let other_attempts = {
+            let publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            publications
+                .get(&identity)
+                .is_some_and(|publication| publication.attempts.len() > 1)
+        };
+        if other_attempts {
+            continuation_entity::Entity::update_many()
+                .col_expr(
+                    continuation_entity::Column::PublicationState,
+                    sea_orm::sea_query::Expr::value(PUBLICATION_PROVISIONAL),
+                )
+                .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
+                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_ACTIVE))
+                .exec(&self.db)
+                .await?;
+        } else {
+            continuation_entity::Entity::delete_many()
+                .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
+                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_ACTIVE))
+                .exec(&self.db)
+                .await?;
+        }
+        let mut publications = match self.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(publication) = publications.get_mut(&identity) {
+            publication.attempts.remove(&delivery_attempt_id);
+            if publication.attempts.is_empty() {
+                publications.remove(&identity);
+            }
+        }
+        delivery_result.map_err(anyhow::Error::from)
     }
 
     pub async fn bind(
@@ -354,16 +435,35 @@ impl ContinuationRegistry {
         credential_authority: &ContinuationAuthority,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        self.bind_inner(
-            owner_user_id,
-            gateway_request_id,
-            provider_response_id,
-            target,
-            credential_authority,
-            now,
-        )
-        .await
-        .map(drop)
+        let key = self.keys.load()?;
+        let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
+        let identity_lock = self.pending_identity_lock(&continuation_identity);
+        let _bind_guard = identity_lock.lock().await;
+        let outcome = self
+            .bind_inner(
+                owner_user_id,
+                gateway_request_id,
+                provider_response_id,
+                target,
+                credential_authority,
+                BindPublication {
+                    now,
+                    state: PUBLICATION_ACTIVE,
+                },
+            )
+            .await?;
+        if outcome == BindOutcome::ExistingProvisional {
+            continuation_entity::Entity::update_many()
+                .col_expr(
+                    continuation_entity::Column::PublicationState,
+                    sea_orm::sea_query::Expr::value(PUBLICATION_ACTIVE),
+                )
+                .filter(continuation_entity::Column::ContinuationIdentity.eq(continuation_identity))
+                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
+                .exec(&self.db)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn bind_pending(
@@ -383,19 +483,17 @@ impl ContinuationRegistry {
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
         let _bind_guard = identity_lock.lock().await;
-        let joined_pending = {
+        {
             let mut publications = match self.pending_publications.lock() {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            let joined = publications.contains_key(&continuation_identity);
             publications
                 .entry(continuation_identity.clone())
                 .or_default()
                 .attempts
                 .insert(delivery_attempt_id);
-            joined
-        };
+        }
         let result = self
             .bind_inner(
                 owner_user_id,
@@ -403,7 +501,10 @@ impl ContinuationRegistry {
                 provider_response_id,
                 target,
                 credential_authority,
-                now,
+                BindPublication {
+                    now,
+                    state: PUBLICATION_PROVISIONAL,
+                },
             )
             .await;
         let mut publications = match self.pending_publications.lock() {
@@ -411,22 +512,16 @@ impl ContinuationRegistry {
             Err(poisoned) => poisoned.into_inner(),
         };
         match result {
-            Ok(inserted) => {
-                let publication = publications
-                    .get_mut(&continuation_identity)
-                    .expect("pending continuation reservation disappeared");
-                if inserted {
-                    publication.row_created = true;
-                } else if !joined_pending {
-                    // An idempotent match against a row that predates this
-                    // attempt is already public and must not become rollback
-                    // owned by this request.
+            Ok(outcome) => {
+                if outcome == BindOutcome::ExistingActive
+                    && let Some(publication) = publications.get_mut(&continuation_identity)
+                {
                     publication.attempts.remove(&delivery_attempt_id);
                     if publication.attempts.is_empty() {
                         publications.remove(&continuation_identity);
                     }
                 }
-                Ok(inserted)
+                Ok(outcome == BindOutcome::Inserted)
             }
             Err(error) => {
                 if let Some(publication) = publications.get_mut(&continuation_identity) {
@@ -447,8 +542,9 @@ impl ContinuationRegistry {
         provider_response_id: &str,
         target: &RoutingTarget,
         credential_authority: &ContinuationAuthority,
-        now: DateTime<Utc>,
-    ) -> Result<bool> {
+        publication: BindPublication,
+    ) -> Result<BindOutcome> {
+        let BindPublication { now, state } = publication;
         let key = self.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let owner_identity = key.owner_identity(owner_user_id)?;
@@ -484,9 +580,10 @@ impl ContinuationRegistry {
             created_at: Set(created_at),
             expires_at: Set(expires_at),
             purge_after: Set(purge_after),
+            publication_state: Set(state.to_owned()),
         };
         match model.insert(&self.db).await {
-            Ok(_) => Ok(true),
+            Ok(_) => Ok(BindOutcome::Inserted),
             Err(insert_error) => {
                 let existing = continuation_entity::Entity::find_by_id(&continuation_identity)
                     .one(&self.db)
@@ -498,7 +595,13 @@ impl ContinuationRegistry {
                 if existing_plaintext == provider_response_id
                     && existing.target_fingerprint == target_fingerprint
                 {
-                    Ok(false)
+                    match existing.publication_state.as_str() {
+                        PUBLICATION_ACTIVE => Ok(BindOutcome::ExistingActive),
+                        PUBLICATION_PROVISIONAL => Ok(BindOutcome::ExistingProvisional),
+                        state => {
+                            anyhow::bail!("unsupported continuation publication state '{state}'")
+                        }
+                    }
                 } else {
                     anyhow::bail!("gateway continuation id is already bound to another response")
                 }
@@ -515,15 +618,19 @@ impl ContinuationRegistry {
         let key = self.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
-        if self.is_pending_identity(&continuation_identity) {
-            return Ok(ContinuationResolution::Missing);
-        }
+        // The same-identity lock linearizes resolve with bind, activation, and
+        // rollback, including the old precheck-to-insert TOCTOU window.
+        let identity_lock = self.pending_identity_lock(&continuation_identity);
+        let _identity_guard = identity_lock.lock().await;
         let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
             .one(&self.db)
             .await?
         else {
             return Ok(ContinuationResolution::Missing);
         };
+        if row.publication_state != PUBLICATION_ACTIVE {
+            return Ok(ContinuationResolution::Missing);
+        }
         let expected_owner = key.owner_identity(owner_user_id)?;
         if row.owner_identity != expected_owner {
             anyhow::bail!("continuation owner identity mismatch");
@@ -827,11 +934,28 @@ impl RequiredFinalizer for ContinuationRuntime {
             })
     }
 
-    fn commit(&self, ctx: &RequiredFinalizationContext) {
+    async fn commit(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        delivery: &RequiredDeliveryHandshake,
+    ) -> PipelineResult<bool> {
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
-            return;
+            return delivery.wait_for_delivery().await;
         }
-        self.registry.publish_pending(ctx.delivery_attempt_id);
+        match self
+            .registry
+            .activate_pending(ctx.delivery_attempt_id, delivery)
+            .await
+        {
+            Ok(delivered) => Ok(delivered),
+            Err(error) => {
+                let error = BitrouterError::internal(format!(
+                    "activating provider continuation publication: {error}"
+                ));
+                delivery.reject(error.clone());
+                Err(error)
+            }
+        }
     }
 }
 
@@ -945,6 +1069,7 @@ mod continuation_entity {
         pub created_at: String,
         pub expires_at: String,
         pub purge_after: String,
+        pub publication_state: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -976,24 +1101,29 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::language_model::context::{PipelineContext, ProviderContinuation};
     use bitrouter_sdk::language_model::hooks::{
         ObserveHook, RequestOutcome, RouteHook, StreamHook,
     };
     use bitrouter_sdk::language_model::settlement::{
-        RequiredFinalizationContext, RequiredFinalizer, SettlementContext, SettlementRecorder,
+        DeliveryAcknowledgement, RequiredFinalizationContext, RequiredFinalizer, SettlementContext,
+        SettlementRecorder,
     };
     use bitrouter_sdk::language_model::{
         ApiProtocol, AppliedAuth, AuthApplier, AuthAppliers, Content, CredentialAuthority,
-        FinishReason, GenerateResult, GenerationParams, HttpExecutor, Message, MockExecutor,
-        MockResponse, Pipeline, PipelineBuilder, PipelineRequest, Prompt, Role, RoutingTarget,
-        StaticRoutingTable, StreamAction, StreamContext, StreamInterest, StreamOutcome, StreamPart,
-        Tool, ToolResultOutput, Usage,
+        ExecutionResult, Executor, FinishReason, GenerateResult, GenerationParams, HttpExecutor,
+        Message, MockExecutor, MockResponse, Pipeline, PipelineBuilder, PipelineRequest, Prompt,
+        Role, RoutingTarget, StaticRoutingTable, StreamAction, StreamContext, StreamInterest,
+        StreamOutcome, StreamPart, StreamPartStream, Tool, ToolResultOutput, Usage,
     };
+    use bitrouter_sdk::server::{AppState, build_router};
     use chrono::{TimeDelta, TimeZone, Utc};
     use futures::StreamExt;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    use tower::ServiceExt;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -1032,6 +1162,151 @@ mod tests {
             30,
             10,
         )
+    }
+
+    fn app_state(pipeline: Arc<Pipeline>) -> AppState {
+        AppState {
+            language_model: pipeline,
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: Vec::new(),
+        }
+    }
+
+    fn responses_http_request(request_id: &str, stream: bool) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("content-type", "application/json")
+            .header("x-bitrouter-request-id", request_id)
+            .body(Body::from(
+                serde_json::json!({
+                    "model": "gpt-5",
+                    "input": "say ready",
+                    "stream": stream,
+                })
+                .to_string(),
+            ))
+            .expect("valid Responses request")
+    }
+
+    fn valid_nonstream_result(target: &RoutingTarget, response_id: &str) -> ExecutionResult {
+        ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: GenerateResult {
+                content: vec![Content::Text {
+                    text: "ready".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: Some(Usage {
+                    prompt_tokens: 7,
+                    completion_tokens: 11,
+                    ..Default::default()
+                }),
+                finish_reason: Some(FinishReason::Stop),
+                response_id: Some(response_id.into()),
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+            request_duration_ms: 1,
+            upstream_duration_ms: Some(1),
+            server_tool_calls: Vec::new(),
+        }
+    }
+
+    struct GatedResponsesExecutor {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl Executor for GatedResponsesExecutor {
+        async fn execute(
+            &self,
+            target: &RoutingTarget,
+            _prompt: &Prompt,
+            _ctx: &PipelineContext,
+        ) -> PipelineResult<ExecutionResult> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(valid_nonstream_result(target, "provider-detached-final"))
+        }
+
+        async fn execute_stream(
+            &self,
+            _target: &RoutingTarget,
+            _prompt: &Prompt,
+            _ctx: &PipelineContext,
+        ) -> PipelineResult<StreamPartStream> {
+            Err(BitrouterError::internal("streaming not used"))
+        }
+    }
+
+    #[tokio::test]
+    async fn server_nonstream_handler_drop_settles_billing_without_publishing_continuation()
+    -> anyhow::Result<()> {
+        let registry = registry(43).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let usage = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(GatedResponsesExecutor {
+                started: started.clone(),
+                release: release.clone(),
+            }))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(UsageSettlementRecorder(usage.clone()))
+            .observe_hook(OutcomeObserver(outcomes.clone()));
+        let pipeline = Arc::new(builder.build()?);
+
+        let mut handler = Box::pin(
+            build_router(app_state(pipeline.clone()))
+                .oneshot(responses_http_request("server-detached-drop", false)),
+        );
+        assert!(
+            futures::poll!(handler.as_mut()).is_pending(),
+            "real HTTP handler must still be waiting on the gated upstream"
+        );
+        started.notified().await;
+        drop(handler);
+        release.notify_one();
+        pipeline.drain_pending_settlements().await;
+
+        assert_eq!(
+            usage.lock().expect("usage settlement poisoned").as_slice(),
+            &[(7, 11)],
+            "detached execution must retain full upstream billing"
+        );
+        assert_eq!(
+            registry
+                .resolve(
+                    CallerContext::local().user_id(),
+                    &encode_gateway_continuation_id("server-detached-drop")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "a detached billing completion must not publish a resumable handle"
+        );
+        assert_eq!(
+            outcomes
+                .lock()
+                .expect("outcome observer poisoned")
+                .as_slice(),
+            &["disconnected"],
+            "the dropped handler is not a delivered success"
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -1369,7 +1644,7 @@ mod tests {
         let runtime = ContinuationRuntime::new(registry.clone());
         let finalization = finalization_context("gateway-result", 1, "resp-provider-final");
         runtime.finalize(&finalization).await?;
-        runtime.commit(&finalization);
+        commit_delivered(&runtime, &finalization).await?;
         let resolved = registry
             .resolve(
                 "owner",
@@ -1399,6 +1674,28 @@ mod tests {
             native_response_completed: true,
             credential_authority: Some(static_authority("credential")),
         }
+    }
+
+    async fn commit_delivered(
+        finalizer: &dyn RequiredFinalizer,
+        ctx: &RequiredFinalizationContext,
+    ) -> PipelineResult<()> {
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new(ready_tx, ack_rx);
+        let acknowledge = tokio::spawn(async move {
+            ready_rx
+                .await
+                .map_err(|error| BitrouterError::internal(error.to_string()))??;
+            ack_tx
+                .send(DeliveryAcknowledgement::Delivered)
+                .map_err(|_| BitrouterError::internal("delivery acknowledgement closed"))
+        });
+        assert!(finalizer.commit(ctx, &delivery).await?);
+        acknowledge
+            .await
+            .map_err(|error| BitrouterError::internal(error.to_string()))??;
+        Ok(())
     }
 
     #[tokio::test]
@@ -1448,7 +1745,7 @@ mod tests {
             ContinuationResolution::Missing,
             "one attempt cannot publish or delete state still owned by another"
         );
-        runtime.commit(&second);
+        commit_delivered(&runtime, &second).await?;
         runtime.rollback(&first).await?;
         assert!(matches!(
             registry.resolve("owner", &public_id, Utc::now()).await?,
@@ -1528,6 +1825,84 @@ mod tests {
             restarted.resolve("owner", &public_id, Utc::now()).await?,
             ContinuationResolution::Missing,
             "tracked rollback must remove provisional durable state before restart"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn provisional_row_is_missing_even_without_process_local_marker() -> anyhow::Result<()> {
+        let registry = registry(44).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("durable-provisional", 401, "provider-provisional");
+        runtime.finalize(&attempt).await?;
+
+        let fresh = ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        assert_eq!(
+            fresh
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("durable-provisional")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "durable resolve exposed a prepare that another process cannot mask"
+        );
+        runtime.rollback(&attempt).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_compensation_keeps_retryable_row_ownership_and_visibility_mask()
+    -> anyhow::Result<()> {
+        let registry = registry(45).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("rollback-retry", 402, "provider-rollback-retry");
+        runtime.finalize(&attempt).await?;
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "CREATE TRIGGER fail_continuation_delete BEFORE DELETE ON provider_continuations BEGIN SELECT RAISE(FAIL, 'forced rollback failure'); END".to_owned(),
+            ))
+            .await?;
+
+        runtime
+            .rollback(&attempt)
+            .await
+            .expect_err("forced conditional delete failure must propagate");
+        assert_eq!(
+            registry
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("rollback-retry")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "a failed compensation must remain masked in the same process"
+        );
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "DROP TRIGGER fail_continuation_delete".to_owned(),
+            ))
+            .await?;
+        runtime.rollback(&attempt).await?;
+
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(
+            row.try_get::<i64>("", "count")?,
+            0,
+            "retry lost ownership before the conditional delete committed"
         );
         Ok(())
     }
@@ -1622,7 +1997,12 @@ mod tests {
             };
             let sse = events
                 .iter()
-                .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"]))
+                .map(|event| {
+                    format!(
+                        "event: {}\ndata: {event}\n\n",
+                        event["type"].as_str().expect("event type")
+                    )
+                })
                 .collect::<String>();
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -1738,7 +2118,12 @@ mod tests {
                 ];
                 let sse = events
                     .iter()
-                    .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"]))
+                    .map(|event| {
+                        format!(
+                            "event: {}\ndata: {event}\n\n",
+                            event["type"].as_str().expect("event type")
+                        )
+                    })
                     .collect::<String>();
                 ResponseTemplate::new(200)
                     .insert_header("content-type", "text/event-stream")
@@ -1798,7 +2183,12 @@ mod tests {
             ];
             let sse = events
                 .iter()
-                .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"]))
+                .map(|event| {
+                    format!(
+                        "event: {}\ndata: {event}\n\n",
+                        event["type"].as_str().expect("event type")
+                    )
+                })
                 .collect::<String>();
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -1987,6 +2377,46 @@ mod tests {
         }
     }
 
+    struct HeaderAuthApplier {
+        headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
+        route_scheme: bitrouter_sdk::language_model::types::AuthScheme,
+    }
+
+    #[async_trait]
+    impl AuthApplier for HeaderAuthApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            for (name, value) in &self.headers {
+                request.headers_mut().append(name, value.clone());
+            }
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> PipelineResult<AppliedAuth> {
+            Ok(AppliedAuth::proven(
+                self.apply(request, target).await?,
+                CredentialAuthority::derive("test/header-principal", "principal"),
+            ))
+        }
+
+        async fn continuation_authority_proof(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<ContinuationAuthority>> {
+            Ok(Some(ContinuationAuthority::new(
+                CredentialAuthority::derive("test/header-principal", "principal"),
+                self.route_scheme,
+            )))
+        }
+    }
+
     fn dynamic_auth_pipeline(
         registry: ContinuationRegistry,
         upstream: &MockServer,
@@ -2130,6 +2560,99 @@ mod tests {
         let mut stream = pipeline.execute_stream(request).await?;
         while let Some(part) = stream.next().await {
             part?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn real_http_responses_terminal_followed_by_event_fails_without_binding()
+    -> anyhow::Result<()> {
+        for (index, trailing) in [
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "provider-http-lifecycle",
+                    "status": "completed",
+                    "output": []
+                }
+            }),
+            serde_json::json!({"type": "response.some_future_event"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let upstream = MockServer::start().await;
+            let events = [
+                serde_json::json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": "provider-http-lifecycle",
+                        "status": "in_progress"
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response.some_future_event_before_terminal"
+                }),
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "provider-http-lifecycle",
+                        "status": "completed",
+                        "output": []
+                    }
+                }),
+                trailing,
+            ];
+            let body = events
+                .iter()
+                .map(|event| {
+                    format!(
+                        "event: {}\ndata: {event}\n\n",
+                        event["type"].as_str().expect("event type")
+                    )
+                })
+                .collect::<String>();
+            Mock::given(method("POST"))
+                .and(path("/responses"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body),
+                )
+                .mount(&upstream)
+                .await;
+            let registry = registry(57 + index as u8).await?;
+            let mut upstream_target = target("credential");
+            upstream_target.api_base = upstream.uri();
+            let pipeline = continuation_pipeline(registry.clone(), vec![upstream_target])?;
+            let request_id = format!("http-post-terminal-{index}");
+            let mut stream = pipeline
+                .clone()
+                .execute_stream(tool_request(&request_id, None))
+                .await?;
+            let mut saw_error = false;
+            while let Some(item) = stream.next().await {
+                if item.is_err() {
+                    saw_error = true;
+                }
+            }
+            pipeline.drain_pending_settlements().await;
+
+            assert!(
+                saw_error,
+                "HttpExecutor stopped consuming immediately after the apparent terminal"
+            );
+            assert_eq!(
+                registry
+                    .resolve(
+                        "tool-owner",
+                        &encode_gateway_continuation_id(&request_id)?,
+                        Utc::now(),
+                    )
+                    .await?,
+                ContinuationResolution::Missing,
+                "an invalid real HTTP lifecycle published a continuation"
+            );
         }
         Ok(())
     }
@@ -2817,6 +3340,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn malformed_or_ambiguous_wire_auth_fails_before_responses_dispatch() -> anyhow::Result<()>
+    {
+        use bitrouter_sdk::language_model::types::AuthScheme;
+        use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
+
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(DynamicAuthResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+        let registry = registry(56).await?;
+        let mut bound_target = target("static-placeholder");
+        bound_target.api_base = upstream.uri();
+        let authority = |scheme| {
+            ContinuationAuthority::new(
+                CredentialAuthority::derive("test/header-principal", "principal"),
+                scheme,
+            )
+        };
+        let authorization = || HeaderName::from_static("authorization");
+        let x_api_key = || HeaderName::from_static("x-api-key");
+        let x_goog_key = || HeaderName::from_static("x-goog-api-key");
+        let invalid_cases = vec![
+            (
+                "basic",
+                AuthScheme::Bearer,
+                vec![(authorization(), HeaderValue::from_static("Basic secret"))],
+            ),
+            (
+                "aws4",
+                AuthScheme::Bearer,
+                vec![(
+                    authorization(),
+                    HeaderValue::from_static("AWS4-HMAC-SHA256 credential"),
+                )],
+            ),
+            (
+                "empty-bearer",
+                AuthScheme::Bearer,
+                vec![(authorization(), HeaderValue::from_static("Bearer "))],
+            ),
+            (
+                "non-utf8-bearer",
+                AuthScheme::Bearer,
+                vec![(authorization(), HeaderValue::from_bytes(b"Bearer \xff")?)],
+            ),
+            (
+                "duplicate-authorization",
+                AuthScheme::Bearer,
+                vec![
+                    (authorization(), HeaderValue::from_static("Bearer one")),
+                    (authorization(), HeaderValue::from_static("Bearer two")),
+                ],
+            ),
+            (
+                "bearer-plus-x-key",
+                AuthScheme::Bearer,
+                vec![
+                    (authorization(), HeaderValue::from_static("Bearer secret")),
+                    (x_api_key(), HeaderValue::from_static("secret")),
+                ],
+            ),
+            (
+                "two-x-key-families",
+                AuthScheme::XApiKey,
+                vec![
+                    (x_api_key(), HeaderValue::from_static("secret")),
+                    (x_goog_key(), HeaderValue::from_static("secret")),
+                ],
+            ),
+        ];
+
+        for (label, scheme, headers) in invalid_cases {
+            let root_id = encode_gateway_continuation_id(&format!("wire-auth-root-{label}"))?;
+            registry
+                .bind(
+                    "tool-owner",
+                    &root_id,
+                    "provider-wire-auth-root",
+                    &bound_target,
+                    &authority(scheme),
+                    Utc::now(),
+                )
+                .await?;
+            let before = state
+                .lock()
+                .expect("dynamic auth state poisoned")
+                .calls
+                .len();
+            let result = dynamic_auth_pipeline(
+                registry.clone(),
+                &upstream,
+                Arc::new(HeaderAuthApplier {
+                    headers,
+                    route_scheme: scheme,
+                }),
+            )?
+            .execute_stream(tool_request(
+                &format!("wire-auth-resume-{label}"),
+                Some(&root_id),
+            ))
+            .await;
+            assert!(
+                result.is_err(),
+                "{label} produced a continuation authority and opened an upstream stream"
+            );
+            assert_eq!(
+                state
+                    .lock()
+                    .expect("dynamic auth state poisoned")
+                    .calls
+                    .len(),
+                before,
+                "{label} reached upstream before failing closed"
+            );
+        }
+
+        for (label, scheme, headers) in [
+            (
+                "bearer-control",
+                AuthScheme::Bearer,
+                vec![(AUTHORIZATION, HeaderValue::from_static("bEaReR secret"))],
+            ),
+            (
+                "x-key-control",
+                AuthScheme::XApiKey,
+                vec![(x_api_key(), HeaderValue::from_static("secret"))],
+            ),
+        ] {
+            let root_id = encode_gateway_continuation_id(&format!("wire-auth-root-{label}"))?;
+            registry
+                .bind(
+                    "tool-owner",
+                    &root_id,
+                    "provider-wire-auth-root",
+                    &bound_target,
+                    &authority(scheme),
+                    Utc::now(),
+                )
+                .await?;
+            drain_stream(
+                dynamic_auth_pipeline(
+                    registry.clone(),
+                    &upstream,
+                    Arc::new(HeaderAuthApplier {
+                        headers,
+                        route_scheme: scheme,
+                    }),
+                )?,
+                tool_request(&format!("wire-auth-resume-{label}"), Some(&root_id)),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replaced_dynamic_authority_rejects_before_upstream() -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
         let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
@@ -3010,10 +3692,68 @@ mod tests {
         completed: Arc<AtomicBool>,
     }
 
+    struct LateCompletingContinuationFinalizer {
+        runtime: ContinuationRuntime,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        completed: Arc<tokio::sync::Notify>,
+    }
+
     struct BlockingEndHook {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         completed: Arc<AtomicUsize>,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum TerminalMutation {
+        Drop,
+        ReplaceFailed,
+        ReplaceNonterminal,
+    }
+
+    struct TerminalMutatingHook(TerminalMutation);
+
+    #[async_trait]
+    impl StreamHook for TerminalMutatingHook {
+        fn interest(&self) -> StreamInterest {
+            StreamInterest::none().with_finish()
+        }
+
+        async fn on_part(
+            &self,
+            _ctx: &mut StreamContext,
+            part: StreamPart,
+        ) -> PipelineResult<StreamAction> {
+            Ok(match self.0 {
+                TerminalMutation::Drop => StreamAction::Drop,
+                TerminalMutation::ReplaceFailed => {
+                    let id = match part {
+                        StreamPart::ResponseCompleted { id, .. } => id,
+                        _ => "replacement-id".into(),
+                    };
+                    StreamAction::Replace(vec![StreamPart::ResponseCompleted {
+                        id,
+                        source_protocol: ApiProtocol::Responses,
+                        status: "failed".into(),
+                        usage: None,
+                    }])
+                }
+                TerminalMutation::ReplaceNonterminal => {
+                    StreamAction::Replace(vec![StreamPart::TextDelta {
+                        text: "terminal removed".into(),
+                    }])
+                }
+            })
+        }
+
+        async fn on_stream_end(
+            &self,
+            _ctx: &mut StreamContext,
+            _outcome: &StreamOutcome,
+        ) -> PipelineResult<()> {
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -3049,6 +3789,8 @@ mod tests {
         release: Arc<tokio::sync::Notify>,
     }
 
+    struct NativeIdStealingRecorder(Arc<std::sync::Mutex<Vec<String>>>);
+
     #[async_trait]
     impl SettlementRecorder for UsageSettlementRecorder {
         async fn record(&self, ctx: &mut SettlementContext) -> PipelineResult<()> {
@@ -3065,6 +3807,26 @@ mod tests {
         async fn record(&self, _ctx: &mut SettlementContext) -> PipelineResult<()> {
             self.started.notify_one();
             self.release.notified().await;
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for NativeIdStealingRecorder {
+        async fn record(&self, ctx: &mut SettlementContext) -> PipelineResult<()> {
+            let snapshot = format!(
+                "request={};model={};provider={};account={:?};finish={:?};error={:?}",
+                ctx.request_id,
+                ctx.model_id,
+                ctx.provider_id,
+                ctx.account_label,
+                ctx.finish_reason,
+                ctx.error,
+            );
+            self.0
+                .lock()
+                .expect("malicious recorder state poisoned")
+                .push(snapshot);
             Ok(())
         }
     }
@@ -3104,6 +3866,266 @@ mod tests {
         }
     }
 
+    struct ComposedContinuationFinalizer {
+        runtime: ContinuationRuntime,
+        blocker: BlockingRequiredFinalizer,
+        continuation_first: bool,
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for ComposedContinuationFinalizer {
+        async fn finalize(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            if self.continuation_first {
+                self.runtime.finalize(ctx).await?;
+                self.blocker.finalize(ctx).await
+            } else {
+                self.blocker.finalize(ctx).await?;
+                self.runtime.finalize(ctx).await
+            }
+        }
+
+        async fn rollback(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            self.runtime.rollback(ctx).await
+        }
+
+        async fn commit(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            delivery: &RequiredDeliveryHandshake,
+        ) -> PipelineResult<bool> {
+            self.runtime.commit(ctx, delivery).await
+        }
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for LateCompletingContinuationFinalizer {
+        async fn finalize(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            let runtime = self.runtime.clone();
+            let ctx = ctx.clone();
+            let release = self.release.clone();
+            let completed = self.completed.clone();
+            let worker = tokio::spawn(async move {
+                release.notified().await;
+                let result = runtime.finalize(&ctx).await;
+                completed.notify_one();
+                result
+            });
+            self.started.notify_one();
+            worker.await.map_err(|error| {
+                BitrouterError::internal(format!("late finalizer task: {error}"))
+            })?
+        }
+
+        async fn rollback(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            self.runtime.rollback(ctx).await
+        }
+
+        async fn commit(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            delivery: &RequiredDeliveryHandshake,
+        ) -> PipelineResult<bool> {
+            self.runtime.commit(ctx, delivery).await
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_settlement_recorder_cannot_obtain_native_responses_id() -> anyhow::Result<()>
+    {
+        const NATIVE_SENTINEL: &str = "native-response-secret-sentinel";
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Generate(
+            GenerateResult {
+                content: vec![Content::Text {
+                    text: "ready".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: None,
+                finish_reason: Some(FinishReason::Stop),
+                response_id: Some(NATIVE_SENTINEL.into()),
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+        )]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .settlement_recorder(NativeIdStealingRecorder(captured.clone()));
+        Arc::new(builder.build()?)
+            .execute(nonstream_tool_request("privacy-recorder", None))
+            .await?;
+
+        let snapshot = captured
+            .lock()
+            .expect("malicious recorder state poisoned")
+            .join("\n");
+        assert!(
+            !snapshot.contains(NATIVE_SENTINEL),
+            "generic settlement recorder exfiltrated a native Responses id: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stream_hook_removed_or_failed_downstream_terminal_never_publishes()
+    -> anyhow::Result<()> {
+        for (index, mutation) in [
+            TerminalMutation::Drop,
+            TerminalMutation::ReplaceFailed,
+            TerminalMutation::ReplaceNonterminal,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let registry = registry(50 + index as u8).await?;
+            let runtime = ContinuationRuntime::new(registry.clone());
+            let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let routes = Arc::new(StaticRoutingTable::new());
+            routes.insert("gpt-5", vec![target("credential")]);
+            let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+                StreamPart::ResponseStarted {
+                    id: "provider-hook-terminal".into(),
+                    source_protocol: ApiProtocol::Responses,
+                },
+                StreamPart::ResponseCompleted {
+                    id: "provider-hook-terminal".into(),
+                    source_protocol: ApiProtocol::Responses,
+                    status: "completed".into(),
+                    usage: None,
+                },
+            ])]));
+            let mut builder = PipelineBuilder::new();
+            builder
+                .routing_table(routes)
+                .executor(executor)
+                .route_hook(runtime.clone())
+                .stream_hook(TerminalMutatingHook(mutation))
+                .required_finalizer(runtime)
+                .observe_hook(OutcomeObserver(outcomes.clone()));
+            let pipeline = Arc::new(builder.build()?);
+            let request_id = format!("hook-terminal-{index}");
+            let mut stream = pipeline
+                .clone()
+                .execute_stream(tool_request(&request_id, None))
+                .await?;
+            let mut saw_error = false;
+            while let Some(item) = stream.next().await {
+                if item.is_err() {
+                    saw_error = true;
+                }
+            }
+            pipeline.drain_pending_settlements().await;
+
+            assert_eq!(
+                registry
+                    .resolve(
+                        "tool-owner",
+                        &encode_gateway_continuation_id(&request_id)?,
+                        Utc::now(),
+                    )
+                    .await?,
+                ContinuationResolution::Missing,
+                "{mutation:?} exposed a resumable continuation"
+            );
+            if !matches!(mutation, TerminalMutation::ReplaceFailed) {
+                assert!(
+                    saw_error,
+                    "{mutation:?} must surface the missing downstream success terminal"
+                );
+            }
+            assert_eq!(
+                outcomes
+                    .lock()
+                    .expect("outcome observer poisoned")
+                    .as_slice(),
+                &["failed"],
+                "settlement followed the upstream terminal instead of {mutation:?} downstream output"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_finalizer_with_late_db_completion_is_compensated_after_completion()
+    -> anyhow::Result<()> {
+        let registry = registry(55).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(tokio::sync::Notify::new());
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Generate(
+            GenerateResult {
+                content: vec![Content::Text {
+                    text: "ready".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: None,
+                finish_reason: Some(FinishReason::Stop),
+                response_id: Some("provider-late-db".into()),
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+        )]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(runtime.clone())
+            .required_finalizer(LateCompletingContinuationFinalizer {
+                runtime: runtime.clone(),
+                started: started.clone(),
+                release: release.clone(),
+                completed: completed.clone(),
+            });
+        let pipeline = Arc::new(builder.build()?);
+        let execution = tokio::spawn({
+            let pipeline = pipeline.clone();
+            async move {
+                pipeline
+                    .execute(nonstream_tool_request("late-db-cancel", None))
+                    .await
+            }
+        });
+        started.notified().await;
+        execution.abort();
+        let _ = execution.await;
+
+        // The finalizer DB await is shutdown-tracked. Cancellation drops its
+        // result receiver; once the late operation completes, that same worker
+        // performs compensation before graceful drain returns.
+        release.notify_one();
+        completed.notified().await;
+        pipeline.drain_pending_settlements().await;
+
+        let fresh = ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        assert_eq!(
+            fresh
+                .resolve(
+                    "tool-owner",
+                    &encode_gateway_continuation_id("late-db-cancel")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "late DB completion escaped the cancellation compensation task"
+        );
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
     fn terminal_barrier_pipeline(
         registry: ContinuationRegistry,
         blocker: Option<BlockingRequiredFinalizer>,
@@ -3132,10 +4154,126 @@ mod tests {
             .executor(executor)
             .route_hook(runtime.clone());
         if let Some(blocker) = blocker {
-            builder.required_finalizer(blocker);
+            builder.required_finalizer(ComposedContinuationFinalizer {
+                runtime,
+                blocker,
+                continuation_first: false,
+            });
+        } else {
+            builder.required_finalizer(runtime);
         }
-        builder.required_finalizer(runtime);
         Ok(Arc::new(builder.build()?))
+    }
+
+    fn public_sse_pipeline(
+        registry: ContinuationRegistry,
+        outcomes: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    ) -> anyhow::Result<Arc<Pipeline>> {
+        let runtime = ContinuationRuntime::new(registry);
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ResponseStarted {
+                id: "provider-public-sse".into(),
+                source_protocol: ApiProtocol::Responses,
+            },
+            StreamPart::TextDelta {
+                text: "ready".into(),
+            },
+            StreamPart::ResponseCompleted {
+                id: "provider-public-sse".into(),
+                source_protocol: ApiProtocol::Responses,
+                status: "completed".into(),
+                usage: None,
+            },
+        ])]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .observe_hook(OutcomeObserver(outcomes));
+        Ok(Arc::new(builder.build()?))
+    }
+
+    #[tokio::test]
+    async fn public_sse_drop_after_early_terminal_expansion_frame_never_publishes()
+    -> anyhow::Result<()> {
+        let registry = registry(53).await?;
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = public_sse_pipeline(registry.clone(), outcomes.clone())?;
+        let response = build_router(app_state(pipeline.clone()))
+            .oneshot(responses_http_request("public-sse-early-drop", true))
+            .await?;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        let mut saw_early_terminal_frame = false;
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk?;
+            let wire = String::from_utf8_lossy(&chunk);
+            if wire.contains("event: response.output_text.done") {
+                saw_early_terminal_frame = true;
+                break;
+            }
+        }
+        assert!(
+            saw_early_terminal_frame,
+            "Responses terminal expansion did not expose its pre-terminal done frame"
+        );
+        drop(body);
+        pipeline.drain_pending_settlements().await;
+
+        assert_eq!(
+            registry
+                .resolve(
+                    CallerContext::local().user_id(),
+                    &encode_gateway_continuation_id("public-sse-early-drop")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "an earlier frame from a multi-frame terminal expansion authorized continuation"
+        );
+        assert_eq!(
+            outcomes
+                .lock()
+                .expect("outcome observer poisoned")
+                .as_slice(),
+            &["disconnected"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn public_sse_final_success_frame_immediately_authorizes_continuation()
+    -> anyhow::Result<()> {
+        let registry = registry(54).await?;
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = public_sse_pipeline(registry.clone(), outcomes)?;
+        let response = build_router(app_state(pipeline.clone()))
+            .oneshot(responses_http_request("public-sse-final-frame", true))
+            .await?;
+        let mut body = response.into_body().into_data_stream();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk?;
+            if String::from_utf8_lossy(&chunk).contains("event: response.completed") {
+                assert!(matches!(
+                    registry
+                        .resolve(
+                            CallerContext::local().user_id(),
+                            &encode_gateway_continuation_id("public-sse-final-frame")?,
+                            Utc::now(),
+                        )
+                        .await?,
+                    ContinuationResolution::Active(_)
+                ));
+                drop(body);
+                pipeline.drain_pending_settlements().await;
+                return Ok(());
+            }
+        }
+        anyhow::bail!("public response.completed frame missing")
     }
 
     #[tokio::test]
@@ -3172,7 +4310,10 @@ mod tests {
         release.notify_one();
         pipeline.drain_pending_settlements().await;
 
-        assert!(!completed.load(Ordering::SeqCst));
+        assert!(
+            completed.load(Ordering::SeqCst),
+            "tracked finalizer preparation completes before compensating cancellation"
+        );
         let public_id = encode_gateway_continuation_id("blocked-terminal")?;
         assert_eq!(
             registry
@@ -3211,12 +4352,16 @@ mod tests {
             .routing_table(routes)
             .executor(executor)
             .route_hook(runtime.clone())
-            // The continuation DB write deliberately happens first.
-            .required_finalizer(runtime)
-            .required_finalizer(BlockingRequiredFinalizer {
-                started: started.clone(),
-                release: release.clone(),
-                completed: completed.clone(),
+            // The continuation DB write deliberately happens first inside one
+            // atomic success-critical composition.
+            .required_finalizer(ComposedContinuationFinalizer {
+                runtime,
+                blocker: BlockingRequiredFinalizer {
+                    started: started.clone(),
+                    release: release.clone(),
+                    completed: completed.clone(),
+                },
+                continuation_first: true,
             });
         let pipeline = Arc::new(builder.build()?);
         let mut stream = pipeline
@@ -3249,7 +4394,10 @@ mod tests {
         let _ = poller.await;
         release.notify_one();
         pipeline.drain_pending_settlements().await;
-        assert!(!completed.load(Ordering::SeqCst));
+        assert!(
+            completed.load(Ordering::SeqCst),
+            "tracked finalizer preparation completes before compensating cancellation"
+        );
         assert_eq!(
             registry
                 .resolve("tool-owner", &public_id, Utc::now())

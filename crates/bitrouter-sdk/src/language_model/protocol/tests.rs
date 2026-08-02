@@ -3709,6 +3709,11 @@ fn regression_432_responses_incomplete_and_unknown_events_not_errors() {
         .decode(&incomplete)
         .expect("incomplete is not an error");
     assert!(
+        parts.is_empty(),
+        "a successful terminal must be buffered until EOF validates the lifecycle"
+    );
+    let parts = decoder.finish().expect("validated EOF releases terminal");
+    assert!(
         parts.iter().any(|p| matches!(
             p,
             StreamPart::ResponseCompleted { status, .. } if status == "incomplete"
@@ -3741,6 +3746,78 @@ fn responses_stream_rejects_duplicate_or_post_terminal_events() {
             .expect_err("no event may follow a Responses terminal");
         assert!(error.to_string().contains("after its terminal"));
     }
+}
+
+#[test]
+fn responses_stream_rejects_header_body_type_mismatch() {
+    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let error = decoder
+        .decode(&SseEvent {
+            event: Some("response.completed".to_string()),
+            data: serde_json::json!({
+                "type": "response.output_text.delta",
+                "delta": "must not be accepted under another explicit event name"
+            })
+            .to_string(),
+        })
+        .expect_err("explicit SSE event name must agree with the JSON type");
+    assert!(error.to_string().contains("event"));
+}
+
+#[test]
+fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
+    let created = |id: &str| SseEvent {
+        event: Some("response.created".to_string()),
+        data: serde_json::json!({
+            "type": "response.created",
+            "response": {"id": id, "status": "in_progress"}
+        })
+        .to_string(),
+    };
+    let terminal = |id: &str| SseEvent {
+        event: Some("response.completed".to_string()),
+        data: serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": id, "status": "completed", "output": []}
+        })
+        .to_string(),
+    };
+
+    let mut empty = adapter_for(ApiProtocol::Responses).stream_decoder();
+    assert!(
+        empty.decode(&created("")).is_err(),
+        "an empty response.created id was accepted"
+    );
+
+    let mut duplicate = adapter_for(ApiProtocol::Responses).stream_decoder();
+    duplicate
+        .decode(&created("resp-one"))
+        .expect("first created is valid");
+    assert!(
+        duplicate.decode(&created("resp-one")).is_err(),
+        "a duplicate response.created event was accepted"
+    );
+
+    let mut mismatch = adapter_for(ApiProtocol::Responses).stream_decoder();
+    mismatch
+        .decode(&created("resp-created"))
+        .expect("created is valid");
+    assert!(
+        mismatch.decode(&terminal("resp-terminal")).is_err(),
+        "terminal id did not have to match response.created"
+    );
+
+    let mut terminal_only = adapter_for(ApiProtocol::Responses).stream_decoder();
+    assert!(
+        terminal_only
+            .decode(&terminal("resp-terminal-only"))
+            .expect("terminal-only streams stay compatible")
+            .is_empty()
+    );
+    assert!(matches!(
+        terminal_only.finish().expect("terminal-only EOF is valid").as_slice(),
+        [StreamPart::ResponseCompleted { id, .. }] if id == "resp-terminal-only"
+    ));
 }
 
 #[test]
@@ -4052,7 +4129,12 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
         })
         .to_string(),
     };
-    let parts = decoder.decode(&event).unwrap();
+    let mut parts = decoder.decode(&event).unwrap();
+    assert!(
+        parts.is_empty(),
+        "success terminal is buffered for EOF validation"
+    );
+    parts.extend(decoder.finish().unwrap());
     match parts.first() {
         Some(StreamPart::ResponseCompleted {
             id, status, usage, ..

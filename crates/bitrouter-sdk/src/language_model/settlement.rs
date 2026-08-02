@@ -8,6 +8,7 @@
 //! blockchain anchoring, …) is deployment-specific and lives outside the SDK.
 
 use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
 
 use crate::caller::CallerContext;
 use crate::error::BitrouterError;
@@ -47,6 +48,78 @@ pub struct RequiredFinalizationContext {
     pub credential_authority: Option<ContinuationAuthority>,
 }
 
+/// The synchronous delivery rendezvous handed to a required finalizer after
+/// its provisional work has completed. A finalizer may make state active and
+/// then hold its own identity lock while awaiting [`Self::wait_for_delivery`].
+#[derive(Clone)]
+pub struct RequiredDeliveryHandshake {
+    inner: Arc<RequiredDeliveryHandshakeInner>,
+}
+
+struct RequiredDeliveryHandshakeInner {
+    ready: Mutex<Option<tokio::sync::oneshot::Sender<Result<()>>>>,
+    acknowledged:
+        tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>>>,
+}
+
+/// Downstream's proof that an activated payload was delivered or replaced by
+/// a concrete server-side failure. Channel closure alone means disconnect.
+#[derive(Debug)]
+pub enum DeliveryAcknowledgement {
+    /// The successful payload is being returned in the same poll.
+    Delivered,
+    /// Rendering or wire encoding failed before the successful payload could
+    /// be returned.
+    Failed(BitrouterError),
+}
+
+impl RequiredDeliveryHandshake {
+    /// Construct the two ends of a required-delivery rendezvous.
+    pub fn new(
+        ready: tokio::sync::oneshot::Sender<Result<()>>,
+        acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RequiredDeliveryHandshakeInner {
+                ready: Mutex::new(Some(ready)),
+                acknowledged: tokio::sync::Mutex::new(Some(acknowledged)),
+            }),
+        }
+    }
+
+    /// Advertise that activation is complete, then wait for the caller's
+    /// synchronous acknowledgment from the same poll that returns the payload.
+    pub async fn wait_for_delivery(&self) -> Result<bool> {
+        let ready = match self.inner.ready.lock() {
+            Ok(mut ready) => ready.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if ready.is_none_or(|ready| ready.send(Ok(())).is_err()) {
+            return Ok(false);
+        }
+        let acknowledged = self.inner.acknowledged.lock().await.take();
+        match acknowledged {
+            Some(acknowledged) => match acknowledged.await {
+                Ok(DeliveryAcknowledgement::Delivered) => Ok(true),
+                Ok(DeliveryAcknowledgement::Failed(error)) => Err(error),
+                Err(_) => Ok(false),
+            },
+            None => Ok(false),
+        }
+    }
+
+    /// Reject activation before a payload can be acknowledged.
+    pub fn reject(&self, error: BitrouterError) {
+        let ready = match self.inner.ready.lock() {
+            Ok(mut ready) => ready.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(ready) = ready {
+            let _ = ready.send(Err(error));
+        }
+    }
+}
+
 /// A success-critical finalizer. Unlike ordinary settlement recorders, an
 /// error is propagated before the caller can receive a successful terminal.
 #[async_trait]
@@ -60,9 +133,16 @@ pub trait RequiredFinalizer: Send + Sync {
         Ok(())
     }
 
-    /// Synchronously authorize provisional state after every finalizer has
-    /// returned and immediately before the terminal is yielded.
-    fn commit(&self, _ctx: &RequiredFinalizationContext) {}
+    /// Activate provisional state and wait for the actual downstream delivery
+    /// acknowledgment. Returning `false` means the receiver disappeared and
+    /// the caller will invoke [`Self::rollback`].
+    async fn commit(
+        &self,
+        _ctx: &RequiredFinalizationContext,
+        delivery: &RequiredDeliveryHandshake,
+    ) -> Result<bool> {
+        delivery.wait_for_delivery().await
+    }
 }
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries
@@ -127,9 +207,6 @@ pub struct SettlementContext {
     pub first_token_kind: Option<FirstTokenKind>,
     /// Canonical reason a successful generation ended.
     pub finish_reason: Option<FinishReason>,
-    /// Provider response id observed during this request. This is request-local
-    /// settlement input; recorders must not persist or emit the raw value.
-    pub response_id: Option<String>,
     /// The error, if the request failed (Settlement still runs).
     pub error: Option<BitrouterError>,
     /// Events carried over from the request lifecycle (so recorders can
@@ -213,7 +290,6 @@ mod tests {
             generation_duration_ms: None,
             first_token_kind: None,
             finish_reason: None,
-            response_id: None,
             error: None,
             events: EventBus::default(),
         }

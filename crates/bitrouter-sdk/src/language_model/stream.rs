@@ -378,6 +378,7 @@ impl StreamProcessor {
 
         // Fan out to observers (read-only, errors swallowed).
         for p in &current {
+            self.ctx.observe_downstream_part(p);
             for obs in &self.observe {
                 if obs.stream_interest().matches(p) {
                     obs.on_stream_part(&self.ctx, p).await;

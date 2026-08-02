@@ -303,7 +303,6 @@ mod tests {
             generation_duration_ms: Some(90),
             first_token_kind: None,
             finish_reason: None,
-            response_id: None,
             error: None,
             events: EventBus::default(),
         }

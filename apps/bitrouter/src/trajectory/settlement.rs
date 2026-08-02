@@ -1293,7 +1293,6 @@ mod tests {
             generation_duration_ms: None,
             first_token_kind: None,
             finish_reason: None,
-            response_id: None,
             error: None,
             events: EventBus::default(),
         }

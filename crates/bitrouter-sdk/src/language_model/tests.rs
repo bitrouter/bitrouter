@@ -681,6 +681,24 @@ async fn full_pipeline_runs_all_four_stages() {
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
 }
 
+#[test]
+fn builder_rejects_multiple_required_finalizers_without_atomic_composition() {
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(routing_table(&["openai"]))
+        .executor(Arc::new(MockExecutor::always_text("hello")))
+        .required_finalizer(CountingRequiredFinalizer(Arc::new(AtomicUsize::new(0))))
+        .required_finalizer(CountingRequiredFinalizer(Arc::new(AtomicUsize::new(0))));
+
+    match builder.build() {
+        Ok(_) => panic!("multiple sequential required finalizers can partially publish"),
+        Err(error) => assert!(
+            error.to_string().contains("at most one required finalizer"),
+            "unexpected builder error: {error}"
+        ),
+    }
+}
+
 #[tokio::test]
 async fn nonstream_required_finalizer_failure_replaces_success() {
     let finalized = Arc::new(AtomicUsize::new(0));
