@@ -467,6 +467,7 @@ impl PipelineContext {
             first_semantic_at: None,
             generation_duration_ms: None,
             finish_reason: None,
+            response_id: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
@@ -483,6 +484,9 @@ impl PipelineContext {
                 exec.result.usage = Some(usage);
             }
             exec.result.finish_reason = stream.finish_reason.clone();
+            if stream.response_id.is_some() {
+                exec.result.response_id = stream.response_id.clone();
+            }
         }
         self.first_token_timing = stream.first_token_timing;
         self.generation_duration_ms = stream.generation_duration_ms;
@@ -548,6 +552,7 @@ impl PipelineContext {
             generation_duration_ms: self.generation_duration_ms,
             first_token_kind: self.first_token_timing.map(|timing| timing.kind),
             finish_reason: exec.and_then(|e| e.result.finish_reason.clone()),
+            response_id: exec.and_then(|e| e.result.response_id.clone()),
             error: None,
             events: std::mem::take(&mut self.events),
         }
@@ -619,6 +624,10 @@ pub struct StreamContext {
     first_semantic_at: Option<Instant>,
     generation_duration_ms: Option<u64>,
     finish_reason: Option<FinishReason>,
+    /// Native Responses continuation id observed on `response.created`.
+    /// Request-local only: settlement may derive an opaque owner-bound alias,
+    /// but the raw value must never enter durable events or storage.
+    response_id: Option<String>,
     events: EventBus,
     metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
@@ -627,6 +636,12 @@ pub struct StreamContext {
 impl StreamContext {
     pub(crate) fn observe_upstream_part(&mut self, part: &StreamPart) {
         match part {
+            StreamPart::ResponseStarted {
+                id,
+                source_protocol: ApiProtocol::Responses,
+            } if !id.is_empty() => {
+                self.response_id = Some(id.clone());
+            }
             StreamPart::Finish { reason } => {
                 self.finish_reason = Some(reason.clone());
             }
@@ -1072,6 +1087,51 @@ mod tests {
             crate::language_model::types::UsageOrigin::ProviderReported
         );
         assert_eq!(settlement.raw_usage.as_ref(), Some(&raw));
+    }
+
+    #[test]
+    fn native_responses_id_reaches_settlement_but_cross_protocol_id_does_not() {
+        fn streaming_context() -> PipelineContext {
+            let mut ctx = ctx_from_prompt(prompt_with_text(None, "hello"));
+            ctx.execution_result = Some(ExecutionResult {
+                provider_id: "provider".into(),
+                model_id: "model".into(),
+                account_label: None,
+                result: crate::language_model::types::GenerateResult {
+                    content: Vec::new(),
+                    usage: None,
+                    finish_reason: None,
+                    response_id: None,
+                    stop_details: None,
+                    provider_metadata: Default::default(),
+                },
+                request_duration_ms: 0,
+                upstream_duration_ms: None,
+                server_tool_calls: Vec::new(),
+            });
+            ctx
+        }
+
+        let mut native = streaming_context();
+        let mut stream = native.stream_context();
+        stream.observe_upstream_part(&StreamPart::ResponseStarted {
+            id: "resp-native".into(),
+            source_protocol: ApiProtocol::Responses,
+        });
+        native.absorb_stream(stream);
+        assert_eq!(
+            native.settlement_context().response_id.as_deref(),
+            Some("resp-native")
+        );
+
+        let mut cross_protocol = streaming_context();
+        let mut stream = cross_protocol.stream_context();
+        stream.observe_upstream_part(&StreamPart::ResponseStarted {
+            id: "chatcmpl-upstream".into(),
+            source_protocol: ApiProtocol::ChatCompletions,
+        });
+        cross_protocol.absorb_stream(stream);
+        assert_eq!(cross_protocol.settlement_context().response_id, None);
     }
 
     #[tokio::test]

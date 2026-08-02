@@ -700,6 +700,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_alias_resolves_only_for_its_owner_and_key_epoch() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let runtime_a = runtime_with_key(&db, CorrelationKey::from_bytes([21; 32])?);
+        let runtime_b = runtime_with_key(&db, CorrelationKey::from_bytes([22; 32])?);
+        let provider_response_id = "provider-response-private-1";
+
+        let root = runtime_a
+            .begin_request(
+                "owner-a",
+                "request-root",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let alias = runtime_a.request_identity("owner-a", provider_response_id)?;
+        runtime_a
+            .store()
+            .bind_response_alias("owner-a", &root.request_id, &alias)
+            .await?;
+
+        let child = runtime_a
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![Message::text(Role::User, "continue")],
+                    provider_response_id,
+                ),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        assert_eq!(child.source, CorrelationSource::NativeParentId);
+        assert_eq!(child.episode_id, root.episode_id);
+        assert_eq!(child.completeness, HistoryCompleteness::Complete);
+        assert_eq!(
+            runtime_a
+                .store()
+                .request("owner-a", &child.request_id)
+                .await?
+                .and_then(|request| request.native_parent_id),
+            Some(root.request_id.clone())
+        );
+
+        let foreign = runtime_a
+            .begin_request(
+                "owner-b",
+                "request-foreign",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![Message::text(Role::User, "foreign")],
+                    provider_response_id,
+                ),
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+        assert_eq!(foreign.source, CorrelationSource::Unresolved);
+        assert_eq!(foreign.completeness, HistoryCompleteness::Incomplete);
+        assert_ne!(foreign.episode_id, root.episode_id);
+
+        let rotated = runtime_b
+            .begin_request(
+                "owner-a",
+                "request-rotated",
+                ApiProtocol::Responses,
+                &responses_prompt(
+                    vec![Message::text(Role::User, "rotated")],
+                    provider_response_id,
+                ),
+                "2026-08-01T00:00:03Z",
+            )
+            .await?;
+        assert_eq!(rotated.source, CorrelationSource::Unresolved);
+        assert_eq!(rotated.completeness, HistoryCompleteness::Incomplete);
+        assert_ne!(rotated.episode_id, root.episode_id);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn unresolved_native_parent_retry_does_not_re_resolve_mutable_state() -> anyhow::Result<()>
     {
         let (runtime, _) = runtime().await?;

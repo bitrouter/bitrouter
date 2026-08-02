@@ -985,6 +985,7 @@ impl InboundAdapter for ResponsesAdapter {
     fn stream_encoder(&self, request_id: &str, model: &str) -> Box<dyn StreamEncoder> {
         Box::new(ResponsesStreamEncoder {
             request_id: request_id.to_string(),
+            response_id: None,
             model: model.to_string(),
             seq: 0,
             created: false,
@@ -2172,8 +2173,19 @@ impl StreamDecoder for ResponsesStreamDecoder {
 
         let mut parts = Vec::new();
         match event_type {
-            "response.created"
-            | "response.in_progress"
+            "response.created" => {
+                if let Some(id) = json
+                    .get("response")
+                    .and_then(|response| response.get("id"))
+                    .and_then(|id| id.as_str())
+                {
+                    parts.push(StreamPart::ResponseStarted {
+                        id: id.to_owned(),
+                        source_protocol: ApiProtocol::Responses,
+                    });
+                }
+            }
+            "response.in_progress"
             | "response.content_part.added"
             | "response.content_part.done"
             | "response.output_text.done"
@@ -2345,6 +2357,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 };
                 parts.push(StreamPart::ResponseCompleted {
                     id,
+                    source_protocol: ApiProtocol::Responses,
                     status: status.to_string(),
                     usage,
                 });
@@ -2411,6 +2424,10 @@ impl StreamDecoder for ResponsesStreamDecoder {
 /// Never emits `[DONE]` (#454-2).
 struct ResponsesStreamEncoder {
     request_id: String,
+    /// Native Responses continuation identity, selected only from the opening
+    /// `response.created` metadata. When absent, the gateway request id is the
+    /// stable fallback for the entire client-facing lifecycle.
+    response_id: Option<String>,
     model: String,
     seq: u64,
     created: bool,
@@ -2519,8 +2536,12 @@ impl ResponsesStreamEncoder {
     fn ensure_created(&mut self, frames: &mut Vec<SseFrame>) {
         if !self.created {
             self.created = true;
+            let response_id = self
+                .response_id
+                .clone()
+                .unwrap_or_else(|| self.request_id.clone());
             let response = serde_json::json!({
-                "id": self.request_id,
+                "id": response_id,
                 "object": "response",
                 "model": self.model,
                 "status": "in_progress",
@@ -2848,6 +2869,15 @@ impl ResponsesStreamEncoder {
 impl StreamEncoder for ResponsesStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
         let mut frames = Vec::new();
+        if let StreamPart::ResponseStarted {
+            id,
+            source_protocol: ApiProtocol::Responses,
+        } = part
+            && !self.created
+            && !id.is_empty()
+        {
+            self.response_id = Some(id.clone());
+        }
         self.ensure_created(&mut frames);
         match part {
             StreamPart::File { .. } => {
@@ -3034,9 +3064,9 @@ impl StreamEncoder for ResponsesStreamEncoder {
             }
             StreamPart::Usage { .. } => {}
             StreamPart::ResponseStarted { .. } => {
-                // Observability-only metadata (upstream response id); the
-                // Responses-protocol client gets its id from the
-                // `response.created` event `ensure_created` emits.
+                // A native Responses start selected the client continuation id
+                // before `ensure_created`. Other protocols are metadata-only and
+                // retain the gateway fallback.
             }
             StreamPart::Finish { reason } => {
                 // A bare `Finish` (e.g. inbound was Chat Completions / Messages /
@@ -3046,13 +3076,20 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     FinishReason::Error(_) => "failed",
                     _ => "completed",
                 };
-                self.emit_terminal(&mut frames, status, &self.request_id.clone(), None);
+                let response_id = self
+                    .response_id
+                    .clone()
+                    .unwrap_or_else(|| self.request_id.clone());
+                self.emit_terminal(&mut frames, status, &response_id, None);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
-                // The carried id identifies the upstream provider response. The
-                // client continuation identity is the gateway request id used by
-                // non-streaming Responses and trajectory correlation.
-                self.emit_terminal(&mut frames, status, &self.request_id.clone(), usage.clone());
+                // Identity is fixed by the opening native `ResponseStarted` (or
+                // the gateway fallback). A terminal id never changes it.
+                let response_id = self
+                    .response_id
+                    .clone()
+                    .unwrap_or_else(|| self.request_id.clone());
+                self.emit_terminal(&mut frames, status, &response_id, usage.clone());
             }
         }
         Ok(frames)
@@ -3061,8 +3098,12 @@ impl StreamEncoder for ResponsesStreamEncoder {
     fn encode_error(&mut self, message: &str) -> Vec<SseFrame> {
         // Responses surfaces a mid-stream error as a `response.failed` event,
         // carrying the full response object with an `error` (#454-2 envelope).
+        let response_id = self
+            .response_id
+            .clone()
+            .unwrap_or_else(|| self.request_id.clone());
         let response = serde_json::json!({
-            "id": self.request_id,
+            "id": response_id,
             "object": "response",
             "model": self.model,
             "status": "failed",
@@ -3075,8 +3116,12 @@ impl StreamEncoder for ResponsesStreamEncoder {
     }
 
     fn encode_bitrouter_error(&mut self, error: &BitrouterError) -> Vec<SseFrame> {
+        let response_id = self
+            .response_id
+            .clone()
+            .unwrap_or_else(|| self.request_id.clone());
         let response = serde_json::json!({
-            "id": self.request_id,
+            "id": response_id,
             "object": "response",
             "model": self.model,
             "status": "failed",

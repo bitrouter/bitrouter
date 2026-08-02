@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use axum_test::TestServer;
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
@@ -72,6 +72,7 @@ struct HttpHarness {
     config: config::Config,
     strong: MockServer,
     economy: MockServer,
+    responses_state: Option<Arc<Mutex<NativeResponsesState>>>,
 }
 
 impl HttpHarness {
@@ -123,8 +124,12 @@ impl HttpHarness {
         upstream_protocol: InboundProtocol,
     ) -> anyhow::Result<Self> {
         let home = tempfile::tempdir()?;
-        let strong = mock_upstream("strong-model", upstream_protocol).await;
-        let economy = mock_upstream("economy-model", upstream_protocol).await;
+        let responses_state = (upstream_protocol == InboundProtocol::Responses)
+            .then(|| Arc::new(Mutex::new(NativeResponsesState::default())));
+        let strong =
+            mock_upstream("strong-model", upstream_protocol, responses_state.clone()).await;
+        let economy =
+            mock_upstream("economy-model", upstream_protocol, responses_state.clone()).await;
         let database_url = format!(
             "sqlite://{}?mode=rwc",
             home.path().join("trajectory.db").display()
@@ -185,6 +190,7 @@ presets:
             _home: home,
             strong,
             economy,
+            responses_state,
         })
     }
 
@@ -219,7 +225,11 @@ presets:
     }
 }
 
-async fn mock_upstream(model: &str, protocol: InboundProtocol) -> MockServer {
+async fn mock_upstream(
+    model: &str,
+    protocol: InboundProtocol,
+    responses_state: Option<Arc<Mutex<NativeResponsesState>>>,
+) -> MockServer {
     let server = MockServer::start().await;
     match protocol {
         InboundProtocol::Responses => {
@@ -227,7 +237,7 @@ async fn mock_upstream(model: &str, protocol: InboundProtocol) -> MockServer {
                 .and(path("/responses"))
                 .respond_with(NativeResponsesStream {
                     model: model.to_owned(),
-                    next_id: AtomicUsize::new(0),
+                    state: responses_state.expect("Responses mock requires shared state"),
                 })
                 .mount(&server)
                 .await;
@@ -272,16 +282,46 @@ impl Respond for NativeIdResponse {
 
 struct NativeResponsesStream {
     model: String,
-    next_id: AtomicUsize,
+    state: Arc<Mutex<NativeResponsesState>>,
+}
+
+#[derive(Default)]
+struct NativeResponsesState {
+    next_id: usize,
+    issued: BTreeSet<String>,
+    forwarded_parents: Vec<Option<String>>,
 }
 
 impl Respond for NativeResponsesStream {
-    fn respond(&self, _request: &Request) -> ResponseTemplate {
-        let upstream_id = format!(
-            "provider-only-response-{}-{}",
-            self.model,
-            self.next_id.fetch_add(1, Ordering::SeqCst)
-        );
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body = match serde_json::from_slice::<Value>(&request.body) {
+            Ok(body) => body,
+            Err(error) => {
+                return ResponseTemplate::new(400)
+                    .set_body_string(format!("invalid Responses request: {error}"));
+            }
+        };
+        let previous_response_id = body
+            .get("previous_response_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let mut state = self.state.lock().expect("Responses mock state poisoned");
+        state.forwarded_parents.push(previous_response_id.clone());
+        if previous_response_id
+            .as_ref()
+            .is_some_and(|parent| !state.issued.contains(parent))
+        {
+            return ResponseTemplate::new(409).set_body_json(json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "previous_response_id was not issued by this provider"
+                }
+            }));
+        }
+        let upstream_id = format!("provider-only-response-{}", state.next_id);
+        state.next_id += 1;
+        state.issued.insert(upstream_id.clone());
+        drop(state);
         let item = json!({
             "id": format!("provider-item-{upstream_id}"),
             "type": "message",
@@ -528,10 +568,12 @@ async fn trajectory_durable_surfaces(
              UNION ALL SELECT payload_json AS value FROM trajectory_outbox WHERE owner_user_id = ? \
              UNION ALL SELECT request_id AS value FROM trajectory_requests WHERE owner_user_id = ? \
              UNION ALL SELECT COALESCE(native_parent_id, '') AS value FROM trajectory_requests WHERE owner_user_id = ? \
+             UNION ALL SELECT COALESCE(response_alias_id, '') AS value FROM trajectory_requests WHERE owner_user_id = ? \
              UNION ALL SELECT COALESCE(latest_request_id, '') AS value FROM trajectory_episodes WHERE owner_user_id = ? \
              UNION ALL SELECT subject_json AS value FROM eval_subjects WHERE owner_user_id = ? \
              UNION ALL SELECT result_json AS value FROM eval_results WHERE owner_user_id = ?",
             [
+                owner.into(),
                 owner.into(),
                 owner.into(),
                 owner.into(),
@@ -1128,6 +1170,7 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
 
     let first_id =
         post_streaming_responses(&first_server, &bearer, "inspect the repository", None).await?;
+    assert!(first_id.starts_with("provider-only-response-"));
     let second_id = post_streaming_responses(
         &first_server,
         &bearer,
@@ -1189,6 +1232,19 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     )
     .await?;
     assert_ne!(second_id, third_id);
+    let forwarded_parents = harness
+        .responses_state
+        .as_ref()
+        .expect("streaming harness has Responses oracle")
+        .lock()
+        .expect("Responses mock state poisoned")
+        .forwarded_parents
+        .clone();
+    assert_eq!(
+        forwarded_parents,
+        [None, Some(first_id.clone()), Some(second_id.clone())],
+        "the assembled app must forward exactly the provider-issued continuation chain"
+    );
     assert_eq!(
         owner_episode_ids(&restarted_app.db, owner).await?,
         episode_ids

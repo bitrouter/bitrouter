@@ -2205,7 +2205,10 @@ impl StreamDecoder for MessagesStreamDecoder {
                     .and_then(|i| i.as_str())
                     .filter(|s| !s.is_empty())
                 {
-                    parts.push(StreamPart::ResponseStarted { id: id.to_string() });
+                    parts.push(StreamPart::ResponseStarted {
+                        id: id.to_string(),
+                        source_protocol: ApiProtocol::Messages,
+                    });
                 }
                 // Messages emits the prompt-cache stats on the start frame,
                 // so capture them now and propagate via the terminal Usage

@@ -267,7 +267,7 @@ mod tests {
     use crate::language_model::server_tools::approval::AllowAll;
     use crate::language_model::server_tools::config::ServerToolLoopConfig;
     use crate::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
-    use crate::language_model::types::{Tool, ToolResultOutput};
+    use crate::language_model::types::{ApiProtocol, Tool, ToolResultOutput};
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -559,6 +559,7 @@ mod tests {
             StreamPart::TextDelta { text: "hi".into() },
             StreamPart::ResponseCompleted {
                 id: "r1".into(),
+                source_protocol: ApiProtocol::Responses,
                 status: "completed".into(),
                 usage: Some(Usage {
                     prompt_tokens: 7,

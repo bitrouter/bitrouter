@@ -1929,18 +1929,20 @@ pub enum StreamPart {
     },
     /// The provider-assigned response id, surfaced once near the start of
     /// the stream — Chat Completions' top-level `id`, Anthropic's
-    /// `message_start.message.id`, Generate Content's `responseId`. (Responses
-    /// carries its id on the terminal [`Self::ResponseCompleted`] instead.)
+    /// `message_start.message.id`, Generate Content's `responseId`, or
+    /// Responses' `response.created.response.id`.
     ///
-    /// Not client-facing: outbound encoders drop it (the client gets an id
-    /// the inbound encoder generates). Observability uses it to stamp the
-    /// GenAI semconv `gen_ai.response.id` attribute on the trace so the
-    /// streaming path matches the non-streaming one.
+    /// `source_protocol` is explicit because the canonical IR may be
+    /// re-encoded onto a different client wire. In particular, a Responses
+    /// client may preserve a native Responses continuation id, but must not
+    /// mistake a Chat / Messages / Generate Content id for one.
     ///
     /// Spec: <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>
     ResponseStarted {
         /// The provider's response id.
         id: String,
+        /// Protocol that assigned `id`.
+        source_protocol: ApiProtocol,
     },
     /// The terminal part: generation finished.
     Finish {
@@ -1954,6 +1956,8 @@ pub enum StreamPart {
     ResponseCompleted {
         /// The provider's response id.
         id: String,
+        /// Protocol that assigned `id`.
+        source_protocol: ApiProtocol,
         /// The terminal status (`completed` / `incomplete` / `failed`).
         status: String,
         /// Final usage, if the provider reported it.

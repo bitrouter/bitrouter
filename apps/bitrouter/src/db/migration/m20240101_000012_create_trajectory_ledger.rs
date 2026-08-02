@@ -169,6 +169,7 @@ impl MigrationTrait for Migration {
                             .not_null(),
                     )
                     .col(ColumnDef::new(TrajectoryRequests::NativeParentId).string())
+                    .col(ColumnDef::new(TrajectoryRequests::ResponseAliasId).string())
                     .col(
                         ColumnDef::new(TrajectoryRequests::Protocol)
                             .string()
@@ -190,6 +191,18 @@ impl MigrationTrait for Migration {
                     .table(TrajectoryRequests::Table)
                     .col(TrajectoryRequests::OwnerUserId)
                     .col(TrajectoryRequests::EpisodeId)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_trajectory_requests_owner_response_alias")
+                    .table(TrajectoryRequests::Table)
+                    .col(TrajectoryRequests::OwnerUserId)
+                    .col(TrajectoryRequests::ResponseAliasId)
+                    .unique()
                     .to_owned(),
             )
             .await?;
@@ -329,6 +342,7 @@ enum TrajectoryRequests {
     SettlementOutboxId,
     FullInputDigest,
     NativeParentId,
+    ResponseAliasId,
     Protocol,
     Status,
 }

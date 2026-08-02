@@ -78,6 +78,9 @@ pub struct SettlementContext {
     pub first_token_kind: Option<FirstTokenKind>,
     /// Canonical reason a successful generation ended.
     pub finish_reason: Option<FinishReason>,
+    /// Provider response id observed during this request. This is request-local
+    /// settlement input; recorders must not persist or emit the raw value.
+    pub response_id: Option<String>,
     /// The error, if the request failed (Settlement still runs).
     pub error: Option<BitrouterError>,
     /// Events carried over from the request lifecycle (so recorders can
@@ -161,6 +164,7 @@ mod tests {
             generation_duration_ms: None,
             first_token_kind: None,
             finish_reason: None,
+            response_id: None,
             error: None,
             events: EventBus::default(),
         }

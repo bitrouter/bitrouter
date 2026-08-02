@@ -491,7 +491,9 @@ mod tests {
     use crate::language_model::context::PipelineContext;
     use crate::language_model::timing::FirstTokenKind;
     use crate::language_model::types::FinishReason;
-    use crate::language_model::types::{GenerationParams, Message, PipelineRequest, Prompt, Role};
+    use crate::language_model::types::{
+        ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
+    };
     use futures::StreamExt;
 
     fn timed_stream_context() -> StreamContext {
@@ -520,7 +522,10 @@ mod tests {
         let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
 
         processor
-            .process_part(StreamPart::ResponseStarted { id: "r".into() })
+            .process_part(StreamPart::ResponseStarted {
+                id: "r".into(),
+                source_protocol: ApiProtocol::Responses,
+            })
             .await
             .unwrap();
         processor
@@ -563,7 +568,10 @@ mod tests {
         let mut processor = StreamProcessor::new(Vec::new(), Vec::new(), timed_stream_context());
 
         for part in [
-            StreamPart::ResponseStarted { id: "r".into() },
+            StreamPart::ResponseStarted {
+                id: "r".into(),
+                source_protocol: ApiProtocol::Responses,
+            },
             StreamPart::Usage {
                 usage: Usage::default(),
             },
@@ -590,6 +598,7 @@ mod tests {
             processor
                 .process_part(StreamPart::ResponseCompleted {
                     id: "r".into(),
+                    source_protocol: ApiProtocol::Responses,
                     status: status.into(),
                     usage: None,
                 })

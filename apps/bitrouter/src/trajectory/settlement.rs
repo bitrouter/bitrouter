@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::language_model::SettlementContext;
+use bitrouter_sdk::language_model::{ApiProtocol, SettlementContext};
 use chrono::{DateTime, SecondsFormat, TimeDelta};
 
 use crate::metering::MeteringSettlementEvent;
@@ -50,6 +50,20 @@ impl TrajectorySettlementRecorder {
         let Some(request) = self.store.request(owner_user_id, &request_id).await? else {
             return Ok(false);
         };
+        if context.streamed
+            && context
+                .target
+                .as_ref()
+                .is_some_and(|target| target.api_protocol == ApiProtocol::Responses)
+            && let Some(response_id) = context.response_id.as_deref()
+        {
+            let response_alias_id = self
+                .identity_key
+                .request_identity(owner_user_id, response_id)?;
+            self.store
+                .bind_response_alias(owner_user_id, &request_id, &response_alias_id)
+                .await?;
+        }
         if request.status != RequestStatus::Started {
             self.store
                 .validate_reusable_terminal_settlement(owner_user_id, &request_id)
@@ -1293,6 +1307,7 @@ mod tests {
             generation_duration_ms: None,
             first_token_kind: None,
             finish_reason: None,
+            response_id: None,
             error: None,
             events: EventBus::default(),
         }
