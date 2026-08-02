@@ -5111,6 +5111,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn required_shutdown_drain_retries_active_unknown_after_database_recovery()
+    -> anyhow::Result<()> {
+        let (_directory, owner_registry, restarted_registry) =
+            independent_file_registries(83).await?;
+        let runtime = ContinuationRuntime::new(owner_registry.clone());
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(MockExecutor::always_text("unused")))
+            .required_finalizer(runtime.clone());
+        let pipeline = Arc::new(builder.build()?);
+        let attempt = finalization_context(
+            "required-drain-active-unknown",
+            706,
+            "provider-required-drain-active-unknown",
+        );
+        runtime.finalize(&attempt).await?;
+        suspend_reconciler_for_test(&owner_registry).await;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        activation_rx.await??;
+        let active = owner_registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT publication_state FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("active continuation row missing"))?;
+        assert_eq!(active.try_get::<String>("", "publication_state")?, "active");
+
+        restarted_registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations RENAME TO provider_continuations_hidden"
+                    .to_owned(),
+            ))
+            .await?;
+        drop(terminal_tx);
+        assert!(commit.await?.is_err());
+        suspend_reconciler_for_test(&owner_registry).await;
+
+        assert!(
+            pipeline.drain_required_pending_settlements().await.is_err(),
+            "required shutdown drain must propagate unresolved owner reconciliation"
+        );
+        assert_eq!(pending_publication_count(&owner_registry), 1);
+
+        restarted_registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations_hidden RENAME TO provider_continuations"
+                    .to_owned(),
+            ))
+            .await?;
+        assert_eq!(
+            pipeline.drain_required_pending_settlements().await?,
+            0,
+            "the retry should not invent detached pipeline work"
+        );
+        assert_eq!(pending_publication_count(&owner_registry), 0);
+        let rows = restarted_registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(rows.try_get::<i64>("", "count")?, 0);
+
+        let public_id = encode_gateway_continuation_id("required-drain-active-unknown")?;
+        drop(pipeline);
+        drop(runtime);
+        drop(owner_registry);
+        assert_eq!(
+            restarted_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn worker_drops_lost_evidence_without_touching_foreign_generation() -> anyhow::Result<()>
     {
         let (_directory, owner_registry, contender_registry) =

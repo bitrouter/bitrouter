@@ -192,6 +192,8 @@ struct FailingRequiredFinalizer(Arc<AtomicUsize>);
 
 struct CountingRequiredFinalizer(Arc<AtomicUsize>);
 
+struct DrainFailingRequiredFinalizer(Arc<AtomicUsize>);
+
 #[async_trait]
 impl settlement::RequiredFinalizer for FailingRequiredFinalizer {
     async fn finalize(&self, ctx: &settlement::RequiredFinalizationContext) -> Result<()> {
@@ -206,6 +208,18 @@ impl settlement::RequiredFinalizer for CountingRequiredFinalizer {
     async fn finalize(&self, _ctx: &settlement::RequiredFinalizationContext) -> Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl settlement::RequiredFinalizer for DrainFailingRequiredFinalizer {
+    async fn finalize(&self, _ctx: &settlement::RequiredFinalizationContext) -> Result<()> {
+        Ok(())
+    }
+
+    async fn drain_pending_work(&self) -> Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(BitrouterError::internal("private required drain failure"))
     }
 }
 
@@ -727,6 +741,24 @@ async fn nonstream_required_finalizer_failure_replaces_success() {
             has_error: true,
         }]
     );
+}
+
+#[tokio::test]
+async fn required_drain_propagates_while_legacy_drain_remains_best_effort() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::always_text("unused")),
+        |builder| {
+            builder.required_finalizer(DrainFailingRequiredFinalizer(attempts.clone()));
+        },
+    );
+
+    let legacy_count: usize = pipeline.drain_pending_settlements().await;
+    assert_eq!(legacy_count, 0);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(pipeline.drain_required_pending_settlements().await.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

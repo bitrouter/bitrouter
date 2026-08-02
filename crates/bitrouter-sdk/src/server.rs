@@ -12,7 +12,9 @@
 //! the outbound (provider) protocol is chosen per routing target.
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -35,6 +37,7 @@ use crate::mcp;
 use crate::metrics::MetricsRenderer;
 
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
+const REQUIRED_SHUTDOWN_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 /// Shared axum state.
 #[derive(Clone)]
@@ -58,7 +61,7 @@ pub struct AppState {
 impl App {
     /// Serve this app's HTTP API on `listen` (e.g. `"0.0.0.0:4356"`).
     pub async fn serve(&self, listen: &str) -> Result<()> {
-        self.serve_inner(listen, None).await
+        self.serve_inner(listen, None, shutdown_signal()).await
     }
 
     /// Like [`App::serve`], but with a host-supplied router wrapper applied
@@ -68,10 +71,45 @@ impl App {
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,
     {
-        self.serve_inner(listen, Some(Arc::new(wrapper))).await
+        self.serve_inner(listen, Some(Arc::new(wrapper)), shutdown_signal())
+            .await
     }
 
-    async fn serve_inner(&self, listen: &str, wrapper: Option<RouterWrapper>) -> Result<()> {
+    /// Serve until a host-owned shutdown future resolves.
+    ///
+    /// This additive entry point lets an embedding process coordinate other
+    /// listeners without racing or dropping the HTTP server's graceful drain.
+    pub async fn serve_with_shutdown<S>(&self, listen: &str, shutdown: S) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_inner(listen, None, shutdown).await
+    }
+
+    /// Like [`Self::serve_with_shutdown`], with a host router wrapper.
+    pub async fn serve_with_router_wrapper_and_shutdown<F, S>(
+        &self,
+        listen: &str,
+        wrapper: F,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        F: Fn(Router) -> Router + Send + Sync + 'static,
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_inner(listen, Some(Arc::new(wrapper)), shutdown)
+            .await
+    }
+
+    async fn serve_inner<S>(
+        &self,
+        listen: &str,
+        wrapper: Option<RouterWrapper>,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
         let pipeline = self
             .language_model()
             .ok_or_else(|| {
@@ -98,20 +136,54 @@ impl App {
         // Graceful shutdown: on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.
         let drain_pipeline = pipeline.clone();
-        serve(listener, router)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|e| BitrouterError::internal(format!("serve: {e}")))?;
-        // After the HTTP server drains, also wait for every detached client-
-        // disconnect settlement task (StreamSettlementGuard::drop) and every
-        // detached non-streaming execution (Pipeline::execute_detached).
-        // Without this, SIGTERM during heavy traffic could drop those tasks
-        // mid-await and lose receipts.
-        let drained = drain_pipeline.drain_pending_settlements().await;
+        let server = async move {
+            serve(listener, router)
+                .with_graceful_shutdown(shutdown)
+                .await
+                .map_err(|error| BitrouterError::internal(format!("serve: {error}")))
+        };
+        // Only after axum stops accepting connections and drains every handler
+        // do we close detached execution and require success-critical
+        // reconciliation. A failed attempt retains its evidence and is retried
+        // serially; an external hard kill remains the only way to interrupt it.
+        let drained = complete_graceful_shutdown(
+            server,
+            move || {
+                let pipeline = drain_pipeline.clone();
+                async move { pipeline.drain_required_pending_settlements().await }
+            },
+            REQUIRED_SHUTDOWN_RETRY_DELAY,
+        )
+        .await?;
         if drained > 0 {
             tracing::info!(drained, "drained pending settlements on shutdown");
         }
         Ok(())
+    }
+}
+
+async fn complete_graceful_shutdown<S, D, DrainFuture>(
+    server: S,
+    mut drain: D,
+    retry_delay: Duration,
+) -> Result<usize>
+where
+    S: Future<Output = Result<()>>,
+    D: FnMut() -> DrainFuture,
+    DrainFuture: Future<Output = Result<usize>>,
+{
+    server.await?;
+    loop {
+        match drain().await {
+            Ok(drained) => return Ok(drained),
+            Err(_) => {
+                tracing::warn!(
+                    reason = "required_shutdown_drain_failed",
+                    "required shutdown drain failed; retrying"
+                );
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
     }
 }
 
@@ -1053,6 +1125,7 @@ mod tests {
     use super::*;
     use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
+    use crate::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
     use crate::language_model::types::{
         ApiProtocol, AuthScheme, ExecutionResult, Prompt, RoutingTarget,
     };
@@ -1060,12 +1133,35 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tower::ServiceExt;
 
     struct CountingExecutor {
         calls: Arc<AtomicUsize>,
         inner: MockExecutor,
+    }
+
+    struct RecoveringDrainFinalizer {
+        attempts: Arc<AtomicUsize>,
+        recovered: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for RecoveringDrainFinalizer {
+        async fn finalize(&self, _ctx: &RequiredFinalizationContext) -> Result<()> {
+            Ok(())
+        }
+
+        async fn drain_pending_work(&self) -> Result<()> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self.recovered.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(BitrouterError::internal(
+                    "private production required drain failure",
+                ))
+            }
+        }
     }
 
     #[async_trait]
@@ -1616,6 +1712,164 @@ mod tests {
         );
         assert_eq!(response.headers()[header::RETRY_AFTER], "7");
         assert_eq!(response.headers()["x-bitrouter-error-source"], "upstream");
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn graceful_shutdown_waits_for_required_drain_recovery_after_server_stops()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let accepting = Arc::new(AtomicBool::new(true));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let server_accepting = accepting.clone();
+        let server = async move {
+            stop_rx
+                .await
+                .map_err(|_| BitrouterError::internal("test server shutdown sender disappeared"))?;
+            server_accepting.store(false, Ordering::SeqCst);
+            Ok(())
+        };
+        let drain_attempts = attempts.clone();
+        let drain_accepting = accepting.clone();
+        let shutdown = tokio::spawn(complete_graceful_shutdown(
+            server,
+            move || {
+                let attempt = drain_attempts.fetch_add(1, Ordering::SeqCst);
+                let accepting = drain_accepting.load(Ordering::SeqCst);
+                async move {
+                    assert!(
+                        !accepting,
+                        "required drain ran while requests were accepted"
+                    );
+                    if attempt == 0 {
+                        Err(BitrouterError::internal("private required drain failure"))
+                    } else {
+                        Ok(7)
+                    }
+                }
+            },
+            std::time::Duration::from_millis(250),
+        ));
+
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
+        stop_tx
+            .send(())
+            .map_err(|_| "test server shutdown receiver disappeared")?;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(
+            !shutdown.is_finished(),
+            "one drain error completed shutdown"
+        );
+
+        tokio::time::advance(std::time::Duration::from_millis(249)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(shutdown.await??, 7);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn external_shutdown_entrypoint_uses_required_pipeline_drain()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let recovered = Arc::new(AtomicBool::new(false));
+        let finalizer = RecoveringDrainFinalizer {
+            attempts: attempts.clone(),
+            recovered: recovered.clone(),
+        };
+        let app = App::builder()
+            .language_model(move |builder| {
+                builder
+                    .routing_table(Arc::new(StaticRoutingTable::new()))
+                    .executor(Arc::new(MockExecutor::always_text("unused")))
+                    .required_finalizer(finalizer);
+            })
+            .build()?;
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            app.serve_with_shutdown("127.0.0.1:0", async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+        });
+        shutdown_tx
+            .send(())
+            .map_err(|_| "external shutdown receiver disappeared")?;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while attempts.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| "required pipeline drain did not start")?;
+        assert!(
+            !server.is_finished(),
+            "the external shutdown entry point swallowed the required drain error"
+        );
+
+        recovered.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .map_err(|_| "server did not finish after required drain recovery")???;
+        assert!(attempts.load(Ordering::SeqCst) >= 2);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn persistent_required_drain_failure_stays_serial_and_pending()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let accepting = Arc::new(AtomicBool::new(true));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let server_accepting = accepting.clone();
+        let server = async move {
+            server_accepting.store(false, Ordering::SeqCst);
+            Ok(())
+        };
+        let drain_attempts = attempts.clone();
+        let drain_active = active.clone();
+        let drain_max_active = max_active.clone();
+        let drain_accepting = accepting.clone();
+        let shutdown = tokio::spawn(complete_graceful_shutdown(
+            server,
+            move || {
+                drain_attempts.fetch_add(1, Ordering::SeqCst);
+                let concurrent = drain_active.fetch_add(1, Ordering::SeqCst) + 1;
+                drain_max_active.fetch_max(concurrent, Ordering::SeqCst);
+                let accepting = drain_accepting.load(Ordering::SeqCst);
+                let active = drain_active.clone();
+                async move {
+                    assert!(
+                        !accepting,
+                        "required drain ran while requests were accepted"
+                    );
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Err(BitrouterError::internal("private persistent drain failure"))
+                }
+            },
+            std::time::Duration::from_millis(250),
+        ));
+
+        tokio::task::yield_now().await;
+        let retained_active_references = Arc::strong_count(&active);
+        for _ in 0..64 {
+            tokio::time::advance(std::time::Duration::from_millis(250)).await;
+            tokio::task::yield_now().await;
+        }
+        assert!(!shutdown.is_finished());
+        assert_eq!(attempts.load(Ordering::SeqCst), 65);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        assert_eq!(Arc::strong_count(&active), retained_active_references);
+        assert!(!accepting.load(Ordering::SeqCst));
+        shutdown.abort();
+        assert!(shutdown.await.is_err());
         Ok(())
     }
 }
