@@ -57,7 +57,9 @@ mod tests {
 
     use super::Migrator;
 
-    use super::m20240101_000012_create_trajectory_ledger::Migration;
+    use super::m20240101_000012_create_trajectory_ledger::{
+        Migration, trajectory_requests_owner_full_input_digest_index,
+    };
     use super::m20240101_000013_create_continuation_registry::{
         Migration as ContinuationMigration, provider_continuations_table,
     };
@@ -258,6 +260,7 @@ mod tests {
             "idx_trajectory_episodes_owner_correlation",
             "idx_trajectory_events_episode_sequence",
             "idx_trajectory_requests_owner_episode",
+            "idx_trajectory_requests_owner_full_input_digest",
             "idx_trajectory_outbox_pending",
         ] {
             let rows = db
@@ -280,6 +283,54 @@ mod tests {
             assert!(!manager.has_table(table).await?);
         }
         assert!(manager.has_table("migration_test_sentinel").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trajectory_prefix_lookup_uses_the_owner_digest_index() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let manager = SchemaManager::new(&db);
+        Migration.up(&manager).await?;
+
+        let details = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "EXPLAIN QUERY PLAN SELECT episode_id, full_input_digest FROM trajectory_requests WHERE owner_user_id = 'owner-a' AND full_input_digest IN ('digest-a', 'digest-b')".to_owned(),
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "detail"))
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n");
+
+        assert!(
+            details.contains("idx_trajectory_requests_owner_full_input_digest"),
+            "prefix membership query did not use the composite owner/digest index: {details}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn trajectory_prefix_index_sql_is_portable_and_owner_digest_ordered() -> anyhow::Result<()> {
+        let statements = [
+            trajectory_requests_owner_full_input_digest_index().to_string(SqliteQueryBuilder),
+            trajectory_requests_owner_full_input_digest_index().to_string(PostgresQueryBuilder),
+            trajectory_requests_owner_full_input_digest_index().to_string(MysqlQueryBuilder),
+        ];
+        for statement in statements {
+            let sql = statement.to_ascii_lowercase();
+            let owner = sql.rfind("owner_user_id").ok_or_else(|| {
+                anyhow::anyhow!("owner column missing from index SQL: {statement}")
+            })?;
+            let digest = sql.rfind("full_input_digest").ok_or_else(|| {
+                anyhow::anyhow!("full-input digest column missing from index SQL: {statement}")
+            })?;
+            assert!(sql.contains("idx_trajectory_requests_owner_full_input_digest"));
+            assert!(
+                owner < digest,
+                "owner must lead digest in index SQL: {statement}"
+            );
+        }
         Ok(())
     }
 }

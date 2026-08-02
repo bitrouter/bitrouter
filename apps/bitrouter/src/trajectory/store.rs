@@ -1718,26 +1718,38 @@ async fn find_prefix_episode(
     owner_user_id: &str,
     ancestor_prefix_digests: &[KeyedDigest],
 ) -> Result<PrefixResolution> {
+    let requested_digests = ancestor_prefix_digests
+        .iter()
+        .map(|digest| digest.as_str().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    if requested_digests.is_empty() {
+        return Ok(PrefixResolution::None);
+    }
+    let requests = request_entity::Entity::find()
+        .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(request_entity::Column::FullInputDigest.is_in(requested_digests))
+        .all(txn)
+        .await?;
+    let mut episode_ids_by_digest =
+        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for request in requests {
+        episode_ids_by_digest
+            .entry(request.full_input_digest)
+            .or_default()
+            .insert(request.episode_id);
+    }
+
     for digest in ancestor_prefix_digests.iter().rev() {
-        let requests = request_entity::Entity::find()
-            .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-            .filter(request_entity::Column::FullInputDigest.eq(digest.as_str()))
-            .all(txn)
-            .await?;
-        if requests.is_empty() {
+        let Some(episode_ids) = episode_ids_by_digest.get(digest.as_str()) else {
             continue;
-        }
-        let mut episode_ids = requests
-            .into_iter()
-            .map(|request| request.episode_id)
-            .collect::<std::collections::BTreeSet<_>>();
+        };
         if episode_ids.len() != 1 {
             return Ok(PrefixResolution::Ambiguous);
         }
         let episode_id = episode_ids
-            .pop_first()
+            .first()
             .ok_or_else(|| anyhow::anyhow!("prefix resolution lost its only episode"))?;
-        return owned_episode(txn, owner_user_id, &episode_id)
+        return owned_episode(txn, owner_user_id, episode_id)
             .await
             .map(Box::new)
             .map(PrefixResolution::Unique);

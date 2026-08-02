@@ -183,6 +183,9 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
+            .create_index(trajectory_requests_owner_full_input_digest_index())
+            .await?;
+        manager
             .create_index(
                 Index::create()
                     .if_not_exists()
@@ -285,6 +288,16 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+}
+
+pub(crate) fn trajectory_requests_owner_full_input_digest_index() -> IndexCreateStatement {
+    Index::create()
+        .if_not_exists()
+        .name("idx_trajectory_requests_owner_full_input_digest")
+        .table(TrajectoryRequests::Table)
+        .col(TrajectoryRequests::OwnerUserId)
+        .col(TrajectoryRequests::FullInputDigest)
+        .to_owned()
 }
 
 #[derive(DeriveIden)]
