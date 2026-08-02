@@ -721,7 +721,6 @@ impl PipelineContext {
             generation_duration_ms: self.generation_duration_ms,
             first_token_kind: self.first_token_timing.map(|timing| timing.kind),
             finish_reason: exec.and_then(|e| e.result.finish_reason.clone()),
-            response_id: exec.and_then(|e| e.result.response_id.clone()),
             error: None,
             events: std::mem::take(&mut self.events),
         }
@@ -731,6 +730,26 @@ impl PipelineContext {
     /// settlement-stage events) returns home.
     pub fn absorb_settlement(&mut self, settle: SettlementContext) {
         self.events = settle.events;
+    }
+
+    /// Render the final non-streaming HTTP response.
+    pub(crate) fn response(&self) -> PipelineResponse {
+        let result = self
+            .execution_result
+            .as_ref()
+            .map(|execution| execution.result.clone())
+            .unwrap_or(crate::language_model::types::GenerateResult {
+                content: Vec::new(),
+                usage: None,
+                finish_reason: None,
+                response_id: None,
+                stop_details: None,
+                provider_metadata: Default::default(),
+            });
+        PipelineResponse {
+            request_id: self.request_id.clone(),
+            result,
+        }
     }
 
     /// Render the final non-streaming HTTP response.
@@ -814,30 +833,13 @@ impl StreamContext {
                 source_protocol: ApiProtocol::Responses,
             } if !id.is_empty() => {
                 self.response_id = Some(id.clone());
-                self.native_response_completed = false;
-            }
-            StreamPart::Finish { reason } => {
-                self.finish_reason = Some(reason.clone());
-                self.terminal_succeeded = !matches!(reason, FinishReason::Error(_));
             }
             StreamPart::ResponseCompleted {
                 id,
-                source_protocol,
-                status,
+                source_protocol: ApiProtocol::Responses,
                 ..
-            } => {
-                let successful = matches!(status.as_str(), "completed" | "incomplete");
-                self.terminal_succeeded = successful;
-                self.native_response_completed =
-                    successful && *source_protocol == ApiProtocol::Responses && !id.is_empty();
-                if *source_protocol == ApiProtocol::Responses && !id.is_empty() {
-                    self.response_id = Some(id.clone());
-                }
-                self.finish_reason = Some(match status.as_str() {
-                    "completed" => FinishReason::Stop,
-                    "incomplete" => FinishReason::Length,
-                    other => FinishReason::Other(other.to_string()),
-                });
+            } if !id.is_empty() => {
+                self.response_id = Some(id.clone());
             }
             _ => {}
         }
@@ -860,6 +862,42 @@ impl StreamContext {
                 kind,
             });
             self.generation_duration_ms = Some(0);
+        }
+    }
+
+    /// Observe only post-hook output when deciding whether downstream really
+    /// received a successful terminal. Raw upstream terminal provenance is
+    /// intentionally insufficient because a hook may drop or replace it.
+    pub(crate) fn observe_downstream_part(&mut self, part: &StreamPart) {
+        if self.finish_reason.is_some() {
+            return;
+        }
+        match part {
+            StreamPart::Finish { reason } => {
+                self.finish_reason = Some(reason.clone());
+                self.terminal_succeeded = !matches!(reason, FinishReason::Error(_));
+                self.native_response_completed = false;
+            }
+            StreamPart::ResponseCompleted {
+                id,
+                source_protocol,
+                status,
+                ..
+            } => {
+                let successful = matches!(status.as_str(), "completed" | "incomplete");
+                self.terminal_succeeded = successful;
+                self.native_response_completed =
+                    successful && *source_protocol == ApiProtocol::Responses && !id.is_empty();
+                if *source_protocol == ApiProtocol::Responses && !id.is_empty() {
+                    self.response_id = Some(id.clone());
+                }
+                self.finish_reason = Some(match status.as_str() {
+                    "completed" => FinishReason::Stop,
+                    "incomplete" => FinishReason::Length,
+                    other => FinishReason::Other(other.to_string()),
+                });
+            }
+            _ => {}
         }
     }
 
@@ -1277,7 +1315,7 @@ mod tests {
     }
 
     #[test]
-    fn native_responses_id_reaches_settlement_but_cross_protocol_id_does_not() {
+    fn native_responses_id_reaches_only_required_finalization_context() {
         fn streaming_context() -> PipelineContext {
             let mut ctx = ctx_from_prompt(prompt_with_text(None, "hello"));
             ctx.execution_result = Some(ExecutionResult {
@@ -1307,7 +1345,10 @@ mod tests {
         });
         native.absorb_stream(stream);
         assert_eq!(
-            native.settlement_context().response_id.as_deref(),
+            native
+                .required_finalization_context(true)
+                .response_id
+                .as_deref(),
             Some("resp-native")
         );
 
@@ -1318,7 +1359,12 @@ mod tests {
             source_protocol: ApiProtocol::ChatCompletions,
         });
         cross_protocol.absorb_stream(stream);
-        assert_eq!(cross_protocol.settlement_context().response_id, None);
+        assert_eq!(
+            cross_protocol
+                .required_finalization_context(true)
+                .response_id,
+            None
+        );
     }
 
     #[tokio::test]

@@ -1602,7 +1602,6 @@ mod tests {
             generation_duration_ms: None,
             first_token_kind: None,
             finish_reason: None,
-            response_id: None,
             error: Some(bitrouter_sdk::BitrouterError::NotFound(
                 "no route for selected model".into(),
             )),

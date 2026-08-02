@@ -21,6 +21,7 @@ pub mod m20240101_000010_create_eval_exchange;
 pub mod m20240101_000011_scope_eval_exchange;
 pub mod m20240101_000012_create_trajectory_ledger;
 pub mod m20240101_000013_create_continuation_registry;
+pub mod m20240101_000014_add_continuation_publication_state;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -45,6 +46,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000011_scope_eval_exchange::Migration),
             Box::new(m20240101_000012_create_trajectory_ledger::Migration),
             Box::new(m20240101_000013_create_continuation_registry::Migration),
+            Box::new(m20240101_000014_add_continuation_publication_state::Migration),
         ]
     }
 }
@@ -56,6 +58,7 @@ mod tests {
 
     use super::m20240101_000012_create_trajectory_ledger::Migration;
     use super::m20240101_000013_create_continuation_registry::Migration as ContinuationMigration;
+    use super::m20240101_000014_add_continuation_publication_state::Migration as ContinuationStateMigration;
 
     #[tokio::test]
     async fn continuation_registry_migration_is_bounded_and_private() -> anyhow::Result<()> {
@@ -98,6 +101,33 @@ mod tests {
         migration.down(&manager).await?;
         assert!(!manager.has_table("provider_continuations").await?);
         assert!(!manager.has_table("provider_continuation_key_epoch").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn continuation_publication_state_migration_backfills_existing_rows() -> anyhow::Result<()>
+    {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let manager = SchemaManager::new(&db);
+        ContinuationMigration.up(&manager).await?;
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO provider_continuations (continuation_identity, owner_identity, target_fingerprint, key_id, cipher_version, created_at, expires_at, purge_after) VALUES ('c', 'o', 't', 'k', 1, 'now', 'later', 'latest')".to_owned(),
+        ))
+        .await?;
+
+        ContinuationStateMigration.up(&manager).await?;
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT publication_state FROM provider_continuations WHERE continuation_identity = 'c'".to_owned(),
+            ))
+            .await?
+            .expect("seeded row");
+        assert_eq!(row.try_get::<String>("", "publication_state")?, "active");
+
+        ContinuationStateMigration.down(&manager).await?;
+        ContinuationMigration.down(&manager).await?;
         Ok(())
     }
 

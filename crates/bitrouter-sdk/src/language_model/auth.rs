@@ -118,15 +118,35 @@ fn static_effective_auth_scheme(target: &RoutingTarget) -> AuthScheme {
 }
 
 fn request_effective_auth_scheme(request: &reqwest::Request) -> Option<AuthScheme> {
-    let bearer = request
+    let authorization = request
         .headers()
-        .contains_key(reqwest::header::AUTHORIZATION);
-    let x_key = request.headers().contains_key("x-api-key")
-        || request.headers().contains_key("x-goog-api-key");
-    match (bearer, x_key) {
-        (true, false) => Some(AuthScheme::Bearer),
-        (false, true) => Some(AuthScheme::XApiKey),
-        (false, false) | (true, true) => None,
+        .get_all(reqwest::header::AUTHORIZATION)
+        .iter()
+        .collect::<Vec<_>>();
+    let x_keys = request
+        .headers()
+        .get_all("x-api-key")
+        .iter()
+        .chain(request.headers().get_all("x-goog-api-key").iter())
+        .collect::<Vec<_>>();
+
+    match (authorization.as_slice(), x_keys.as_slice()) {
+        ([value], []) => {
+            let value = value.to_str().ok()?;
+            let mut fields = value.split_ascii_whitespace();
+            let scheme = fields.next()?;
+            let credential = fields.next()?;
+            (scheme.eq_ignore_ascii_case("bearer")
+                && !credential.is_empty()
+                && fields.next().is_none())
+            .then_some(AuthScheme::Bearer)
+        }
+        ([], [value]) => value
+            .to_str()
+            .ok()
+            .filter(|credential| !credential.trim().is_empty())
+            .map(|_| AuthScheme::XApiKey),
+        _ => None,
     }
 }
 
@@ -450,36 +470,68 @@ mod tests {
     }
 
     #[test]
-    fn effective_scheme_requires_exactly_one_recognized_credential_header() {
+    fn effective_scheme_requires_one_well_formed_credential_header() {
         let client = reqwest::Client::new();
-        let request = |authorization: bool, x_key: bool| {
+        let request = |authorization: Option<reqwest::header::HeaderValue>,
+                       x_key: Option<reqwest::header::HeaderValue>| {
             let mut request = client.post("https://example.invalid").build().unwrap();
-            if authorization {
-                request.headers_mut().insert(
-                    reqwest::header::AUTHORIZATION,
-                    reqwest::header::HeaderValue::from_static("Bearer secret"),
-                );
+            if let Some(authorization) = authorization {
+                request
+                    .headers_mut()
+                    .insert(reqwest::header::AUTHORIZATION, authorization);
             }
-            if x_key {
-                request.headers_mut().insert(
-                    "x-api-key",
-                    reqwest::header::HeaderValue::from_static("secret"),
-                );
+            if let Some(x_key) = x_key {
+                request.headers_mut().insert("x-api-key", x_key);
             }
             request
         };
+
+        let header = reqwest::header::HeaderValue::from_static;
         assert_eq!(
-            request_effective_auth_scheme(&request(true, false)),
+            request_effective_auth_scheme(&request(Some(header("Bearer secret")), None)),
             Some(AuthScheme::Bearer)
         );
         assert_eq!(
-            request_effective_auth_scheme(&request(false, true)),
+            request_effective_auth_scheme(&request(Some(header("bEaReR secret")), None)),
+            Some(AuthScheme::Bearer)
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(None, Some(header("secret")))),
             Some(AuthScheme::XApiKey)
         );
-        assert_eq!(request_effective_auth_scheme(&request(true, true)), None);
-        assert_eq!(request_effective_auth_scheme(&request(false, false)), None);
+        for invalid in [
+            header("Basic secret"),
+            header("AWS4-HMAC-SHA256 credential"),
+            header("Bearer"),
+            header("Bearer "),
+            header("Bearer    "),
+        ] {
+            assert_eq!(
+                request_effective_auth_scheme(&request(Some(invalid), None)),
+                None
+            );
+        }
+        assert_eq!(
+            request_effective_auth_scheme(&request(
+                Some(reqwest::header::HeaderValue::from_bytes(b"Bearer \xff").unwrap()),
+                None,
+            )),
+            None
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(None, Some(header("")))),
+            None
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(
+                Some(header("Bearer secret")),
+                Some(header("secret")),
+            )),
+            None
+        );
+        assert_eq!(request_effective_auth_scheme(&request(None, None)), None);
         let mismatched = AppliedAuth::proven_with_scheme(
-            request(true, false),
+            request(Some(header("Bearer secret")), None),
             CredentialAuthority::derive("test", "principal"),
             AuthScheme::XApiKey,
         );

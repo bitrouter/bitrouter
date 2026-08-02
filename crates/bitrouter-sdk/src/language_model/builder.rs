@@ -160,6 +160,11 @@ impl PipelineBuilder {
     /// Finalise into a [`Pipeline`]. Fails if the routing table or executor is
     /// missing.
     pub fn build(self) -> Result<Pipeline> {
+        if self.required_finalizers.len() > 1 {
+            return Err(BitrouterError::internal(
+                "language_model pipeline: at most one required finalizer is supported; compose atomic success-critical work behind one finalizer",
+            ));
+        }
         let routing_table = self.routing_table.ok_or_else(|| {
             BitrouterError::internal("language_model pipeline: routing_table is required")
         })?;

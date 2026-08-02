@@ -2178,9 +2178,14 @@ struct ResponsesStreamDecoder {
     /// events, so synthesized [`Source`] ids stay unique within the stream
     /// (mirrors `next_index` on the non-streaming `parse_responses_annotations`).
     source_index: usize,
-    /// A native Responses stream is complete only after one validated terminal
-    /// lifecycle event. EOF alone is never success.
-    terminal_seen: bool,
+    /// Native identity introduced by `response.created`, when the upstream
+    /// emits that optional lifecycle event. It must be unique, non-empty, and
+    /// match the terminal response id.
+    created_id: Option<String>,
+    /// A successful terminal is buffered until EOF. This forces the production
+    /// executor to consume and validate every later SSE event before exposing
+    /// success to the pipeline, where a terminal otherwise stops polling.
+    successful_terminal: Option<StreamPart>,
 }
 
 impl ResponsesStreamDecoder {
@@ -2219,18 +2224,22 @@ impl StreamDecoder for ResponsesStreamDecoder {
             Ok(v) => v,
             Err(_) => return Ok(Vec::new()),
         };
-        // The event name lives in the JSON body's `type` field; Responses also
-        // mirrors it onto the SSE `event:` line, but several upstreams (notably
-        // OpenRouter and stock OpenAI when fronted via gateways) emit only the
-        // `data:` line — the SSE spec then defaults `event` to "message",
-        // which would otherwise shadow the real event name. Always prefer the
-        // body `type` and fall back to the SSE header only when it's absent.
-        let event_type = json
-            .get("type")
-            .and_then(|t| t.as_str())
-            .or(event.event.as_deref())
-            .unwrap_or_default();
-        if self.terminal_seen {
+        // When an explicit Responses `event:` name is present it must agree
+        // with the JSON `type`. `message` is the SSE default used when the
+        // event line is omitted, so body `type` remains authoritative there.
+        let body_type = json.get("type").and_then(|t| t.as_str());
+        let explicit_event = event.event.as_deref().filter(|name| *name != "message");
+        if let (Some(header), Some(body)) = (explicit_event, body_type)
+            && header != body
+        {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: format!(
+                    "Responses SSE event name '{header}' contradicts JSON type '{body}'"
+                ),
+            });
+        }
+        let event_type = body_type.or(explicit_event).unwrap_or_default();
+        if self.successful_terminal.is_some() {
             return Err(BitrouterError::UpstreamInvalidResponse {
                 message: format!(
                     "Responses stream emitted event '{event_type}' after its terminal"
@@ -2241,16 +2250,25 @@ impl StreamDecoder for ResponsesStreamDecoder {
         let mut parts = Vec::new();
         match event_type {
             "response.created" => {
-                if let Some(id) = json
+                let id = json
                     .get("response")
                     .and_then(|response| response.get("id"))
                     .and_then(|id| id.as_str())
-                {
-                    parts.push(StreamPart::ResponseStarted {
-                        id: id.to_owned(),
-                        source_protocol: ApiProtocol::Responses,
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| BitrouterError::UpstreamInvalidResponse {
+                        message: "Responses response.created missing non-empty response id"
+                            .to_string(),
+                    })?;
+                if self.created_id.is_some() {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: "Responses stream emitted duplicate response.created".to_string(),
                     });
                 }
+                self.created_id = Some(id.to_owned());
+                parts.push(StreamPart::ResponseStarted {
+                    id: id.to_owned(),
+                    source_protocol: ApiProtocol::Responses,
+                });
             }
             "response.in_progress"
             | "response.content_part.added"
@@ -2436,8 +2454,19 @@ impl StreamDecoder for ResponsesStreamDecoder {
                             .to_string(),
                     })?
                     .to_string();
-                self.terminal_seen = true;
-                parts.push(StreamPart::ResponseCompleted {
+                if self
+                    .created_id
+                    .as_deref()
+                    .is_some_and(|created_id| created_id != id)
+                {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: format!(
+                            "Responses terminal id '{id}' does not match response.created id '{}'",
+                            self.created_id.as_deref().unwrap_or_default()
+                        ),
+                    });
+                }
+                self.successful_terminal = Some(StreamPart::ResponseCompleted {
                     id,
                     source_protocol: ApiProtocol::Responses,
                     status: expected_status.to_string(),
@@ -2481,13 +2510,12 @@ impl StreamDecoder for ResponsesStreamDecoder {
     }
 
     fn finish(&mut self) -> Result<Vec<StreamPart>> {
-        if self.terminal_seen {
-            Ok(Vec::new())
-        } else {
-            Err(BitrouterError::UpstreamInvalidResponse {
+        self.successful_terminal
+            .take()
+            .map(|terminal| vec![terminal])
+            .ok_or_else(|| BitrouterError::UpstreamInvalidResponse {
                 message: "Responses stream ended before a valid terminal event".to_string(),
             })
-        }
     }
 }
 

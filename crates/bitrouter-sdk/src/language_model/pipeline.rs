@@ -24,7 +24,8 @@ use crate::language_model::server_tools::loop_controller::{ServerToolLoop, Upstr
 use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::server_tools::toolset::ToolContext;
 use crate::language_model::settlement::{
-    RequiredFinalizationContext, RequiredFinalizer, SettlementContext, SettlementRecorder,
+    DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
+    RequiredFinalizer, SettlementContext, SettlementRecorder,
 };
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
@@ -38,6 +39,89 @@ struct StreamingExecution {
     stream: StreamPartStream,
     target: RoutingTarget,
     provider_started_at: Instant,
+}
+
+pub(crate) struct DeliveryPermit {
+    ready: tokio::sync::oneshot::Receiver<Result<()>>,
+    acknowledged: Option<tokio::sync::oneshot::Sender<DeliveryAcknowledgement>>,
+}
+
+impl DeliveryPermit {
+    pub(crate) async fn deliver(mut self) -> Result<()> {
+        match self.ready.await {
+            Ok(Ok(())) => {
+                // No await follows this send. The same poll that observes the
+                // activation-ready signal authorizes the payload returned by
+                // the caller immediately after this future becomes Ready.
+                let acknowledged = self
+                    .acknowledged
+                    .take()
+                    .is_some_and(|ack| ack.send(DeliveryAcknowledgement::Delivered).is_ok());
+                if acknowledged {
+                    Ok(())
+                } else {
+                    Err(BitrouterError::internal(
+                        "delivery authorization closed before acknowledgment",
+                    ))
+                }
+            }
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(BitrouterError::internal(format!(
+                "delivery authorization ended unexpectedly: {error}"
+            ))),
+        }
+    }
+
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    pub(crate) async fn fail(mut self, failure: BitrouterError) -> Result<()> {
+        match self.ready.await {
+            Ok(Ok(())) => {
+                let acknowledged = self
+                    .acknowledged
+                    .take()
+                    .is_some_and(|ack| ack.send(DeliveryAcknowledgement::Failed(failure)).is_ok());
+                if acknowledged {
+                    Ok(())
+                } else {
+                    Err(BitrouterError::internal(
+                        "delivery authorization closed before failure acknowledgment",
+                    ))
+                }
+            }
+            Ok(Err(error)) => Err(error),
+            Err(error) => Err(BitrouterError::internal(format!(
+                "delivery authorization ended unexpectedly: {error}"
+            ))),
+        }
+    }
+}
+
+pub(crate) struct PreparedStreamPart {
+    pub(crate) part: StreamPart,
+    pub(crate) delivery: Option<DeliveryPermit>,
+}
+
+pub(crate) struct PreparedPipelineResponse {
+    pub(crate) response: PipelineResponse,
+    pub(crate) delivery: DeliveryPermit,
+}
+
+enum DeliveryAuthorizationOutcome {
+    Delivered,
+    Disconnected,
+    Failed(BitrouterError),
+}
+
+fn delivery_handshake() -> (DeliveryPermit, RequiredDeliveryHandshake) {
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let (acknowledged_tx, acknowledged_rx) = tokio::sync::oneshot::channel();
+    (
+        DeliveryPermit {
+            ready: ready_rx,
+            acknowledged: Some(acknowledged_tx),
+        },
+        RequiredDeliveryHandshake::new(ready_tx, acknowledged_rx),
+    )
 }
 
 struct ObservedUpstreamStream {
@@ -241,6 +325,13 @@ impl Pipeline {
     /// Drops fire *before* `drain_pending_settlements` is called — the swap
     /// is correct under that contract.
     pub async fn drain_pending_settlements(&self) -> usize {
+        // Detached non-stream execution may itself enqueue finalizer rollback
+        // and delivery-observation tasks. Drain it first so those tasks are in
+        // the JoinSet before we take that set below.
+        let mut drained = self.detached_executions.len();
+        self.detached_executions.close();
+        self.detached_executions.wait().await;
+
         // Take the JoinSet out of the mutex so we can `await` join_next
         // without holding a sync lock across an await.
         let mut taken = {
@@ -250,19 +341,9 @@ impl Pipeline {
             };
             mem::take(&mut *guard)
         };
-        let mut drained = 0;
         while taken.join_next().await.is_some() {
             drained += 1;
         }
-
-        // Also wait for every in-flight detached non-streaming execution
-        // (`execute_detached`). `close()` only stops the tracker from blocking
-        // `wait()` on tasks spawned *after* this point — already-spawned tasks
-        // are still awaited. axum drains in-flight handlers before this runs,
-        // so every detached execution has already been spawned.
-        drained += self.detached_executions.len();
-        self.detached_executions.close();
-        self.detached_executions.wait().await;
 
         drained
     }
@@ -277,8 +358,10 @@ impl Pipeline {
                 while set.try_join_next().is_some() {}
                 set.spawn(future);
             }
-            Err(_poisoned) => {
-                tokio::spawn(future);
+            Err(poisoned) => {
+                let mut set = poisoned.into_inner();
+                while set.try_join_next().is_some() {}
+                set.spawn(future);
             }
         }
     }
@@ -303,27 +386,46 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PipelineResponse> {
+        let prepared = self.execute_detached_prepared(req).await?;
+        prepared.delivery.deliver().await?;
+        Ok(prepared.response)
+    }
+
+    pub(crate) async fn execute_detached_prepared(
+        self: Arc<Self>,
+        req: PipelineRequest,
+    ) -> Result<PreparedPipelineResponse> {
         let pipeline = Arc::clone(&self);
         // `tokio::spawn` does not propagate the current tracing span, so attach
         // it explicitly — otherwise the whole request's logs would detach from
         // the handler's request span / trace context.
         let span = tracing::Span::current();
-        let handle = self
-            .detached_executions
-            .spawn(async move { pipeline.execute(req).await }.instrument(span));
-        match handle.await {
-            Ok(result) => result,
-            // The task panicked or was aborted (it is never aborted by us). The
-            // settlement inside `execute` already ran or the panic precluded it;
-            // surface a clean internal error to the still-connected caller.
-            Err(join_err) => Err(BitrouterError::internal(format!(
-                "non-streaming execution task failed to complete: {join_err}"
-            ))),
-        }
+        let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+        self.detached_executions.spawn(
+            async move {
+                let result = pipeline.execute_prepared(req).await;
+                // A dropped handler drops the prepared delivery permit here;
+                // upstream execution and settlement have nevertheless run on
+                // this shutdown-tracked task.
+                let _ = prepared_tx.send(result);
+            }
+            .instrument(span),
+        );
+        prepared_rx.await.map_err(|error| {
+            BitrouterError::internal(format!(
+                "non-streaming execution task failed to complete: {error}"
+            ))
+        })?
     }
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
+        let prepared = self.execute_prepared(req).await?;
+        prepared.delivery.deliver().await?;
+        Ok(prepared.response)
+    }
+
+    async fn execute_prepared(&self, req: PipelineRequest) -> Result<PreparedPipelineResponse> {
         let mut ctx = PipelineContext::new(req);
         self.observe_start(&ctx).await;
 
@@ -445,14 +547,26 @@ impl Pipeline {
         };
         self.run_settlement(&mut ctx, false, None).await;
         self.observe_after(Phase::Settlement, &ctx).await;
-        self.observe_end(&ctx, RequestOutcome::Completed).await;
+        let response = ctx.response();
+        let (delivery, authorization) = finalization.begin_delivery();
+        let observe_hooks = self.observe_hooks.clone();
+        self.spawn_stream_finalization(async move {
+            let outcome = match authorization.await {
+                Ok(DeliveryAuthorizationOutcome::Delivered) => RequestOutcome::Completed,
+                Ok(DeliveryAuthorizationOutcome::Disconnected) => {
+                    RequestOutcome::ClientDisconnected
+                }
+                Ok(DeliveryAuthorizationOutcome::Failed(error)) => RequestOutcome::Failed(error),
+                Err(error) => RequestOutcome::Failed(BitrouterError::internal(format!(
+                    "delivery authorization outcome ended unexpectedly: {error}"
+                ))),
+            };
+            for hook in &observe_hooks {
+                hook.on_request_end(&ctx, &outcome).await;
+            }
+        });
 
-        // This is the non-stream delivery authorization boundary. The guard
-        // remains armed throughout settlement/observation, and there is no
-        // await between a successful commit and returning the response.
-        finalization.commit();
-
-        Ok(ctx.into_response())
+        Ok(PreparedPipelineResponse { response, delivery })
     }
 
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
@@ -462,6 +576,20 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
+        let prepared = self.execute_stream_prepared(req).await?;
+        Ok(Box::pin(prepared.then(|item| async move {
+            let PreparedStreamPart { part, delivery } = item?;
+            if let Some(delivery) = delivery {
+                delivery.deliver().await?;
+            }
+            Ok(part)
+        })))
+    }
+
+    pub(crate) async fn execute_stream_prepared(
+        self: Arc<Self>,
+        req: PipelineRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<PreparedStreamPart>> + Send>>> {
         let mut ctx = PipelineContext::new(req);
         self.observe_start(&ctx).await;
 
@@ -599,24 +727,31 @@ impl Pipeline {
         self: Arc<Self>,
         mut upstream: StreamPartStream,
         mut guard: StreamSettlementGuard,
-    ) -> impl Stream<Item = Result<StreamPart>> + Send {
+    ) -> impl Stream<Item = Result<PreparedStreamPart>> + Send {
         async_stream::stream! {
             'pump: loop {
                 match upstream.next().await {
                     Some(Ok(part)) => {
-                        let is_finish = part.is_terminal();
                         let processed = guard.processor().process_part(part).await;
                         match processed {
                             Ok(parts) => {
-                                if is_finish
-                                    && let Err(error) =
-                                        guard.finalize(StreamOutcome::Completed).await
-                                {
-                                    yield Err(error);
-                                    break 'pump;
-                                }
                                 for p in parts {
-                                    yield Ok(p);
+                                    let delivery = if p.is_terminal() {
+                                        match guard.finalize(StreamOutcome::Completed).await {
+                                            Ok(delivery) => delivery,
+                                            Err(error) => {
+                                                yield Err(error);
+                                                break 'pump;
+                                            }
+                                        }
+                                    } else {
+                                        None
+                                    };
+                                    let terminal = p.is_terminal();
+                                    yield Ok(PreparedStreamPart { part: p, delivery });
+                                    if terminal {
+                                        break 'pump;
+                                    }
                                 }
                             }
                             Err(abort_err) => {
@@ -626,9 +761,6 @@ impl Pipeline {
                                 yield Err(abort_err);
                                 break 'pump;
                             }
-                        }
-                        if is_finish {
-                            break 'pump;
                         }
                     }
                     Some(Err(e)) => {
@@ -676,14 +808,44 @@ impl Pipeline {
             guard.disarm();
             return Ok(guard);
         }
-        for (index, finalizer) in self.required_finalizers.iter().enumerate() {
-            guard.started = index + 1;
-            if let Err(error) = finalizer.finalize(&finalization).await {
-                guard.rollback().await;
-                return Err(error);
-            }
-        }
+        guard.started = self
+            .prepare_required_finalizer_tracked(&finalization)
+            .await?;
         Ok(guard)
+    }
+
+    async fn prepare_required_finalizer_tracked(
+        &self,
+        finalization: &RequiredFinalizationContext,
+    ) -> Result<usize> {
+        let Some(finalizer) = self.required_finalizers.first().cloned() else {
+            return Ok(0);
+        };
+        let task_finalization = finalization.clone();
+        let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+        self.spawn_stream_finalization(async move {
+            match finalizer.finalize(&task_finalization).await {
+                Ok(()) => {
+                    if prepared_tx.send(Ok(())).is_err()
+                        && let Err(error) = finalizer.rollback(&task_finalization).await
+                    {
+                        tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+                    }
+                }
+                Err(error) => {
+                    if let Err(rollback_error) = finalizer.rollback(&task_finalization).await {
+                        tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
+                    }
+                    let _ = prepared_tx.send(Err(error));
+                }
+            }
+        });
+        prepared_rx.await.map_err(|error| {
+            BitrouterError::internal(format!(
+                "required finalizer preparation ended unexpectedly: {error}"
+            ))
+        })??;
+        Ok(1)
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
@@ -1173,23 +1335,63 @@ impl RequiredFinalizationGuard {
         self.started = 0;
     }
 
-    async fn rollback(&mut self) {
-        if !self.armed {
-            return;
+    fn begin_delivery(
+        &mut self,
+    ) -> (
+        DeliveryPermit,
+        tokio::sync::oneshot::Receiver<DeliveryAuthorizationOutcome>,
+    ) {
+        let (permit, delivery) = delivery_handshake();
+        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        let finalizers = self.finalizers.clone();
+        let finalization = self.finalization.clone();
+        let started = self.started;
+        self.disarm();
+        let authorization = async move {
+            let authorization_result = if started == 0 {
+                delivery.wait_for_delivery().await
+            } else {
+                finalizers[0].commit(&finalization, &delivery).await
+            };
+            let delivered = match authorization_result {
+                Ok(delivered) => delivered,
+                Err(error) => {
+                    delivery.reject(error.clone());
+                    for finalizer in finalizers.iter().take(started).rev() {
+                        if let Err(rollback_error) = finalizer.rollback(&finalization).await {
+                            tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
+                        }
+                    }
+                    let _ = outcome_tx.send(DeliveryAuthorizationOutcome::Failed(error));
+                    return;
+                }
+            };
+            if !delivered {
+                for finalizer in finalizers.iter().take(started).rev() {
+                    if let Err(error) = finalizer.rollback(&finalization).await {
+                        tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+                    }
+                }
+            }
+            let _ = outcome_tx.send(if delivered {
+                DeliveryAuthorizationOutcome::Delivered
+            } else {
+                DeliveryAuthorizationOutcome::Disconnected
+            });
         }
-        for finalizer in self.finalizers.iter().take(self.started).rev() {
-            if let Err(error) = finalizer.rollback(&self.finalization).await {
-                tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+        .instrument(tracing::Span::current());
+        match self.pending_settlements.lock() {
+            Ok(mut set) => {
+                while set.try_join_next().is_some() {}
+                set.spawn(authorization);
+            }
+            Err(poisoned) => {
+                let mut set = poisoned.into_inner();
+                while set.try_join_next().is_some() {}
+                set.spawn(authorization);
             }
         }
-        self.disarm();
-    }
-
-    fn commit(&mut self) {
-        for finalizer in &self.finalizers {
-            finalizer.commit(&self.finalization);
-        }
-        self.disarm();
+        (permit, outcome_rx)
     }
 }
 
@@ -1215,8 +1417,10 @@ impl Drop for RequiredFinalizationGuard {
                 while set.try_join_next().is_some() {}
                 set.spawn(rollback);
             }
-            Err(_poisoned) => {
-                tokio::spawn(rollback);
+            Err(poisoned) => {
+                let mut set = poisoned.into_inner();
+                while set.try_join_next().is_some() {}
+                set.spawn(rollback);
             }
         }
     }
@@ -1362,29 +1566,25 @@ impl StreamSettlementGuard {
         if !finalization.successful_terminal {
             return Ok(());
         }
-        for (index, finalizer) in self.pipeline.required_finalizers.iter().enumerate() {
-            self.started_required_finalizers = index + 1;
-            finalizer.finalize(&finalization).await?;
-        }
-        for finalizer in &self.pipeline.required_finalizers {
-            finalizer.commit(&finalization);
-        }
-        self.started_required_finalizers = 0;
+        self.started_required_finalizers = self
+            .pipeline
+            .prepare_required_finalizer_tracked(&finalization)
+            .await?;
         Ok(())
     }
 
     /// Finalise a provider terminal inline only through the required-finalizer
     /// boundary. Settlement is then enqueued and the terminal is returned
     /// synchronously by the same `poll_next` call.
-    async fn finalize(&mut self, outcome: StreamOutcome) -> Result<()> {
+    async fn finalize(&mut self, outcome: StreamOutcome) -> Result<Option<DeliveryPermit>> {
         if self.state.is_none() {
-            return Ok(());
+            return Ok(None);
         }
         self.finish_processor(outcome.clone()).await?;
 
         let (settlement_error, request_outcome, delivery_error) = {
             let Some(StreamDeliveryState::Ready(ctx)) = self.state.as_ref() else {
-                return Ok(());
+                return Ok(None);
             };
             let (error, outcome) = stream_terminal_metadata(&outcome);
             if matches!(outcome, RequestOutcome::Completed) && !ctx.stream_terminal_succeeded() {
@@ -1430,7 +1630,7 @@ impl StreamSettlementGuard {
         }
 
         let Some(StreamDeliveryState::Ready(ctx)) = self.state.take() else {
-            return Ok(());
+            return Ok(None);
         };
         if settlement_error.is_some() {
             let pipeline = self.pipeline.clone();
@@ -1440,11 +1640,43 @@ impl StreamSettlementGuard {
             if let Some(error) = delivery_error {
                 return Err(error);
             }
-            return Ok(());
+            return Ok(None);
         }
         let pipeline = self.pipeline.clone();
+        let started = self.started_required_finalizers;
+        self.started_required_finalizers = 0;
+        let finalization = ctx.required_finalization_context(true);
+        let (permit, delivery) = delivery_handshake();
         self.pipeline.spawn_stream_finalization(async move {
-            settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
+            let authorization_result = if started == 0 {
+                delivery.wait_for_delivery().await
+            } else {
+                pipeline.required_finalizers[0]
+                    .commit(&finalization, &delivery)
+                    .await
+            };
+            let delivered = match authorization_result {
+                Ok(delivered) => delivered,
+                Err(error) => {
+                    delivery.reject(error.clone());
+                    rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                    settle_prepared_stream(
+                        pipeline.clone(),
+                        *ctx,
+                        Some(error.clone()),
+                        RequestOutcome::Failed(error),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            if delivered {
+                settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
+            } else {
+                rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                settle_prepared_stream(pipeline, *ctx, None, RequestOutcome::ClientDisconnected)
+                    .await;
+            }
         });
 
         // NO AWAIT BELOW THIS POINT. The caller yields the buffered terminal
@@ -1453,7 +1685,7 @@ impl StreamSettlementGuard {
         // Drop owns PendingDelivery and may reclassify to ClientDisconnected;
         // after it, required finalization has committed and Poll::Ready carries
         // the terminal to the consumer without another cancellation point.
-        Ok(())
+        Ok(Some(permit))
     }
 }
 
@@ -1663,7 +1895,7 @@ fn log_request_finished(settle: &SettlementContext) {
 
 #[cfg(test)]
 mod stream_outcome_tests {
-    use super::{RequestOutcome, StreamOutcome, stream_terminal_metadata};
+    use super::{RequestOutcome, StreamOutcome, delivery_handshake, stream_terminal_metadata};
     use crate::error::BitrouterError;
 
     #[test]
@@ -1698,6 +1930,21 @@ mod stream_outcome_tests {
         assert!(matches!(
             request_outcome,
             RequestOutcome::ClientDisconnected
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_wire_failure_is_not_classified_as_disconnect() {
+        let (permit, delivery) = delivery_handshake();
+        let authorization = tokio::spawn(async move { delivery.wait_for_delivery().await });
+        permit
+            .fail(BitrouterError::internal("terminal encoder failed"))
+            .await
+            .expect("failure acknowledgement reaches authorization worker");
+        let outcome = authorization.await.expect("authorization worker joins");
+        assert!(matches!(
+            outcome,
+            Err(BitrouterError::Internal(message)) if message == "terminal encoder failed"
         ));
     }
 }
