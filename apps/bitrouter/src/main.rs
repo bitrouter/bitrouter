@@ -49,6 +49,57 @@ use bitrouter::output::reports::trajectory::{
 use bitrouter::output::{CliReport, Output};
 use bitrouter_sdk::config;
 
+async fn supervise_http_shutdown<Http, Control, Hup, Term>(
+    http: Http,
+    control: Control,
+    hup: Hup,
+    term: Term,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+) -> Result<()>
+where
+    Http: std::future::Future<Output = Result<()>> + Send,
+    Control: std::future::Future<Output = Result<()>> + Send,
+    Hup: std::future::Future<Output = Result<()>> + Send,
+    Term: std::future::Future<Output = Result<()>> + Send,
+{
+    let mut http = Box::pin(http);
+    let mut control = Box::pin(control);
+    let mut hup = Box::pin(hup);
+    let mut term = Box::pin(term);
+    let mut hup_open = true;
+    let trigger_result = loop {
+        tokio::select! {
+            result = &mut http => return result,
+            result = &mut control => break result,
+            result = &mut term => {
+                if result.is_err() {
+                    tracing::warn!(
+                        reason = "termination_signal_listener_unavailable",
+                        "termination-signal listener unavailable"
+                    );
+                }
+                break Ok(());
+            }
+            result = &mut hup, if hup_open => {
+                if result.is_err() {
+                    tracing::warn!(
+                        reason = "sighup_listener_unavailable",
+                        "SIGHUP listener unavailable"
+                    );
+                }
+                hup_open = false;
+            }
+        }
+    };
+
+    drop(control);
+    drop(hup);
+    drop(term);
+    let _ = shutdown.send(());
+    http.await?;
+    trigger_result
+}
+
 /// BitRouter — an LLM API router.
 #[derive(Parser)]
 #[command(name = "bitrouter", version, about)]
@@ -2634,26 +2685,36 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
 
     let http_app = app.clone();
     let http_listen = listen.clone();
+    let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
     let http = async move {
         // Wrap the SDK router in tower-http's TraceLayer (plus inbound W3C
         // trace-context propagation) so the inbound HTTP request becomes
         // the SERVER span parent of the bitrouter `chat` INTERNAL span.
         let otel_wrapper = bitrouter_observe::otel::http_layer::router_wrapper();
+        let shutdown = async move {
+            let _ = http_shutdown_rx.await;
+        };
         match workflow_trace_capture {
             Some(capture) => {
                 let workflow_wrapper = capture.router_wrapper();
                 let eval_router = eval_router.clone();
                 http_app
-                    .serve_with_router_wrapper(&http_listen, move |router| {
-                        workflow_wrapper(otel_wrapper(router.merge(eval_router.clone())))
-                    })
+                    .serve_with_router_wrapper_and_shutdown(
+                        &http_listen,
+                        move |router| {
+                            workflow_wrapper(otel_wrapper(router.merge(eval_router.clone())))
+                        },
+                        shutdown,
+                    )
                     .await
             }
             None => {
                 http_app
-                    .serve_with_router_wrapper(&http_listen, move |router| {
-                        otel_wrapper(router.merge(eval_router.clone()))
-                    })
+                    .serve_with_router_wrapper_and_shutdown(
+                        &http_listen,
+                        move |router| otel_wrapper(router.merge(eval_router.clone())),
+                        shutdown,
+                    )
                     .await
             }
         }
@@ -2735,20 +2796,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
     };
 
-    let result = tokio::select! {
-        r = http => r,
-        r = control => r,
-        // HUP loop never returns Ok by design (Unix); an error from signal
-        // setup is logged and we keep serving. On Windows this arm is pending.
-        r = hup => match r {
-            Ok(()) => Ok(()),
-            Err(e) => { tracing::warn!(error = %e, "SIGHUP listener unavailable"); Ok(()) }
-        },
-        r = term => match r {
-            Ok(()) => Ok(()),
-            Err(e) => { tracing::warn!(error = %e, "termination-signal listener unavailable"); Ok(()) }
-        },
-    };
+    // Control/termination requests signal the SDK server and then keep polling
+    // that same future until axum and every required finalizer finish. An HTTP
+    // failure still returns directly; a HUP listener failure only disables
+    // reload signaling and leaves the server running.
+    let result = supervise_http_shutdown(http, control, hup, term, http_shutdown_tx).await;
 
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {
@@ -4174,6 +4226,116 @@ async fn force_kill(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn outer_shutdown_keeps_http_future_until_required_drain_recovers() -> anyhow::Result<()>
+    {
+        for control_trigger in [true, false] {
+            let accepting = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let drain_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let recovery = Arc::new(tokio::sync::Notify::new());
+            let inflight_release = Arc::new(tokio::sync::Notify::new());
+            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+            let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+            let (term_tx, term_rx) = tokio::sync::oneshot::channel();
+
+            let http_accepting = accepting.clone();
+            let http_attempts = drain_attempts.clone();
+            let http_recovery = recovery.clone();
+            let http_inflight_release = inflight_release.clone();
+            let http = async move {
+                shutdown_rx
+                    .await
+                    .map_err(|_| anyhow::anyhow!("outer shutdown sender disappeared"))?;
+                http_accepting.store(false, std::sync::atomic::Ordering::SeqCst);
+                http_inflight_release.notified().await;
+                http_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                http_recovery.notified().await;
+                http_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            };
+            let control = async move {
+                control_rx
+                    .await
+                    .map_err(|_| anyhow::anyhow!("test control sender disappeared"))?;
+                Ok(())
+            };
+            let term = async move {
+                term_rx
+                    .await
+                    .map_err(|_| anyhow::anyhow!("test term sender disappeared"))?;
+                Ok(())
+            };
+            let hup = async move {
+                if control_trigger {
+                    return Err(anyhow::anyhow!("test HUP setup unavailable"));
+                }
+                std::future::pending::<anyhow::Result<()>>().await
+            };
+            let supervision = tokio::spawn(supervise_http_shutdown(
+                http,
+                control,
+                hup,
+                term,
+                shutdown_tx,
+            ));
+
+            tokio::task::yield_now().await;
+            assert!(
+                !supervision.is_finished(),
+                "a HUP setup error must not drop the HTTP server"
+            );
+            assert!(accepting.load(std::sync::atomic::Ordering::SeqCst));
+            if control_trigger {
+                control_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("test control receiver disappeared"))?;
+            } else {
+                term_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("test term receiver disappeared"))?;
+            }
+            tokio::task::yield_now().await;
+            assert!(!accepting.load(std::sync::atomic::Ordering::SeqCst));
+            assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(
+                !supervision.is_finished(),
+                "in-flight HTTP work must finish before required drain"
+            );
+
+            inflight_release.notify_one();
+            tokio::task::yield_now().await;
+            assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert!(
+                !supervision.is_finished(),
+                "the outer supervisor dropped a server waiting on required drain"
+            );
+            recovery.notify_one();
+            tokio::task::yield_now().await;
+            assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+            supervision.await??;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn outer_shutdown_returns_http_errors_without_waiting_for_a_trigger() -> anyhow::Result<()>
+    {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let error = supervise_http_shutdown(
+            async { Err(anyhow::anyhow!("test HTTP failure")) },
+            std::future::pending::<anyhow::Result<()>>(),
+            std::future::pending::<anyhow::Result<()>>(),
+            std::future::pending::<anyhow::Result<()>>(),
+            shutdown_tx,
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("HTTP failure unexpectedly succeeded"))?;
+        assert_eq!(error.to_string(), "test HTTP failure");
+        assert!(shutdown_rx.await.is_err());
+        Ok(())
+    }
 
     #[test]
     fn trajectory_inspect_replay_and_prune_flags_parse() {

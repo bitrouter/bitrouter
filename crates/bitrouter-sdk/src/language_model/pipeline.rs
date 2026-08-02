@@ -252,14 +252,15 @@ pub struct Pipeline {
     /// Detached stream-finalization tasks. Every terminal stream moves its
     /// settlement here before awaiting it, so a client disconnect cannot cancel
     /// recorders after the terminal SSE frame has already been delivered.
-    /// [`Pipeline::drain_pending_settlements`] awaits them on graceful shutdown.
+    /// [`Pipeline::drain_required_pending_settlements`] awaits them on
+    /// production graceful shutdown.
     pub(crate) pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
     /// Detached **non-streaming** executions ([`Pipeline::execute_detached`]).
     /// A `TaskTracker` (not the `JoinSet` above) because *every* non-streaming
     /// request runs here, so completed tasks must be reaped automatically
-    /// rather than retained until shutdown. `drain_pending_settlements` closes
-    /// and awaits it on graceful shutdown so a SIGTERM can't cut a request that
-    /// the upstream is still billing us for.
+    /// rather than retained until shutdown. The graceful drain methods close
+    /// and await it so a SIGTERM can't cut a request that the upstream is still
+    /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
 }
 
@@ -364,6 +365,30 @@ impl Pipeline {
     /// Drops fire *before* `drain_pending_settlements` is called — the swap
     /// is correct under that contract.
     pub async fn drain_pending_settlements(&self) -> usize {
+        let drained = self.drain_detached_work().await;
+        if self.drain_required_finalizers().await.is_err() {
+            tracing::error!(
+                reason = "required_finalizer_drain_failed",
+                "RequiredFinalizer background drain failed"
+            );
+        }
+        drained
+    }
+
+    /// Wait for detached pipeline work and require every success-critical
+    /// finalizer to drain successfully.
+    ///
+    /// Production servers must use this error-returning shutdown contract so
+    /// unresolved durable ownership cannot be mistaken for a clean exit. It is
+    /// safe to retry after an error: detached work remains drained while each
+    /// finalizer re-enters its retained reconciliation evidence.
+    pub async fn drain_required_pending_settlements(&self) -> Result<usize> {
+        let drained = self.drain_detached_work().await;
+        self.drain_required_finalizers().await?;
+        Ok(drained)
+    }
+
+    async fn drain_detached_work(&self) -> usize {
         // Detached non-stream execution may itself enqueue finalizer rollback
         // and delivery-observation tasks. Drain it first so those tasks are in
         // the JoinSet before we take that set below.
@@ -383,13 +408,14 @@ impl Pipeline {
         while taken.join_next().await.is_some() {
             drained += 1;
         }
-        for finalizer in &self.required_finalizers {
-            if let Err(error) = finalizer.drain_pending_work().await {
-                tracing::error!(error = %error, "RequiredFinalizer background drain failed");
-            }
-        }
-
         drained
+    }
+
+    async fn drain_required_finalizers(&self) -> Result<()> {
+        for finalizer in &self.required_finalizers {
+            finalizer.drain_pending_work().await?;
+        }
+        Ok(())
     }
 
     fn spawn_stream_finalization<F>(&self, future: F)
