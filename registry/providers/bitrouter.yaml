@@ -409,6 +409,15 @@ models:
         cache_read: 0.3
       output_tokens:
         text: 15
+  - id: anthropic/claude-opus-5
+    provider_model_id: anthropic/claude-opus-5
+    pricing:
+      input_tokens:
+        no_cache: 5
+        cache_read: 0.5
+        cache_write: 6.25
+      output_tokens:
+        text: 25
 status: active
 weight: 1
 community: false
