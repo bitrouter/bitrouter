@@ -246,9 +246,14 @@ impl MigrationTrait for Migration {
                     .table(TrajectoryOutbox::Table)
                     .col(TrajectoryOutbox::OwnerUserId)
                     .col(TrajectoryOutbox::DeliveredAt)
+                    .col(TrajectoryOutbox::Attempts)
                     .col(TrajectoryOutbox::CreatedAt)
+                    .col(TrajectoryOutbox::OutboxId)
                     .to_owned(),
             )
+            .await?;
+        manager
+            .create_index(trajectory_outbox_delivery_order_index())
             .await?;
         Ok(())
     }
@@ -297,6 +302,18 @@ pub(crate) fn trajectory_requests_owner_full_input_digest_index() -> IndexCreate
         .table(TrajectoryRequests::Table)
         .col(TrajectoryRequests::OwnerUserId)
         .col(TrajectoryRequests::FullInputDigest)
+        .to_owned()
+}
+
+pub(crate) fn trajectory_outbox_delivery_order_index() -> IndexCreateStatement {
+    Index::create()
+        .if_not_exists()
+        .name("idx_trajectory_outbox_delivery_order")
+        .table(TrajectoryOutbox::Table)
+        .col(TrajectoryOutbox::DeliveredAt)
+        .col(TrajectoryOutbox::Attempts)
+        .col(TrajectoryOutbox::CreatedAt)
+        .col(TrajectoryOutbox::OutboxId)
         .to_owned()
 }
 

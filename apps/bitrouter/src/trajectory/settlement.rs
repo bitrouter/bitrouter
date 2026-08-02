@@ -310,6 +310,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publisher_records_the_successful_admission_time_not_outbox_creation_time()
+    -> anyhow::Result<()> {
+        let (db, store) = store().await?;
+        begin_guarded(&store, "request-delivery-time", "episode-delivery-time").await?;
+        let metering = metering("request-delivery-time");
+        store
+            .settle_request_from_current_head(
+                "owner-a",
+                "request-delivery-time",
+                |request, events, sequence| {
+                    build_settlement("owner-a", request, events, sequence, &metering)
+                },
+            )
+            .await?;
+        let created_at = store.pending_outbox("owner-a").await?[0].created_at.clone();
+        let before_admission = chrono::Utc::now();
+        let publisher = TrajectoryOutboxPublisher::new(
+            store,
+            EvalStore::new(db.clone()),
+            EvalConfig::default(),
+            10,
+        )?;
+
+        let summary = publisher.drain_pending().await?;
+        let after_admission = chrono::Utc::now();
+        let delivered_at = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT delivered_at FROM trajectory_outbox WHERE owner_user_id = 'owner-a'"
+                    .to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("delivered outbox row missing"))?
+            .try_get::<String>("", "delivered_at")?;
+        let delivered = chrono::DateTime::parse_from_rfc3339(&delivered_at)?;
+
+        assert_eq!(summary.delivered, 1);
+        assert_ne!(delivered_at, created_at);
+        assert!(delivered >= before_admission.fixed_offset());
+        assert!(delivered <= after_admission.fixed_offset());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn exact_settlement_retry_is_idempotent_and_changed_authority_conflicts()
     -> anyhow::Result<()> {
         let (_db, store) = store().await?;

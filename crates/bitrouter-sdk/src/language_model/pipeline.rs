@@ -88,7 +88,7 @@ impl DeliveryPermit {
         }
     }
 
-    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    #[cfg(any(feature = "server", test))]
     pub(crate) async fn fail(mut self, failure: BitrouterError) -> Result<()> {
         match self.ready.await {
             Ok(Ok(())) => {

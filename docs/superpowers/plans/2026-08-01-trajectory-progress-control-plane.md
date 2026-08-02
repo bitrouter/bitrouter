@@ -627,7 +627,7 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 - [x] **Step 4: Replace per-prefix queries with one indexed membership query.** De-duplicate matches, choose the longest supplied prefix, and return `Ambiguous` when that digest maps to multiple episodes.
 - [x] **Step 5: Prove the SQLite query plan uses the composite index and run large-history correlation tests.** No prompt text or unkeyed digest may enter logs or storage.
 - [x] **Step 6: Run canonical, store, migration, correlation, cross-protocol, and privacy tests until GREEN.**
-- [ ] **Step 7: Commit `perf(trajectory): bound prefix correlation`.**
+- [x] **Step 7: Commit `perf(trajectory): bound prefix correlation`.** Signed commit `13042876` is exactly one child of `697b1673`; `git verify-commit` reports a Good RSA signature from key `53E083BA9EB9D718FA8DD18A4A75D60F38346236`. The ordinary push fast-forwarded the existing Draft PR branch after its remote head was rechecked, and the worktree was clean at the checkpoint.
 
 **Task 12 RED evidence:** On exact pushed head `697b1673`, the 32-turn work probe observed 528 typed-turn serializations instead of 32; the real SQLite query plan selected only `idx_trajectory_requests_owner_episode`; and a 300-turn history incorrectly correlated through an old root outside the proposed bounded window. These were assertion-level failures after two environment-only no-space link failures were separated from behavioral evidence.
 
@@ -643,13 +643,17 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 
 **Interfaces:** `delivered_at` is the UTC time at which Eval admission succeeds, not `created_at`. Global drain uses `idx_trajectory_outbox_delivery_order (delivered_at, attempts, created_at, outbox_id)`; owner-scoped inspection remains owner-filtered.
 
-- [ ] **Step 1: Write a RED delivery-time test using distinct deterministic timestamps.** Assert delayed admission records the later successful-delivery time and exact retry does not rewrite it.
-- [ ] **Step 2: Write migration/query-plan RED coverage for the global drain order.** Require an index whose leading column is `delivered_at` and whose remaining columns match the query order.
-- [ ] **Step 3: Capture the admission-success timestamp and pass it to `mark_outbox_delivered`.** Preserve idempotency and restart behavior.
-- [ ] **Step 4: Add the global delivery-order index and retain any separate owner inspection index only when query-plan evidence needs it.**
-- [ ] **Step 5: Run publisher, outbox, migration, retention, and Eval Exchange tests until GREEN.**
-- [ ] **Step 6: Close the two Task 11 repository-policy Minors without changing public behavior.** Replace the added `cfg_attr(..., allow(dead_code))` with exact feature/test compilation gating, remove the added public language-model re-export, update consumers to the already-public submodule path, and prove all feature combinations remain warning-free. Do not add a source-grep test; existing behavior tests plus strict compilation/Clippy are the executable evidence.
+- [x] **Step 1: Write a RED delivery-time test using distinct deterministic timestamps.** Assert delayed admission records the later successful-delivery time and exact retry does not rewrite it.
+- [x] **Step 2: Write migration/query-plan RED coverage for the global drain order.** Require an index whose leading column is `delivered_at` and whose remaining columns match the query order.
+- [x] **Step 3: Capture the admission-success timestamp and pass it to `mark_outbox_delivered`.** Preserve idempotency and restart behavior.
+- [x] **Step 4: Add the global delivery-order index and retain any separate owner inspection index only when query-plan evidence needs it.**
+- [x] **Step 5: Run publisher, outbox, migration, retention, and Eval Exchange tests until GREEN.**
+- [x] **Step 6: Close the two Task 11 repository-policy Minors without changing public behavior.** Replace the added `cfg_attr(..., allow(dead_code))` with exact feature/test compilation gating, remove the added public language-model re-export, update consumers to the already-public submodule path, and prove all feature combinations remain warning-free. Do not add a source-grep test; existing behavior tests plus strict compilation/Clippy are the executable evidence.
 - [ ] **Step 7: Commit `fix(trajectory): correct outbox delivery audit`.**
+
+**Task 13 RED evidence:** On exact pushed Task 12 head `13042876`, all three new behavior probes failed: publisher delivery stored the outbox creation timestamp unchanged; a deterministic second `mark_outbox_delivered` call replaced the first success time (`00:02` became `00:03`); and SQLite reported `SCAN trajectory_outbox` plus `USE TEMP B-TREE FOR ORDER BY` for the global drain.
+
+**Task 13 GREEN evidence before commit:** The five focused delivery/idempotency/global-index/owner-index/portable-SQL probes pass 5/5. Combined publisher, outbox, migration, retention, and Eval Exchange suites pass 77/77; the complete continuation/import compatibility selection passes 99/99 after its sandbox-only loopback bind denial was rerun at the authorized local-network boundary; required-delivery permit controls pass 2/2. Strict Clippy passes for SDK no-feature library, SDK server library, SDK `config_file` tests without server, affected all-feature provider/cloud libraries, and SDK/BitRouter all-feature all-targets. The raw no-feature SDK test target still hits its pre-existing `context.rs` test import of the feature-gated `crate::config`; this is outside the Task 11 debt and the corresponding no-server test compilation passes with its required `config_file` feature. Formatting, diff checks, task/benchmark-specific branch audit, exact cfg audit, and submodule-import audit pass.
 
 ## Task 14: Validate the exact PR tree and record benchmark evidence
 
