@@ -1,8 +1,10 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -16,7 +18,8 @@ use bitrouter_sdk::language_model::protocol::responses::{
     decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
 use bitrouter_sdk::language_model::settlement::{
-    RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizer,
+    RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizationReceipt,
+    RequiredFinalizer,
 };
 use bitrouter_sdk::language_model::{
     ApiProtocol, AuthAppliers, ContinuationAuthority, RoutingTarget,
@@ -37,6 +40,13 @@ const AEAD_AAD_DOMAIN: &[u8] = b"bitrouter.continuation.aead.v1";
 const CIPHER_VERSION: i32 = 1;
 const NONCE_BYTES: usize = 12;
 const PUBLICATION_GENERATION_BYTES: usize = 16;
+const PUBLICATION_INSTANCE_BYTES: usize = 16;
+const PUBLICATION_LEASE_SECONDS: i64 = 30;
+const PUBLICATION_RECONCILIATION_LEASE_SECONDS: i64 = 1;
+const MAX_PENDING_PUBLICATIONS: usize = 256;
+const RECONCILIATION_BATCH_SIZE: usize = 32;
+const RECONCILIATION_BASE_DELAY: Duration = Duration::from_millis(25);
+const RECONCILIATION_MAX_DELAY: Duration = Duration::from_secs(5);
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_DELIVERING: &str = "delivering";
 const PUBLICATION_ACTIVE: &str = "active";
@@ -194,10 +204,16 @@ impl Eq for ContinuationKey {}
 
 #[derive(Clone)]
 pub struct ContinuationRegistry {
+    inner: Arc<ContinuationRegistryInner>,
+}
+
+struct ContinuationRegistryInner {
     db: DatabaseConnection,
     keys: ContinuationKeySource,
     retention: TimeDelta,
     prune_batch_size: u64,
+    instance_id: String,
+    pending_capacity: usize,
     /// Process-local index from delivery attempts to the random generation
     /// authenticated in each durable row. The row's `publication_state` and
     /// `publication_generation` are the durable ownership authority; this map
@@ -209,10 +225,36 @@ pub struct ContinuationRegistry {
     /// process left to perform the compensating delete.
     pending_publications: Arc<Mutex<HashMap<u64, PendingPublication>>>,
     pending_bind_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
+    reconciler: ReconcilerControl,
     #[cfg(test)]
     ambiguous_insert_fault: Arc<Mutex<Option<Arc<AmbiguousInsertFault>>>>,
     #[cfg(test)]
     maintenance_fault: Arc<Mutex<Option<Arc<MaintenanceFault>>>>,
+}
+
+struct ReconcilerControl {
+    notify: Arc<tokio::sync::Notify>,
+    task: Mutex<Option<ReconcilerTask>>,
+    pending_cursor: Mutex<Option<u64>>,
+    stale_offset: Mutex<u64>,
+}
+
+struct ReconcilerTask {
+    cancelled: Arc<AtomicBool>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ContinuationRegistryInner {
+    fn drop(&mut self) {
+        let task = match self.reconciler.task.get_mut() {
+            Ok(task) => task.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(task) = task {
+            task.cancelled.store(true, Ordering::Release);
+            self.reconciler.notify.notify_waiters();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -239,6 +281,27 @@ struct MaintenanceFault {
 struct PendingPublication {
     continuation_identity: String,
     generation: String,
+    instance_id: String,
+    lease_until: String,
+    receipt: Option<RequiredFinalizationReceipt>,
+    phase: PendingPublicationPhase,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingPublicationPhase {
+    Reserved,
+    Prepared,
+    Reconcile,
+}
+
+impl PendingPublication {
+    fn matches_receipt(&self, receipt: Option<&RequiredFinalizationReceipt>) -> bool {
+        match (self.receipt.as_ref(), receipt) {
+            (Some(expected), Some(actual)) => expected.same_invocation(actual),
+            (None, None) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,12 +359,15 @@ enum CompensationOutcome {
 struct PendingBindAttempt {
     now: DateTime<Utc>,
     delivery_attempt_id: u64,
+    receipt: Option<RequiredFinalizationReceipt>,
 }
 
 struct BindPublication {
     now: DateTime<Utc>,
     state: &'static str,
     generation: String,
+    instance_id: String,
+    lease_until: String,
 }
 
 impl ContinuationRegistry {
@@ -316,16 +382,26 @@ impl ContinuationRegistry {
         let prune_batch_size =
             u64::try_from(prune_batch_size).context("continuation prune_batch_size exceeds u64")?;
         Ok(Self {
-            db,
-            keys,
-            retention,
-            prune_batch_size,
-            pending_publications: Arc::new(Mutex::new(HashMap::new())),
-            pending_bind_locks: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(test)]
-            ambiguous_insert_fault: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
-            maintenance_fault: Arc::new(Mutex::new(None)),
+            inner: Arc::new(ContinuationRegistryInner {
+                db,
+                keys,
+                retention,
+                prune_batch_size,
+                instance_id: publication_instance_id()?,
+                pending_capacity: MAX_PENDING_PUBLICATIONS,
+                pending_publications: Arc::new(Mutex::new(HashMap::new())),
+                pending_bind_locks: Arc::new(Mutex::new(HashMap::new())),
+                reconciler: ReconcilerControl {
+                    notify: Arc::new(tokio::sync::Notify::new()),
+                    task: Mutex::new(None),
+                    pending_cursor: Mutex::new(None),
+                    stale_offset: Mutex::new(0),
+                },
+                #[cfg(test)]
+                ambiguous_insert_fault: Arc::new(Mutex::new(None)),
+                #[cfg(test)]
+                maintenance_fault: Arc::new(Mutex::new(None)),
+            }),
         })
     }
 
@@ -342,7 +418,7 @@ impl ContinuationRegistry {
             committed: Mutex::new(Some(committed_tx)),
             release: tokio::sync::Mutex::new(Some(release_rx)),
         });
-        match self.ambiguous_insert_fault.lock() {
+        match self.inner.ambiguous_insert_fault.lock() {
             Ok(mut installed) => *installed = Some(fault),
             Err(poisoned) => *poisoned.into_inner() = Some(fault),
         }
@@ -364,7 +440,7 @@ impl ContinuationRegistry {
             snapshot_read: Mutex::new(Some(snapshot_read_tx)),
             release: tokio::sync::Mutex::new(Some(release_rx)),
         });
-        match self.maintenance_fault.lock() {
+        match self.inner.maintenance_fault.lock() {
             Ok(mut installed) => *installed = Some(fault),
             Err(poisoned) => *poisoned.into_inner() = Some(fault),
         }
@@ -374,7 +450,7 @@ impl ContinuationRegistry {
     #[cfg(test)]
     async fn wait_at_maintenance_snapshot(&self, kind: MaintenanceFaultKind) {
         let fault = {
-            let mut installed = match self.maintenance_fault.lock() {
+            let mut installed = match self.inner.maintenance_fault.lock() {
                 Ok(installed) => installed,
                 Err(poisoned) => poisoned.into_inner(),
             };
@@ -400,11 +476,354 @@ impl ContinuationRegistry {
     }
 
     pub fn database(&self) -> &DatabaseConnection {
-        &self.db
+        &self.inner.db
+    }
+
+    pub(crate) fn start_reconciler(&self) {
+        let mut task = match self.inner.reconciler.task.lock() {
+            Ok(task) => task,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if task
+            .as_ref()
+            .is_some_and(|running| !running.handle.is_finished())
+        {
+            self.inner.reconciler.notify.notify_one();
+            return;
+        }
+        let _ = task.take();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let task_cancelled = cancelled.clone();
+        let notify = self.inner.reconciler.notify.clone();
+        let task_notify = notify.clone();
+        let inner = Arc::downgrade(&self.inner);
+        let handle = tokio::spawn(async move {
+            let mut delay = RECONCILIATION_BASE_DELAY;
+            loop {
+                if task_cancelled.load(Ordering::Acquire) {
+                    return;
+                }
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let registry = ContinuationRegistry { inner };
+                let had_error = registry.reconcile_pass(Utc::now()).await;
+                let has_pending = registry.has_pending_publications();
+                drop(registry);
+                delay = if has_pending {
+                    Duration::from_secs(1)
+                } else if had_error {
+                    delay.saturating_mul(2).min(RECONCILIATION_MAX_DELAY)
+                } else {
+                    RECONCILIATION_MAX_DELAY
+                };
+                tokio::select! {
+                    () = task_notify.notified() => {
+                        delay = RECONCILIATION_BASE_DELAY;
+                    }
+                    () = tokio::time::sleep(delay) => {}
+                }
+            }
+        });
+        *task = Some(ReconcilerTask { cancelled, handle });
+    }
+
+    async fn stop_reconciler(&self) -> Result<()> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let task = {
+            let mut task = match self.inner.reconciler.task.lock() {
+                Ok(task) => task,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            task.take()
+        };
+        if let Some(mut task) = task {
+            task.cancelled.store(true, Ordering::Release);
+            self.inner.reconciler.notify.notify_waiters();
+            if tokio::time::timeout_at(deadline, &mut task.handle)
+                .await
+                .is_err()
+            {
+                task.handle.abort();
+                anyhow::bail!("continuation reconciliation worker shutdown timed out");
+            }
+        }
+        self.mark_pending_for_shutdown_reconciliation();
+        loop {
+            let before = self.pending_reconciliation_count();
+            if before == 0 {
+                return Ok(());
+            }
+            let had_error = tokio::time::timeout_at(
+                deadline,
+                self.reconcile_local_publications(Utc::now()),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("continuation reconciliation drain timed out with {before} retained owner markers"))?;
+            let after = self.pending_reconciliation_count();
+            if after == 0 {
+                return Ok(());
+            }
+            if after >= before {
+                let reason = if had_error {
+                    "database reconciliation failed"
+                } else {
+                    "reconciliation made no progress"
+                };
+                anyhow::bail!(
+                    "continuation reconciliation drain stopped because {reason}; retained {after} owner markers"
+                );
+            }
+        }
+    }
+
+    async fn reconcile_pass(&self, now: DateTime<Utc>) -> bool {
+        let mut had_error = self.reconcile_local_publications(now).await;
+        if self.reconcile_stale_publications(now).await {
+            had_error = true;
+        }
+        had_error
+    }
+
+    async fn reconcile_local_publications(&self, now: DateTime<Utc>) -> bool {
+        let pending = {
+            let publications = match self.inner.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let mut eligible = publications
+                .iter()
+                .filter(|(_, publication)| publication.phase != PendingPublicationPhase::Reserved)
+                .map(|(delivery_attempt_id, publication)| {
+                    (*delivery_attempt_id, publication.clone())
+                })
+                .collect::<Vec<_>>();
+            eligible.sort_unstable_by_key(|(delivery_attempt_id, _)| *delivery_attempt_id);
+            if eligible.is_empty() {
+                Vec::new()
+            } else {
+                let mut cursor = match self.inner.reconciler.pending_cursor.lock() {
+                    Ok(cursor) => cursor,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let start = cursor
+                    .and_then(|previous| {
+                        let next =
+                            eligible.partition_point(|(attempt_id, _)| *attempt_id <= previous);
+                        (next < eligible.len()).then_some(next)
+                    })
+                    .unwrap_or(0);
+                let count = eligible.len().min(RECONCILIATION_BATCH_SIZE);
+                let selected = (0..count)
+                    .map(|offset| eligible[(start + offset) % eligible.len()].clone())
+                    .collect::<Vec<_>>();
+                *cursor = selected.last().map(|(attempt_id, _)| *attempt_id);
+                selected
+            }
+        };
+        let mut seen = HashSet::new();
+        let mut had_error = false;
+        for (delivery_attempt_id, snapshot) in pending {
+            if !seen.insert((
+                snapshot.continuation_identity.clone(),
+                snapshot.generation.clone(),
+            )) {
+                continue;
+            }
+            let identity_lock = self.pending_identity_lock(&snapshot.continuation_identity);
+            let _identity_guard = identity_lock.lock().await;
+            let Some(publication) =
+                self.pending_publication(delivery_attempt_id, snapshot.receipt.as_ref())
+            else {
+                continue;
+            };
+            let publication = match self
+                .renew_publication_lease(delivery_attempt_id, &publication, now)
+                .await
+            {
+                Ok(publication) => publication,
+                Err(failure) if failure.ownership == PublicationOwnership::LostOrForeign => {
+                    self.clear_pending_publication(
+                        delivery_attempt_id,
+                        &publication.generation,
+                        publication.receipt.as_ref(),
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    had_error = true;
+                    continue;
+                }
+            };
+            if publication.phase != PendingPublicationPhase::Reconcile {
+                continue;
+            }
+            match self.compensate_owned_publication(&publication).await {
+                Ok(CompensationOutcome::Released | CompensationOutcome::LostOrForeign) => {
+                    self.clear_pending_publication(
+                        delivery_attempt_id,
+                        &publication.generation,
+                        publication.receipt.as_ref(),
+                    );
+                }
+                Err(failure) if failure.ownership == PublicationOwnership::LostOrForeign => {
+                    self.clear_pending_publication(
+                        delivery_attempt_id,
+                        &publication.generation,
+                        publication.receipt.as_ref(),
+                    );
+                }
+                Err(_) => had_error = true,
+            }
+        }
+        had_error
+    }
+
+    fn mark_pending_for_shutdown_reconciliation(&self) {
+        let mut publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for publication in publications.values_mut() {
+            if publication.phase == PendingPublicationPhase::Prepared {
+                publication.phase = PendingPublicationPhase::Reconcile;
+            }
+        }
+    }
+
+    fn pending_reconciliation_count(&self) -> usize {
+        let publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        publications
+            .values()
+            .filter(|publication| publication.phase != PendingPublicationPhase::Reserved)
+            .count()
+    }
+
+    async fn reconcile_stale_publications(&self, now: DateTime<Utc>) -> bool {
+        let limit = match u64::try_from(RECONCILIATION_BATCH_SIZE) {
+            Ok(limit) => limit,
+            Err(_) => return true,
+        };
+        let offset = {
+            let offset = match self.inner.reconciler.stale_offset.lock() {
+                Ok(offset) => offset,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *offset
+        };
+        let stale = match continuation_entity::Entity::find()
+            .filter(
+                continuation_entity::Column::PublicationState
+                    .is_in([PUBLICATION_PROVISIONAL, PUBLICATION_DELIVERING]),
+            )
+            .filter(continuation_entity::Column::PublicationLeaseUntil.lte(timestamp(now)))
+            .order_by_asc(continuation_entity::Column::PublicationLeaseUntil)
+            .order_by_asc(continuation_entity::Column::ContinuationIdentity)
+            .offset(offset)
+            .limit(limit)
+            .all(&self.inner.db)
+            .await
+        {
+            Ok(stale) => stale,
+            Err(_) => return true,
+        };
+        {
+            let mut next_offset = match self.inner.reconciler.stale_offset.lock() {
+                Ok(offset) => offset,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *next_offset = if stale.len() < RECONCILIATION_BATCH_SIZE {
+                0
+            } else {
+                offset.saturating_add(limit)
+            };
+        }
+        let mut had_error = false;
+        for row in stale {
+            if self.has_local_generation(&row.continuation_identity, &row.publication_generation) {
+                continue;
+            }
+            let identity_lock = self.pending_identity_lock(&row.continuation_identity);
+            let _identity_guard = identity_lock.lock().await;
+            match self.claim_and_compensate_stale_publication(row, now).await {
+                Ok(()) => {}
+                Err(_) => had_error = true,
+            }
+        }
+        had_error
+    }
+
+    async fn claim_and_compensate_stale_publication(
+        &self,
+        row: continuation_entity::Model,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        if !matches!(
+            row.publication_state.as_str(),
+            PUBLICATION_PROVISIONAL | PUBLICATION_DELIVERING
+        ) || parse_timestamp(&row.publication_lease_until)? > now
+        {
+            return Ok(());
+        }
+        let key = self.inner.keys.load()?;
+        let plaintext = decrypt_row(&key, &row)?;
+        let lease_until = publication_reconciliation_lease_until(now)?;
+        let aad = aead_aad([
+            &row.key_id,
+            &row.owner_identity,
+            &row.continuation_identity,
+            &row.target_fingerprint,
+            &row.created_at,
+            &row.expires_at,
+            &row.purge_after,
+            &row.publication_state,
+            &row.publication_generation,
+            &self.inner.instance_id,
+            &lease_until,
+        ]);
+        let (ciphertext, nonce) = encrypt(&key, plaintext.as_bytes(), &aad)?;
+        let claimed = continuation_entity::Entity::update_many()
+            .col_expr(
+                continuation_entity::Column::PublicationInstanceId,
+                sea_orm::sea_query::Expr::value(self.inner.instance_id.clone()),
+            )
+            .col_expr(
+                continuation_entity::Column::PublicationLeaseUntil,
+                sea_orm::sea_query::Expr::value(lease_until.clone()),
+            )
+            .col_expr(
+                continuation_entity::Column::Ciphertext,
+                sea_orm::sea_query::Expr::value(ciphertext.clone()),
+            )
+            .col_expr(
+                continuation_entity::Column::Nonce,
+                sea_orm::sea_query::Expr::value(nonce.clone()),
+            )
+            .filter(continuation_snapshot_condition(&row))
+            .exec(&self.inner.db)
+            .await?;
+        if claimed.rows_affected != 1 {
+            return Ok(());
+        }
+        let publication = PendingPublication {
+            continuation_identity: row.continuation_identity,
+            generation: row.publication_generation,
+            instance_id: self.inner.instance_id.clone(),
+            lease_until,
+            receipt: None,
+            phase: PendingPublicationPhase::Reconcile,
+        };
+        match self.compensate_owned_publication(&publication).await {
+            Ok(CompensationOutcome::Released | CompensationOutcome::LostOrForeign) => Ok(()),
+            Err(failure) => Err(failure.into_error()),
+        }
     }
 
     fn pending_identity_lock(&self, continuation_identity: &str) -> Arc<tokio::sync::Mutex<()>> {
-        let mut locks = match self.pending_bind_locks.lock() {
+        let mut locks = match self.inner.pending_bind_locks.lock() {
             Ok(locks) => locks,
             Err(poisoned) => poisoned.into_inner(),
         };
@@ -417,14 +836,27 @@ impl ContinuationRegistry {
         lock
     }
 
-    async fn rollback_pending(&self, delivery_attempt_id: u64) -> Result<()> {
-        let publication = {
-            let publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            publications.get(&delivery_attempt_id).cloned()
+    fn pending_publication(
+        &self,
+        delivery_attempt_id: u64,
+        receipt: Option<&RequiredFinalizationReceipt>,
+    ) -> Option<PendingPublication> {
+        let publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
         };
+        publications
+            .get(&delivery_attempt_id)
+            .filter(|publication| publication.matches_receipt(receipt))
+            .cloned()
+    }
+
+    async fn rollback_pending(
+        &self,
+        delivery_attempt_id: u64,
+        receipt: Option<&RequiredFinalizationReceipt>,
+    ) -> Result<()> {
+        let publication = self.pending_publication(delivery_attempt_id, receipt);
         let Some(publication) = publication else {
             return Ok(());
         };
@@ -432,31 +864,232 @@ impl ContinuationRegistry {
         // callers and request ids retain full DB concurrency.
         let identity_lock = self.pending_identity_lock(&publication.continuation_identity);
         let _bind_guard = identity_lock.lock().await;
+        let Some(publication) = self.pending_publication(delivery_attempt_id, receipt) else {
+            return Ok(());
+        };
+        let publication = match self
+            .renew_publication_lease(delivery_attempt_id, &publication, Utc::now())
+            .await
+        {
+            Ok(publication) => publication,
+            Err(failure) if failure.ownership == PublicationOwnership::LostOrForeign => {
+                self.clear_pending_publication(
+                    delivery_attempt_id,
+                    &publication.generation,
+                    receipt,
+                );
+                return Ok(());
+            }
+            Err(failure) => {
+                self.update_pending_phase(
+                    delivery_attempt_id,
+                    &publication.generation,
+                    receipt,
+                    PendingPublicationPhase::Reconcile,
+                );
+                self.start_reconciler();
+                return Err(failure.into_error());
+            }
+        };
         match self.compensate_owned_publication(&publication).await {
             Ok(CompensationOutcome::Released | CompensationOutcome::LostOrForeign) => {
-                self.clear_pending_publication(delivery_attempt_id, &publication.generation);
+                self.clear_pending_publication(
+                    delivery_attempt_id,
+                    &publication.generation,
+                    receipt,
+                );
                 Ok(())
             }
             Err(failure) => {
                 if failure.ownership == PublicationOwnership::LostOrForeign {
-                    self.clear_pending_publication(delivery_attempt_id, &publication.generation);
+                    self.clear_pending_publication(
+                        delivery_attempt_id,
+                        &publication.generation,
+                        receipt,
+                    );
+                } else {
+                    self.update_pending_phase(
+                        delivery_attempt_id,
+                        &publication.generation,
+                        receipt,
+                        PendingPublicationPhase::Reconcile,
+                    );
+                    self.start_reconciler();
                 }
                 Err(failure.into_error())
             }
         }
     }
 
-    fn clear_pending_publication(&self, delivery_attempt_id: u64, generation: &str) {
-        let mut publications = match self.pending_publications.lock() {
+    fn clear_pending_publication(
+        &self,
+        delivery_attempt_id: u64,
+        generation: &str,
+        receipt: Option<&RequiredFinalizationReceipt>,
+    ) {
+        let mut publications = match self.inner.pending_publications.lock() {
             Ok(publications) => publications,
             Err(poisoned) => poisoned.into_inner(),
         };
         if publications
             .get(&delivery_attempt_id)
-            .is_some_and(|publication| publication.generation == generation)
+            .is_some_and(|publication| {
+                publication.generation == generation && publication.matches_receipt(receipt)
+            })
         {
             publications.remove(&delivery_attempt_id);
         }
+    }
+
+    fn update_pending_phase(
+        &self,
+        delivery_attempt_id: u64,
+        generation: &str,
+        receipt: Option<&RequiredFinalizationReceipt>,
+        phase: PendingPublicationPhase,
+    ) -> bool {
+        let mut publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(publication) = publications.get_mut(&delivery_attempt_id) else {
+            return false;
+        };
+        if publication.generation != generation || !publication.matches_receipt(receipt) {
+            return false;
+        }
+        publication.phase = phase;
+        true
+    }
+
+    fn update_pending_lease(
+        &self,
+        delivery_attempt_id: u64,
+        previous: &PendingPublication,
+        lease_until: String,
+    ) -> Option<PendingPublication> {
+        let mut publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let publication = publications.get_mut(&delivery_attempt_id)?;
+        if publication.generation != previous.generation
+            || publication.instance_id != previous.instance_id
+            || publication.lease_until != previous.lease_until
+            || !publication.matches_receipt(previous.receipt.as_ref())
+        {
+            return None;
+        }
+        publication.lease_until = lease_until;
+        Some(publication.clone())
+    }
+
+    fn has_pending_publications(&self) -> bool {
+        let publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        publications
+            .values()
+            .any(|publication| publication.phase != PendingPublicationPhase::Reserved)
+    }
+
+    fn has_pending_generation(&self, continuation_identity: &str, generation: &str) -> bool {
+        let publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        publications.values().any(|publication| {
+            publication.phase != PendingPublicationPhase::Reserved
+                && publication.continuation_identity == continuation_identity
+                && publication.generation == generation
+        })
+    }
+
+    fn has_local_generation(&self, continuation_identity: &str, generation: &str) -> bool {
+        let publications = match self.inner.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        publications.values().any(|publication| {
+            publication.continuation_identity == continuation_identity
+                && publication.generation == generation
+        })
+    }
+
+    async fn renew_publication_lease(
+        &self,
+        delivery_attempt_id: u64,
+        publication: &PendingPublication,
+        now: DateTime<Utc>,
+    ) -> std::result::Result<PendingPublication, OwnershipFailure> {
+        let renewal_window = TimeDelta::try_seconds(PUBLICATION_LEASE_SECONDS / 2)
+            .ok_or_else(|| OwnershipFailure::owned(anyhow::anyhow!("invalid lease window")))?;
+        if parse_timestamp(&publication.lease_until).map_err(OwnershipFailure::owned)?
+            > now + renewal_window
+        {
+            return Ok(publication.clone());
+        }
+        let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+            .one(&self.inner.db)
+            .await
+            .map_err(OwnershipFailure::unknown)?
+            .ok_or_else(|| {
+                OwnershipFailure::lost_or_foreign(anyhow::anyhow!(
+                    "continuation disappeared before lease renewal"
+                ))
+            })?;
+        if !publication_owns_row(publication, &row) {
+            return Err(OwnershipFailure::lost_or_foreign(anyhow::anyhow!(
+                "continuation lease fencing ownership changed"
+            )));
+        }
+        let key = self.inner.keys.load().map_err(OwnershipFailure::owned)?;
+        let plaintext = decrypt_row(&key, &row).map_err(OwnershipFailure::owned)?;
+        let lease_until = publication_lease_until(now).map_err(OwnershipFailure::owned)?;
+        let aad = aead_aad([
+            &row.key_id,
+            &row.owner_identity,
+            &row.continuation_identity,
+            &row.target_fingerprint,
+            &row.created_at,
+            &row.expires_at,
+            &row.purge_after,
+            &row.publication_state,
+            &row.publication_generation,
+            &row.publication_instance_id,
+            &lease_until,
+        ]);
+        let (ciphertext, nonce) =
+            encrypt(&key, plaintext.as_bytes(), &aad).map_err(OwnershipFailure::owned)?;
+        let renewed = continuation_entity::Entity::update_many()
+            .col_expr(
+                continuation_entity::Column::PublicationLeaseUntil,
+                sea_orm::sea_query::Expr::value(lease_until.clone()),
+            )
+            .col_expr(
+                continuation_entity::Column::Ciphertext,
+                sea_orm::sea_query::Expr::value(ciphertext),
+            )
+            .col_expr(
+                continuation_entity::Column::Nonce,
+                sea_orm::sea_query::Expr::value(nonce),
+            )
+            .filter(continuation_snapshot_condition(&row))
+            .exec(&self.inner.db)
+            .await
+            .map_err(OwnershipFailure::unknown)?;
+        if renewed.rows_affected != 1 {
+            return Err(OwnershipFailure::lost_or_foreign(anyhow::anyhow!(
+                "continuation lease renewal lost fencing ownership"
+            )));
+        }
+        self.update_pending_lease(delivery_attempt_id, publication, lease_until)
+            .ok_or_else(|| {
+                OwnershipFailure::lost_or_foreign(anyhow::anyhow!(
+                    "continuation lease marker changed concurrently"
+                ))
+            })
     }
 
     async fn compensate_owned_publication(
@@ -464,16 +1097,16 @@ impl ContinuationRegistry {
         publication: &PendingPublication,
     ) -> std::result::Result<CompensationOutcome, OwnershipFailure> {
         let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-            .one(&self.db)
+            .one(&self.inner.db)
             .await
             .map_err(OwnershipFailure::unknown)?;
         let Some(mut row) = row else {
             return Ok(CompensationOutcome::LostOrForeign);
         };
-        if row.publication_generation != publication.generation {
+        if !publication_owns_row(publication, &row) {
             return Ok(CompensationOutcome::LostOrForeign);
         }
-        let key = self.keys.load().map_err(OwnershipFailure::owned)?;
+        let key = self.inner.keys.load().map_err(OwnershipFailure::owned)?;
         match row.publication_state.as_str() {
             PUBLICATION_DELIVERING | PUBLICATION_ACTIVE => {
                 row = match self
@@ -495,27 +1128,9 @@ impl ContinuationRegistry {
                 )));
             }
         }
-        let ciphertext = row
-            .ciphertext
-            .as_ref()
-            .ok_or_else(|| OwnershipFailure::owned(anyhow::anyhow!("continuation has expired")))?;
-        let nonce = row
-            .nonce
-            .as_ref()
-            .ok_or_else(|| OwnershipFailure::owned(anyhow::anyhow!("continuation has expired")))?;
         let deleted = match continuation_entity::Entity::delete_many()
-            .filter(
-                continuation_entity::Column::ContinuationIdentity
-                    .eq(row.continuation_identity.clone()),
-            )
-            .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
-            .filter(
-                continuation_entity::Column::PublicationGeneration
-                    .eq(publication.generation.clone()),
-            )
-            .filter(continuation_entity::Column::Ciphertext.eq(ciphertext.clone()))
-            .filter(continuation_entity::Column::Nonce.eq(nonce.clone()))
-            .exec(&self.db)
+            .filter(continuation_snapshot_condition(&row))
+            .exec(&self.inner.db)
             .await
         {
             Ok(deleted) => deleted,
@@ -541,11 +1156,11 @@ impl ContinuationRegistry {
         error: anyhow::Error,
     ) -> std::result::Result<CompensationOutcome, OwnershipFailure> {
         match continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-            .one(&self.db)
+            .one(&self.inner.db)
             .await
         {
             Ok(None) => Ok(CompensationOutcome::LostOrForeign),
-            Ok(Some(row)) if row.publication_generation != publication.generation => {
+            Ok(Some(row)) if !publication_owns_row(publication, &row) => {
                 Ok(CompensationOutcome::LostOrForeign)
             }
             Ok(Some(_)) => Err(OwnershipFailure::owned(error)),
@@ -558,15 +1173,10 @@ impl ContinuationRegistry {
     async fn activate_pending(
         &self,
         delivery_attempt_id: u64,
+        receipt: Option<&RequiredFinalizationReceipt>,
         delivery: &RequiredDeliveryHandshake,
     ) -> Result<bool> {
-        let publication = {
-            let publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            publications.get(&delivery_attempt_id).cloned()
-        };
+        let publication = self.pending_publication(delivery_attempt_id, receipt);
         let Some(publication) = publication else {
             // Idempotent preparation against an already-active row owns no
             // durable transition but must still use the delivery rendezvous.
@@ -575,51 +1185,81 @@ impl ContinuationRegistry {
                 .await
                 .map_err(anyhow::Error::from);
         };
-        let identity_lock = self.pending_identity_lock(&publication.continuation_identity);
-        let _identity_guard = identity_lock.lock().await;
-        let key = self.keys.load()?;
-        let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-            .one(&self.db)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("provisional continuation disappeared before activation")
-            })?;
-        if row.publication_generation != publication.generation {
-            anyhow::bail!("provisional continuation generation ownership changed");
-        }
-        match row.publication_state.as_str() {
-            PUBLICATION_PROVISIONAL => {
-                self.transition_publication_state(&key, &row, PUBLICATION_DELIVERING)
-                    .await?;
+        {
+            let identity_lock = self.pending_identity_lock(&publication.continuation_identity);
+            let _identity_guard = identity_lock.lock().await;
+            let publication = self
+                .pending_publication(delivery_attempt_id, receipt)
+                .ok_or_else(|| anyhow::anyhow!("provisional continuation ownership disappeared"))?;
+            let publication = self
+                .renew_publication_lease(delivery_attempt_id, &publication, Utc::now())
+                .await
+                .map_err(OwnershipFailure::into_error)?;
+            let key = self.inner.keys.load()?;
+            let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+                .one(&self.inner.db)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("provisional continuation disappeared before activation")
+                })?;
+            if !publication_owns_row(&publication, &row) {
+                anyhow::bail!("provisional continuation fencing ownership changed");
             }
-            PUBLICATION_DELIVERING => {
-                decrypt_row(&key, &row)?;
+            match row.publication_state.as_str() {
+                PUBLICATION_PROVISIONAL => {
+                    self.transition_publication_state(&key, &row, PUBLICATION_DELIVERING)
+                        .await?;
+                }
+                PUBLICATION_DELIVERING => {
+                    decrypt_row(&key, &row)?;
+                }
+                PUBLICATION_ACTIVE => anyhow::bail!(
+                    "continuation publication was already active before delivery acknowledgement"
+                ),
+                state => anyhow::bail!("unsupported continuation publication state '{state}'"),
             }
-            PUBLICATION_ACTIVE => anyhow::bail!(
-                "continuation publication was already active before delivery acknowledgement"
-            ),
-            state => anyhow::bail!("unsupported continuation publication state '{state}'"),
         }
 
         let delivery_result = delivery.wait_for_delivery_acknowledgement().await;
         if delivery_result.as_ref().is_ok_and(|delivered| *delivered) {
-            let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-                .one(&self.db)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("delivering continuation disappeared before activation")
-                })?;
-            let activation = if row.publication_generation != publication.generation {
-                Err(anyhow::anyhow!(
-                    "delivering continuation generation ownership changed"
-                ))
-            } else if row.publication_state != PUBLICATION_DELIVERING {
-                Err(anyhow::anyhow!(
-                    "continuation left delivering state before activation"
-                ))
-            } else {
-                self.transition_publication_state(&key, &row, PUBLICATION_ACTIVE)
-                    .await
+            let activation = {
+                let identity_lock = self.pending_identity_lock(&publication.continuation_identity);
+                let _identity_guard = identity_lock.lock().await;
+                let publication = self
+                    .pending_publication(delivery_attempt_id, receipt)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("delivering continuation ownership disappeared")
+                    });
+                match publication {
+                    Ok(publication) => {
+                        let publication = self
+                            .renew_publication_lease(delivery_attempt_id, &publication, Utc::now())
+                            .await
+                            .map_err(OwnershipFailure::into_error)?;
+                        let row = continuation_entity::Entity::find_by_id(
+                            &publication.continuation_identity,
+                        )
+                        .one(&self.inner.db)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("delivering continuation disappeared before activation")
+                        })?;
+                        if !publication_owns_row(&publication, &row) {
+                            Err(anyhow::anyhow!(
+                                "delivering continuation fencing ownership changed"
+                            ))
+                        } else if row.publication_state != PUBLICATION_DELIVERING {
+                            Err(anyhow::anyhow!(
+                                "continuation left delivering state before activation"
+                            ))
+                        } else {
+                            let key = self.inner.keys.load()?;
+                            self.transition_publication_state(&key, &row, PUBLICATION_ACTIVE)
+                                .await
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
             };
             match activation {
                 Ok(_) => {
@@ -628,35 +1268,17 @@ impl ContinuationRegistry {
                         self.clear_pending_publication(
                             delivery_attempt_id,
                             &publication.generation,
+                            receipt,
                         );
                         return Ok(true);
                     }
-                    match self.compensate_owned_publication(&publication).await {
-                        Ok(CompensationOutcome::Released | CompensationOutcome::LostOrForeign) => {
-                            self.clear_pending_publication(
-                                delivery_attempt_id,
-                                &publication.generation,
-                            );
-                            return Ok(false);
-                        }
-                        Err(failure) => return Err(failure.into_error()),
-                    }
+                    self.rollback_pending(delivery_attempt_id, receipt).await?;
+                    return Ok(false);
                 }
                 Err(activation_error) => {
-                    let compensation = self
-                        .compensate_owned_publication(&publication)
-                        .await
-                        .map_err(OwnershipFailure::into_error);
-                    if compensation.is_ok() {
-                        self.clear_pending_publication(
-                            delivery_attempt_id,
-                            &publication.generation,
-                        );
-                    }
+                    let compensation = self.rollback_pending(delivery_attempt_id, receipt).await;
                     let error = match compensation {
-                        Ok(CompensationOutcome::Released | CompensationOutcome::LostOrForeign) => {
-                            activation_error
-                        }
+                        Ok(()) => activation_error,
                         Err(compensation_error) => anyhow::anyhow!(
                             "{activation_error}; compensating failed activation: {compensation_error}"
                         ),
@@ -669,16 +1291,14 @@ impl ContinuationRegistry {
             }
         }
 
-        match self.compensate_owned_publication(&publication).await {
-            Ok(CompensationOutcome::Released | CompensationOutcome::LostOrForeign) => {
-                self.clear_pending_publication(delivery_attempt_id, &publication.generation);
+        match self.rollback_pending(delivery_attempt_id, receipt).await {
+            Ok(()) => {
                 if delivery.complete_activation(Ok(())) {
                     let _ = delivery.wait_for_terminal_commit().await;
                 }
                 delivery_result.map_err(anyhow::Error::from)
             }
-            Err(failure) => {
-                let error = failure.into_error();
+            Err(error) => {
                 let _ = delivery.complete_activation(Err(BitrouterError::internal(format!(
                     "compensating provider continuation publication: {error}"
                 ))));
@@ -702,14 +1322,6 @@ impl ContinuationRegistry {
         ) {
             anyhow::bail!("unsupported continuation publication state transition");
         }
-        let old_ciphertext = row
-            .ciphertext
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("continuation has expired"))?;
-        let old_nonce = row
-            .nonce
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("continuation has expired"))?;
         let plaintext = decrypt_row(key, row)?;
         let aad = aead_aad([
             &row.key_id,
@@ -721,6 +1333,8 @@ impl ContinuationRegistry {
             &row.purge_after,
             next_state,
             &row.publication_generation,
+            &row.publication_instance_id,
+            &row.publication_lease_until,
         ]);
         let (ciphertext, nonce) = encrypt(key, plaintext.as_bytes(), &aad)?;
         let updated = continuation_entity::Entity::update_many()
@@ -736,18 +1350,8 @@ impl ContinuationRegistry {
                 continuation_entity::Column::Nonce,
                 sea_orm::sea_query::Expr::value(nonce.clone()),
             )
-            .filter(
-                continuation_entity::Column::ContinuationIdentity
-                    .eq(row.continuation_identity.clone()),
-            )
-            .filter(continuation_entity::Column::PublicationState.eq(row.publication_state.clone()))
-            .filter(
-                continuation_entity::Column::PublicationGeneration
-                    .eq(row.publication_generation.clone()),
-            )
-            .filter(continuation_entity::Column::Ciphertext.eq(old_ciphertext.clone()))
-            .filter(continuation_entity::Column::Nonce.eq(old_nonce.clone()))
-            .exec(&self.db)
+            .filter(continuation_snapshot_condition(row))
+            .exec(&self.inner.db)
             .await?;
         if updated.rows_affected != 1 {
             anyhow::bail!("continuation publication state changed concurrently");
@@ -768,7 +1372,7 @@ impl ContinuationRegistry {
         credential_authority: &ContinuationAuthority,
         now: DateTime<Utc>,
     ) -> Result<()> {
-        let key = self.keys.load()?;
+        let key = self.inner.keys.load()?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
         let _bind_guard = identity_lock.lock().await;
@@ -783,6 +1387,8 @@ impl ContinuationRegistry {
                     now,
                     state: PUBLICATION_ACTIVE,
                     generation: publication_generation()?,
+                    instance_id: self.inner.instance_id.clone(),
+                    lease_until: publication_lease_until(now)?,
                 },
             )
             .await
@@ -805,28 +1411,44 @@ impl ContinuationRegistry {
         let PendingBindAttempt {
             now,
             delivery_attempt_id,
+            receipt,
         } = attempt;
-        let key = self.keys.load()?;
+        let key = self.inner.keys.load()?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         let generation = publication_generation()?;
+        let instance_id = self.inner.instance_id.clone();
+        let lease_until = publication_lease_until(now)?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
         let _bind_guard = identity_lock.lock().await;
         {
-            let mut publications = match self.pending_publications.lock() {
+            let mut publications = match self.inner.pending_publications.lock() {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
             };
+            if publications.len() >= self.inner.pending_capacity
+                && !publications.contains_key(&delivery_attempt_id)
+            {
+                anyhow::bail!("continuation reconciliation capacity exhausted");
+            }
             match publications.entry(delivery_attempt_id) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(PendingPublication {
                         continuation_identity: continuation_identity.clone(),
                         generation: generation.clone(),
+                        instance_id: instance_id.clone(),
+                        lease_until: lease_until.clone(),
+                        receipt: receipt.clone(),
+                        phase: PendingPublicationPhase::Reserved,
                     });
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {
                     anyhow::bail!("duplicate continuation delivery attempt id");
                 }
             }
+        }
+        if let Err(error) = self.prune(now).await {
+            self.clear_pending_publication(delivery_attempt_id, &generation, receipt.as_ref());
+            return Err(error.context("pruning provider continuations"));
         }
         let result = self
             .bind_inner(
@@ -839,25 +1461,48 @@ impl ContinuationRegistry {
                     now,
                     state: PUBLICATION_PROVISIONAL,
                     generation: generation.clone(),
+                    instance_id,
+                    lease_until,
                 },
             )
             .await;
         match result {
-            Ok(BindOutcome::Inserted) => Ok(true),
+            Ok(BindOutcome::Inserted) => {
+                self.update_pending_phase(
+                    delivery_attempt_id,
+                    &generation,
+                    receipt.as_ref(),
+                    PendingPublicationPhase::Prepared,
+                );
+                self.start_reconciler();
+                Ok(true)
+            }
             Ok(BindOutcome::ExistingActive) => {
-                self.clear_pending_publication(delivery_attempt_id, &generation);
+                self.clear_pending_publication(delivery_attempt_id, &generation, receipt.as_ref());
                 Ok(false)
             }
             Ok(BindOutcome::ExistingProvisional) => {
-                self.clear_pending_publication(delivery_attempt_id, &generation);
+                self.clear_pending_publication(delivery_attempt_id, &generation, receipt.as_ref());
                 anyhow::bail!("gateway continuation id has a pending publication")
             }
             Err(failure) => {
                 if failure.ownership == PublicationOwnership::LostOrForeign {
-                    self.clear_pending_publication(delivery_attempt_id, &generation);
+                    self.clear_pending_publication(
+                        delivery_attempt_id,
+                        &generation,
+                        receipt.as_ref(),
+                    );
+                } else {
+                    self.update_pending_phase(
+                        delivery_attempt_id,
+                        &generation,
+                        receipt.as_ref(),
+                        PendingPublicationPhase::Reconcile,
+                    );
+                    self.start_reconciler();
                 }
-                // Owned and Unknown both retain the marker so tracked
-                // rollback can finish or reclassify the durable generation.
+                // Owned and Unknown retain fenced ownership for automatic
+                // reconciliation; conclusively foreign ownership is cleared.
                 Err(failure.into_error())
             }
         }
@@ -876,8 +1521,11 @@ impl ContinuationRegistry {
             now,
             state,
             generation,
+            instance_id,
+            lease_until,
         } = publication;
         let key = self
+            .inner
             .keys
             .load()
             .map_err(OwnershipFailure::lost_or_foreign)?;
@@ -895,12 +1543,12 @@ impl ContinuationRegistry {
             .map_err(OwnershipFailure::lost_or_foreign)?;
         let created_at = timestamp(now);
         let expires_at = timestamp(
-            now.checked_add_signed(self.retention)
+            now.checked_add_signed(self.inner.retention)
                 .ok_or_else(|| anyhow::anyhow!("continuation expiry exceeds time range"))
                 .map_err(OwnershipFailure::lost_or_foreign)?,
         );
         let purge_after = timestamp(
-            now.checked_add_signed(self.retention + self.retention)
+            now.checked_add_signed(self.inner.retention + self.inner.retention)
                 .ok_or_else(|| anyhow::anyhow!("continuation purge boundary exceeds time range"))
                 .map_err(OwnershipFailure::lost_or_foreign)?,
         );
@@ -914,6 +1562,8 @@ impl ContinuationRegistry {
             &purge_after,
             state,
             &generation,
+            &instance_id,
+            &lease_until,
         ]);
         let (ciphertext, nonce) = encrypt(&key, provider_response_id.as_bytes(), &aad)
             .map_err(OwnershipFailure::lost_or_foreign)?;
@@ -930,12 +1580,14 @@ impl ContinuationRegistry {
             purge_after: Set(purge_after),
             publication_state: Set(state.to_owned()),
             publication_generation: Set(generation.clone()),
+            publication_instance_id: Set(instance_id.clone()),
+            publication_lease_until: Set(lease_until.clone()),
         };
-        let insert_result = model.insert(&self.db).await;
+        let insert_result = model.insert(&self.inner.db).await;
         #[cfg(test)]
         let insert_result = match insert_result {
             Ok(model) => {
-                let fault = match self.ambiguous_insert_fault.lock() {
+                let fault = match self.inner.ambiguous_insert_fault.lock() {
                     Ok(mut fault) => fault.take(),
                     Err(poisoned) => poisoned.into_inner().take(),
                 };
@@ -963,7 +1615,7 @@ impl ContinuationRegistry {
             Ok(_) => Ok(BindOutcome::Inserted),
             Err(insert_error) => {
                 let existing = continuation_entity::Entity::find_by_id(&continuation_identity)
-                    .one(&self.db)
+                    .one(&self.inner.db)
                     .await
                     .map_err(|reread_error| {
                         OwnershipFailure::unknown(anyhow::anyhow!(
@@ -973,7 +1625,10 @@ impl ContinuationRegistry {
                 let Some(existing) = existing else {
                     return Err(OwnershipFailure::lost_or_foreign(insert_error));
                 };
-                if existing.publication_generation == generation {
+                if existing.publication_generation == generation
+                    && existing.publication_instance_id == instance_id
+                    && existing.publication_lease_until == lease_until
+                {
                     let existing_plaintext =
                         decrypt_row(&key, &existing).map_err(OwnershipFailure::owned)?;
                     if existing_plaintext != provider_response_id
@@ -1021,7 +1676,7 @@ impl ContinuationRegistry {
         gateway_request_id: &str,
         now: DateTime<Utc>,
     ) -> Result<ContinuationResolution> {
-        let key = self.keys.load()?;
+        let key = self.inner.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         // The same-identity lock linearizes resolve with bind, activation, and
@@ -1030,12 +1685,16 @@ impl ContinuationRegistry {
         let _identity_guard = identity_lock.lock().await;
         loop {
             let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
-                .one(&self.db)
+                .one(&self.inner.db)
                 .await?
             else {
                 return Ok(ContinuationResolution::Missing);
             };
             if row.publication_state != PUBLICATION_ACTIVE {
+                return Ok(ContinuationResolution::Missing);
+            }
+            if self.has_pending_generation(&row.continuation_identity, &row.publication_generation)
+            {
                 return Ok(ContinuationResolution::Missing);
             }
             let expected_owner = key.owner_identity(owner_user_id)?;
@@ -1072,8 +1731,8 @@ impl ContinuationRegistry {
             .filter(continuation_entity::Column::ExpiresAt.lte(now.clone()))
             .filter(continuation_entity::Column::Ciphertext.is_not_null())
             .order_by_asc(continuation_entity::Column::ExpiresAt)
-            .limit(self.prune_batch_size)
-            .all(&self.db)
+            .limit(self.inner.prune_batch_size)
+            .all(&self.inner.db)
             .await?;
         for row in expired {
             self.scrub_expired(&row).await?;
@@ -1082,8 +1741,8 @@ impl ContinuationRegistry {
         let purge_rows = continuation_entity::Entity::find()
             .filter(continuation_entity::Column::PurgeAfter.lte(now))
             .order_by_asc(continuation_entity::Column::PurgeAfter)
-            .limit(self.prune_batch_size)
-            .all(&self.db)
+            .limit(self.inner.prune_batch_size)
+            .all(&self.inner.db)
             .await?;
         #[cfg(test)]
         self.wait_at_maintenance_snapshot(MaintenanceFaultKind::Purge)
@@ -1092,7 +1751,7 @@ impl ContinuationRegistry {
         for row in purge_rows {
             let result = continuation_entity::Entity::delete_many()
                 .filter(continuation_snapshot_condition(&row))
-                .exec(&self.db)
+                .exec(&self.inner.db)
                 .await?;
             rows_affected += result.rows_affected;
         }
@@ -1113,14 +1772,14 @@ impl ContinuationRegistry {
                 sea_orm::sea_query::Expr::value(Option::<String>::None),
             )
             .filter(continuation_snapshot_condition(row))
-            .exec(&self.db)
+            .exec(&self.inner.db)
             .await?;
         Ok(result.rows_affected == 1)
     }
 
     async fn ensure_key_epoch(&self, key: &ContinuationKey, now: DateTime<Utc>) -> Result<()> {
         let existing = key_epoch_entity::Entity::find_by_id(1)
-            .one(&self.db)
+            .one(&self.inner.db)
             .await?;
         let epoch = match existing {
             Some(epoch) => epoch,
@@ -1130,10 +1789,10 @@ impl ContinuationRegistry {
                     key_id: Set(key.key_id.clone()),
                     created_at: Set(timestamp(now)),
                 };
-                match insert.insert(&self.db).await {
+                match insert.insert(&self.inner.db).await {
                     Ok(epoch) => epoch,
                     Err(_) => key_epoch_entity::Entity::find_by_id(1)
-                        .one(&self.db)
+                        .one(&self.inner.db)
                         .await?
                         .ok_or_else(|| {
                             anyhow::anyhow!("continuation key epoch could not be initialized")
@@ -1164,6 +1823,14 @@ fn continuation_snapshot_condition(row: &continuation_entity::Model) -> sea_orm:
         .add(
             continuation_entity::Column::PublicationGeneration
                 .eq(row.publication_generation.clone()),
+        )
+        .add(
+            continuation_entity::Column::PublicationInstanceId
+                .eq(row.publication_instance_id.clone()),
+        )
+        .add(
+            continuation_entity::Column::PublicationLeaseUntil
+                .eq(row.publication_lease_until.clone()),
         );
     let condition = match &row.ciphertext {
         Some(ciphertext) => {
@@ -1175,6 +1842,15 @@ fn continuation_snapshot_condition(row: &continuation_entity::Model) -> sea_orm:
         Some(nonce) => condition.add(continuation_entity::Column::Nonce.eq(nonce.clone())),
         None => condition.add(continuation_entity::Column::Nonce.is_null()),
     }
+}
+
+fn publication_owns_row(
+    publication: &PendingPublication,
+    row: &continuation_entity::Model,
+) -> bool {
+    row.publication_generation == publication.generation
+        && row.publication_instance_id == publication.instance_id
+        && row.publication_lease_until == publication.lease_until
 }
 
 /// Always-on route resolver and success-critical continuation publisher.
@@ -1304,9 +1980,12 @@ impl RouteHook for ContinuationRuntime {
     }
 }
 
-#[async_trait]
-impl RequiredFinalizer for ContinuationRuntime {
-    async fn finalize(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+impl ContinuationRuntime {
+    async fn finalize_required(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        receipt: Option<&RequiredFinalizationReceipt>,
+    ) -> PipelineResult<()> {
         if !ctx.successful_terminal || ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return Ok(());
         }
@@ -1346,9 +2025,6 @@ impl RequiredFinalizer for ContinuationRuntime {
         };
         let public_continuation_id = encode_gateway_continuation_id(&ctx.request_id)?;
         let now = Utc::now();
-        self.registry.prune(now).await.map_err(|error| {
-            BitrouterError::internal(format!("pruning provider continuations: {error}"))
-        })?;
         self.registry
             .bind_pending(
                 ctx.caller.user_id(),
@@ -1359,6 +2035,7 @@ impl RequiredFinalizer for ContinuationRuntime {
                 PendingBindAttempt {
                     now,
                     delivery_attempt_id: ctx.delivery_attempt_id,
+                    receipt: receipt.cloned(),
                 },
             )
             .await
@@ -1368,12 +2045,16 @@ impl RequiredFinalizer for ContinuationRuntime {
         Ok(())
     }
 
-    async fn rollback(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+    async fn rollback_required(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        receipt: Option<&RequiredFinalizationReceipt>,
+    ) -> PipelineResult<()> {
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return Ok(());
         }
         self.registry
-            .rollback_pending(ctx.delivery_attempt_id)
+            .rollback_pending(ctx.delivery_attempt_id, receipt)
             .await
             .map_err(|error| {
                 BitrouterError::internal(format!(
@@ -1382,9 +2063,10 @@ impl RequiredFinalizer for ContinuationRuntime {
             })
     }
 
-    async fn commit(
+    async fn commit_required(
         &self,
         ctx: &RequiredFinalizationContext,
+        receipt: Option<&RequiredFinalizationReceipt>,
         delivery: &RequiredDeliveryHandshake,
     ) -> PipelineResult<bool> {
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
@@ -1392,7 +2074,7 @@ impl RequiredFinalizer for ContinuationRuntime {
         }
         match self
             .registry
-            .activate_pending(ctx.delivery_attempt_id, delivery)
+            .activate_pending(ctx.delivery_attempt_id, receipt, delivery)
             .await
         {
             Ok(delivered) => Ok(delivered),
@@ -1407,6 +2089,56 @@ impl RequiredFinalizer for ContinuationRuntime {
     }
 }
 
+#[async_trait]
+impl RequiredFinalizer for ContinuationRuntime {
+    async fn finalize(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+        self.finalize_required(ctx, None).await
+    }
+
+    async fn finalize_with_receipt(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        receipt: &RequiredFinalizationReceipt,
+    ) -> PipelineResult<()> {
+        self.finalize_required(ctx, Some(receipt)).await
+    }
+
+    async fn rollback(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+        self.rollback_required(ctx, None).await
+    }
+
+    async fn rollback_with_receipt(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        receipt: &RequiredFinalizationReceipt,
+    ) -> PipelineResult<()> {
+        self.rollback_required(ctx, Some(receipt)).await
+    }
+
+    async fn commit(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        delivery: &RequiredDeliveryHandshake,
+    ) -> PipelineResult<bool> {
+        self.commit_required(ctx, None, delivery).await
+    }
+
+    async fn commit_with_receipt(
+        &self,
+        ctx: &RequiredFinalizationContext,
+        receipt: &RequiredFinalizationReceipt,
+        delivery: &RequiredDeliveryHandshake,
+    ) -> PipelineResult<bool> {
+        self.commit_required(ctx, Some(receipt), delivery).await
+    }
+
+    async fn drain_pending_work(&self) -> PipelineResult<()> {
+        self.registry.stop_reconciler().await.map_err(|error| {
+            BitrouterError::internal(format!("draining continuation reconciliation: {error}"))
+        })
+    }
+}
+
 fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Micros, true)
 }
@@ -1417,7 +2149,7 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
         .with_context(|| format!("invalid continuation timestamp '{value}'"))
 }
 
-fn aead_aad(fields: [&str; 9]) -> Vec<u8> {
+fn aead_aad(fields: [&str; 11]) -> Vec<u8> {
     let mut aad = AEAD_AAD_DOMAIN.to_vec();
     for field in fields {
         aad.push(0);
@@ -1452,6 +2184,31 @@ fn publication_generation() -> Result<String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(generation))
 }
 
+fn publication_instance_id() -> Result<String> {
+    let mut instance = [0_u8; PUBLICATION_INSTANCE_BYTES];
+    SystemRandom::new()
+        .fill(&mut instance)
+        .map_err(|_| anyhow::anyhow!("continuation publication instance generation failed"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(instance))
+}
+
+fn publication_lease_until(now: DateTime<Utc>) -> Result<String> {
+    publication_lease_until_for(now, PUBLICATION_LEASE_SECONDS)
+}
+
+fn publication_reconciliation_lease_until(now: DateTime<Utc>) -> Result<String> {
+    publication_lease_until_for(now, PUBLICATION_RECONCILIATION_LEASE_SECONDS)
+}
+
+fn publication_lease_until_for(now: DateTime<Utc>, seconds: i64) -> Result<String> {
+    let duration = TimeDelta::try_seconds(seconds)
+        .ok_or_else(|| anyhow::anyhow!("continuation publication lease exceeds time range"))?;
+    let lease_until = now
+        .checked_add_signed(duration)
+        .ok_or_else(|| anyhow::anyhow!("continuation publication lease exceeds time range"))?;
+    Ok(timestamp(lease_until))
+}
+
 fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Result<String> {
     let ciphertext = row
         .ciphertext
@@ -1480,6 +2237,8 @@ fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Resul
         &row.purge_after,
         &row.publication_state,
         &row.publication_generation,
+        &row.publication_instance_id,
+        &row.publication_lease_until,
     ]);
     let unbound = UnboundKey::new(&AES_256_GCM, &key.secret)
         .map_err(|_| anyhow::anyhow!("invalid continuation encryption key"))?;
@@ -1513,6 +2272,8 @@ mod continuation_entity {
         pub purge_after: String,
         pub publication_state: String,
         pub publication_generation: String,
+        pub publication_instance_id: String,
+        pub publication_lease_until: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -1683,9 +2444,59 @@ mod tests {
     }
 
     fn pending_publication_count(registry: &ContinuationRegistry) -> usize {
-        match registry.pending_publications.lock() {
+        match registry.inner.pending_publications.lock() {
             Ok(publications) => publications.len(),
             Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+
+    async fn wait_for_pending_publication_count(
+        registry: &ContinuationRegistry,
+        expected: usize,
+    ) -> anyhow::Result<()> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if pending_publication_count(registry) == expected {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "timed out waiting for {expected} pending publications; observed {}",
+                pending_publication_count(registry)
+            )
+        })?;
+        Ok(())
+    }
+
+    fn reconciler_task_id(registry: &ContinuationRegistry) -> Option<tokio::task::Id> {
+        let task = match registry.inner.reconciler.task.lock() {
+            Ok(task) => task,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        task.as_ref().map(|task| task.handle.id())
+    }
+
+    async fn suspend_reconciler_for_test(registry: &ContinuationRegistry) {
+        let task = {
+            let mut task = match registry.inner.reconciler.task.lock() {
+                Ok(task) => task,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            task.take()
+        };
+        if let Some(mut task) = task {
+            task.cancelled.store(true, Ordering::Release);
+            registry.inner.reconciler.notify.notify_waiters();
+            if tokio::time::timeout(Duration::from_secs(1), &mut task.handle)
+                .await
+                .is_err()
+            {
+                task.handle.abort();
+            }
         }
     }
 
@@ -1983,6 +2794,7 @@ mod tests {
         snapshot_read.await?;
 
         let continuation_identity = rebinding_registry
+            .inner
             .keys
             .load()?
             .continuation_identity("owner", "scrub-race")?;
@@ -2037,6 +2849,7 @@ mod tests {
         snapshot_read.await?;
 
         let continuation_identity = rebinding_registry
+            .inner
             .keys
             .load()?
             .continuation_identity("owner", "batch-scrub-race")?;
@@ -2092,6 +2905,7 @@ mod tests {
         snapshot_read.await?;
 
         let continuation_identity = rebinding_registry
+            .inner
             .keys
             .load()?
             .continuation_identity("owner", "purge-race")?;
@@ -2142,8 +2956,12 @@ mod tests {
             ))
             .await?;
 
-        let independent =
-            ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let independent = ContinuationRegistry::new(
+            registry.inner.db.clone(),
+            registry.inner.keys.clone(),
+            30,
+            10,
+        )?;
         let error = independent
             .resolve(
                 "owner",
@@ -2198,6 +3016,7 @@ mod tests {
                 [
                     generations[1].clone().into(),
                     registry
+                        .inner
                         .keys
                         .load()?
                         .continuation_identity("owner", "generation-a")?
@@ -2210,6 +3029,58 @@ mod tests {
             .await
             .expect_err("changing a generation token without re-sealing must fail authentication");
         assert!(error.to_string().contains("authentication"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publication_instance_and_lease_are_authenticated() -> anyhow::Result<()> {
+        let registry = registry(83).await?;
+        let now = Utc::now();
+        for gateway_id in ["instance-tamper", "lease-tamper"] {
+            registry
+                .bind(
+                    "owner",
+                    gateway_id,
+                    &format!("provider-{gateway_id}"),
+                    &target("credential"),
+                    &static_authority("credential"),
+                    now,
+                )
+                .await?;
+        }
+        let instance_identity = registry
+            .inner
+            .keys
+            .load()?
+            .continuation_identity("owner", "instance-tamper")?;
+        let lease_identity = registry
+            .inner
+            .keys
+            .load()?
+            .continuation_identity("owner", "lease-tamper")?;
+        registry
+            .database()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE provider_continuations SET publication_instance_id = ? WHERE continuation_identity = ?",
+                ["foreign-instance".into(), instance_identity.into()],
+            ))
+            .await?;
+        registry
+            .database()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE provider_continuations SET publication_lease_until = ? WHERE continuation_identity = ?",
+                [timestamp(now + TimeDelta::seconds(300)).into(), lease_identity.into()],
+            ))
+            .await?;
+
+        for gateway_id in ["instance-tamper", "lease-tamper"] {
+            let error = registry.resolve("owner", gateway_id, now).await.expect_err(
+                "changing publication fencing without re-sealing must fail authentication",
+            );
+            assert!(error.to_string().contains("authentication"));
+        }
         Ok(())
     }
 
@@ -2567,8 +3438,12 @@ mod tests {
         let attempt = finalization_context("restart-pending", 301, "provider-restart");
         runtime.finalize(&attempt).await?;
         runtime.rollback(&attempt).await?;
-        let restarted =
-            ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let restarted = ContinuationRegistry::new(
+            registry.inner.db.clone(),
+            registry.inner.keys.clone(),
+            30,
+            10,
+        )?;
         let public_id = encode_gateway_continuation_id("restart-pending")?;
         assert_eq!(
             restarted.resolve("owner", &public_id, Utc::now()).await?,
@@ -2585,7 +3460,12 @@ mod tests {
         let attempt = finalization_context("durable-provisional", 401, "provider-provisional");
         runtime.finalize(&attempt).await?;
 
-        let fresh = ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let fresh = ContinuationRegistry::new(
+            registry.inner.db.clone(),
+            registry.inner.keys.clone(),
+            30,
+            10,
+        )?;
         assert_eq!(
             fresh
                 .resolve(
@@ -2862,6 +3742,7 @@ mod tests {
 
         let public_id = encode_gateway_continuation_id("ack-rebind")?;
         let continuation_identity = first_registry
+            .inner
             .keys
             .load()?
             .continuation_identity("owner", &public_id)?;
@@ -3073,8 +3954,12 @@ mod tests {
         let attempt = finalization_context("foreign-provisional", 404, "provider-provisional");
         runtime.finalize(&attempt).await?;
 
-        let independent =
-            ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let independent = ContinuationRegistry::new(
+            registry.inner.db.clone(),
+            registry.inner.keys.clone(),
+            30,
+            10,
+        )?;
         independent
             .bind(
                 "owner",
@@ -3106,8 +3991,8 @@ mod tests {
     {
         let first_registry = registry(48).await?;
         let second_registry = ContinuationRegistry::new(
-            first_registry.db.clone(),
-            first_registry.keys.clone(),
+            first_registry.inner.db.clone(),
+            first_registry.inner.keys.clone(),
             30,
             10,
         )?;
@@ -3178,6 +4063,219 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pipeline_duplicate_finalize_rollback_is_invocation_attributed() -> anyhow::Result<()> {
+        for (
+            index,
+            first_request_id,
+            duplicate_request_id,
+            first_provider_id,
+            duplicate_provider_id,
+        ) in [
+            (
+                0_u8,
+                "pipeline-attempt-owner-a",
+                "pipeline-attempt-owner-b",
+                "provider-attempt-a",
+                "provider-attempt-b",
+            ),
+            (
+                1_u8,
+                "pipeline-same-identity",
+                "pipeline-same-identity",
+                "provider-binding-a",
+                "provider-binding-b",
+            ),
+            (
+                2_u8,
+                "pipeline-exact-duplicate",
+                "pipeline-exact-duplicate",
+                "provider-exact",
+                "provider-exact",
+            ),
+        ] {
+            let registry = registry(70 + index).await?;
+            let runtime = ContinuationRuntime::new(registry.clone());
+            let target = target("credential");
+            let routes = Arc::new(StaticRoutingTable::new());
+            routes.insert("gpt-5", vec![target.clone()]);
+            let first_commit_started = Arc::new(tokio::sync::Notify::new());
+            let release_first_commit = Arc::new(tokio::sync::Notify::new());
+            let finalizer = CollidingAttemptFinalizer {
+                runtime,
+                forced_delivery_attempt_id: 430,
+                blocked_request_id: first_request_id.to_owned(),
+                first_commit_started: first_commit_started.clone(),
+                release_first_commit: release_first_commit.clone(),
+                duplicate_rollback: None,
+            };
+            let executor = Arc::new(MockExecutor::new(vec![
+                MockResponse::Generate(valid_nonstream_result(&target, first_provider_id).result),
+                MockResponse::Generate(
+                    valid_nonstream_result(&target, duplicate_provider_id).result,
+                ),
+            ]));
+            let mut builder = PipelineBuilder::new();
+            builder
+                .routing_table(routes)
+                .executor(executor)
+                .route_hook(finalizer.runtime.clone())
+                .required_finalizer(finalizer);
+            let pipeline = Arc::new(builder.build()?);
+
+            let first = tokio::spawn({
+                let pipeline = pipeline.clone();
+                let request = nonstream_tool_request(first_request_id, None);
+                async move { pipeline.execute(request).await }
+            });
+            first_commit_started.notified().await;
+
+            let duplicate_error = pipeline
+                .execute(nonstream_tool_request(duplicate_request_id, None))
+                .await
+                .err()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("duplicate pipeline finalize unexpectedly succeeded")
+                })?;
+            assert!(
+                duplicate_error
+                    .to_string()
+                    .contains("duplicate continuation delivery attempt id"),
+                "unexpected duplicate error: {duplicate_error}"
+            );
+            assert_eq!(
+                pending_publication_count(&registry),
+                1,
+                "automatic duplicate-context rollback removed the first invocation marker"
+            );
+            let public_id = encode_gateway_continuation_id(first_request_id)?;
+            let continuation_identity = registry
+                .inner
+                .keys
+                .load()?
+                .continuation_identity("tool-owner", &public_id)?;
+            let first_row = continuation_entity::Entity::find_by_id(continuation_identity)
+                .one(registry.database())
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "automatic duplicate-context rollback removed the first durable row"
+                    )
+                })?;
+            assert_eq!(first_row.publication_state, PUBLICATION_PROVISIONAL);
+
+            if index == 0 {
+                first.abort();
+                let _ = first.await;
+                release_first_commit.notify_one();
+                pipeline.drain_pending_settlements().await;
+                assert_eq!(
+                    pending_publication_count(&registry),
+                    0,
+                    "the original invocation receipt did not clear its owner marker"
+                );
+                assert!(
+                    continuation_entity::Entity::find_by_id(&first_row.continuation_identity)
+                        .one(registry.database())
+                        .await?
+                        .is_none(),
+                    "the original invocation receipt did not delete its durable provisional row"
+                );
+                assert_eq!(
+                    registry
+                        .resolve("tool-owner", &public_id, Utc::now())
+                        .await?,
+                    ContinuationResolution::Missing,
+                    "the original invocation receipt could not roll back its own publication"
+                );
+            } else {
+                release_first_commit.notify_one();
+                first.await??;
+                pipeline.drain_pending_settlements().await;
+                assert!(matches!(
+                    registry
+                        .resolve("tool-owner", &public_id, Utc::now())
+                        .await?,
+                    ContinuationResolution::Active(_)
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pipeline_late_duplicate_rollback_preserves_committed_first_invocation()
+    -> anyhow::Result<()> {
+        let registry = registry(73).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let target = target("credential");
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target.clone()]);
+        let first_commit_started = Arc::new(tokio::sync::Notify::new());
+        let release_first_commit = Arc::new(tokio::sync::Notify::new());
+        let duplicate_rollback_started = Arc::new(tokio::sync::Notify::new());
+        let release_duplicate_rollback = Arc::new(tokio::sync::Notify::new());
+        let finalizer = CollidingAttemptFinalizer {
+            runtime,
+            forced_delivery_attempt_id: 431,
+            blocked_request_id: "pipeline-late-owner-a".to_owned(),
+            first_commit_started: first_commit_started.clone(),
+            release_first_commit: release_first_commit.clone(),
+            duplicate_rollback: Some(DuplicateRollbackBarrier {
+                request_id: "pipeline-late-owner-b".to_owned(),
+                started: duplicate_rollback_started.clone(),
+                release: release_duplicate_rollback.clone(),
+            }),
+        };
+        let executor = Arc::new(MockExecutor::new(vec![
+            MockResponse::Generate(valid_nonstream_result(&target, "provider-late-owner-a").result),
+            MockResponse::Generate(valid_nonstream_result(&target, "provider-late-owner-b").result),
+        ]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(finalizer.runtime.clone())
+            .required_finalizer(finalizer);
+        let pipeline = Arc::new(builder.build()?);
+
+        let first = tokio::spawn({
+            let pipeline = pipeline.clone();
+            async move {
+                pipeline
+                    .execute(nonstream_tool_request("pipeline-late-owner-a", None))
+                    .await
+            }
+        });
+        first_commit_started.notified().await;
+        let duplicate = tokio::spawn({
+            let pipeline = pipeline.clone();
+            async move {
+                pipeline
+                    .execute(nonstream_tool_request("pipeline-late-owner-b", None))
+                    .await
+            }
+        });
+        duplicate_rollback_started.notified().await;
+
+        release_first_commit.notify_one();
+        first.await??;
+        release_duplicate_rollback.notify_one();
+        assert!(duplicate.await?.is_err());
+        pipeline.drain_pending_settlements().await;
+        assert!(matches!(
+            registry
+                .resolve(
+                    "tool-owner",
+                    &encode_gateway_continuation_id("pipeline-late-owner-a")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn reused_successful_http_root_never_accumulates_pending_publications()
     -> anyhow::Result<()> {
         let registry = registry(64).await?;
@@ -3216,6 +4314,7 @@ mod tests {
 
         let public_id = encode_gateway_continuation_id(request_id)?;
         let continuation_identity = registry
+            .inner
             .keys
             .load()?
             .continuation_identity(CallerContext::local().user_id(), &public_id)?;
@@ -3435,6 +4534,624 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assembled_http_unknown_publications_reconcile_after_database_recovery()
+    -> anyhow::Result<()> {
+        let (_directory, registry, database_control) = independent_file_registries(74).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let target = target("credential");
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target.clone()]);
+        let responses = (0..3)
+            .map(|index| {
+                MockResponse::Generate(
+                    valid_nonstream_result(&target, &format!("provider-unknown-http-{index}"))
+                        .result,
+                )
+            })
+            .collect();
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(MockExecutor::new(responses)))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime);
+        let pipeline = Arc::new(builder.build()?);
+        let app = build_router(app_state(pipeline.clone()));
+        let mut retained_counts = Vec::new();
+
+        for index in 0..3 {
+            let (committed, release) = registry.inject_ambiguous_insert_after_commit();
+            let response = tokio::spawn({
+                let app = app.clone();
+                async move {
+                    app.oneshot(responses_http_request(
+                        &format!("unknown-http-{index}"),
+                        false,
+                    ))
+                    .await
+                }
+            });
+            committed.await?;
+            database_control
+                .database()
+                .execute(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "ALTER TABLE provider_continuations RENAME TO provider_continuations_hidden"
+                        .to_owned(),
+                ))
+                .await?;
+            release
+                .send(())
+                .map_err(|_| anyhow::anyhow!("ambiguous insert release closed"))?;
+            let response = response.await??;
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            );
+            database_control
+                .database()
+                .execute(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "ALTER TABLE provider_continuations_hidden RENAME TO provider_continuations"
+                        .to_owned(),
+                ))
+                .await?;
+            pipeline.drain_pending_settlements().await;
+            retained_counts.push(pending_publication_count(&registry));
+        }
+
+        pipeline.drain_pending_settlements().await;
+        assert_eq!(
+            retained_counts,
+            vec![0, 0, 0],
+            "automatic production reconciliation retained Unknown markers after recovery"
+        );
+        assert_eq!(pending_publication_count(&registry), 0);
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(
+            row.try_get::<i64>("", "count")?,
+            0,
+            "automatic production reconciliation retained durable provisional rows"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconciliation_capacity_backpressures_before_durable_side_effect() -> anyhow::Result<()>
+    {
+        let mut registry = registry(75).await?;
+        let inner = Arc::get_mut(&mut registry.inner)
+            .ok_or_else(|| anyhow::anyhow!("registry unexpectedly shared before configuration"))?;
+        inner.pending_capacity = 1;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let first = finalization_context("capacity-owner-a", 440, "provider-capacity-a");
+        let second = finalization_context("capacity-owner-b", 441, "provider-capacity-b");
+
+        runtime.finalize(&first).await?;
+        let worker = reconciler_task_id(&registry)
+            .ok_or_else(|| anyhow::anyhow!("reconciliation worker did not start"))?;
+        let error = runtime
+            .finalize(&second)
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("capacity exhaustion unexpectedly succeeded"))?;
+        assert!(error.to_string().contains("capacity exhausted"));
+        assert_eq!(pending_publication_count(&registry), 1);
+        assert_eq!(reconciler_task_id(&registry), Some(worker));
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 1);
+        runtime.rollback(&first).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reserved_bind_is_never_scanned_or_compensated_by_worker() -> anyhow::Result<()> {
+        let registry = registry(76).await?;
+        registry.start_reconciler();
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("reserved-bind", 442, "provider-reserved");
+        let (committed, release) = registry.inject_ambiguous_insert_after_commit();
+        let finalizing = tokio::spawn({
+            let runtime = runtime.clone();
+            let attempt = attempt.clone();
+            async move { runtime.finalize(&attempt).await }
+        });
+        committed.await?;
+        let phase = registry
+            .pending_publication(attempt.delivery_attempt_id, None)
+            .map(|publication| publication.phase)
+            .ok_or_else(|| anyhow::anyhow!("reserved publication marker missing"))?;
+        assert!(matches!(phase, PendingPublicationPhase::Reserved));
+
+        registry
+            .reconcile_pass(Utc::now() + TimeDelta::seconds(60))
+            .await;
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(
+            row.try_get::<i64>("", "count")?,
+            1,
+            "worker compensated a bind still in Reserved phase"
+        );
+
+        release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("ambiguous insert release closed"))?;
+        finalizing.await??;
+        runtime.rollback(&attempt).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persistent_outage_keeps_one_worker_and_bounded_owner_evidence() -> anyhow::Result<()> {
+        let (_directory, mut registry, database_control) = independent_file_registries(77).await?;
+        let inner = Arc::get_mut(&mut registry.inner)
+            .ok_or_else(|| anyhow::anyhow!("registry unexpectedly shared before configuration"))?;
+        inner.pending_capacity = 3;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempts = (0_u64..3)
+            .map(|index| {
+                finalization_context(
+                    &format!("persistent-outage-{index}"),
+                    443 + index,
+                    &format!("provider-persistent-{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        for attempt in &attempts {
+            runtime.finalize(attempt).await?;
+        }
+        let worker = reconciler_task_id(&registry)
+            .ok_or_else(|| anyhow::anyhow!("reconciliation worker did not start"))?;
+        database_control
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations RENAME TO provider_continuations_hidden"
+                    .to_owned(),
+            ))
+            .await?;
+        for attempt in &attempts {
+            assert!(runtime.rollback(attempt).await.is_err());
+        }
+        assert_eq!(pending_publication_count(&registry), 3);
+        assert_eq!(reconciler_task_id(&registry), Some(worker));
+        let overflow = finalization_context("persistent-overflow", 446, "provider-overflow");
+        let error =
+            runtime.finalize(&overflow).await.err().ok_or_else(|| {
+                anyhow::anyhow!("persistent-outage overflow unexpectedly succeeded")
+            })?;
+        assert!(error.to_string().contains("capacity exhausted"));
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        assert_eq!(pending_publication_count(&registry), 3);
+        assert_eq!(reconciler_task_id(&registry), Some(worker));
+
+        database_control
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations_hidden RENAME TO provider_continuations"
+                    .to_owned(),
+            ))
+            .await?;
+        wait_for_pending_publication_count(&registry, 0).await?;
+        assert_eq!(reconciler_task_id(&registry), Some(worker));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconciler_round_robin_renews_more_than_one_batch_without_self_claim()
+    -> anyhow::Result<()> {
+        let registry = registry(78).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let mut attempts = (0_u64..48)
+            .map(|index| {
+                finalization_context(
+                    &format!("round-robin-{index}"),
+                    500 + index,
+                    &format!("provider-round-robin-{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        for attempt in &attempts {
+            runtime.finalize(attempt).await?;
+        }
+        suspend_reconciler_for_test(&registry).await;
+        match registry.inner.reconciler.pending_cursor.lock() {
+            Ok(mut cursor) => *cursor = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
+        }
+        let future = Utc::now() + TimeDelta::seconds(20);
+        registry.reconcile_pass(future).await;
+
+        for removed in attempts.drain(0..4) {
+            runtime.rollback(&removed).await?;
+        }
+        let replacements = (0_u64..4)
+            .map(|index| {
+                finalization_context(
+                    &format!("round-robin-replacement-{index}"),
+                    100 + index,
+                    &format!("provider-round-robin-replacement-{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        for replacement in &replacements {
+            runtime.finalize(replacement).await?;
+        }
+        attempts.extend(replacements);
+        suspend_reconciler_for_test(&registry).await;
+        match registry.inner.reconciler.pending_cursor.lock() {
+            Ok(mut cursor) => *cursor = Some(531),
+            Err(poisoned) => *poisoned.into_inner() = Some(531),
+        }
+        registry.reconcile_pass(future).await;
+        let renewed = registry
+            .database()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations WHERE publication_lease_until > ?",
+                [timestamp(future + TimeDelta::seconds(15)).into()],
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("renewed continuation count missing"))?;
+        assert_eq!(
+            renewed.try_get::<i64>("", "count")?,
+            48,
+            "stable round-robin skipped owner evidence after removal and low-id insertion"
+        );
+        registry
+            .reconcile_pass(future + TimeDelta::seconds(15))
+            .await;
+        assert_eq!(pending_publication_count(&registry), attempts.len());
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 48);
+        for attempt in &attempts {
+            runtime.rollback(attempt).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_drains_more_than_one_recovered_batch() -> anyhow::Result<()> {
+        let (_directory, registry, database_control) = independent_file_registries(79).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempts = (0_u64..48)
+            .map(|index| {
+                finalization_context(
+                    &format!("shutdown-batch-{index}"),
+                    600 + index,
+                    &format!("provider-shutdown-batch-{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        for attempt in &attempts {
+            runtime.finalize(attempt).await?;
+        }
+        database_control
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations RENAME TO provider_continuations_hidden"
+                    .to_owned(),
+            ))
+            .await?;
+        for attempt in &attempts {
+            assert!(runtime.rollback(attempt).await.is_err());
+        }
+        assert_eq!(pending_publication_count(&registry), attempts.len());
+        database_control
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations_hidden RENAME TO provider_continuations"
+                    .to_owned(),
+            ))
+            .await?;
+
+        tokio::time::timeout(Duration::from_secs(3), registry.stop_reconciler()).await??;
+        assert_eq!(pending_publication_count(&registry), 0);
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restart_claims_only_expired_prepublication_leases() -> anyhow::Result<()> {
+        let (_directory, owner_registry, restarted_registry) =
+            independent_file_registries(80).await?;
+        assert_ne!(
+            owner_registry.inner.instance_id,
+            restarted_registry.inner.instance_id
+        );
+        let runtime = ContinuationRuntime::new(owner_registry.clone());
+        let provisional = finalization_context("restart-provisional", 700, "provider-provisional");
+        let delivering = finalization_context("restart-delivering", 701, "provider-delivering");
+        let raced = finalization_context("restart-raced", 705, "provider-raced");
+        runtime.finalize(&provisional).await?;
+        runtime.finalize(&delivering).await?;
+        runtime.finalize(&raced).await?;
+        suspend_reconciler_for_test(&owner_registry).await;
+
+        let delivering_publication = owner_registry
+            .pending_publication(delivering.delivery_attempt_id, None)
+            .ok_or_else(|| anyhow::anyhow!("delivering owner marker missing"))?;
+        let delivering_row =
+            continuation_entity::Entity::find_by_id(&delivering_publication.continuation_identity)
+                .one(owner_registry.database())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("delivering durable row missing"))?;
+        owner_registry
+            .transition_publication_state(
+                &owner_registry.inner.keys.load()?,
+                &delivering_row,
+                PUBLICATION_DELIVERING,
+            )
+            .await?;
+        owner_registry
+            .bind(
+                "owner",
+                "restart-active",
+                "provider-active",
+                &target("credential"),
+                &static_authority("credential"),
+                Utc::now(),
+            )
+            .await?;
+
+        let raced_publication = owner_registry
+            .pending_publication(raced.delivery_attempt_id, None)
+            .ok_or_else(|| anyhow::anyhow!("raced owner marker missing"))?;
+        let stale_raced_row =
+            continuation_entity::Entity::find_by_id(&raced_publication.continuation_identity)
+                .one(owner_registry.database())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("raced durable row missing"))?;
+        let renewal_time = Utc::now() + TimeDelta::seconds(20);
+        for attempt in [&provisional, &delivering, &raced] {
+            let publication = owner_registry
+                .pending_publication(attempt.delivery_attempt_id, None)
+                .ok_or_else(|| anyhow::anyhow!("owner marker missing before renewal"))?;
+            owner_registry
+                .renew_publication_lease(attempt.delivery_attempt_id, &publication, renewal_time)
+                .await
+                .map_err(OwnershipFailure::into_error)?;
+        }
+        let renewed_raced_row =
+            continuation_entity::Entity::find_by_id(&raced_publication.continuation_identity)
+                .one(owner_registry.database())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("renewed raced row missing"))?;
+        assert_eq!(
+            decrypt_row(&owner_registry.inner.keys.load()?, &renewed_raced_row)?,
+            "provider-raced",
+            "lease renewal did not re-seal an authenticated readable row"
+        );
+        restarted_registry
+            .claim_and_compensate_stale_publication(
+                stale_raced_row,
+                renewal_time + TimeDelta::seconds(15),
+            )
+            .await?;
+        let post_claim_raced_row =
+            continuation_entity::Entity::find_by_id(&raced_publication.continuation_identity)
+                .one(owner_registry.database())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("renewed row disappeared after stale claim"))?;
+        assert_eq!(
+            post_claim_raced_row, renewed_raced_row,
+            "stale claim snapshot replaced a concurrently renewed owner lease"
+        );
+        runtime.rollback(&raced).await?;
+
+        restarted_registry
+            .reconcile_pass(renewal_time + TimeDelta::seconds(15))
+            .await;
+        let live_rows = restarted_registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("live continuation count missing"))?;
+        assert_eq!(
+            live_rows.try_get::<i64>("", "count")?,
+            3,
+            "restart claimed a lease still renewed by its originating instance"
+        );
+
+        drop(runtime);
+        drop(owner_registry);
+        restarted_registry
+            .reconcile_pass(renewal_time + TimeDelta::seconds(31))
+            .await;
+        let expired_rows = restarted_registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expired continuation count missing"))?;
+        assert_eq!(expired_rows.try_get::<i64>("", "count")?, 1);
+        assert!(matches!(
+            restarted_registry
+                .resolve(
+                    "owner",
+                    "restart-active",
+                    renewal_time + TimeDelta::seconds(31)
+                )
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_unknown_is_masked_and_reconciles_but_restart_leaves_it_active()
+    -> anyhow::Result<()> {
+        let (_directory, owner_registry, restarted_registry) =
+            independent_file_registries(81).await?;
+        let runtime = ContinuationRuntime::new(owner_registry.clone());
+        let attempt = finalization_context("active-unknown-auto", 702, "provider-active-unknown");
+        runtime.finalize(&attempt).await?;
+        suspend_reconciler_for_test(&owner_registry).await;
+
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let (activation_tx, activation_rx) = tokio::sync::oneshot::channel();
+        let (terminal_tx, terminal_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new_with_completion(
+            ready_tx,
+            ack_rx,
+            activation_tx,
+            terminal_rx,
+        );
+        let committing_runtime = runtime.clone();
+        let committing_attempt = attempt.clone();
+        let commit = tokio::spawn(async move {
+            committing_runtime
+                .commit(&committing_attempt, &delivery)
+                .await
+        });
+        ready_rx.await??;
+        ack_tx
+            .send(DeliveryAcknowledgement::Delivered)
+            .map_err(|_| anyhow::anyhow!("delivery acknowledgement closed"))?;
+        activation_rx.await??;
+        restarted_registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations RENAME TO provider_continuations_hidden"
+                    .to_owned(),
+            ))
+            .await?;
+        drop(terminal_tx);
+        assert!(commit.await?.is_err());
+        suspend_reconciler_for_test(&owner_registry).await;
+        restarted_registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "ALTER TABLE provider_continuations_hidden RENAME TO provider_continuations"
+                    .to_owned(),
+            ))
+            .await?;
+
+        let public_id = encode_gateway_continuation_id("active-unknown-auto")?;
+        assert_eq!(pending_publication_count(&owner_registry), 1);
+        assert_eq!(
+            owner_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "same-instance Active ambiguity was not masked"
+        );
+        assert!(matches!(
+            restarted_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+        restarted_registry
+            .reconcile_pass(Utc::now() + TimeDelta::seconds(60))
+            .await;
+        assert!(matches!(
+            restarted_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Active(_)
+        ));
+
+        owner_registry.start_reconciler();
+        wait_for_pending_publication_count(&owner_registry, 0).await?;
+        assert_eq!(
+            restarted_registry
+                .resolve("owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn worker_drops_lost_evidence_without_touching_foreign_generation() -> anyhow::Result<()>
+    {
+        let (_directory, owner_registry, contender_registry) =
+            independent_file_registries(82).await?;
+        let owner_runtime = ContinuationRuntime::new(owner_registry.clone());
+        let contender_runtime = ContinuationRuntime::new(contender_registry.clone());
+        let owner = finalization_context("worker-lost-owner", 703, "provider-owner");
+        let contender = finalization_context("worker-lost-owner", 704, "provider-contender");
+        owner_runtime.finalize(&owner).await?;
+        suspend_reconciler_for_test(&owner_registry).await;
+        let owner_publication = owner_registry
+            .pending_publication(owner.delivery_attempt_id, None)
+            .ok_or_else(|| anyhow::anyhow!("owner publication marker missing"))?;
+        continuation_entity::Entity::delete_by_id(&owner_publication.continuation_identity)
+            .exec(contender_registry.database())
+            .await?;
+        contender_runtime.finalize(&contender).await?;
+        suspend_reconciler_for_test(&contender_registry).await;
+        assert!(owner_registry.update_pending_phase(
+            owner.delivery_attempt_id,
+            &owner_publication.generation,
+            None,
+            PendingPublicationPhase::Reconcile,
+        ));
+        owner_registry.start_reconciler();
+        wait_for_pending_publication_count(&owner_registry, 0).await?;
+        assert_eq!(pending_publication_count(&contender_registry), 1);
+        let contender_publication = contender_registry
+            .pending_publication(contender.delivery_attempt_id, None)
+            .ok_or_else(|| anyhow::anyhow!("contender publication marker missing"))?;
+        let row =
+            continuation_entity::Entity::find_by_id(&contender_publication.continuation_identity)
+                .one(contender_registry.database())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("foreign durable generation disappeared"))?;
+        assert_eq!(row.publication_generation, contender_publication.generation);
+        contender_runtime.rollback(&contender).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn ambiguous_committed_insert_same_generation_retains_rollback_ownership()
     -> anyhow::Result<()> {
         let (_directory, registry, restarted_registry) = independent_file_registries(57).await?;
@@ -3455,6 +5172,7 @@ mod tests {
             .expect("rereading the same durable generation must retain ownership");
         assert!(
             registry
+                .inner
                 .pending_publications
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -3491,7 +5209,7 @@ mod tests {
             tokio::spawn(async move { finalizing_runtime.finalize(&finalizing_attempt).await });
 
         committed.await?;
-        let continuation_identity = first_registry.keys.load()?.continuation_identity(
+        let continuation_identity = first_registry.inner.keys.load()?.continuation_identity(
             "owner",
             &encode_gateway_continuation_id("ambiguous-foreign")?,
         )?;
@@ -5410,6 +7128,29 @@ mod tests {
         completed: Arc<tokio::sync::Notify>,
     }
 
+    struct DuplicateRollbackBarrier {
+        request_id: String,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    struct CollidingAttemptFinalizer {
+        runtime: ContinuationRuntime,
+        forced_delivery_attempt_id: u64,
+        blocked_request_id: String,
+        first_commit_started: Arc<tokio::sync::Notify>,
+        release_first_commit: Arc<tokio::sync::Notify>,
+        duplicate_rollback: Option<DuplicateRollbackBarrier>,
+    }
+
+    impl CollidingAttemptFinalizer {
+        fn context(&self, context: &RequiredFinalizationContext) -> RequiredFinalizationContext {
+            let mut context = context.clone();
+            context.delivery_attempt_id = self.forced_delivery_attempt_id;
+            context
+        }
+    }
+
     struct BlockingEndHook {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
@@ -5634,6 +7375,76 @@ mod tests {
             self.release.notified().await;
             self.completed.store(true, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for CollidingAttemptFinalizer {
+        async fn finalize(&self, context: &RequiredFinalizationContext) -> PipelineResult<()> {
+            self.runtime.finalize(&self.context(context)).await
+        }
+
+        async fn finalize_with_receipt(
+            &self,
+            context: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+        ) -> PipelineResult<()> {
+            self.runtime
+                .finalize_with_receipt(&self.context(context), receipt)
+                .await
+        }
+
+        async fn rollback(&self, context: &RequiredFinalizationContext) -> PipelineResult<()> {
+            if let Some(barrier) = self.duplicate_rollback.as_ref()
+                && barrier.request_id == context.request_id
+            {
+                barrier.started.notify_one();
+                barrier.release.notified().await;
+            }
+            self.runtime.rollback(&self.context(context)).await
+        }
+
+        async fn rollback_with_receipt(
+            &self,
+            context: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+        ) -> PipelineResult<()> {
+            if let Some(barrier) = self.duplicate_rollback.as_ref()
+                && barrier.request_id == context.request_id
+            {
+                barrier.started.notify_one();
+                barrier.release.notified().await;
+            }
+            self.runtime
+                .rollback_with_receipt(&self.context(context), receipt)
+                .await
+        }
+
+        async fn commit(
+            &self,
+            context: &RequiredFinalizationContext,
+            delivery: &RequiredDeliveryHandshake,
+        ) -> PipelineResult<bool> {
+            if self.blocked_request_id == context.request_id {
+                self.first_commit_started.notify_one();
+                self.release_first_commit.notified().await;
+            }
+            self.runtime.commit(&self.context(context), delivery).await
+        }
+
+        async fn commit_with_receipt(
+            &self,
+            context: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+            delivery: &RequiredDeliveryHandshake,
+        ) -> PipelineResult<bool> {
+            if self.blocked_request_id == context.request_id {
+                self.first_commit_started.notify_one();
+                self.release_first_commit.notified().await;
+            }
+            self.runtime
+                .commit_with_receipt(&self.context(context), receipt, delivery)
+                .await
         }
     }
 
@@ -5983,7 +7794,12 @@ mod tests {
         completed.notified().await;
         pipeline.drain_pending_settlements().await;
 
-        let fresh = ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let fresh = ContinuationRegistry::new(
+            registry.inner.db.clone(),
+            registry.inner.keys.clone(),
+            30,
+            10,
+        )?;
         assert_eq!(
             fresh
                 .resolve(

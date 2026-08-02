@@ -229,6 +229,7 @@ pub async fn build_app_with_path(
             "pruned expired provider continuations at startup"
         );
     }
+    continuation_registry.start_reconciler();
     let continuation_runtime = ContinuationRuntime::with_auth_appliers(
         continuation_registry.clone(),
         auth_appliers.clone(),
