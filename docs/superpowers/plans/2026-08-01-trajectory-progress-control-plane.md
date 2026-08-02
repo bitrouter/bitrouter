@@ -145,6 +145,7 @@ pub struct CorrelationEvidence {
     pub native_parent_id: Option<String>,
     pub full_input_digest: String,
     pub ancestor_prefix_digests: Vec<String>,
+    pub ancestor_prefixes_truncated: bool,
     pub starts_with_prior_turns: bool,
 }
 
@@ -433,7 +434,7 @@ the general progress invariant depend on external agent installations.
 
 - [x] **Step 1: Write the failing contradiction tests.** Extend `native_parent_resolves_exact_request_and_outranks_conflicting_prefix` so the native episode still wins while `HistoryCompleteness::Incomplete`, `history.completeness = incomplete`, and `correlation.prefix_conflict = 1` are observable. Add matching-native-prefix and ambiguous-prefix controls.
 - [x] **Step 2: Run `cargo test -p bitrouter --all-features trajectory::correlation::tests::native_parent -- --nocapture`.** Expected RED: the conflicting request is currently `Complete` with no conflict marker.
-- [x] **Step 3: Resolve prefix evidence alongside the trusted native parent in the existing transaction.** Preserve native selection; mark only contradictory or ambiguous non-empty prefix evidence incomplete. `PrefixResolution::None` remains acceptable for native delta/compacted Responses input.
+- [x] **Step 3: Resolve prefix evidence alongside the trusted native parent in the existing transaction.** Preserve native selection; mark contradictory or ambiguous non-empty prefix evidence incomplete. `PrefixResolution::None` remains acceptable for native delta/compacted Responses input only when canonicalization proves the complete prefix set was inspected; a bounded, truncated miss is unobservable ancestry and must be incomplete.
 - [x] **Step 4: Prove monotonic replay and guard behavior.** Reconnect to file-backed SQLite, replay the episode, and assert the same incomplete snapshot digest. With `incomplete_history: escalate`, assert a protected route; with `observe`, assert no invented semantic result.
 - [x] **Step 5: Run focused correlation, store, replay, and guard tests until GREEN.**
 - [x] **Step 6: Commit `fix(trajectory): expose ancestry conflicts`.**
@@ -633,6 +634,8 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 
 **Task 12 GREEN evidence before commit:** Incremental v1 JSON/HMAC compatibility passes 1/1; bounded-work, composite-index query-plan, portable SQLite/Postgres/MySQL index SQL, and conservative old-ancestry tests each pass 1/1. Complete canonical, correlation, store, and migration suites pass 14/14, 24/24, 40/40, and 7/7. `cargo fmt --all -- --check`, `git diff --check`, and `CARGO_INCREMENTAL=0 cargo clippy -p bitrouter --all-features --lib -- -D warnings` pass. Static inspection finds no task-, provider-, case-, workflow-, or benchmark-specific runtime branch and no raw prompt/unkeyed digest persistence. Only this isolated worktree's 30GB regenerable Cargo `target/` was removed after disk exhaustion; source, sibling worktrees, and benchmark artifacts were untouched.
 
+**Task 14 specification correction:** The first independent review of exact head `164ee354` reproduced a 300-turn Responses continuation in which native episode A was selected while a contradictory canonical root B existed only outside the retained newest-256 prefix window. The result was incorrectly `NativeParentId / Complete`. Root cause: the canonical result and correlation transaction carried the bounded digests but not whether older digests were omitted, so native `PrefixResolution::None` conflated a complete miss with an unobservable truncated miss. The correction adds authenticated `ancestor_prefixes_truncated` evidence through canonicalization, public correlation evidence, persisted request-start structure, and exact-retry comparison. Native selection remains authoritative; only `None + truncated` forces incomplete, while an exact 256-prefix non-truncated boundary and a retained matching native prefix stay complete. `correlation.prefix_conflict` remains reserved for observed different/ambiguous evidence rather than invented conflict.
+
 ## Task 13: Correct outbox delivery audit time and drain index
 
 **Files:**
@@ -663,6 +666,11 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 - Modify: implementation/docs only for defects found by validation
 
 - [ ] **Step 1: Generate a fresh full-diff review package and require an independent reviewer to close every Critical/Important finding.** The review at `c199f9a9` found 0 Critical, 5 Important, and 2 Minor; its earlier green gates are invalidated by Tasks 8-13 and cannot be reused.
+- **First Task 14 review result:** exact signed head `164ee354` and its complete-history bundle passed provenance, signature, clean-tree, Task 12/13 focused probes, formatting, and diff validation, but specification review returned **FAIL — 0 Critical / 1 Important / 2 compatibility Minors**. Quality review and benchmark remain blocked. The Important is the truncated native-ancestry completeness defect documented above; the two Minors are the already disclosed required `StreamPart.source_protocol` and public `Config` struct-literal migrations.
+- [x] **Step 1a: Reproduce the Task 14 finding as a permanent RED.** On exact `164ee354`, the 300-turn native/contradictory-old-root regression failed at `left: Complete, right: Incomplete`; the exact 257-turn/256-prefix boundary control was added alongside it.
+- [x] **Step 1b: Carry and authenticate bounded-window truncation.** Canonicalization emits `ancestor_prefixes_truncated`; correlation persists it in content-digested request-start evidence and exact retry rejects a changed value. In the native branch, `None + truncated` is incomplete without falsely setting `prefix_conflict`; `None + not truncated`, a retained matching native prefix, and the exact boundary keep prior semantics.
+- [ ] **Step 1c: Rerun focused and exact-tree gates, create a new signed candidate/bundle, and require a fresh independent specification PASS before starting a separate quality review.**
+- **Task 14 correction GREEN before commit:** the permanent 300-turn omitted-old-root regression, exact 257-turn/256-prefix boundary, linear canonical work/truncation evidence, and changed-truncation exact-retry control each pass 1/1. Complete canonical, correlation, and store suites pass 14/14, 26/26, and 41/41. `cargo fmt --all -- --check`, `git diff --check`, and `cargo clippy --all-features --all-targets -- -D warnings` pass. Authorized `cargo nextest run --all-features --no-fail-fast` passes 2,525/2,525 with 11 skipped across 31 binaries. `cargo run -p dist-helper -- check` reports the schema current and 50 providers / 49 canonical models. Static staged-diff inspection finds no task/provider/case/workflow/benchmark runtime branch, lint allowance, or new production panic/unwrap/expect. After gates, only this isolated worktree's 25.1GB regenerable Cargo output was cleaned to recover disk for independent review; no source, sibling worktree, process, or benchmark artifact was read or changed.
 - [ ] **Step 2: Run focused tests after every remediation task and record the exact command/result in the PR.**
 - [ ] **Step 3: Run `cargo fmt --all -- --check`.**
 - [ ] **Step 4: Run `cargo clippy --all-features --all-targets -- -D warnings`.**

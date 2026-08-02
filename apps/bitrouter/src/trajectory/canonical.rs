@@ -120,6 +120,7 @@ pub struct Canonicalizer {
 pub struct CanonicalPromptDigests {
     pub full_input_digest: KeyedDigest,
     pub ancestor_prefix_digests: Vec<KeyedDigest>,
+    pub ancestor_prefixes_truncated: bool,
     pub starts_with_prior_turns: bool,
     pub canonical_input_bytes: u64,
 }
@@ -284,6 +285,8 @@ impl Canonicalizer {
             .len()
             .saturating_sub(1)
             .min(MAX_ANCESTOR_PREFIX_DIGESTS);
+        let ancestor_prefixes_truncated =
+            turns.len().saturating_sub(1) > MAX_ANCESTOR_PREFIX_DIGESTS;
         let first_retained_end = turns.len().saturating_sub(MAX_ANCESTOR_PREFIX_DIGESTS);
         let mut prefix_digests = Vec::with_capacity(prefix_capacity);
 
@@ -331,6 +334,7 @@ impl Canonicalizer {
         Ok(CanonicalPromptDigests {
             full_input_digest,
             ancestor_prefix_digests: prefix_digests,
+            ancestor_prefixes_truncated,
             starts_with_prior_turns,
             canonical_input_bytes,
         })
@@ -566,8 +570,8 @@ mod tests {
     };
 
     use super::{
-        CANONICAL_PROMPT_VERSION, CanonicalPrefix, Canonicalizer, CorrelationKey, canonical_turns,
-        canonical_work, reset_canonical_work,
+        CANONICAL_PROMPT_VERSION, CanonicalPrefix, Canonicalizer, CorrelationKey,
+        MAX_ANCESTOR_PREFIX_DIGESTS, canonical_turns, canonical_work, reset_canonical_work,
     };
 
     fn parse(protocol: ApiProtocol, body: serde_json::Value) -> anyhow::Result<Prompt> {
@@ -1053,6 +1057,7 @@ mod tests {
         })?;
 
         assert_eq!(canonical.ancestor_prefix_digests, expected_prefixes);
+        assert!(!canonical.ancestor_prefixes_truncated);
         assert_eq!(
             canonical.full_input_digest,
             canonicalizer.digest_bytes(&full)?
@@ -1088,6 +1093,11 @@ mod tests {
                 canonical.ancestor_prefix_digests.len(),
                 expected_prefixes,
                 "prefix bound changed for {turn_count} turns"
+            );
+            assert_eq!(
+                canonical.ancestor_prefixes_truncated,
+                turn_count.saturating_sub(1) > MAX_ANCESTOR_PREFIX_DIGESTS,
+                "prefix truncation evidence changed for {turn_count} turns"
             );
             assert_eq!(
                 work.turn_serializations, turn_count,

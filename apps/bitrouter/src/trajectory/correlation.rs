@@ -31,6 +31,7 @@ pub struct CorrelationEvidence {
     pub native_parent_id: Option<String>,
     pub full_input_digest: String,
     pub ancestor_prefix_digests: Vec<String>,
+    pub ancestor_prefixes_truncated: bool,
     pub starts_with_prior_turns: bool,
     pub canonical_input_bytes: u64,
 }
@@ -158,6 +159,7 @@ impl TrajectoryRuntime {
                     native_parent_digest,
                     full_input_digest: canonical.full_input_digest,
                     ancestor_prefix_digests: canonical.ancestor_prefix_digests,
+                    ancestor_prefixes_truncated: canonical.ancestor_prefixes_truncated,
                     starts_with_prior_turns: canonical.starts_with_prior_turns,
                     canonical_input_bytes: canonical.canonical_input_bytes,
                     protocol: protocol_name(&inbound_protocol).to_owned(),
@@ -192,6 +194,7 @@ fn correlation_evidence(
             .iter()
             .map(|digest| digest.as_str().to_owned())
             .collect(),
+        ancestor_prefixes_truncated: canonical.ancestor_prefixes_truncated,
         starts_with_prior_turns: canonical.starts_with_prior_turns,
         canonical_input_bytes: canonical.canonical_input_bytes,
     }
@@ -1004,6 +1007,153 @@ mod tests {
             unresolved.evidence.ancestor_prefix_digests.len(),
             256,
             "bounded correlation must expose only the newest authenticated prefixes"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_parent_with_omitted_older_ancestry_is_incomplete() -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let native_root = runtime
+            .begin_request(
+                "owner-a",
+                "request-native-root",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "native root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let contradictory_root = runtime
+            .begin_request(
+                "owner-a",
+                "request-contradictory-root",
+                ApiProtocol::Messages,
+                &prompt(vec![Message::text(Role::User, "omitted canonical root")]),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        let messages = (0..300)
+            .map(|index| {
+                if index == 0 {
+                    Message::text(Role::User, "omitted canonical root")
+                } else if index % 2 == 0 {
+                    Message::text(Role::User, format!("later user turn {index}"))
+                } else {
+                    Message::text(Role::Assistant, format!("later assistant turn {index}"))
+                }
+            })
+            .collect::<Vec<_>>();
+        let child_prompt = responses_prompt(messages, "request-native-root");
+
+        let linked = runtime
+            .begin_request(
+                "owner-a",
+                "request-truncated-native-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:00:02Z",
+            )
+            .await?;
+
+        assert_eq!(linked.source, CorrelationSource::NativeParentId);
+        assert_eq!(linked.episode_id, native_root.episode_id);
+        assert_ne!(linked.episode_id, contradictory_root.episode_id);
+        assert_eq!(linked.completeness, HistoryCompleteness::Incomplete);
+        assert_eq!(linked.prior_events.len(), 1);
+        assert_eq!(linked.evidence.ancestor_prefix_digests.len(), 256);
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &linked.episode_id)
+            .await?;
+        let start = events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing truncated request start"))?;
+        assert_eq!(
+            start
+                .evidence
+                .structural
+                .get("correlation.ancestor_prefixes_truncated"),
+            Some(&1)
+        );
+        assert_eq!(
+            start.evidence.structural.get("correlation.prefix_conflict"),
+            Some(&0),
+            "unobserved omitted ancestry is incomplete, not an observed contradiction"
+        );
+
+        let retry = runtime
+            .begin_request(
+                "owner-a",
+                "request-truncated-native-child",
+                ApiProtocol::Responses,
+                &child_prompt,
+                "2026-08-01T00:05:00Z",
+            )
+            .await?;
+        assert_eq!(retry.episode_id, linked.episode_id);
+        assert_eq!(retry.source, CorrelationSource::NativeParentId);
+        assert_eq!(retry.completeness, HistoryCompleteness::Incomplete);
+        assert_eq!(retry.prior_events, linked.prior_events);
+        assert_eq!(
+            runtime
+                .store()
+                .events_for_episode("owner-a", &linked.episode_id)
+                .await?
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exact_prefix_window_boundary_preserves_complete_native_episode() -> anyhow::Result<()>
+    {
+        let (runtime, _) = runtime().await?;
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-boundary-root",
+                ApiProtocol::Responses,
+                &prompt(vec![Message::text(Role::User, "boundary root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let messages = (0..257)
+            .map(|index| {
+                if index == 0 {
+                    Message::text(Role::User, "boundary root")
+                } else if index % 2 == 0 {
+                    Message::text(Role::User, format!("boundary user turn {index}"))
+                } else {
+                    Message::text(Role::Assistant, format!("boundary assistant turn {index}"))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let linked = runtime
+            .begin_request(
+                "owner-a",
+                "request-boundary-child",
+                ApiProtocol::Responses,
+                &responses_prompt(messages, "request-boundary-root"),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        assert_eq!(linked.source, CorrelationSource::NativeParentId);
+        assert_eq!(linked.episode_id, root.episode_id);
+        assert_eq!(linked.completeness, HistoryCompleteness::Complete);
+        assert_eq!(linked.evidence.ancestor_prefix_digests.len(), 256);
+        let events = runtime
+            .store()
+            .events_for_episode("owner-a", &linked.episode_id)
+            .await?;
+        assert_eq!(
+            events[1]
+                .evidence
+                .structural
+                .get("correlation.ancestor_prefixes_truncated"),
+            Some(&0)
         );
         Ok(())
     }
