@@ -3043,6 +3043,12 @@ struct RestartRelease {
     forced_pid: Option<u32>,
 }
 
+#[derive(Clone, Copy)]
+struct RestartTarget {
+    pid: u32,
+    kill_authorized: bool,
+}
+
 async fn wait_for_restart_condition(
     timeout: std::time::Duration,
     mut ready: impl FnMut() -> bool,
@@ -3062,7 +3068,7 @@ async fn wait_for_restart_condition(
 
 async fn await_restart_release<IsAlive, EndpointInUse, ForceKill, ForceKillFuture>(
     socket: &Path,
-    old_pid: Option<u32>,
+    target: Option<RestartTarget>,
     mut is_alive: IsAlive,
     mut endpoint_in_use: EndpointInUse,
     mut force_kill: ForceKill,
@@ -3073,7 +3079,7 @@ where
     ForceKill: FnMut(u32) -> ForceKillFuture,
     ForceKillFuture: std::future::Future<Output = ()>,
 {
-    let Some(pid) = old_pid else {
+    let Some(target) = target else {
         let ready =
             wait_for_restart_condition(RESTART_GRACE_PERIOD, || !endpoint_in_use(socket)).await;
         return RestartRelease {
@@ -3081,6 +3087,7 @@ where
             forced_pid: None,
         };
     };
+    let pid = target.pid;
 
     let process_exited = wait_for_restart_condition(RESTART_GRACE_PERIOD, || !is_alive(pid)).await;
     if process_exited {
@@ -3088,6 +3095,13 @@ where
             wait_for_restart_condition(RESTART_CLEANUP_PERIOD, || !endpoint_in_use(socket)).await;
         return RestartRelease {
             ready,
+            forced_pid: None,
+        };
+    }
+
+    if !target.kill_authorized {
+        return RestartRelease {
+            ready: false,
             forced_pid: None,
         };
     }
@@ -3113,49 +3127,95 @@ async fn remove_stale_pid_file_if_matches(
     }
 }
 
+async fn restart_control_phase<
+    SendCommand,
+    SendCommandFuture,
+    IsAlive,
+    EndpointInUse,
+    ForceKill,
+    ForceKillFuture,
+>(
+    socket: &Path,
+    pidfile_pid: Option<u32>,
+    endpoint_was_in_use: bool,
+    mut send_command: SendCommand,
+    is_alive: IsAlive,
+    endpoint_in_use: EndpointInUse,
+    force_kill: ForceKill,
+) -> Result<RestartRelease>
+where
+    SendCommand: FnMut(DaemonCommand) -> SendCommandFuture,
+    SendCommandFuture: std::future::Future<Output = Result<DaemonResponse>>,
+    IsAlive: FnMut(u32) -> bool,
+    EndpointInUse: FnMut(&Path) -> bool,
+    ForceKill: FnMut(u32) -> ForceKillFuture,
+    ForceKillFuture: std::future::Future<Output = ()>,
+{
+    let target = if endpoint_was_in_use {
+        let status = send_command(DaemonCommand::Status).await.map_err(|_| {
+            anyhow::anyhow!("running daemon process identity could not be verified for restart")
+        })?;
+        let pid = match status {
+            DaemonResponse::Status { pid, .. } if pid != 0 => pid,
+            _ => anyhow::bail!("running daemon process identity could not be verified for restart"),
+        };
+        match send_command(DaemonCommand::Stop).await {
+            Ok(DaemonResponse::Ok) => {}
+            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
+            Err(e) => tracing::warn!(error = %e, "stop failed — proceeding to start"),
+        }
+        Some(RestartTarget {
+            pid,
+            kill_authorized: true,
+        })
+    } else {
+        pidfile_pid.map(|pid| RestartTarget {
+            pid,
+            kill_authorized: false,
+        })
+    };
+
+    let release =
+        await_restart_release(socket, target, is_alive, endpoint_in_use, force_kill).await;
+    Ok(release)
+}
+
 async fn restart(
     source: &bitrouter::paths::ConfigSource,
     socket: &Path,
     log_path: &Path,
 ) -> Result<DaemonActionReport> {
     let pid_path = pid_path_for(socket);
-    let old_pid = daemon::read_pid_file(&pid_path)
+    let pidfile_pid = daemon::read_pid_file(&pid_path)
         .await
         .filter(|pid| process_is_alive(*pid));
-    // Stop is best-effort — a missing daemon is fine, we just go straight to
-    // start. Any other error from the running daemon is fatal. `endpoint_in_use`
-    // abstracts "is a daemon bound here?" across the Unix socket file and the
-    // Windows named pipe.
+    // A reachable control endpoint must authenticate the daemon process through
+    // Status before Stop. With no endpoint, a live pidfile can delay replacement
+    // but never authorize a signal. Stop transport failure remains best-effort
+    // after authentication; explicit or unexpected Stop responses remain fatal.
     let endpoint_was_in_use = daemon::endpoint_in_use(socket);
-    if endpoint_was_in_use {
-        match daemon::send_command(socket, &DaemonCommand::Stop).await {
-            Ok(DaemonResponse::Ok) => {}
-            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-            Err(e) => tracing::warn!(error = %e, "stop failed — proceeding to start"),
-        }
+    let release = restart_control_phase(
+        socket,
+        pidfile_pid,
+        endpoint_was_in_use,
+        |command| async move { daemon::send_command(socket, &command).await },
+        process_is_alive,
+        daemon::endpoint_in_use,
+        |pid| async move {
+            tracing::warn!(
+                reason = "restart_grace_period_elapsed",
+                "old daemon still running after restart grace period; forcing shutdown"
+            );
+            force_kill(pid).await;
+        },
+    )
+    .await?;
+    if let Some(pid) = release.forced_pid {
+        remove_stale_pid_file_if_matches(&pid_path, pid, process_is_alive).await;
     }
-    if old_pid.is_some() || endpoint_was_in_use {
-        let release = await_restart_release(
-            socket,
-            old_pid,
-            process_is_alive,
-            daemon::endpoint_in_use,
-            |pid| async move {
-                tracing::warn!(
-                    reason = "restart_grace_period_elapsed",
-                    "old daemon still running after restart grace period; forcing shutdown"
-                );
-                force_kill(pid).await;
-            },
-        )
-        .await;
-        if let Some(pid) = release.forced_pid {
-            remove_stale_pid_file_if_matches(&pid_path, pid, process_is_alive).await;
-        }
-        if !release.ready {
-            anyhow::bail!("old daemon did not release its process and control endpoint in time");
-        }
+    if !release.ready {
+        anyhow::bail!("old daemon did not release its process and control endpoint in time");
     }
     start(source, log_path, "restart").await
 }
@@ -4304,6 +4364,20 @@ async fn force_kill(pid: u32) {
 mod tests {
     use super::*;
 
+    enum RestartCommandKind {
+        Status,
+        Stop,
+    }
+
+    impl RestartCommandKind {
+        fn matches(&self, command: &DaemonCommand) -> bool {
+            matches!(
+                (self, command),
+                (Self::Status, DaemonCommand::Status) | (Self::Stop, DaemonCommand::Stop)
+            )
+        }
+    }
+
     #[derive(Clone)]
     struct RestartGateHarness {
         old_pid: u32,
@@ -4311,6 +4385,7 @@ mod tests {
         endpoint_in_use: Arc<std::sync::atomic::AtomicBool>,
         forced: Arc<std::sync::atomic::AtomicUsize>,
         forced_pid: Arc<std::sync::atomic::AtomicUsize>,
+        sent_commands: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl RestartGateHarness {
@@ -4321,10 +4396,11 @@ mod tests {
                 endpoint_in_use: Arc::new(std::sync::atomic::AtomicBool::new(endpoint_in_use)),
                 forced: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 forced_pid: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                sent_commands: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
 
-        fn spawn(&self, old_pid: Option<u32>) -> tokio::task::JoinHandle<RestartRelease> {
+        fn spawn(&self, target: Option<RestartTarget>) -> tokio::task::JoinHandle<RestartRelease> {
             let expected_pid = self.old_pid;
             let alive = self.alive.clone();
             let endpoint_in_use = self.endpoint_in_use.clone();
@@ -4333,7 +4409,51 @@ mod tests {
             tokio::spawn(async move {
                 await_restart_release(
                     Path::new("restart.sock"),
-                    old_pid,
+                    target,
+                    move |pid| {
+                        pid == expected_pid && alive.load(std::sync::atomic::Ordering::SeqCst)
+                    },
+                    move |_| endpoint_in_use.load(std::sync::atomic::Ordering::SeqCst),
+                    move |pid| {
+                        let forced = forced.clone();
+                        let forced_pid = forced_pid.clone();
+                        async move {
+                            forced_pid.store(pid as usize, std::sync::atomic::Ordering::SeqCst);
+                            forced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    },
+                )
+                .await
+            })
+        }
+
+        fn spawn_control(
+            &self,
+            pidfile_pid: Option<u32>,
+            endpoint_was_in_use: bool,
+            responses: Vec<(RestartCommandKind, anyhow::Result<DaemonResponse>)>,
+        ) -> tokio::task::JoinHandle<anyhow::Result<RestartRelease>> {
+            let expected_pid = self.old_pid;
+            let alive = self.alive.clone();
+            let endpoint_in_use = self.endpoint_in_use.clone();
+            let forced = self.forced.clone();
+            let forced_pid = self.forced_pid.clone();
+            let sent_commands = self.sent_commands.clone();
+            tokio::spawn(async move {
+                let mut responses = std::collections::VecDeque::from(responses);
+                restart_control_phase(
+                    Path::new("restart.sock"),
+                    pidfile_pid,
+                    endpoint_was_in_use,
+                    move |command| {
+                        sent_commands.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let response = match responses.pop_front() {
+                            Some((expected, response)) if expected.matches(&command) => response,
+                            Some(_) => Err(anyhow::anyhow!("unexpected daemon command order")),
+                            None => Err(anyhow::anyhow!("unexpected extra daemon command")),
+                        };
+                        std::future::ready(response)
+                    },
                     move |pid| {
                         pid == expected_pid && alive.load(std::sync::atomic::Ordering::SeqCst)
                     },
@@ -4367,12 +4487,19 @@ mod tests {
         fn forced_pid(&self) -> usize {
             self.forced_pid.load(std::sync::atomic::Ordering::SeqCst)
         }
+
+        fn sent_commands(&self) -> usize {
+            self.sent_commands.load(std::sync::atomic::Ordering::SeqCst)
+        }
     }
 
     #[tokio::test(start_paused = true)]
     async fn restart_waits_for_exact_old_pid_after_endpoint_release() -> anyhow::Result<()> {
         let harness = RestartGateHarness::new(4_242, true, false);
-        let gate = harness.spawn(Some(4_242));
+        let gate = harness.spawn(Some(RestartTarget {
+            pid: 4_242,
+            kill_authorized: true,
+        }));
 
         tokio::task::yield_now().await;
         assert!(
@@ -4390,9 +4517,156 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn restart_pidfile_only_target_times_out_without_force_kill() -> anyhow::Result<()> {
+        let harness = RestartGateHarness::new(4_248, true, false);
+        let gate = harness.spawn_control(Some(4_248), false, vec![]);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(RESTART_GRACE_PERIOD).await;
+        tokio::task::yield_now().await;
+        tokio::time::advance(RESTART_CLEANUP_PERIOD).await;
+        tokio::task::yield_now().await;
+        let release = gate.await??;
+        assert!(!release.ready, "stale live pid evidence became ready");
+        assert_eq!(harness.sent_commands(), 0);
+        assert_eq!(
+            harness.forced_count(),
+            0,
+            "pidfile-only evidence authorized a destructive signal"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn restart_control_status_pid_survives_missing_pidfile_and_endpoint_release()
+    -> anyhow::Result<()> {
+        let harness = RestartGateHarness::new(4_249, true, false);
+        let control = harness.spawn_control(
+            None,
+            true,
+            vec![
+                (
+                    RestartCommandKind::Status,
+                    Ok(DaemonResponse::Status {
+                        pid: 4_249,
+                        listen: "127.0.0.1:4356".to_string(),
+                        models: 0,
+                    }),
+                ),
+                (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
+            ],
+        );
+
+        tokio::task::yield_now().await;
+        assert_eq!(harness.sent_commands(), 2);
+        assert!(
+            !control.is_finished(),
+            "endpoint release bypassed Status pid"
+        );
+        assert_eq!(harness.forced_count(), 0);
+        harness.set_alive(false);
+        tokio::time::advance(RESTART_POLL_INTERVAL).await;
+        tokio::task::yield_now().await;
+        let release = control.await??;
+        assert!(release.ready);
+        assert_eq!(release.forced_pid, None);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn restart_control_status_pid_is_only_force_kill_target_with_different_pidfile()
+    -> anyhow::Result<()> {
+        let harness = RestartGateHarness::new(4_250, true, false);
+        let control = harness.spawn_control(
+            Some(9_999),
+            true,
+            vec![
+                (
+                    RestartCommandKind::Status,
+                    Ok(DaemonResponse::Status {
+                        pid: 4_250,
+                        listen: "127.0.0.1:4356".to_string(),
+                        models: 0,
+                    }),
+                ),
+                (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
+            ],
+        );
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(RESTART_GRACE_PERIOD - std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(harness.forced_count(), 0);
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(harness.forced_count(), 1);
+        assert_eq!(harness.forced_pid(), 4_250);
+        assert_eq!(harness.sent_commands(), 2);
+
+        harness.set_alive(false);
+        tokio::time::advance(RESTART_POLL_INTERVAL).await;
+        tokio::task::yield_now().await;
+        let release = control.await??;
+        assert!(release.ready);
+        assert_eq!(release.forced_pid, Some(4_250));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn restart_status_failures_never_promote_pidfile_to_kill_authority() -> anyhow::Result<()>
+    {
+        let cases = [
+            (
+                "zero pid",
+                Ok(DaemonResponse::Status {
+                    pid: 0,
+                    listen: "127.0.0.1:4356".to_string(),
+                    models: 0,
+                }),
+            ),
+            (
+                "daemon error",
+                Ok(DaemonResponse::Error {
+                    message: "status unavailable".to_string(),
+                }),
+            ),
+            ("unexpected response", Ok(DaemonResponse::Ok)),
+            (
+                "transport error",
+                Err(anyhow::anyhow!("control transport unavailable")),
+            ),
+        ];
+
+        for (name, response) in cases {
+            let harness = RestartGateHarness::new(4_251, true, false);
+            let control = harness.spawn_control(
+                Some(4_251),
+                true,
+                vec![(RestartCommandKind::Status, response)],
+            );
+            let outcome = control.await?;
+            assert!(outcome.is_err(), "{name} did not fail closed");
+            assert_eq!(
+                harness.sent_commands(),
+                1,
+                "{name} sent Stop without authenticated process identity"
+            );
+            assert_eq!(
+                harness.forced_count(),
+                0,
+                "{name} promoted pidfile evidence to kill authority"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn restart_waits_for_endpoint_after_exact_old_pid_exits() -> anyhow::Result<()> {
         let harness = RestartGateHarness::new(4_243, false, true);
-        let gate = harness.spawn(Some(4_243));
+        let gate = harness.spawn(Some(RestartTarget {
+            pid: 4_243,
+            kill_authorized: true,
+        }));
 
         tokio::task::yield_now().await;
         assert!(
@@ -4413,7 +4687,10 @@ mod tests {
     async fn restart_force_kills_only_after_full_grace_and_waits_for_cleanup() -> anyhow::Result<()>
     {
         let harness = RestartGateHarness::new(4_244, true, false);
-        let gate = harness.spawn(Some(4_244));
+        let gate = harness.spawn(Some(RestartTarget {
+            pid: 4_244,
+            kill_authorized: true,
+        }));
 
         tokio::task::yield_now().await;
         tokio::time::advance(RESTART_GRACE_PERIOD - RESTART_POLL_INTERVAL).await;
@@ -4445,7 +4722,10 @@ mod tests {
     async fn restart_force_kill_cleanup_remains_bounded_when_process_survives() -> anyhow::Result<()>
     {
         let harness = RestartGateHarness::new(4_245, true, false);
-        let gate = harness.spawn(Some(4_245));
+        let gate = harness.spawn(Some(RestartTarget {
+            pid: 4_245,
+            kill_authorized: true,
+        }));
 
         tokio::task::yield_now().await;
         tokio::time::advance(RESTART_GRACE_PERIOD).await;
@@ -4508,59 +4788,6 @@ mod tests {
         assert!(
             !pid_path.exists(),
             "dead matching pid evidence was retained"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn restart_wiring_captures_pid_before_stop_and_gates_already_draining_process()
-    -> anyhow::Result<()> {
-        let source = include_str!("main.rs");
-        let Some(restart_start) = source.find("async fn restart(") else {
-            anyhow::bail!("restart function not found");
-        };
-        let Some(restart_end_offset) = source[restart_start..].find("async fn reload(") else {
-            anyhow::bail!("restart function end not found");
-        };
-        let restart = &source[restart_start..restart_start + restart_end_offset];
-
-        let Some(pid_capture) = restart.find("let old_pid = daemon::read_pid_file(&pid_path)")
-        else {
-            anyhow::bail!("restart does not capture the old pid");
-        };
-        let Some(endpoint_snapshot) =
-            restart.find("let endpoint_was_in_use = daemon::endpoint_in_use(socket);")
-        else {
-            anyhow::bail!("restart does not snapshot the endpoint state");
-        };
-        let Some(stop_request) = restart.find("daemon::send_command(socket, &DaemonCommand::Stop)")
-        else {
-            anyhow::bail!("restart does not send Stop");
-        };
-        let Some(release_gate) = restart.find("if old_pid.is_some() || endpoint_was_in_use") else {
-            anyhow::bail!(
-                "restart does not gate an already-draining process after its endpoint is released"
-            );
-        };
-        let Some(start_request) = restart.find("start(source, log_path, \"restart\").await") else {
-            anyhow::bail!("restart does not start after the release gate");
-        };
-
-        assert!(
-            pid_capture < endpoint_snapshot,
-            "old pid must be captured before inspecting the endpoint"
-        );
-        assert!(
-            pid_capture < stop_request,
-            "old pid must be captured before sending Stop"
-        );
-        assert!(
-            stop_request < release_gate,
-            "the release gate must follow the Stop attempt"
-        );
-        assert!(
-            release_gate < start_request,
-            "start must remain behind the process-and-endpoint release gate"
         );
         Ok(())
     }
