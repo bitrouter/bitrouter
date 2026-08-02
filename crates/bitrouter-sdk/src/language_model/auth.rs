@@ -23,6 +23,81 @@ use crate::language_model::types::{ApiProtocol, AuthScheme, RoutingTarget};
 
 const AUTHORITY_DOMAIN: &[u8] = b"bitrouter.transport.credential-authority.v1";
 
+/// Host-owned authentication extension operation whose diagnostic may be public.
+#[derive(Clone, Copy)]
+pub(super) enum AuthExtensionOperation {
+    /// Structured request-body preparation.
+    BodyPreparation,
+    /// Initial wire authentication.
+    RequestAuthentication,
+    /// Credential refresh after an upstream rejection.
+    Refresh,
+    /// Route-time continuation authority resolution.
+    ContinuationAuthorityResolution,
+}
+
+impl AuthExtensionOperation {
+    fn diagnostic(self) -> &'static str {
+        match self {
+            Self::BodyPreparation => "upstream authentication body preparation failed",
+            Self::RequestAuthentication => "upstream authentication failed",
+            Self::Refresh => "upstream authentication refresh failed",
+            Self::ContinuationAuthorityResolution => {
+                "continuation authentication authority resolution failed"
+            }
+        }
+    }
+}
+
+/// Discard opaque extension-controlled diagnostics while retaining only the
+/// bounded error-class data used by routing and public status projection.
+pub(super) fn normalize_auth_extension_error(
+    error: BitrouterError,
+    operation: AuthExtensionOperation,
+) -> BitrouterError {
+    let diagnostic = operation.diagnostic();
+    match error {
+        BitrouterError::BadRequest { .. } => BitrouterError::BadRequest {
+            message: diagnostic.into(),
+        },
+        BitrouterError::Unauthorized(_) => BitrouterError::Unauthorized(diagnostic.into()),
+        BitrouterError::PaymentRequired(_) => BitrouterError::PaymentRequired(diagnostic.into()),
+        BitrouterError::UpstreamPaymentRequired { .. } => {
+            BitrouterError::UpstreamPaymentRequired { detail: None }
+        }
+        BitrouterError::Forbidden(_) => BitrouterError::Forbidden(diagnostic.into()),
+        BitrouterError::NotFound(_) => BitrouterError::NotFound(diagnostic.into()),
+        BitrouterError::RateLimited { retry_after } => BitrouterError::RateLimited { retry_after },
+        BitrouterError::UpstreamRateLimited { retry_after, .. } => {
+            BitrouterError::UpstreamRateLimited {
+                retry_after,
+                detail: None,
+            }
+        }
+        BitrouterError::UpstreamBadRequest { .. } => BitrouterError::UpstreamBadRequest {
+            error: serde_json::Value::String(diagnostic.into()),
+        },
+        BitrouterError::UpstreamPolicyViolation { .. } => BitrouterError::UpstreamPolicyViolation {
+            message: diagnostic.into(),
+        },
+        BitrouterError::Upstream { status, .. } => BitrouterError::Upstream {
+            status,
+            message: diagnostic.into(),
+        },
+        BitrouterError::UpstreamInvalidResponse { .. } => BitrouterError::UpstreamInvalidResponse {
+            message: diagnostic.into(),
+        },
+        BitrouterError::UpstreamAuth { status, .. } => BitrouterError::UpstreamAuth {
+            status,
+            www_authenticate: None,
+            required_scope: None,
+        },
+        BitrouterError::UpstreamTimeout => BitrouterError::UpstreamTimeout,
+        BitrouterError::UpstreamUnavailable => BitrouterError::UpstreamUnavailable,
+        BitrouterError::Internal(_) => BitrouterError::Internal(diagnostic.into()),
+    }
+}
+
 /// Redaction-safe stable identity for the credential principal used on one
 /// outbound request. The value is already a one-way digest; raw credentials
 /// and account identifiers never enter pipeline events, logs, or storage.
@@ -238,7 +313,7 @@ impl std::fmt::Debug for AppliedAuth {
         formatter
             .debug_struct("AppliedAuth")
             .field("method", self.request.method())
-            .field("url", self.request.url())
+            .field("url", &"<redacted>")
             .field(
                 "continuation_authority_proven",
                 &self.continuation_authority.is_some(),
@@ -390,9 +465,15 @@ impl AuthAppliers {
         target: &RoutingTarget,
     ) -> Result<Option<CredentialAuthority>> {
         if let Some(applier) = self.lookup(&target.provider_name) {
-            return applier.continuation_authority(target).await.map_err(|_| {
-                BitrouterError::internal("continuation authentication authority resolution failed")
-            });
+            return applier
+                .continuation_authority(target)
+                .await
+                .map_err(|error| {
+                    normalize_auth_extension_error(
+                        error,
+                        AuthExtensionOperation::ContinuationAuthorityResolution,
+                    )
+                });
         }
         let credential = target
             .api_key_override
@@ -413,9 +494,10 @@ impl AuthAppliers {
             return applier
                 .continuation_authority_proof(target)
                 .await
-                .map_err(|_| {
-                    BitrouterError::internal(
-                        "continuation authentication authority resolution failed",
+                .map_err(|error| {
+                    normalize_auth_extension_error(
+                        error,
+                        AuthExtensionOperation::ContinuationAuthorityResolution,
                     )
                 });
         }
@@ -486,6 +568,101 @@ mod tests {
             "Bearer legacy"
         );
         assert!(applied.continuation_authority.is_none());
+    }
+
+    #[test]
+    fn applied_auth_debug_redacts_the_complete_authenticated_url() {
+        let request = reqwest::Client::new()
+            .post(
+                "https://debug-user:debug-password@example.invalid/private-path?api_key=debug-query-secret",
+            )
+            .build()
+            .unwrap();
+        let debug = format!("{:?}", AppliedAuth::unproven(request));
+
+        for private in [
+            "debug-user",
+            "debug-password",
+            "private-path",
+            "api_key",
+            "debug-query-secret",
+        ] {
+            assert!(
+                !debug.contains(private),
+                "AppliedAuth Debug exposed authenticated URL data: {debug}"
+            );
+        }
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn opaque_error_normalization_preserves_kind_and_status_without_any_detail() {
+        const SENTINEL: &str = "auth-normalizer-private-sentinel";
+        let errors = vec![
+            BitrouterError::BadRequest {
+                message: SENTINEL.into(),
+            },
+            BitrouterError::Unauthorized(SENTINEL.into()),
+            BitrouterError::PaymentRequired(SENTINEL.into()),
+            BitrouterError::UpstreamPaymentRequired {
+                detail: Some(SENTINEL.into()),
+            },
+            BitrouterError::Forbidden(SENTINEL.into()),
+            BitrouterError::NotFound(SENTINEL.into()),
+            BitrouterError::RateLimited {
+                retry_after: Some(13),
+            },
+            BitrouterError::UpstreamRateLimited {
+                retry_after: Some(17),
+                detail: Some(SENTINEL.into()),
+            },
+            BitrouterError::UpstreamBadRequest {
+                error: serde_json::json!({"secret": SENTINEL}),
+            },
+            BitrouterError::UpstreamPolicyViolation {
+                message: SENTINEL.into(),
+            },
+            BitrouterError::Upstream {
+                status: 503,
+                message: SENTINEL.into(),
+            },
+            BitrouterError::UpstreamInvalidResponse {
+                message: SENTINEL.into(),
+            },
+            BitrouterError::UpstreamAuth {
+                status: 403,
+                www_authenticate: Some(SENTINEL.into()),
+                required_scope: Some(SENTINEL.into()),
+            },
+            BitrouterError::UpstreamTimeout,
+            BitrouterError::UpstreamUnavailable,
+            BitrouterError::Internal(SENTINEL.into()),
+        ];
+
+        for error in errors {
+            let expected_kind = error.kind();
+            let expected_status = error.status();
+            let normalized = normalize_auth_extension_error(
+                error,
+                AuthExtensionOperation::RequestAuthentication,
+            );
+            assert_eq!(normalized.kind(), expected_kind);
+            assert_eq!(normalized.status(), expected_status);
+            let mut surfaces = vec![
+                normalized.to_string(),
+                format!("{normalized:?}"),
+                normalized.public_message(),
+                serde_json::to_string(&normalized.to_envelope()).unwrap(),
+            ];
+            if let Some(detail) = normalized.upstream_detail() {
+                surfaces.push(detail.into());
+            }
+            assert!(
+                surfaces.iter().all(|surface| !surface.contains(SENTINEL)),
+                "normalized error exposed opaque detail: {surfaces:?}"
+            );
+            assert!(std::error::Error::source(&normalized).is_none());
+        }
     }
 
     #[test]

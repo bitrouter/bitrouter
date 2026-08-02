@@ -196,6 +196,31 @@ impl ObserveHook for ErrorCapturingObserveHook {
     }
 }
 
+struct HopErrorCapturingObserveHook(Arc<std::sync::Mutex<Vec<String>>>);
+
+#[async_trait]
+impl ObserveHook for HopErrorCapturingObserveHook {
+    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+
+    async fn on_hop_end(
+        &self,
+        _ctx: &PipelineContext,
+        _target: &RoutingTarget,
+        outcome: HopOutcome<'_>,
+    ) {
+        if let HopOutcome::Failed(error) = outcome {
+            match self.0.lock() {
+                Ok(mut errors) => errors.push(format!("{error:?}\n{error}")),
+                Err(poisoned) => poisoned.into_inner().push(format!("{error:?}\n{error}")),
+            }
+        }
+    }
+
+    async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+    async fn on_request_end(&self, _ctx: &PipelineContext, _outcome: &RequestOutcome) {}
+}
+
 struct FailingSettlementRecorder(Arc<AtomicUsize>);
 
 #[async_trait]
@@ -2934,11 +2959,129 @@ impl AuthApplier for OpaqueFailingAuthApplier {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SemanticAuthFailurePoint {
+    PrepareBody,
+    Apply,
+    Refresh,
+}
+
+struct SemanticFailingAuthApplier {
+    point: SemanticAuthFailurePoint,
+    error: BitrouterError,
+}
+
+#[async_trait]
+impl AuthApplier for SemanticFailingAuthApplier {
+    async fn apply(
+        &self,
+        mut request: reqwest::Request,
+        _target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        if matches!(self.point, SemanticAuthFailurePoint::Apply) {
+            return Err(self.error.clone());
+        }
+        request.headers_mut().insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_static("Bearer semantic-test-credential"),
+        );
+        Ok(request)
+    }
+
+    async fn prepare_body(
+        &self,
+        _body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        if matches!(self.point, SemanticAuthFailurePoint::PrepareBody) {
+            return Err(self.error.clone());
+        }
+        Ok(())
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        _target: &RoutingTarget,
+        _rejected_authorization: Option<&reqwest::header::HeaderValue>,
+    ) -> Result<bool> {
+        if matches!(self.point, SemanticAuthFailurePoint::Refresh) {
+            return Err(self.error.clone());
+        }
+        Ok(false)
+    }
+}
+
+struct CountingFailingAuthApplier(Arc<AtomicUsize>);
+
+#[async_trait]
+impl AuthApplier for CountingFailingAuthApplier {
+    async fn apply(
+        &self,
+        _request: reqwest::Request,
+        _target: &RoutingTarget,
+    ) -> Result<reqwest::Request> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(BitrouterError::internal(
+            "unexpected fail-fast fallback target",
+        ))
+    }
+}
+
 fn opaque_auth_executor(point: OpaqueAuthFailurePoint) -> HttpExecutor {
     let auth =
         AuthAppliers::new().with("retry-provider", Arc::new(OpaqueFailingAuthApplier(point)));
     HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)
         .expect("executor")
+}
+
+fn semantic_auth_executor(
+    provider: &str,
+    point: SemanticAuthFailurePoint,
+    error: BitrouterError,
+) -> HttpExecutor {
+    let auth = AuthAppliers::new().with(
+        provider,
+        Arc::new(SemanticFailingAuthApplier { point, error }),
+    );
+    HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)
+        .expect("executor")
+}
+
+async fn semantic_auth_error(error: BitrouterError) -> BitrouterError {
+    let provider = "semantic-auth-failure";
+    let executor = semantic_auth_executor(provider, SemanticAuthFailurePoint::Apply, error);
+    let mut target = auth_retry_target("http://example.invalid".into());
+    target.provider_name = provider.into();
+    let req = request();
+    let ctx = PipelineContext::new(req.clone());
+    executor
+        .execute(&target, &req.prompt, &ctx)
+        .await
+        .expect_err("semantic authentication failure must fail execution")
+}
+
+fn assert_error_surfaces_omit(error: &BitrouterError, private: &str) {
+    let mut diagnostics = vec![
+        error.to_string(),
+        format!("{error:?}"),
+        error.public_message(),
+        serde_json::to_string(&error.to_envelope()).expect("serialize error envelope"),
+    ];
+    if let Some(detail) = error.upstream_detail() {
+        diagnostics.push(detail.to_string());
+    }
+    let mut source = std::error::Error::source(error);
+    while let Some(current) = source {
+        diagnostics.push(current.to_string());
+        diagnostics.push(format!("{current:?}"));
+        source = current.source();
+    }
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.contains(private)),
+        "private extension data escaped through an error surface: {diagnostics:?}"
+    );
 }
 
 async fn opaque_auth_error(
@@ -3048,6 +3191,95 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         api_base_override: None,
         auth_scheme: Default::default(),
     }
+}
+
+async fn assert_semantic_auth_failure_falls_back(
+    error: BitrouterError,
+    point: SemanticAuthFailurePoint,
+    stream: bool,
+) {
+    const SENTINEL: &str = "semantic-auth-private-sentinel";
+    const NONSTREAM_OK: &str = r#"{"id":"chatcmpl-semantic-fallback","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+    const STREAM_OK: &str = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let seen_auths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let success = if stream { STREAM_OK } else { NONSTREAM_OK };
+    let responses = match point {
+        SemanticAuthFailurePoint::PrepareBody | SemanticAuthFailurePoint::Apply => {
+            vec![("200 OK", success)]
+        }
+        SemanticAuthFailurePoint::Refresh => vec![
+            (
+                "401 Unauthorized",
+                r#"{"error":{"code":"expired","message":"refresh required"}}"#,
+            ),
+            ("200 OK", success),
+        ],
+    };
+    let api_base = spawn_auth_retry_server(responses, seen_auths.clone());
+    let failing_provider = "semantic-auth-failure";
+    let mut first = auth_retry_target(api_base.clone());
+    first.provider_name = failing_provider.into();
+    let mut second = auth_retry_target(api_base);
+    second.provider_name = "semantic-auth-success".into();
+    second.api_key = "healthy-static-credential".into();
+    let routes = Arc::new(StaticRoutingTable::new());
+    routes.insert("test-model", vec![first, second]);
+    let executor = semantic_auth_executor(failing_provider, point, error);
+    let hop_errors = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(routes, Arc::new(executor), |builder| {
+        builder.observe_hook(HopErrorCapturingObserveHook(hop_errors.clone()));
+    });
+
+    if stream {
+        let parts = collect_stream(
+            pipeline
+                .execute_stream(stream_request())
+                .await
+                .expect("retryable auth failure must fall back to a healthy stream"),
+        )
+        .await;
+        assert!(parts.iter().all(Result::is_ok));
+        assert!(parts.iter().any(|part| matches!(
+            part,
+            Ok(StreamPart::TextDelta { text }) if text == "ok"
+        )));
+    } else {
+        let result = pipeline
+            .execute(request())
+            .await
+            .expect("retryable auth failure must fall back to a healthy target");
+        assert!(matches!(
+            result.result.content.as_slice(),
+            [Content::Text { text, .. }] if text == "ok"
+        ));
+    }
+
+    let diagnostics = hop_errors
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .join("\n");
+    assert!(!diagnostics.contains(SENTINEL));
+    let safe_diagnostic = match point {
+        SemanticAuthFailurePoint::PrepareBody => "upstream authentication body preparation failed",
+        SemanticAuthFailurePoint::Apply => "upstream authentication failed",
+        SemanticAuthFailurePoint::Refresh => "upstream authentication refresh failed",
+    };
+    assert!(diagnostics.contains(safe_diagnostic));
+    assert_eq!(
+        seen_auths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len(),
+        if matches!(point, SemanticAuthFailurePoint::Refresh) {
+            2
+        } else {
+            1
+        }
+    );
 }
 
 fn auth_retry_executor(
@@ -3246,6 +3478,165 @@ async fn pipeline_settlement_never_receives_opaque_auth_failure_text() {
             "opaque authentication detail reached a caller or settlement surface: {diagnostic}"
         );
         assert!(diagnostic.contains("upstream authentication failed"));
+    }
+}
+
+#[tokio::test]
+async fn opaque_auth_failures_preserve_retryable_fallback_semantics_in_both_modes() {
+    const SENTINEL: &str = "semantic-auth-private-sentinel";
+    for stream in [false, true] {
+        for (point, error) in [
+            (
+                SemanticAuthFailurePoint::PrepareBody,
+                BitrouterError::Upstream {
+                    status: 503,
+                    message: SENTINEL.into(),
+                },
+            ),
+            (
+                SemanticAuthFailurePoint::Apply,
+                BitrouterError::Upstream {
+                    status: 503,
+                    message: SENTINEL.into(),
+                },
+            ),
+            (
+                SemanticAuthFailurePoint::Apply,
+                BitrouterError::PaymentRequired(SENTINEL.into()),
+            ),
+            (
+                SemanticAuthFailurePoint::Refresh,
+                BitrouterError::Upstream {
+                    status: 503,
+                    message: SENTINEL.into(),
+                },
+            ),
+        ] {
+            assert_semantic_auth_failure_falls_back(error, point, stream).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn opaque_auth_failures_preserve_safe_error_variants_and_discard_private_fields() {
+    const SENTINEL: &str = "semantic-auth-private-sentinel";
+
+    let error = semantic_auth_error(BitrouterError::Upstream {
+        status: 503,
+        message: SENTINEL.into(),
+    })
+    .await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    match error {
+        BitrouterError::Upstream { status, message } => {
+            assert_eq!(status, 503);
+            assert_eq!(message, "upstream authentication failed");
+        }
+        other => panic!("upstream classification changed to {other:?}"),
+    }
+    let error = semantic_auth_error(BitrouterError::PaymentRequired(SENTINEL.into())).await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    match error {
+        BitrouterError::PaymentRequired(message) => {
+            assert_eq!(message, "upstream authentication failed");
+        }
+        other => panic!("payment classification changed to {other:?}"),
+    }
+    let error = semantic_auth_error(BitrouterError::UpstreamRateLimited {
+        retry_after: Some(17),
+        detail: Some(SENTINEL.into()),
+    })
+    .await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    match error {
+        BitrouterError::UpstreamRateLimited {
+            retry_after,
+            detail,
+        } => {
+            assert_eq!(retry_after, Some(17));
+            assert_eq!(detail, None);
+        }
+        other => panic!("rate-limit classification changed to {other:?}"),
+    }
+    let error = semantic_auth_error(BitrouterError::UpstreamBadRequest {
+        error: serde_json::json!({"secret": SENTINEL}),
+    })
+    .await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    match error {
+        BitrouterError::UpstreamBadRequest { error } => {
+            assert_eq!(error, serde_json::json!("upstream authentication failed"));
+        }
+        other => panic!("bad-request classification changed to {other:?}"),
+    }
+    let error = semantic_auth_error(BitrouterError::UpstreamAuth {
+        status: 403,
+        www_authenticate: Some(SENTINEL.into()),
+        required_scope: Some(SENTINEL.into()),
+    })
+    .await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    match error {
+        BitrouterError::UpstreamAuth {
+            status,
+            www_authenticate,
+            required_scope,
+        } => {
+            assert_eq!(status, 403);
+            assert_eq!(www_authenticate, None);
+            assert_eq!(required_scope, None);
+        }
+        other => panic!("upstream-auth classification changed to {other:?}"),
+    }
+    let error = semantic_auth_error(BitrouterError::UpstreamTimeout).await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    assert!(matches!(error, BitrouterError::UpstreamTimeout));
+    let error = semantic_auth_error(BitrouterError::UpstreamUnavailable).await;
+    assert_error_surfaces_omit(&error, SENTINEL);
+    assert!(matches!(error, BitrouterError::UpstreamUnavailable));
+}
+
+#[tokio::test]
+async fn opaque_nonretryable_auth_failure_stays_fail_fast_in_both_modes() {
+    const SENTINEL: &str = "semantic-auth-private-sentinel";
+    for stream in [false, true] {
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let first_provider = "semantic-auth-failure";
+        let second_provider = "semantic-auth-unexpected-fallback";
+        let auth = AuthAppliers::new()
+            .with(
+                first_provider,
+                Arc::new(SemanticFailingAuthApplier {
+                    point: SemanticAuthFailurePoint::Apply,
+                    error: BitrouterError::Unauthorized(SENTINEL.into()),
+                }),
+            )
+            .with(
+                second_provider,
+                Arc::new(CountingFailingAuthApplier(second_calls.clone())),
+            );
+        let executor =
+            HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)
+                .expect("executor");
+        let routes = routing_table(&[first_provider, second_provider]);
+        let pipeline = pipeline_with(routes, Arc::new(executor), |_| {});
+        let error = if stream {
+            match pipeline.execute_stream(stream_request()).await {
+                Ok(_) => panic!("non-retryable auth failure unexpectedly opened a stream"),
+                Err(error) => error,
+            }
+        } else {
+            pipeline
+                .execute(request())
+                .await
+                .expect_err("non-retryable auth failure must fail")
+        };
+
+        assert_eq!(error.status(), 401);
+        let diagnostic = format!("{error:?}\n{error}");
+        assert!(!diagnostic.contains(SENTINEL));
+        assert!(diagnostic.contains("upstream authentication failed"));
+        assert_eq!(second_calls.load(Ordering::SeqCst), 0);
     }
 }
 
