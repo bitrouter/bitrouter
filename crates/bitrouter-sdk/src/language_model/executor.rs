@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
 use crate::language_model::auth::{
-    AppliedAuth, AuthAppliers, ContinuationAuthority, CredentialAuthority,
+    AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
+    normalize_auth_extension_error,
 };
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
@@ -828,7 +829,12 @@ impl HttpExecutor {
             applier
                 .apply_with_authority(request, target)
                 .await
-                .map_err(|_| BitrouterError::internal("upstream authentication failed"))
+                .map_err(|error| {
+                    normalize_auth_extension_error(
+                        error,
+                        AuthExtensionOperation::RequestAuthentication,
+                    )
+                })
         } else {
             let request = transport.authorise(request, target).await?;
             let credential = target
@@ -852,8 +858,8 @@ impl HttpExecutor {
         target: &RoutingTarget,
     ) -> Result<()> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
-            applier.prepare_body(body, target).await.map_err(|_| {
-                BitrouterError::internal("upstream authentication body preparation failed")
+            applier.prepare_body(body, target).await.map_err(|error| {
+                normalize_auth_extension_error(error, AuthExtensionOperation::BodyPreparation)
             })?;
         }
         Ok(())
@@ -895,7 +901,7 @@ impl HttpExecutor {
         applier
             .refresh_after_unauthorized(target, rejected_authorization)
             .await
-            .map_err(|_| BitrouterError::internal("upstream authentication refresh failed"))
+            .map_err(|error| normalize_auth_extension_error(error, AuthExtensionOperation::Refresh))
     }
 
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {

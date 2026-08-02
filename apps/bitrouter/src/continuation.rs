@@ -177,11 +177,22 @@ pub enum ContinuationResolution {
     Active(ResolvedContinuation),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedContinuation {
     pub provider_response_id: String,
     target_fingerprint: String,
     key: ContinuationKey,
+}
+
+impl std::fmt::Debug for ResolvedContinuation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedContinuation")
+            .field("provider_response_id", &"<redacted>")
+            .field("target_fingerprint", &"<redacted>")
+            .field("key", &self.key)
+            .finish()
+    }
 }
 
 impl ResolvedContinuation {
@@ -2356,6 +2367,27 @@ mod tests {
             CredentialAuthority::derive("static-transport-credential", api_key),
             bitrouter_sdk::language_model::types::AuthScheme::Bearer,
         )
+    }
+
+    #[test]
+    fn resolved_continuation_debug_redacts_native_and_fingerprint_values() {
+        let resolved = ResolvedContinuation {
+            provider_response_id: "provider-debug-private-sentinel".into(),
+            target_fingerprint: "fingerprint-debug-private-sentinel".into(),
+            key: ContinuationKey::from_bytes([74; 32]).expect("continuation key"),
+        };
+        let debug = format!("{resolved:?}");
+
+        for private in [
+            "provider-debug-private-sentinel",
+            "fingerprint-debug-private-sentinel",
+        ] {
+            assert!(
+                !debug.contains(private),
+                "ResolvedContinuation Debug exposed private capability data: {debug}"
+            );
+        }
+        assert!(debug.contains("<redacted>"));
     }
 
     async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
