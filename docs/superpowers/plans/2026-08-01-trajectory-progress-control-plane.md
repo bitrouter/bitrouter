@@ -649,7 +649,7 @@ The reused evaluation authority must exactly equal the operational envelope rebu
 - [x] **Step 4: Add the global delivery-order index and retain any separate owner inspection index only when query-plan evidence needs it.**
 - [x] **Step 5: Run publisher, outbox, migration, retention, and Eval Exchange tests until GREEN.**
 - [x] **Step 6: Close the two Task 11 repository-policy Minors without changing public behavior.** Replace the added `cfg_attr(..., allow(dead_code))` with exact feature/test compilation gating, remove the added public language-model re-export, update consumers to the already-public submodule path, and prove all feature combinations remain warning-free. Do not add a source-grep test; existing behavior tests plus strict compilation/Clippy are the executable evidence.
-- [ ] **Step 7: Commit `fix(trajectory): correct outbox delivery audit`.**
+- [x] **Step 7: Commit `fix(trajectory): correct outbox delivery audit`.** Signed commit `5d28b758` is exactly one child of `13042876`; `git verify-commit` reports a Good RSA signature from key `53E083BA9EB9D718FA8DD18A4A75D60F38346236`. The existing Draft PR branch was rechecked at the Task 12 head and ordinary-push fast-forwarded to this clean checkpoint.
 
 **Task 13 RED evidence:** On exact pushed Task 12 head `13042876`, all three new behavior probes failed: publisher delivery stored the outbox creation timestamp unchanged; a deterministic second `mark_outbox_delivered` call replaced the first success time (`00:02` became `00:03`); and SQLite reported `SCAN trajectory_outbox` plus `USE TEMP B-TREE FOR ORDER BY` for the global drain.
 
