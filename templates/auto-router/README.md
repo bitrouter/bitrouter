@@ -29,6 +29,14 @@ keys. No private BitRouter headers are required. Published `agent_trace/v1`
 locks remain routable through an exact compatibility fallback; new default
 decisions and learning evidence use v2.
 
+The v2 request projection also bounds model-induced loops without keeping a
+source-specific session budget. A visible agent trajectory with eight prior
+assistant action turns raises expected redo risk to `guarded`, and an observed
+execution failure remains guarded through the next two execution observations.
+Both signals are reconstructed from inbound message history. Ordinary long
+conversations without agent actions are unaffected; protocols that hide prior
+turns retain explicit visibility-gap evidence instead of inventing state.
+
 The eight starter routes are compiler-owned experiments informed by settled
 trace analysis, model protocol canaries, and synthetic long-context action
 qualification. Cross-agent quality has not been validated; evaluate the policy

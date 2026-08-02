@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "migration": "This v2 policy adds a context band and a long-context-qualified balanced tier.",
+  "migration": "This v2 policy adds context and guarded trajectory bands, a bounded recovery window, and a long-context-qualified balanced tier.",
   "crossAgentQuality": "unvalidated",
   "strongModel": "openai-codex:gpt-5.6-sol",
   "balancedModel": "bitrouter:moonshotai/kimi-k3",

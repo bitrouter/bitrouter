@@ -630,6 +630,8 @@ enum WorkflowStateAction {
         #[arg(long = "request-id", required = true)]
         request_ids: Vec<String>,
         /// Frozen price as provider:model=uncached,cache_read,cache_write,output.
+        /// Repeat a provider/model pair for alternative schedules; settlement
+        /// accepts only one distinct candidate that reconstructs the receipt.
         #[arg(long = "price")]
         prices: Vec<String>,
         /// Maximum durable receipt fetches per request.

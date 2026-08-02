@@ -484,6 +484,10 @@ bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JS
 credential file. The latter resolves static keys and refreshable OAuth without
 putting a bearer in the environment. Price specs use
 `provider:model=uncached,cache_read,cache_write,output` in micro-USD per token.
+Repeat the same provider/model pair when a gateway may have applied one of
+several frozen schedules. A computed receipt is accepted only when exactly one
+distinct candidate reconstructs its final micro-USD charge; no match or an
+ambiguous rounding collision remains `unknown`.
 
 `policy-oracle` performs an immutable cost-only replay of a candidate lock over
 baseline traces and exact request settlement. `--effective-cost-factor` is the

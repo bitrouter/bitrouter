@@ -590,8 +590,10 @@ impl MeteringStore {
     }
 
     /// Apply one content-free authoritative receipt to a pending local row.
-    /// Computed receipts are accepted only when frozen pricing reconstructs
-    /// the exact final micro-USD charge.
+    /// Computed receipts are accepted only when exactly one distinct frozen
+    /// pricing candidate reconstructs the final micro-USD charge. Repeated
+    /// identical candidates are harmless; distinct candidates that collide
+    /// after provider rounding fail closed as ambiguous.
     pub async fn apply_authoritative_receipt(
         &self,
         receipt: &SettlementReceipt,
@@ -676,10 +678,10 @@ impl MeteringStore {
                         )
                         .await;
                 };
-                let Some(price) = prices
+                let candidates = prices
                     .iter()
-                    .find(|price| price.provider_id == provider_id && price.model_id == model_id)
-                else {
+                    .filter(|price| price.provider_id == provider_id && price.model_id == model_id);
+                if candidates.clone().next().is_none() {
                     return self
                         .persist_unknown_reconciliation(
                             row,
@@ -688,23 +690,38 @@ impl MeteringStore {
                             "authoritative_pricing_not_found",
                         )
                         .await;
-                };
-                let pricing = ModelPricing::cache_aware(
-                    Some(price.input_micro_usd_per_token),
-                    price.cache_read_micro_usd_per_token,
-                    price.cache_write_micro_usd_per_token,
-                    Some(price.output_micro_usd_per_token),
-                );
-                let evidence = calculate_charge_evidence(&usage, &pricing, PricingSource::Override);
-                if evidence.status != ChargeStatus::Computed
-                    || evidence.charge_micro_usd != receipt.final_charge_micro_usd
-                {
+                }
+                let mut matching = candidates
+                    .map(|price| {
+                        let pricing = ModelPricing::cache_aware(
+                            Some(price.input_micro_usd_per_token),
+                            price.cache_read_micro_usd_per_token,
+                            price.cache_write_micro_usd_per_token,
+                            Some(price.output_micro_usd_per_token),
+                        );
+                        calculate_charge_evidence(&usage, &pricing, PricingSource::Override)
+                    })
+                    .filter(|evidence| {
+                        evidence.status == ChargeStatus::Computed
+                            && evidence.charge_micro_usd == receipt.final_charge_micro_usd
+                    });
+                let Some(evidence) = matching.next() else {
                     return self
                         .persist_unknown_reconciliation(
                             row,
                             &usage,
                             receipt_json,
                             "authoritative_charge_mismatch",
+                        )
+                        .await;
+                };
+                if matching.any(|candidate| candidate.pricing_version != evidence.pricing_version) {
+                    return self
+                        .persist_unknown_reconciliation(
+                            row,
+                            &usage,
+                            receipt_json,
+                            "authoritative_pricing_ambiguous",
                         )
                         .await;
                 }

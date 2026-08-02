@@ -211,6 +211,94 @@ async fn computed_receipt_replaces_local_usage_only_when_charge_matches() -> Res
 }
 
 #[tokio::test]
+async fn computed_receipt_selects_the_unique_exact_price_candidate() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder =
+        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
+    let mut settlement = ctx("candidate-price", 1, 1);
+    settlement.provider_id = "bitrouter".to_string();
+    recorder.record(&mut settlement).await?;
+    let receipt = SettlementReceipt {
+        request_id: settlement.request_id.clone(),
+        state: SettlementState::Computed,
+        model_id: Some("model-a".to_string()),
+        provider_id: Some("provider-a".to_string()),
+        usage: SettlementUsage {
+            uncached_input_tokens: 10,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            output_tokens: 5,
+            reasoning_tokens: 0,
+        },
+        final_charge_micro_usd: Some(25),
+    };
+    let prices = [
+        super::UsagePriceOverride::parse("provider-a:model-a=2,0,0,10")?,
+        super::UsagePriceOverride::parse("provider-a:model-a=1,0,0,3")?,
+    ];
+
+    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let record = &records[0];
+
+    assert_eq!(status, super::ReconciliationStatus::Computed);
+    assert_eq!(record.final_charge_micro_usd, Some(25));
+    let rates = &record
+        .charge_evidence
+        .as_ref()
+        .expect("selected price evidence")
+        .effective_rates;
+    assert_eq!(rates.uncached_input_micro_usd_per_token, Some(1.0));
+    assert_eq!(rates.output_micro_usd_per_token, Some(3.0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn computed_receipt_rejects_ambiguous_exact_price_candidates() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder =
+        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
+    let mut settlement = ctx("ambiguous-price", 1, 0);
+    settlement.provider_id = "bitrouter".to_string();
+    recorder.record(&mut settlement).await?;
+    let receipt = SettlementReceipt {
+        request_id: settlement.request_id.clone(),
+        state: SettlementState::Computed,
+        model_id: Some("model-a".to_string()),
+        provider_id: Some("provider-a".to_string()),
+        usage: SettlementUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            output_tokens: 0,
+            reasoning_tokens: 0,
+        },
+        final_charge_micro_usd: Some(1),
+    };
+    let prices = [
+        super::UsagePriceOverride::parse("provider-a:model-a=1.1,0,0,3")?,
+        super::UsagePriceOverride::parse("provider-a:model-a=1.4,0,0,5")?,
+    ];
+
+    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
+    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let record = &records[0];
+
+    assert_eq!(status, super::ReconciliationStatus::Unknown);
+    assert_eq!(record.final_charge_micro_usd, None);
+    assert_eq!(
+        record
+            .charge_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.unknown_reason.as_deref()),
+        Some("authoritative_pricing_ambiguous")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn authoritative_half_micro_charge_matches_provider_rounding() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());

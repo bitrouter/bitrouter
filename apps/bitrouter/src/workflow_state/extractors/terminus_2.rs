@@ -8,7 +8,9 @@
 
 use bitrouter_sdk::language_model::types::{Content, Prompt, Role};
 
-use crate::workflow_state::extractors::generic::GenericPromptExtractor;
+use crate::workflow_state::extractors::generic::{
+    GenericPromptExtractor, apply_trajectory_pressure,
+};
 use crate::workflow_state::extractors::{ExtractorInput, WorkflowStateExtractor};
 use crate::workflow_state::ir::{
     Evidence, EvidenceLevel, HarnessId, RecoverySignal, RequirementLevel, ToolDensity,
@@ -94,6 +96,7 @@ impl WorkflowStateExtractor for Terminus2Extractor {
             confidence: 0.9,
             level: EvidenceLevel::Inferred,
         });
+        apply_trajectory_pressure(input.prompt, &mut ir);
         ir
     }
 }

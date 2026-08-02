@@ -193,6 +193,25 @@ fn terminus_xml_action_and_command_density_are_recognized() {
 }
 
 #[test]
+fn terminus_text_actions_share_the_generic_long_trajectory_guard() {
+    let mut messages = vec![user(TERMINUS_OPENING)];
+    for turn in 0..8 {
+        messages.push(assistant(&json_action(&["git diff --check\n"], false)));
+        messages.push(user(&format!("step {turn} clean")));
+    }
+    let prompt = prompt(messages);
+
+    let ir = extract(&prompt);
+
+    assert_eq!(ir.state_kind, WorkflowStateKind::Review);
+    assert_eq!(
+        ir.capability_constraints.expected_redo_penalty,
+        RequirementLevel::High
+    );
+    assert_eq!(ir.route_projection().key(), "agent_trace/v2|review|guarded");
+}
+
+#[test]
 fn oversized_or_malformed_action_fails_open_to_planning() {
     let oversized = format!(
         "{{\"commands\":[{{\"keystrokes\":\"{}\"}}]}}",
