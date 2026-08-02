@@ -3216,6 +3216,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mapped_continuation_replaces_opaque_authority_failure_text() -> anyhow::Result<()> {
+        const SENTINEL: &str = "opaque-authority-private-sentinel";
+        let registry = registry(72).await?;
+        let bound = target("credential-a");
+        let public_id = encode_gateway_continuation_id("opaque-authority-prior-request")?;
+        registry
+            .bind(
+                "owner",
+                &public_id,
+                "resp-final",
+                &bound,
+                &static_authority("credential-a"),
+                Utc::now(),
+            )
+            .await?;
+        let auth = AuthAppliers::new().with(
+            bound.provider_name.clone(),
+            Arc::new(SecretFailingAuthorityAuthApplier),
+        );
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, auth);
+        let mut chain = vec![bound];
+        let error = runtime
+            .resolve(&mut chain, &mut continuation_context(&public_id))
+            .await
+            .expect_err("opaque authority failure must fail mapped continuation routing");
+        let diagnostic = error.to_string();
+
+        assert!(
+            !diagnostic.contains(SENTINEL),
+            "opaque continuation authority detail reached the route caller: {diagnostic}"
+        );
+        assert!(diagnostic.contains("continuation authentication authority resolution failed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn public_responses_and_runtime_diagnostics_replace_opaque_apply_failure_text()
+    -> anyhow::Result<()> {
+        const SENTINEL: &str = "opaque-public-auth-private-sentinel";
+        let upstream = MockServer::start().await;
+        let registry = registry(73).await?;
+        let auth = AuthAppliers::new().with("openai", Arc::new(SecretFailingApplyAuthApplier));
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, auth.clone());
+        let mut upstream_target = target("static-placeholder");
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let settlement = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let executor =
+            HttpExecutor::with_dispatch_and_auth(Default::default(), Default::default(), auth)?;
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(executor))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(NativeIdStealingRecorder(settlement.clone()));
+        let pipeline = Arc::new(builder.build()?);
+        let app = build_router(app_state(pipeline.clone()));
+
+        let captured_logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_sink = captured_logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || CapturedLogWriter(log_sink.clone()))
+            .finish();
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let mut public_bodies = Vec::new();
+        for (request_id, stream) in [
+            ("opaque-auth-public-nonstream", false),
+            ("opaque-auth-public-stream", true),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(responses_http_request(request_id, stream))
+                .await?;
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            );
+            public_bodies.push(String::from_utf8(
+                axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await?
+                    .to_vec(),
+            )?);
+        }
+        pipeline.drain_pending_settlements().await;
+
+        let diagnostics = [
+            public_bodies.join("\n"),
+            settlement
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .join("\n"),
+            String::from_utf8(
+                captured_logs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            )?,
+        ];
+        for diagnostic in diagnostics {
+            assert!(
+                !diagnostic.contains(SENTINEL),
+                "opaque authentication detail reached a public/runtime surface: {diagnostic}"
+            );
+        }
+        assert!(
+            public_bodies
+                .iter()
+                .all(|body| body.contains("upstream authentication failed"))
+        );
+        assert_eq!(
+            upstream
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("request recording disabled"))?
+                .len(),
+            0,
+            "opaque authentication failure must stop before provider dispatch"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn missing_gateway_fails_closed_but_native_compatibility_is_pinned() -> anyhow::Result<()>
     {
         let runtime = ContinuationRuntime::new(registry(13).await?);
@@ -5715,6 +5844,43 @@ mod tests {
         ) -> PipelineResult<Option<CredentialAuthority>> {
             Err(BitrouterError::internal(
                 "broken non-Responses credential store",
+            ))
+        }
+    }
+
+    struct SecretFailingAuthorityAuthApplier;
+
+    #[async_trait]
+    impl AuthApplier for SecretFailingAuthorityAuthApplier {
+        async fn apply(
+            &self,
+            request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            Ok(request)
+        }
+
+        async fn continuation_authority_proof(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<ContinuationAuthority>> {
+            Err(BitrouterError::internal(
+                "opaque authority plugin exposed opaque-authority-private-sentinel",
+            ))
+        }
+    }
+
+    struct SecretFailingApplyAuthApplier;
+
+    #[async_trait]
+    impl AuthApplier for SecretFailingApplyAuthApplier {
+        async fn apply(
+            &self,
+            _request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            Err(BitrouterError::internal(
+                "opaque apply plugin exposed opaque-public-auth-private-sentinel",
             ))
         }
     }

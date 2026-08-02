@@ -825,7 +825,10 @@ impl HttpExecutor {
         transport: &Arc<dyn crate::language_model::protocol::Transport>,
     ) -> Result<AppliedAuth> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
-            applier.apply_with_authority(request, target).await
+            applier
+                .apply_with_authority(request, target)
+                .await
+                .map_err(|_| BitrouterError::internal("upstream authentication failed"))
         } else {
             let request = transport.authorise(request, target).await?;
             let credential = target
@@ -849,7 +852,9 @@ impl HttpExecutor {
         target: &RoutingTarget,
     ) -> Result<()> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
-            applier.prepare_body(body, target).await?;
+            applier.prepare_body(body, target).await.map_err(|_| {
+                BitrouterError::internal("upstream authentication body preparation failed")
+            })?;
         }
         Ok(())
     }
@@ -890,6 +895,7 @@ impl HttpExecutor {
         applier
             .refresh_after_unauthorized(target, rejected_authorization)
             .await
+            .map_err(|_| BitrouterError::internal("upstream authentication refresh failed"))
     }
 
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
