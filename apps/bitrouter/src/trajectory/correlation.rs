@@ -962,6 +962,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ancestry_older_than_the_bounded_prefix_window_fails_conservatively()
+    -> anyhow::Result<()> {
+        let (runtime, _) = runtime().await?;
+        let root = runtime
+            .begin_request(
+                "owner-a",
+                "request-old-root",
+                ApiProtocol::Messages,
+                &prompt(vec![Message::text(Role::User, "old root")]),
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let messages = (0..300)
+            .map(|index| {
+                if index == 0 {
+                    Message::text(Role::User, "old root")
+                } else if index % 2 == 0 {
+                    Message::text(Role::User, format!("later user turn {index}"))
+                } else {
+                    Message::text(Role::Assistant, format!("later assistant turn {index}"))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let unresolved = runtime
+            .begin_request(
+                "owner-a",
+                "request-bounded-history",
+                ApiProtocol::Messages,
+                &prompt(messages),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+
+        assert_eq!(unresolved.source, CorrelationSource::Unresolved);
+        assert_eq!(unresolved.completeness, HistoryCompleteness::Incomplete);
+        assert_ne!(unresolved.episode_id, root.episode_id);
+        assert!(unresolved.prior_events.is_empty());
+        assert_eq!(
+            unresolved.evidence.ancestor_prefix_digests.len(),
+            256,
+            "bounded correlation must expose only the newest authenticated prefixes"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn unprovable_prior_turns_start_an_incomplete_episode() -> anyhow::Result<()> {
         let (runtime, _) = runtime().await?;
         let unresolved = runtime

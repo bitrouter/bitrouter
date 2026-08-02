@@ -13,6 +13,63 @@ const CANONICAL_PROMPT_VERSION: u32 = 1;
 const CORRELATION_KEY_ID_DOMAIN: &[u8] = b"bitrouter.trajectory.correlation.key-id.v1";
 const NATIVE_PARENT_DIGEST_DOMAIN: &[u8] = b"bitrouter.trajectory.correlation.native-parent.v1";
 const REQUEST_IDENTITY_DOMAIN: &[u8] = b"bitrouter.trajectory.request-identity.v1";
+pub(crate) const MAX_ANCESTOR_PREFIX_DIGESTS: usize = 256;
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CanonicalWork {
+    turn_serializations: usize,
+    hmac_input_bytes: usize,
+    digest_finalizations: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CANONICAL_WORK: std::cell::Cell<CanonicalWork> = const {
+        std::cell::Cell::new(CanonicalWork {
+            turn_serializations: 0,
+            hmac_input_bytes: 0,
+            digest_finalizations: 0,
+        })
+    };
+}
+
+#[cfg(test)]
+fn reset_canonical_work() {
+    CANONICAL_WORK.set(CanonicalWork::default());
+}
+
+#[cfg(test)]
+fn canonical_work() -> CanonicalWork {
+    CANONICAL_WORK.get()
+}
+
+#[cfg(test)]
+fn record_turn_serializations(count: usize) {
+    CANONICAL_WORK.with(|cell| {
+        let mut work = cell.get();
+        work.turn_serializations = work.turn_serializations.saturating_add(count);
+        cell.set(work);
+    });
+}
+
+#[cfg(test)]
+fn record_hmac_input_work(input_bytes: usize) {
+    CANONICAL_WORK.with(|cell| {
+        let mut work = cell.get();
+        work.hmac_input_bytes = work.hmac_input_bytes.saturating_add(input_bytes);
+        cell.set(work);
+    });
+}
+
+#[cfg(test)]
+fn record_digest_finalization() {
+    CANONICAL_WORK.with(|cell| {
+        let mut work = cell.get();
+        work.digest_finalizations = work.digest_finalizations.saturating_add(1);
+        cell.set(work);
+    });
+}
 
 #[derive(Clone)]
 pub struct CorrelationKey {
@@ -205,26 +262,69 @@ impl Canonicalizer {
 
     pub fn canonicalize(&self, prompt: &Prompt) -> Result<CanonicalPromptDigests> {
         let turns = canonical_turns(prompt)?;
-
-        let mut prefix_digests = Vec::with_capacity(turns.len().saturating_sub(1));
-        if !turns.is_empty() {
-            for end in 1..turns.len() {
-                prefix_digests.push(self.digest(&CanonicalPrefix {
-                    version: CANONICAL_PROMPT_VERSION,
-                    system: prompt.system.as_deref(),
-                    turns: &turns[..end],
-                })?);
-            }
-        }
-        let full_input = serde_json::to_vec(&CanonicalPrefix {
+        let mut canonical_prefix = serde_json::to_vec(&CanonicalPrefix {
             version: CANONICAL_PROMPT_VERSION,
             system: prompt.system.as_deref(),
-            turns: &turns,
+            turns: &[],
         })
-        .context("serializing canonical full prompt")?;
-        let canonical_input_bytes =
-            u64::try_from(full_input.len()).context("canonical prompt exceeds byte-count range")?;
-        let full_input_digest = self.digest_bytes(&full_input)?;
+        .context("serializing canonical prompt envelope")?;
+        const CANONICAL_SUFFIX: &[u8] = b"]}";
+        if !canonical_prefix.ends_with(CANONICAL_SUFFIX) {
+            anyhow::bail!("canonical prompt envelope has an unsupported serialization shape")
+        }
+        canonical_prefix.truncate(canonical_prefix.len() - CANONICAL_SUFFIX.len());
+
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key.secret)
+            .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
+        mac.update(&canonical_prefix);
+        #[cfg(test)]
+        record_hmac_input_work(canonical_prefix.len());
+        let mut canonical_input_bytes = canonical_prefix.len();
+        let prefix_capacity = turns
+            .len()
+            .saturating_sub(1)
+            .min(MAX_ANCESTOR_PREFIX_DIGESTS);
+        let first_retained_end = turns.len().saturating_sub(MAX_ANCESTOR_PREFIX_DIGESTS);
+        let mut prefix_digests = Vec::with_capacity(prefix_capacity);
+
+        for (index, turn) in turns.iter().enumerate() {
+            if index > 0 {
+                mac.update(b",");
+                #[cfg(test)]
+                record_hmac_input_work(1);
+                canonical_input_bytes = canonical_input_bytes
+                    .checked_add(1)
+                    .context("canonical prompt exceeds byte-count range")?;
+            }
+            let turn_bytes = serde_json::to_vec(turn).context("serializing canonical turn")?;
+            #[cfg(test)]
+            record_turn_serializations(1);
+            mac.update(&turn_bytes);
+            #[cfg(test)]
+            record_hmac_input_work(turn_bytes.len());
+            canonical_input_bytes = canonical_input_bytes
+                .checked_add(turn_bytes.len())
+                .context("canonical prompt exceeds byte-count range")?;
+
+            let end = index + 1;
+            if end < turns.len() && end >= first_retained_end {
+                let mut prefix_mac = mac.clone();
+                prefix_mac.update(CANONICAL_SUFFIX);
+                #[cfg(test)]
+                record_hmac_input_work(CANONICAL_SUFFIX.len());
+                prefix_digests.push(self.finish_digest(prefix_mac)?);
+            }
+        }
+
+        mac.update(CANONICAL_SUFFIX);
+        #[cfg(test)]
+        record_hmac_input_work(CANONICAL_SUFFIX.len());
+        canonical_input_bytes = canonical_input_bytes
+            .checked_add(CANONICAL_SUFFIX.len())
+            .context("canonical prompt exceeds byte-count range")?;
+        let full_input_digest = self.finish_digest(mac)?;
+        let canonical_input_bytes = u64::try_from(canonical_input_bytes)
+            .context("canonical prompt exceeds byte-count range")?;
         let starts_with_prior_turns = turns
             .iter()
             .any(|turn| matches!(turn.role, Role::Assistant | Role::Tool));
@@ -236,15 +336,18 @@ impl Canonicalizer {
         })
     }
 
-    fn digest<T: Serialize>(&self, value: &T) -> Result<KeyedDigest> {
-        let bytes = serde_json::to_vec(value).context("serializing canonical prompt prefix")?;
-        self.digest_bytes(&bytes)
-    }
-
+    #[cfg(test)]
     fn digest_bytes(&self, bytes: &[u8]) -> Result<KeyedDigest> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key.secret)
             .map_err(|_| anyhow::anyhow!("invalid correlation HMAC key"))?;
         mac.update(bytes);
+        record_hmac_input_work(bytes.len());
+        self.finish_digest(mac)
+    }
+
+    fn finish_digest(&self, mac: Hmac<Sha256>) -> Result<KeyedDigest> {
+        #[cfg(test)]
+        record_digest_finalization();
         let digest = mac.finalize().into_bytes();
         KeyedDigest::parse(format!(
             "hmac-sha256:{}:{}",
@@ -462,7 +565,10 @@ mod tests {
         ApiProtocol, Content, Prompt, ToolResultOutput, inbound_adapter_for,
     };
 
-    use super::{Canonicalizer, CorrelationKey};
+    use super::{
+        CANONICAL_PROMPT_VERSION, CanonicalPrefix, Canonicalizer, CorrelationKey, canonical_turns,
+        canonical_work, reset_canonical_work,
+    };
 
     fn parse(protocol: ApiProtocol, body: serde_json::Value) -> anyhow::Result<Prompt> {
         inbound_adapter_for(&protocol)
@@ -909,6 +1015,91 @@ mod tests {
 
         assert_eq!(canonical.canonical_input_bytes, 96);
         assert_eq!(canonical.full_input_digest.as_str().len(), 97);
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_prefix_digests_remain_byte_compatible_with_v1_json() -> anyhow::Result<()> {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([31; 32])?);
+        let prompt = parse(
+            ApiProtocol::ChatCompletions,
+            serde_json::json!({
+                "model": "provider/model",
+                "messages": [
+                    {"role": "user", "content": "first"},
+                    {"role": "assistant", "content": "second"},
+                    {"role": "user", "content": "third"}
+                ]
+            }),
+        )?;
+        let turns = canonical_turns(&prompt)?;
+        let canonical = canonicalizer.canonicalize(&prompt)?;
+
+        let expected_prefixes = (1..turns.len())
+            .map(|end| {
+                serde_json::to_vec(&CanonicalPrefix {
+                    version: CANONICAL_PROMPT_VERSION,
+                    system: prompt.system.as_deref(),
+                    turns: &turns[..end],
+                })
+                .map_err(anyhow::Error::from)
+                .and_then(|bytes| canonicalizer.digest_bytes(&bytes))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let full = serde_json::to_vec(&CanonicalPrefix {
+            version: CANONICAL_PROMPT_VERSION,
+            system: prompt.system.as_deref(),
+            turns: &turns,
+        })?;
+
+        assert_eq!(canonical.ancestor_prefix_digests, expected_prefixes);
+        assert_eq!(
+            canonical.full_input_digest,
+            canonicalizer.digest_bytes(&full)?
+        );
+        assert_eq!(canonical.canonical_input_bytes, u64::try_from(full.len())?);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_prefix_work_is_linear_and_emits_at_most_256_newest_digests() -> anyhow::Result<()>
+    {
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([32; 32])?);
+        for turn_count in [32_usize, 64, 128, 1024] {
+            let messages = (0..turn_count)
+                .map(|index| {
+                    serde_json::json!({
+                        "role": if index % 2 == 0 { "user" } else { "assistant" },
+                        "content": format!("semantic-turn-{index:04}")
+                    })
+                })
+                .collect::<Vec<_>>();
+            let prompt = parse(
+                ApiProtocol::ChatCompletions,
+                serde_json::json!({"model": "provider/model", "messages": messages}),
+            )?;
+
+            reset_canonical_work();
+            let canonical = canonicalizer.canonicalize(&prompt)?;
+            let work = canonical_work();
+            let expected_prefixes = turn_count.saturating_sub(1).min(256);
+
+            assert_eq!(
+                canonical.ancestor_prefix_digests.len(),
+                expected_prefixes,
+                "prefix bound changed for {turn_count} turns"
+            );
+            assert_eq!(
+                work.turn_serializations, turn_count,
+                "typed turns were serialized more than once for {turn_count} turns"
+            );
+            assert_eq!(work.digest_finalizations, expected_prefixes + 1);
+            assert_eq!(
+                work.hmac_input_bytes,
+                usize::try_from(canonical.canonical_input_bytes)? + 2 * expected_prefixes,
+                "HMAC work reprocessed a prior canonical prefix for {turn_count} turns"
+            );
+        }
         Ok(())
     }
 }
