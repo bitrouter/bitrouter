@@ -3738,6 +3738,14 @@ fn responses_stream_rejects_duplicate_or_post_terminal_events() {
             event: Some("response.some_future_event".to_string()),
             data: serde_json::json!({"type": "response.some_future_event"}).to_string(),
         },
+        SseEvent {
+            event: None,
+            data: "[DONE]".to_string(),
+        },
+        SseEvent {
+            event: None,
+            data: "malformed nonempty trailing data".to_string(),
+        },
     ] {
         let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
         decoder.decode(&terminal).expect("first terminal is valid");
@@ -3802,9 +3810,13 @@ fn responses_stream_created_identity_is_nonempty_unique_and_matches_terminal() {
     mismatch
         .decode(&created("resp-created"))
         .expect("created is valid");
+    let mismatch_error = mismatch
+        .decode(&terminal("resp-terminal"))
+        .expect_err("terminal id did not have to match response.created");
+    let mismatch_text = mismatch_error.to_string();
     assert!(
-        mismatch.decode(&terminal("resp-terminal")).is_err(),
-        "terminal id did not have to match response.created"
+        !mismatch_text.contains("resp-created") && !mismatch_text.contains("resp-terminal"),
+        "native response ids leaked through the mismatch diagnostic: {mismatch_text}"
     );
 
     let mut terminal_only = adapter_for(ApiProtocol::Responses).stream_decoder();

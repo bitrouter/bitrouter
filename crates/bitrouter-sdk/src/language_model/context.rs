@@ -371,17 +371,26 @@ impl PipelineContext {
         self.stream_terminal_succeeded
     }
 
-    /// Store outbound HTTP headers for the next upstream request. The
+    /// Store W3C trace-context headers for the next upstream request. The
     /// executor merges them into the request just before issuing it.
-    /// Typically called by an `ObserveHook` from `on_hop_start` to inject
-    /// W3C trace context. Replaces any previously-set headers (whole-map
-    /// overwrite, not merge).
+    /// Typically called by an `ObserveHook` from `on_hop_start`.
+    ///
+    /// Only the exact `traceparent` and `tracestate` field names are retained;
+    /// every other header is ignored. This keeps a read-only observer from
+    /// mutating authentication or other transport semantics through the trace
+    /// propagation seam. Replaces any previously-set trace headers.
     pub fn set_outbound_trace_headers(&self, headers: http::HeaderMap) {
+        let mut trace_headers = http::HeaderMap::new();
+        for (name, value) in headers.iter() {
+            if name == "traceparent" || name == "tracestate" {
+                trace_headers.insert(name.clone(), value.clone());
+            }
+        }
         let mut slot = match self.outbound_trace_headers.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *slot = Some(headers);
+        *slot = (!trace_headers.is_empty()).then_some(trace_headers);
     }
 
     /// Take any pending outbound trace headers. Called by the executor

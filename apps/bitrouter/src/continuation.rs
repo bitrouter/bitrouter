@@ -1,6 +1,6 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -36,6 +36,7 @@ const KEY_ID_DOMAIN: &[u8] = b"bitrouter.continuation.key-id.v1";
 const AEAD_AAD_DOMAIN: &[u8] = b"bitrouter.continuation.aead.v1";
 const CIPHER_VERSION: i32 = 1;
 const NONCE_BYTES: usize = 12;
+const PUBLICATION_GENERATION_BYTES: usize = 16;
 const PUBLICATION_PROVISIONAL: &str = "provisional";
 const PUBLICATION_ACTIVE: &str = "active";
 
@@ -196,20 +197,22 @@ pub struct ContinuationRegistry {
     keys: ContinuationKeySource,
     retention: TimeDelta,
     prune_batch_size: u64,
-    /// Process-local ownership of provisional rows. Visibility is determined
-    /// by the durable `publication_state`, while this map identifies the
-    /// delivery attempt allowed to activate or compensate each row.
+    /// Process-local index from delivery attempts to the random generation
+    /// authenticated in each durable row. The row's `publication_state` and
+    /// `publication_generation` are the durable ownership authority; this map
+    /// lets the originating attempt retry an owner-aware CAS compensation.
     ///
     /// A hard process crash after activation but before the terminal reaches
     /// the socket remains the intentionally documented at-least-once delivery
     /// exception: there is no process left to perform the compensating delete.
-    pending_publications: Arc<Mutex<HashMap<String, PendingPublication>>>,
+    pending_publications: Arc<Mutex<HashMap<u64, PendingPublication>>>,
     pending_bind_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
 }
 
-#[derive(Default)]
+#[derive(Clone)]
 struct PendingPublication {
-    attempts: HashSet<u64>,
+    continuation_identity: String,
+    generation: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,6 +230,7 @@ struct PendingBindAttempt {
 struct BindPublication {
     now: DateTime<Utc>,
     state: &'static str,
+    generation: String,
 }
 
 impl ContinuationRegistry {
@@ -269,64 +273,94 @@ impl ContinuationRegistry {
     }
 
     async fn rollback_pending(&self, delivery_attempt_id: u64) -> Result<()> {
-        let identity = {
+        let publication = {
             let publications = match self.pending_publications.lock() {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            publications.iter().find_map(|(identity, publication)| {
-                publication
-                    .attempts
-                    .contains(&delivery_attempt_id)
-                    .then(|| identity.clone())
-            })
+            publications.get(&delivery_attempt_id).cloned()
         };
-        let Some(identity) = identity else {
+        let Some(publication) = publication else {
             return Ok(());
         };
         // Serialize only the same owner-bound continuation identity. Unrelated
         // callers and request ids retain full DB concurrency.
-        let identity_lock = self.pending_identity_lock(&identity);
+        let identity_lock = self.pending_identity_lock(&publication.continuation_identity);
         let _bind_guard = identity_lock.lock().await;
-        let is_last_attempt = {
-            let mut publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            let Some(publication) = publications.get_mut(&identity) else {
-                return Ok(());
-            };
-            if !publication.attempts.contains(&delivery_attempt_id) {
-                return Ok(());
-            }
-            if publication.attempts.len() > 1 {
-                publication.attempts.remove(&delivery_attempt_id);
-                return Ok(());
-            }
-            true
-        };
-        if is_last_attempt {
-            // Keep ownership installed until the conditional delete commits.
-            // An error or cancellation therefore leaves the same attempt able
-            // to retry and same-process resolve still sees durable provisional
-            // state as Missing.
-            continuation_entity::Entity::delete_many()
-                .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
-                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
-                .exec(&self.db)
-                .await?;
-            let mut publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(publication) = publications.get_mut(&identity) {
-                publication.attempts.remove(&delivery_attempt_id);
-                if publication.attempts.is_empty() {
-                    publications.remove(&identity);
-                }
-            }
-        }
+        self.compensate_owned_publication(&publication).await?;
+        self.clear_pending_publication(delivery_attempt_id, &publication.generation);
         Ok(())
+    }
+
+    fn clear_pending_publication(&self, delivery_attempt_id: u64, generation: &str) {
+        let mut publications = match self.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if publications
+            .get(&delivery_attempt_id)
+            .is_some_and(|publication| publication.generation == generation)
+        {
+            publications.remove(&delivery_attempt_id);
+        }
+    }
+
+    async fn compensate_owned_publication(&self, publication: &PendingPublication) -> Result<()> {
+        let Some(mut row) =
+            continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+                .one(&self.db)
+                .await?
+        else {
+            return Ok(());
+        };
+        if row.publication_generation != publication.generation {
+            anyhow::bail!("continuation rollback no longer owns the durable generation");
+        }
+        let key = self.keys.load()?;
+        match row.publication_state.as_str() {
+            PUBLICATION_ACTIVE => {
+                row = self
+                    .transition_publication_state(&key, &row, PUBLICATION_PROVISIONAL)
+                    .await?;
+            }
+            PUBLICATION_PROVISIONAL => {
+                decrypt_row(&key, &row)?;
+            }
+            state => anyhow::bail!("unsupported continuation publication state '{state}'"),
+        }
+        let ciphertext = row
+            .ciphertext
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("continuation has expired"))?;
+        let nonce = row
+            .nonce
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("continuation has expired"))?;
+        let deleted = continuation_entity::Entity::delete_many()
+            .filter(
+                continuation_entity::Column::ContinuationIdentity
+                    .eq(row.continuation_identity.clone()),
+            )
+            .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
+            .filter(
+                continuation_entity::Column::PublicationGeneration
+                    .eq(publication.generation.clone()),
+            )
+            .filter(continuation_entity::Column::Ciphertext.eq(ciphertext.clone()))
+            .filter(continuation_entity::Column::Nonce.eq(nonce.clone()))
+            .exec(&self.db)
+            .await?;
+        if deleted.rows_affected == 1 {
+            return Ok(());
+        }
+        if continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+            .one(&self.db)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
+        anyhow::bail!("continuation rollback compare-and-swap lost ownership")
     }
 
     async fn activate_pending(
@@ -334,19 +368,14 @@ impl ContinuationRegistry {
         delivery_attempt_id: u64,
         delivery: &RequiredDeliveryHandshake,
     ) -> Result<bool> {
-        let identity = {
+        let publication = {
             let publications = match self.pending_publications.lock() {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            publications.iter().find_map(|(identity, publication)| {
-                publication
-                    .attempts
-                    .contains(&delivery_attempt_id)
-                    .then(|| identity.clone())
-            })
+            publications.get(&delivery_attempt_id).cloned()
         };
-        let Some(identity) = identity else {
+        let Some(publication) = publication else {
             // Idempotent preparation against an already-active row owns no
             // durable transition but must still use the delivery rendezvous.
             return delivery
@@ -354,76 +383,108 @@ impl ContinuationRegistry {
                 .await
                 .map_err(anyhow::Error::from);
         };
-        let identity_lock = self.pending_identity_lock(&identity);
+        let identity_lock = self.pending_identity_lock(&publication.continuation_identity);
         let _identity_guard = identity_lock.lock().await;
-        let activated = continuation_entity::Entity::update_many()
-            .col_expr(
-                continuation_entity::Column::PublicationState,
-                sea_orm::sea_query::Expr::value(PUBLICATION_ACTIVE),
-            )
-            .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
-            .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
-            .exec(&self.db)
-            .await?;
-        if activated.rows_affected == 0 {
-            let state = continuation_entity::Entity::find_by_id(&identity)
-                .select_only()
-                .column(continuation_entity::Column::PublicationState)
-                .into_tuple::<String>()
-                .one(&self.db)
-                .await?;
-            if state.as_deref() != Some(PUBLICATION_ACTIVE) {
-                anyhow::bail!("provisional continuation disappeared before activation");
+        let key = self.keys.load()?;
+        let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("provisional continuation disappeared before activation")
+            })?;
+        if row.publication_generation != publication.generation {
+            anyhow::bail!("provisional continuation generation ownership changed");
+        }
+        match row.publication_state.as_str() {
+            PUBLICATION_PROVISIONAL => {
+                self.transition_publication_state(&key, &row, PUBLICATION_ACTIVE)
+                    .await?;
             }
+            PUBLICATION_ACTIVE => {
+                decrypt_row(&key, &row)?;
+            }
+            state => anyhow::bail!("unsupported continuation publication state '{state}'"),
         }
 
         let delivery_result = delivery.wait_for_delivery().await;
         if delivery_result.as_ref().is_ok_and(|delivered| *delivered) {
-            let mut publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            publications.remove(&identity);
+            self.clear_pending_publication(delivery_attempt_id, &publication.generation);
             return Ok(true);
         }
 
-        let other_attempts = {
-            let publications = match self.pending_publications.lock() {
-                Ok(publications) => publications,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            publications
-                .get(&identity)
-                .is_some_and(|publication| publication.attempts.len() > 1)
-        };
-        if other_attempts {
-            continuation_entity::Entity::update_many()
-                .col_expr(
-                    continuation_entity::Column::PublicationState,
-                    sea_orm::sea_query::Expr::value(PUBLICATION_PROVISIONAL),
-                )
-                .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
-                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_ACTIVE))
-                .exec(&self.db)
-                .await?;
-        } else {
-            continuation_entity::Entity::delete_many()
-                .filter(continuation_entity::Column::ContinuationIdentity.eq(identity.clone()))
-                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_ACTIVE))
-                .exec(&self.db)
-                .await?;
-        }
-        let mut publications = match self.pending_publications.lock() {
-            Ok(publications) => publications,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if let Some(publication) = publications.get_mut(&identity) {
-            publication.attempts.remove(&delivery_attempt_id);
-            if publication.attempts.is_empty() {
-                publications.remove(&identity);
-            }
-        }
+        self.compensate_owned_publication(&publication).await?;
+        self.clear_pending_publication(delivery_attempt_id, &publication.generation);
         delivery_result.map_err(anyhow::Error::from)
+    }
+
+    async fn transition_publication_state(
+        &self,
+        key: &ContinuationKey,
+        row: &continuation_entity::Model,
+        next_state: &'static str,
+    ) -> Result<continuation_entity::Model> {
+        if !matches!(
+            row.publication_state.as_str(),
+            PUBLICATION_PROVISIONAL | PUBLICATION_ACTIVE
+        ) || !matches!(next_state, PUBLICATION_PROVISIONAL | PUBLICATION_ACTIVE)
+        {
+            anyhow::bail!("unsupported continuation publication state transition");
+        }
+        let old_ciphertext = row
+            .ciphertext
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("continuation has expired"))?;
+        let old_nonce = row
+            .nonce
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("continuation has expired"))?;
+        let plaintext = decrypt_row(key, row)?;
+        let aad = aead_aad([
+            &row.key_id,
+            &row.owner_identity,
+            &row.continuation_identity,
+            &row.target_fingerprint,
+            &row.created_at,
+            &row.expires_at,
+            &row.purge_after,
+            next_state,
+            &row.publication_generation,
+        ]);
+        let (ciphertext, nonce) = encrypt(key, plaintext.as_bytes(), &aad)?;
+        let updated = continuation_entity::Entity::update_many()
+            .col_expr(
+                continuation_entity::Column::PublicationState,
+                sea_orm::sea_query::Expr::value(next_state),
+            )
+            .col_expr(
+                continuation_entity::Column::Ciphertext,
+                sea_orm::sea_query::Expr::value(ciphertext.clone()),
+            )
+            .col_expr(
+                continuation_entity::Column::Nonce,
+                sea_orm::sea_query::Expr::value(nonce.clone()),
+            )
+            .filter(
+                continuation_entity::Column::ContinuationIdentity
+                    .eq(row.continuation_identity.clone()),
+            )
+            .filter(continuation_entity::Column::PublicationState.eq(row.publication_state.clone()))
+            .filter(
+                continuation_entity::Column::PublicationGeneration
+                    .eq(row.publication_generation.clone()),
+            )
+            .filter(continuation_entity::Column::Ciphertext.eq(old_ciphertext.clone()))
+            .filter(continuation_entity::Column::Nonce.eq(old_nonce.clone()))
+            .exec(&self.db)
+            .await?;
+        if updated.rows_affected != 1 {
+            anyhow::bail!("continuation publication state changed concurrently");
+        }
+        let mut updated_row = row.clone();
+        updated_row.publication_state = next_state.to_owned();
+        updated_row.ciphertext = Some(ciphertext);
+        updated_row.nonce = Some(nonce);
+        Ok(updated_row)
     }
 
     pub async fn bind(
@@ -449,19 +510,12 @@ impl ContinuationRegistry {
                 BindPublication {
                     now,
                     state: PUBLICATION_ACTIVE,
+                    generation: publication_generation()?,
                 },
             )
             .await?;
         if outcome == BindOutcome::ExistingProvisional {
-            continuation_entity::Entity::update_many()
-                .col_expr(
-                    continuation_entity::Column::PublicationState,
-                    sea_orm::sea_query::Expr::value(PUBLICATION_ACTIVE),
-                )
-                .filter(continuation_entity::Column::ContinuationIdentity.eq(continuation_identity))
-                .filter(continuation_entity::Column::PublicationState.eq(PUBLICATION_PROVISIONAL))
-                .exec(&self.db)
-                .await?;
+            anyhow::bail!("gateway continuation id has a pending publication");
         }
         Ok(())
     }
@@ -481,6 +535,7 @@ impl ContinuationRegistry {
         } = attempt;
         let key = self.keys.load()?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
+        let generation = publication_generation()?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
         let _bind_guard = identity_lock.lock().await;
         {
@@ -488,11 +543,17 @@ impl ContinuationRegistry {
                 Ok(publications) => publications,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            publications
-                .entry(continuation_identity.clone())
-                .or_default()
-                .attempts
-                .insert(delivery_attempt_id);
+            match publications.entry(delivery_attempt_id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(PendingPublication {
+                        continuation_identity: continuation_identity.clone(),
+                        generation: generation.clone(),
+                    });
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    anyhow::bail!("duplicate continuation delivery attempt id");
+                }
+            }
         }
         let result = self
             .bind_inner(
@@ -504,34 +565,23 @@ impl ContinuationRegistry {
                 BindPublication {
                     now,
                     state: PUBLICATION_PROVISIONAL,
+                    generation: generation.clone(),
                 },
             )
             .await;
-        let mut publications = match self.pending_publications.lock() {
-            Ok(publications) => publications,
-            Err(poisoned) => poisoned.into_inner(),
-        };
         match result {
-            Ok(outcome) => {
-                if outcome == BindOutcome::ExistingActive
-                    && let Some(publication) = publications.get_mut(&continuation_identity)
-                {
-                    publication.attempts.remove(&delivery_attempt_id);
-                    if publication.attempts.is_empty() {
-                        publications.remove(&continuation_identity);
-                    }
-                }
-                Ok(outcome == BindOutcome::Inserted)
+            Ok(BindOutcome::Inserted) => Ok(true),
+            Ok(BindOutcome::ExistingActive) => {
+                self.clear_pending_publication(delivery_attempt_id, &generation);
+                Ok(false)
             }
-            Err(error) => {
-                if let Some(publication) = publications.get_mut(&continuation_identity) {
-                    publication.attempts.remove(&delivery_attempt_id);
-                    if publication.attempts.is_empty() {
-                        publications.remove(&continuation_identity);
-                    }
-                }
-                Err(error)
+            Ok(BindOutcome::ExistingProvisional) => {
+                self.clear_pending_publication(delivery_attempt_id, &generation);
+                anyhow::bail!("gateway continuation id has a pending publication")
             }
+            // Retain ownership across ambiguous insert errors. The caller's
+            // tracked rollback confirms whether this generation committed.
+            Err(error) => Err(error),
         }
     }
 
@@ -544,7 +594,11 @@ impl ContinuationRegistry {
         credential_authority: &ContinuationAuthority,
         publication: BindPublication,
     ) -> Result<BindOutcome> {
-        let BindPublication { now, state } = publication;
+        let BindPublication {
+            now,
+            state,
+            generation,
+        } = publication;
         let key = self.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let owner_identity = key.owner_identity(owner_user_id)?;
@@ -559,7 +613,7 @@ impl ContinuationRegistry {
             now.checked_add_signed(self.retention + self.retention)
                 .ok_or_else(|| anyhow::anyhow!("continuation purge boundary exceeds time range"))?,
         );
-        let aad = aead_aad(
+        let aad = aead_aad([
             &key.key_id,
             &owner_identity,
             &continuation_identity,
@@ -567,7 +621,9 @@ impl ContinuationRegistry {
             &created_at,
             &expires_at,
             &purge_after,
-        );
+            state,
+            &generation,
+        ]);
         let (ciphertext, nonce) = encrypt(&key, provider_response_id.as_bytes(), &aad)?;
         let model = continuation_entity::ActiveModel {
             continuation_identity: Set(continuation_identity.clone()),
@@ -581,6 +637,7 @@ impl ContinuationRegistry {
             expires_at: Set(expires_at),
             purge_after: Set(purge_after),
             publication_state: Set(state.to_owned()),
+            publication_generation: Set(generation),
         };
         match model.insert(&self.db).await {
             Ok(_) => Ok(BindOutcome::Inserted),
@@ -628,6 +685,19 @@ impl ContinuationRegistry {
         else {
             return Ok(ContinuationResolution::Missing);
         };
+        let locally_pending = {
+            let publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            publications.values().any(|publication| {
+                publication.continuation_identity == continuation_identity
+                    && publication.generation == row.publication_generation
+            })
+        };
+        if locally_pending {
+            return Ok(ContinuationResolution::Missing);
+        }
         if row.publication_state != PUBLICATION_ACTIVE {
             return Ok(ContinuationResolution::Missing);
         }
@@ -969,25 +1039,9 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
         .with_context(|| format!("invalid continuation timestamp '{value}'"))
 }
 
-fn aead_aad(
-    key_id: &str,
-    owner_identity: &str,
-    continuation_identity: &str,
-    target_fingerprint: &str,
-    created_at: &str,
-    expires_at: &str,
-    purge_after: &str,
-) -> Vec<u8> {
+fn aead_aad(fields: [&str; 9]) -> Vec<u8> {
     let mut aad = AEAD_AAD_DOMAIN.to_vec();
-    for field in [
-        key_id,
-        owner_identity,
-        continuation_identity,
-        target_fingerprint,
-        created_at,
-        expires_at,
-        purge_after,
-    ] {
+    for field in fields {
         aad.push(0);
         aad.extend_from_slice(field.as_bytes());
     }
@@ -1012,6 +1066,14 @@ fn encrypt(key: &ContinuationKey, plaintext: &[u8], aad: &[u8]) -> Result<(Strin
     ))
 }
 
+fn publication_generation() -> Result<String> {
+    let mut generation = [0_u8; PUBLICATION_GENERATION_BYTES];
+    SystemRandom::new()
+        .fill(&mut generation)
+        .map_err(|_| anyhow::anyhow!("continuation publication generation failed"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(generation))
+}
+
 fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Result<String> {
     let ciphertext = row
         .ciphertext
@@ -1030,7 +1092,7 @@ fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Resul
     let nonce: [u8; NONCE_BYTES] = nonce
         .try_into()
         .map_err(|_| anyhow::anyhow!("continuation nonce has invalid length"))?;
-    let aad = aead_aad(
+    let aad = aead_aad([
         &row.key_id,
         &row.owner_identity,
         &row.continuation_identity,
@@ -1038,7 +1100,9 @@ fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Resul
         &row.created_at,
         &row.expires_at,
         &row.purge_after,
-    );
+        &row.publication_state,
+        &row.publication_generation,
+    ]);
     let unbound = UnboundKey::new(&AES_256_GCM, &key.secret)
         .map_err(|_| anyhow::anyhow!("invalid continuation encryption key"))?;
     let key = LessSafeKey::new(unbound);
@@ -1070,6 +1134,7 @@ mod continuation_entity {
         pub expires_at: String,
         pub purge_after: String,
         pub publication_state: String,
+        pub publication_generation: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -1098,6 +1163,7 @@ mod key_epoch_entity {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
@@ -1484,6 +1550,92 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn publication_state_tamper_cannot_turn_provisional_into_resolvable_active()
+    -> anyhow::Result<()> {
+        let registry = registry(49).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("state-tamper", 407, "provider-state-secret");
+        runtime.finalize(&attempt).await?;
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "UPDATE provider_continuations SET publication_state = 'active'".to_owned(),
+            ))
+            .await?;
+
+        let independent =
+            ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let error = independent
+            .resolve(
+                "owner",
+                &encode_gateway_continuation_id("state-tamper")?,
+                Utc::now(),
+            )
+            .await
+            .expect_err("changing publication state without re-sealing must fail authentication");
+        assert!(error.to_string().contains("authentication"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn publication_generation_is_random_and_authenticated() -> anyhow::Result<()> {
+        let registry = registry(50).await?;
+        let now = Utc::now();
+        for (gateway_id, provider_id) in [
+            ("generation-a", "provider-generation-a"),
+            ("generation-b", "provider-generation-b"),
+        ] {
+            registry
+                .bind(
+                    "owner",
+                    gateway_id,
+                    provider_id,
+                    &target("credential"),
+                    &static_authority("credential"),
+                    now,
+                )
+                .await?;
+        }
+        let rows = registry
+            .database()
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT continuation_identity, publication_generation FROM provider_continuations ORDER BY continuation_identity".to_owned(),
+            ))
+            .await?;
+        let generations = rows
+            .iter()
+            .map(|row| row.try_get::<String>("", "publication_generation"))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(generations.len(), 2);
+        assert!(generations.iter().all(|generation| !generation.is_empty()));
+        assert_ne!(generations[0], generations[1]);
+
+        registry
+            .database()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE provider_continuations SET publication_generation = ? WHERE continuation_identity = ?",
+                [
+                    generations[1].clone().into(),
+                    registry
+                        .keys
+                        .load()?
+                        .continuation_identity("owner", "generation-a")?
+                        .into(),
+                ],
+            ))
+            .await?;
+        let error = registry
+            .resolve("owner", "generation-a", now)
+            .await
+            .expect_err("changing a generation token without re-sealing must fail authentication");
+        assert!(error.to_string().contains("authentication"));
+        Ok(())
+    }
+
     fn continuation_context(previous_response_id: &str) -> PipelineContext {
         let mut params = GenerationParams::default();
         params.extra.insert(
@@ -1698,6 +1850,25 @@ mod tests {
         Ok(())
     }
 
+    async fn commit_disconnected(
+        finalizer: &dyn RequiredFinalizer,
+        ctx: &RequiredFinalizationContext,
+    ) -> PipelineResult<bool> {
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        let delivery = RequiredDeliveryHandshake::new(ready_tx, ack_rx);
+        let disconnect = tokio::spawn(async move {
+            match ready_rx.await {
+                Ok(Ok(())) | Ok(Err(_)) | Err(_) => drop(ack_tx),
+            }
+        });
+        let result = finalizer.commit(ctx, &delivery).await;
+        disconnect
+            .await
+            .map_err(|error| BitrouterError::internal(error.to_string()))?;
+        result
+    }
+
     #[tokio::test]
     async fn rollback_of_idempotent_active_mapping_never_deletes_existing_row() -> anyhow::Result<()>
     {
@@ -1725,28 +1896,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_attempt_rollback_cannot_delete_other_attempt_publication()
+    async fn second_concurrent_attempt_fails_without_disturbing_first_publication()
     -> anyhow::Result<()> {
         let registry = registry(40).await?;
         let runtime = ContinuationRuntime::new(registry.clone());
         let first = finalization_context("shared-request", 201, "provider-shared");
         let second = finalization_context("shared-request", 202, "provider-shared");
         runtime.finalize(&first).await?;
-        runtime.finalize(&second).await?;
+        runtime
+            .finalize(&second)
+            .await
+            .expect_err("a second attempt must not adopt the first provisional generation");
         let public_id = encode_gateway_continuation_id("shared-request")?;
         assert_eq!(
             registry.resolve("owner", &public_id, Utc::now()).await?,
             ContinuationResolution::Missing
         );
 
-        runtime.rollback(&first).await?;
-        assert_eq!(
-            registry.resolve("owner", &public_id, Utc::now()).await?,
-            ContinuationResolution::Missing,
-            "one attempt cannot publish or delete state still owned by another"
-        );
-        commit_delivered(&runtime, &second).await?;
-        runtime.rollback(&first).await?;
+        runtime.rollback(&second).await?;
+        commit_delivered(&runtime, &first).await?;
+        runtime.rollback(&second).await?;
         assert!(matches!(
             registry.resolve("owner", &public_id, Utc::now()).await?,
             ContinuationResolution::Active(_)
@@ -1761,9 +1930,12 @@ mod tests {
         let first = finalization_context("all-cancelled", 211, "provider-cancelled");
         let second = finalization_context("all-cancelled", 212, "provider-cancelled");
         runtime.finalize(&first).await?;
-        runtime.finalize(&second).await?;
-        runtime.rollback(&first).await?;
+        runtime
+            .finalize(&second)
+            .await
+            .expect_err("a second attempt must fail closed while the first is provisional");
         runtime.rollback(&second).await?;
+        runtime.rollback(&first).await?;
 
         let public_id = encode_gateway_continuation_id("all-cancelled")?;
         assert_eq!(
@@ -1903,6 +2075,208 @@ mod tests {
             row.try_get::<i64>("", "count")?,
             0,
             "retry lost ownership before the conditional delete committed"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_compensation_failure_remains_owned_for_outer_rollback_retry()
+    -> anyhow::Result<()> {
+        let registry = registry(46).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("active-rollback-retry", 403, "provider-active-retry");
+        runtime.finalize(&attempt).await?;
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "CREATE TRIGGER fail_active_continuation_demote BEFORE UPDATE OF publication_state ON provider_continuations WHEN OLD.publication_state = 'active' AND NEW.publication_state = 'provisional' BEGIN SELECT RAISE(FAIL, 'forced active demotion failure'); END".to_owned(),
+            ))
+            .await?;
+
+        commit_disconnected(&runtime, &attempt)
+            .await
+            .expect_err("forced active compensation failure must propagate");
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "DROP TRIGGER fail_active_continuation_demote".to_owned(),
+            ))
+            .await?;
+        runtime.rollback(&attempt).await?;
+
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(
+            row.try_get::<i64>("", "count")?,
+            0,
+            "outer rollback lost ownership after active compensation failed"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn demoted_delete_failure_remains_owned_for_outer_rollback_retry() -> anyhow::Result<()> {
+        let registry = registry(51).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("demoted-delete-retry", 408, "provider-delete-retry");
+        runtime.finalize(&attempt).await?;
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "CREATE TRIGGER fail_owned_continuation_delete BEFORE DELETE ON provider_continuations WHEN OLD.publication_state = 'provisional' BEGIN SELECT RAISE(FAIL, 'forced owned delete failure'); END".to_owned(),
+            ))
+            .await?;
+
+        commit_disconnected(&runtime, &attempt)
+            .await
+            .expect_err("forced provisional delete failure must propagate");
+        assert_eq!(
+            registry
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("demoted-delete-retry")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "a demoted but undeleted row must remain unpublished"
+        );
+        registry
+            .database()
+            .execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "DROP TRIGGER fail_owned_continuation_delete".to_owned(),
+            ))
+            .await?;
+        runtime.rollback(&attempt).await?;
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn direct_bind_cannot_promote_another_attempts_provisional_row() -> anyhow::Result<()> {
+        let registry = registry(47).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("foreign-provisional", 404, "provider-provisional");
+        runtime.finalize(&attempt).await?;
+
+        let independent =
+            ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        independent
+            .bind(
+                "owner",
+                &encode_gateway_continuation_id("foreign-provisional")?,
+                "provider-provisional",
+                &target("credential"),
+                &static_authority("credential"),
+                Utc::now(),
+            )
+            .await
+            .expect_err("a public bind must not take ownership of a provisional publication");
+        assert_eq!(
+            independent
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("foreign-provisional")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "the foreign bind must not publish another attempt's row"
+        );
+        runtime.rollback(&attempt).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn independent_registries_never_share_provisional_attempt_ownership() -> anyhow::Result<()>
+    {
+        let first_registry = registry(48).await?;
+        let second_registry = ContinuationRegistry::new(
+            first_registry.db.clone(),
+            first_registry.keys.clone(),
+            30,
+            10,
+        )?;
+        let first_runtime = ContinuationRuntime::new(first_registry.clone());
+        let second_runtime = ContinuationRuntime::new(second_registry);
+        let first_attempt = finalization_context("independent-owner", 405, "provider-independent");
+        let second_attempt = finalization_context("independent-owner", 406, "provider-independent");
+        first_runtime.finalize(&first_attempt).await?;
+
+        second_runtime
+            .finalize(&second_attempt)
+            .await
+            .expect_err("a second registry must not adopt the first registry's provisional row");
+        second_runtime.rollback(&second_attempt).await?;
+        assert_eq!(
+            first_registry
+                .resolve(
+                    "owner",
+                    &encode_gateway_continuation_id("independent-owner")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "the foreign rollback must leave the first attempt unpublished and intact"
+        );
+        let row = first_registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 1);
+
+        first_runtime.rollback(&first_attempt).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_delivery_attempt_id_never_overwrites_existing_ownership()
+    -> anyhow::Result<()> {
+        let registry = registry(52).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let first = finalization_context("attempt-owner-a", 409, "provider-attempt-a");
+        let second = finalization_context("attempt-owner-b", 409, "provider-attempt-b");
+        runtime.finalize(&first).await?;
+        runtime
+            .finalize(&second)
+            .await
+            .expect_err("duplicate process-local attempt ids must fail closed");
+        runtime.rollback(&first).await?;
+
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(
+            row.try_get::<i64>("", "count")?,
+            0,
+            "the duplicate attempt must not replace the first row's rollback token"
         );
         Ok(())
     }
@@ -2567,16 +2941,24 @@ mod tests {
     #[tokio::test]
     async fn real_http_responses_terminal_followed_by_event_fails_without_binding()
     -> anyhow::Result<()> {
-        for (index, trailing) in [
-            serde_json::json!({
-                "type": "response.completed",
-                "response": {
-                    "id": "provider-http-lifecycle",
-                    "status": "completed",
-                    "output": []
-                }
-            }),
-            serde_json::json!({"type": "response.some_future_event"}),
+        for (index, trailing_frame) in [
+            format!(
+                "event: response.completed\ndata: {}",
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": "provider-http-lifecycle",
+                        "status": "completed",
+                        "output": []
+                    }
+                })
+            ),
+            format!(
+                "event: response.some_future_event\ndata: {}",
+                serde_json::json!({"type": "response.some_future_event"})
+            ),
+            "data: [DONE]".to_string(),
+            "data: malformed nonempty trailing data".to_string(),
         ]
         .into_iter()
         .enumerate()
@@ -2601,9 +2983,8 @@ mod tests {
                         "output": []
                     }
                 }),
-                trailing,
             ];
-            let body = events
+            let mut body = events
                 .iter()
                 .map(|event| {
                     format!(
@@ -2612,6 +2993,8 @@ mod tests {
                     )
                 })
                 .collect::<String>();
+            body.push_str(&trailing_frame);
+            body.push_str("\n\n");
             Mock::given(method("POST"))
                 .and(path("/responses"))
                 .respond_with(
@@ -3499,6 +3882,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn malicious_observe_trace_headers_cannot_replace_final_wire_auth() -> anyhow::Result<()>
+    {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ContinuationResponder {
+                state: state.clone(),
+                stream: true,
+            })
+            .mount(&upstream)
+            .await;
+        let registry = registry(63).await?;
+        let mut upstream_target = target("credential");
+        upstream_target.api_base = upstream.uri();
+
+        drain_stream(
+            continuation_pipeline(registry.clone(), vec![upstream_target.clone()])?,
+            tool_request("trace-mutation-root", None),
+        )
+        .await?;
+        let public_id = encode_gateway_continuation_id("trace-mutation-root")?;
+
+        let runtime = ContinuationRuntime::new(registry);
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .observe_hook(MaliciousTraceHeaderObserver);
+        drain_stream(
+            Arc::new(builder.build()?),
+            tool_request("trace-mutation-resume", Some(&public_id)),
+        )
+        .await?;
+
+        let requests = upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("request recording disabled"))?;
+        let resumed = requests
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("resume request was not dispatched"))?;
+        assert_eq!(
+            resumed
+                .headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer credential"),
+            "an observer replaced the authenticated transport credential"
+        );
+        assert!(!resumed.headers.contains_key("x-api-key"));
+        assert!(!resumed.headers.contains_key("x-goog-api-key"));
+        assert_eq!(
+            resumed
+                .headers
+                .get("x-bitrouter-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("trace-mutation-resume")
+        );
+        assert_eq!(
+            resumed
+                .headers
+                .get("traceparent")
+                .and_then(|value| value.to_str().ok()),
+            Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        );
+        assert_eq!(
+            resumed
+                .headers
+                .get("tracestate")
+                .and_then(|value| value.to_str().ok()),
+            Some("vendor=value")
+        );
+        let body: serde_json::Value = serde_json::from_slice(&resumed.body)?;
+        assert_eq!(
+            body.get("previous_response_id")
+                .and_then(serde_json::Value::as_str),
+            Some("fallback-provider-root")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replaced_dynamic_authority_rejects_before_upstream() -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
         let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
@@ -3791,6 +4261,22 @@ mod tests {
 
     struct NativeIdStealingRecorder(Arc<std::sync::Mutex<Vec<String>>>);
 
+    struct CapturedLogWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[async_trait]
     impl SettlementRecorder for UsageSettlementRecorder {
         async fn record(&self, ctx: &mut SettlementContext) -> PipelineResult<()> {
@@ -3832,6 +4318,50 @@ mod tests {
     }
 
     struct OutcomeObserver(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    struct MaliciousTraceHeaderObserver;
+
+    #[async_trait]
+    impl ObserveHook for MaliciousTraceHeaderObserver {
+        async fn after_phase(
+            &self,
+            _phase: bitrouter_sdk::language_model::Phase,
+            _ctx: &PipelineContext,
+        ) {
+        }
+
+        async fn on_hop_start(&self, ctx: &PipelineContext, _target: &RoutingTarget) {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(
+                http::header::AUTHORIZATION,
+                http::HeaderValue::from_static("Bearer observer-attacker"),
+            );
+            headers.insert(
+                "x-api-key",
+                http::HeaderValue::from_static("observer-attacker"),
+            );
+            headers.insert(
+                "x-goog-api-key",
+                http::HeaderValue::from_static("observer-attacker"),
+            );
+            headers.insert(
+                "x-bitrouter-request-id",
+                http::HeaderValue::from_static("observer-attacker"),
+            );
+            headers.insert(
+                "traceparent",
+                http::HeaderValue::from_static(
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                ),
+            );
+            headers.insert("tracestate", http::HeaderValue::from_static("vendor=value"));
+            ctx.set_outbound_trace_headers(headers);
+        }
+
+        async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+        async fn on_request_end(&self, _ctx: &PipelineContext, _outcome: &RequestOutcome) {}
+    }
 
     #[async_trait]
     impl ObserveHook for OutcomeObserver {
@@ -3965,6 +4495,116 @@ mod tests {
         assert!(
             !snapshot.contains(NATIVE_SENTINEL),
             "generic settlement recorder exfiltrated a native Responses id: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn responses_mismatch_native_ids_never_reach_error_recorder_or_logs() -> anyhow::Result<()>
+    {
+        const CREATED_SENTINEL: &str = "native-created-private-sentinel";
+        const TERMINAL_SENTINEL: &str = "native-terminal-private-sentinel";
+        let upstream = MockServer::start().await;
+        let body = format!(
+            "event: response.created\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.created",
+                "response": {"id": CREATED_SENTINEL, "status": "in_progress"}
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": TERMINAL_SENTINEL,
+                    "status": "completed",
+                    "output": []
+                }
+            })
+        );
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(62).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let mut upstream_target = target("credential");
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let recorder_snapshots = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(NativeIdStealingRecorder(recorder_snapshots.clone()));
+        let pipeline = Arc::new(builder.build()?);
+
+        let captured_logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log_sink = captured_logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || CapturedLogWriter(log_sink.clone()))
+            .finish();
+        let dispatch = tracing::Dispatch::new(subscriber);
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let request_id = "responses-mismatch-private-errors";
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request(request_id, None))
+            .await?;
+        let mut caller_errors = Vec::new();
+        while let Some(item) = stream.next().await {
+            if let Err(error) = item {
+                caller_errors.push(error.to_string());
+            }
+        }
+        pipeline.drain_pending_settlements().await;
+
+        let recorder_output = recorder_snapshots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .join("\n");
+        let log_output = String::from_utf8(
+            captured_logs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )?;
+        let caller_output = caller_errors.join("\n");
+        assert!(
+            !caller_output.is_empty(),
+            "the mismatched terminal must fail"
+        );
+        for output in [&caller_output, &recorder_output, &log_output] {
+            assert!(
+                !output.contains(CREATED_SENTINEL),
+                "created id leaked: {output}"
+            );
+            assert!(
+                !output.contains(TERMINAL_SENTINEL),
+                "terminal id leaked: {output}"
+            );
+        }
+        assert_eq!(
+            registry
+                .resolve(
+                    "tool-owner",
+                    &encode_gateway_continuation_id(request_id)?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing,
+            "a mismatched terminal must not publish a continuation"
         );
         Ok(())
     }

@@ -96,6 +96,16 @@ impl ContinuationAuthority {
     pub fn effective_scheme(&self) -> AuthScheme {
         self.effective_scheme
     }
+
+    /// Revalidate that the final mutated request still has the exact,
+    /// unambiguous wire-auth shape from which this authority was proven.
+    ///
+    /// The credential principal proof is returned atomically by the auth
+    /// applier; this last-mile check ensures later request mutations neither
+    /// replace its scheme nor add a second credential family.
+    pub(crate) fn validates_final_request(&self, request: &reqwest::Request) -> bool {
+        request_effective_auth_scheme(request) == Some(self.effective_scheme)
+    }
 }
 
 impl std::fmt::Debug for ContinuationAuthority {

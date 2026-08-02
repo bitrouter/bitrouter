@@ -2220,6 +2220,11 @@ impl StreamDecoder for ResponsesStreamDecoder {
         if data.is_empty() {
             return Ok(Vec::new());
         }
+        if self.successful_terminal.is_some() {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: "Responses stream emitted non-empty data after its terminal".to_string(),
+            });
+        }
         let json: serde_json::Value = match serde_json::from_str(data) {
             Ok(v) => v,
             Err(_) => return Ok(Vec::new()),
@@ -2239,14 +2244,6 @@ impl StreamDecoder for ResponsesStreamDecoder {
             });
         }
         let event_type = body_type.or(explicit_event).unwrap_or_default();
-        if self.successful_terminal.is_some() {
-            return Err(BitrouterError::UpstreamInvalidResponse {
-                message: format!(
-                    "Responses stream emitted event '{event_type}' after its terminal"
-                ),
-            });
-        }
-
         let mut parts = Vec::new();
         match event_type {
             "response.created" => {
@@ -2460,10 +2457,8 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     .is_some_and(|created_id| created_id != id)
                 {
                     return Err(BitrouterError::UpstreamInvalidResponse {
-                        message: format!(
-                            "Responses terminal id '{id}' does not match response.created id '{}'",
-                            self.created_id.as_deref().unwrap_or_default()
-                        ),
+                        message: "Responses terminal id does not match response.created id"
+                            .to_string(),
                     });
                 }
                 self.successful_terminal = Some(StreamPart::ResponseCompleted {
