@@ -321,13 +321,231 @@ fn validate_nonstream_responses_terminal(json: &serde_json::Value) -> Result<()>
     Ok(())
 }
 
+struct ProviderContinuationSubstitution {
+    native: String,
+    public_or_redacted: String,
+}
+
+struct UpstreamErrorScrubber {
+    replacements: Vec<(String, String)>,
+}
+
+fn is_sensitive_credential_name(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase().replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "authorization" | "proxy_authorization" | "cookie" | "set_cookie"
+    ) || normalized.split('_').any(|segment| {
+        matches!(
+            segment,
+            "auth" | "key" | "token" | "credential" | "secret" | "signature" | "sig"
+        )
+    })
+}
+
+impl UpstreamErrorScrubber {
+    fn new(continuation: Option<ProviderContinuationSubstitution>) -> Self {
+        let mut scrubber = Self {
+            replacements: Vec::new(),
+        };
+        if let Some(continuation) = continuation {
+            scrubber.add_replacement(continuation.native, continuation.public_or_redacted);
+        }
+        scrubber
+    }
+
+    fn capture_request_credentials(&mut self, request: &reqwest::Request, target: &RoutingTarget) {
+        let effective_target_key = target
+            .api_key_override
+            .as_deref()
+            .unwrap_or(target.api_key.as_str());
+        for name in request.headers().keys() {
+            for value in request.headers().get_all(name) {
+                let Ok(value) = value.to_str() else {
+                    continue;
+                };
+                if !is_sensitive_credential_name(name.as_str())
+                    && (effective_target_key.is_empty() || value != effective_target_key)
+                {
+                    continue;
+                }
+                self.add_replacement(value.to_owned(), "[redacted credential]".to_owned());
+                if let Some((_, credential)) = value.split_once(' ')
+                    && !credential.is_empty()
+                {
+                    self.add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
+                }
+                if name.as_str().eq_ignore_ascii_case("cookie") {
+                    for pair in value.split(';') {
+                        if let Some((_, credential)) = pair.trim().split_once('=')
+                            && !credential.is_empty()
+                        {
+                            self.add_replacement(
+                                credential.to_owned(),
+                                "[redacted credential]".to_owned(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        for (name, value) in request.url().query_pairs() {
+            if is_sensitive_credential_name(&name)
+                || (!effective_target_key.is_empty() && value == effective_target_key)
+            {
+                self.add_replacement(value.into_owned(), "[redacted credential]".to_owned());
+            }
+        }
+        if let Some(raw_query) = request.url().query() {
+            for raw_pair in raw_query.split('&') {
+                let (_, raw_value) = raw_pair.split_once('=').unwrap_or((raw_pair, ""));
+                let Some((decoded_name, decoded_value)) =
+                    url::form_urlencoded::parse(raw_pair.as_bytes()).next()
+                else {
+                    continue;
+                };
+                if is_sensitive_credential_name(&decoded_name)
+                    || (!effective_target_key.is_empty()
+                        && decoded_value.as_ref() == effective_target_key)
+                {
+                    self.add_replacement(raw_value.to_owned(), "[redacted credential]".to_owned());
+                }
+            }
+        }
+    }
+
+    fn capture_effective_target_key(&mut self, target: &RoutingTarget) {
+        let credential = target
+            .api_key_override
+            .as_deref()
+            .unwrap_or(target.api_key.as_str());
+        self.add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
+    }
+
+    fn add_replacement(&mut self, sensitive: String, replacement: String) {
+        if sensitive.is_empty()
+            || self
+                .replacements
+                .iter()
+                .any(|(existing, _)| existing == &sensitive)
+        {
+            return;
+        }
+        self.replacements.push((sensitive, replacement));
+        self.replacements
+            .sort_by_key(|(sensitive, _)| std::cmp::Reverse(sensitive.len()));
+    }
+
+    fn scrub_text(&self, text: &str) -> String {
+        self.replacements
+            .iter()
+            .fold(text.to_owned(), |scrubbed, (sensitive, replacement)| {
+                scrubbed.replace(sensitive, replacement)
+            })
+    }
+
+    fn scrub_value(&self, value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(text) => *text = self.scrub_text(text),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    self.scrub_value(value);
+                }
+            }
+            serde_json::Value::Object(object) => {
+                let entries = std::mem::take(object);
+                for (key, mut value) in entries {
+                    self.scrub_value(&mut value);
+                    object.insert(self.scrub_text(&key), value);
+                }
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            }
+        }
+    }
+
+    fn scrub_body(&self, body: &str) -> String {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body) else {
+            return self.scrub_text(body);
+        };
+        self.scrub_value(&mut value);
+        value.to_string()
+    }
+
+    fn scrub_error(&self, error: BitrouterError) -> BitrouterError {
+        match error {
+            BitrouterError::BadRequest { message } => BitrouterError::BadRequest {
+                message: self.scrub_text(&message),
+            },
+            BitrouterError::Unauthorized(message) => {
+                BitrouterError::Unauthorized(self.scrub_text(&message))
+            }
+            BitrouterError::PaymentRequired(message) => {
+                BitrouterError::PaymentRequired(self.scrub_text(&message))
+            }
+            BitrouterError::UpstreamPaymentRequired { detail } => {
+                BitrouterError::UpstreamPaymentRequired {
+                    detail: detail.map(|detail| self.scrub_text(&detail)),
+                }
+            }
+            BitrouterError::Forbidden(message) => {
+                BitrouterError::Forbidden(self.scrub_text(&message))
+            }
+            BitrouterError::NotFound(message) => {
+                BitrouterError::NotFound(self.scrub_text(&message))
+            }
+            error @ BitrouterError::RateLimited { .. } => error,
+            BitrouterError::UpstreamRateLimited {
+                retry_after,
+                detail,
+            } => BitrouterError::UpstreamRateLimited {
+                retry_after,
+                detail: detail.map(|detail| self.scrub_text(&detail)),
+            },
+            BitrouterError::UpstreamBadRequest { mut error } => {
+                self.scrub_value(&mut error);
+                BitrouterError::UpstreamBadRequest { error }
+            }
+            BitrouterError::UpstreamPolicyViolation { message } => {
+                BitrouterError::UpstreamPolicyViolation {
+                    message: self.scrub_text(&message),
+                }
+            }
+            BitrouterError::Upstream { status, message } => BitrouterError::Upstream {
+                status,
+                message: self.scrub_text(&message),
+            },
+            BitrouterError::UpstreamInvalidResponse { message } => {
+                BitrouterError::UpstreamInvalidResponse {
+                    message: self.scrub_text(&message),
+                }
+            }
+            BitrouterError::UpstreamAuth {
+                status,
+                www_authenticate,
+                required_scope,
+            } => BitrouterError::UpstreamAuth {
+                status,
+                www_authenticate: www_authenticate.map(|value| self.scrub_text(&value)),
+                required_scope: required_scope.map(|value| self.scrub_text(&value)),
+            },
+            BitrouterError::Internal(message) => {
+                BitrouterError::Internal(self.scrub_text(&message))
+            }
+            error @ (BitrouterError::UpstreamTimeout | BitrouterError::UpstreamUnavailable) => {
+                error
+            }
+        }
+    }
+}
+
 fn apply_provider_continuation(
     body: &mut serde_json::Value,
     target: &RoutingTarget,
     ctx: &PipelineContext,
-) -> Result<()> {
+) -> Result<Option<ProviderContinuationSubstitution>> {
     let Some(continuation) = ctx.extension::<ProviderContinuation>() else {
-        return Ok(());
+        return Ok(None);
     };
     if !continuation.matches_target(target) {
         return Err(BitrouterError::internal(
@@ -344,11 +562,21 @@ fn apply_provider_continuation(
             "Responses request body must be an object",
         ));
     };
+    let public_or_redacted = object
+        .get("previous_response_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| id.starts_with("brc_"))
+        .unwrap_or("[redacted provider continuation]")
+        .to_owned();
+    let native = continuation.response_id().to_owned();
     object.insert(
         "previous_response_id".to_owned(),
-        serde_json::Value::String(continuation.response_id().to_owned()),
+        serde_json::Value::String(native.clone()),
     );
-    Ok(())
+    Ok(Some(ProviderContinuationSubstitution {
+        native,
+        public_or_redacted,
+    }))
 }
 
 fn validate_continuation_authority(
@@ -950,7 +1178,9 @@ impl Executor for HttpExecutor {
         upstream_prompt.stream = false;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         self.shape_request_body(&mut body, target).await?;
-        apply_provider_continuation(&mut body, target, ctx)?;
+        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
+        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
+        error_scrubber.capture_effective_target_key(target);
         let url = transport.endpoint_url(target, false);
         let trace_headers = ctx.take_outbound_trace_headers();
 
@@ -968,29 +1198,33 @@ impl Executor for HttpExecutor {
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
         let text = loop {
-            let request = self.build_authenticated_request(&request_input).await?;
+            let request = self
+                .build_authenticated_request(&request_input)
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+            error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            let response = client.execute(request).await.map_err(|e| {
-                if e.is_timeout() {
+            let response = client.execute(request).await.map_err(|error| {
+                let error = if error.is_timeout() {
                     BitrouterError::UpstreamTimeout
                 } else {
                     BitrouterError::Upstream {
                         status: 502,
-                        message: format!("request to {} failed: {e}", target.provider_name),
+                        message: format!("request to {} failed: {error}", target.provider_name),
                     }
-                }
+                };
+                error_scrubber.scrub_error(error)
             })?;
 
             let status = response.status();
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            let text = response
-                .text()
-                .await
-                .map_err(|e| upstream_body_error("reading upstream body", e))?;
+            let text = response.text().await.map_err(|error| {
+                error_scrubber.scrub_error(upstream_body_error("reading upstream body", error))
+            })?;
 
             if status.is_success() {
                 break text;
@@ -999,23 +1233,32 @@ impl Executor for HttpExecutor {
                 && !attempted_auth_refresh
                 && self
                     .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
-                    .await?
+                    .await
+                    .map_err(|error| error_scrubber.scrub_error(error))?
             {
                 attempted_auth_refresh = true;
                 continue;
             }
-            return Err(classify_upstream_error(status.as_u16(), &text, retry_after));
+            let scrubbed = error_scrubber.scrub_body(&text);
+            return Err(classify_upstream_error(
+                status.as_u16(),
+                &scrubbed,
+                retry_after,
+            ));
         };
 
-        let json: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| BitrouterError::Upstream {
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+            error_scrubber.scrub_error(BitrouterError::Upstream {
                 status: 502,
-                message: format!("upstream returned non-JSON body: {e}"),
-            })?;
+                message: format!("upstream returned non-JSON body: {error}"),
+            })
+        })?;
         if target.api_protocol == ApiProtocol::Responses {
-            validate_nonstream_responses_terminal(&json)?;
+            validate_nonstream_responses_terminal(&json)
+                .map_err(|error| error_scrubber.scrub_error(error))?;
         }
-        let result = parse_upstream_success(adapter.as_ref(), json)?;
+        let result = parse_upstream_success(adapter.as_ref(), json)
+            .map_err(|error| error_scrubber.scrub_error(error))?;
         let elapsed = started.elapsed().as_millis() as u64;
 
         Ok(ExecutionResult {
@@ -1047,7 +1290,9 @@ impl Executor for HttpExecutor {
         upstream_prompt.stream = true;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         self.shape_request_body(&mut body, target).await?;
-        apply_provider_continuation(&mut body, target, ctx)?;
+        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
+        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
+        error_scrubber.capture_effective_target_key(target);
         let url = transport.endpoint_url(target, true);
         let trace_headers = ctx.take_outbound_trace_headers();
 
@@ -1064,20 +1309,28 @@ impl Executor for HttpExecutor {
         };
         let mut attempted_auth_refresh = false;
         let response = loop {
-            let request = self.build_authenticated_request(&request_input).await?;
+            let request = self
+                .build_authenticated_request(&request_input)
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
+            error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            let response = client.execute(request).await.map_err(|e| {
-                if e.is_timeout() {
+            let response = client.execute(request).await.map_err(|error| {
+                let error = if error.is_timeout() {
                     BitrouterError::UpstreamTimeout
                 } else {
                     BitrouterError::Upstream {
                         status: 502,
-                        message: format!("stream request to {} failed: {e}", target.provider_name),
+                        message: format!(
+                            "stream request to {} failed: {error}",
+                            target.provider_name
+                        ),
                     }
-                }
+                };
+                error_scrubber.scrub_error(error)
             })?;
 
             let status = response.status();
@@ -1086,17 +1339,28 @@ impl Executor for HttpExecutor {
             if status.is_success() {
                 break response;
             }
-            let text = response.text().await.unwrap_or_default();
+            let text = response.text().await.map_err(|error| {
+                error_scrubber.scrub_error(upstream_body_error(
+                    "reading upstream stream error body",
+                    error,
+                ))
+            })?;
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
                 && self
                     .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
-                    .await?
+                    .await
+                    .map_err(|error| error_scrubber.scrub_error(error))?
             {
                 attempted_auth_refresh = true;
                 continue;
             }
-            return Err(classify_upstream_error(status.as_u16(), &text, retry_after));
+            let scrubbed = error_scrubber.scrub_body(&text);
+            return Err(classify_upstream_error(
+                status.as_u16(),
+                &scrubbed,
+                retry_after,
+            ));
         };
 
         // Parse the upstream SSE byte stream into canonical stream parts via
@@ -1121,7 +1385,9 @@ impl Executor for HttpExecutor {
                                 }
                             }
                             Err(e) => {
-                                yield Err(classify_stream_decoder_error(e));
+                                yield Err(error_scrubber.scrub_error(
+                                    classify_stream_decoder_error(e)
+                                ));
                                 return;
                             }
                         }
@@ -1134,7 +1400,9 @@ impl Executor for HttpExecutor {
                             &e,
                             eventsource_stream::EventStreamError::Transport(re) if re.is_timeout()
                         );
-                        yield Err(stream_transport_error(is_timeout, &e));
+                        yield Err(error_scrubber.scrub_error(
+                            stream_transport_error(is_timeout, &e)
+                        ));
                         return;
                     }
                 }
@@ -1145,7 +1413,9 @@ impl Executor for HttpExecutor {
                         yield Ok(p);
                     }
                 }
-                Err(e) => yield Err(classify_stream_decoder_error(e)),
+                Err(e) => yield Err(error_scrubber.scrub_error(
+                    classify_stream_decoder_error(e)
+                )),
             }
         };
 
@@ -1692,19 +1962,151 @@ mod provider_continuation_tests {
     }
 
     #[test]
+    fn credential_name_detection_covers_custom_auth_without_redacting_ordinary_fields() {
+        for name in [
+            "Authorization",
+            "api-key",
+            "X-Custom-Token",
+            "X-Provider-Auth",
+            "x-refresh-secret",
+            "X-Amz-Signature",
+            "cookie",
+        ] {
+            assert!(is_sensitive_credential_name(name), "missed {name}");
+        }
+        for name in ["content-type", "api-version", "model", "x-request-id"] {
+            assert!(
+                !is_sensitive_credential_name(name),
+                "ordinary field was classified as a credential: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_target_key_is_scrubbed_from_custom_header_without_sensitive_name() {
+        let target = responses_target("openai");
+        let mut request = reqwest::Client::new()
+            .post("https://api.example/v1/responses")
+            .build()
+            .expect("request");
+        request.headers_mut().insert(
+            "x-provider-session",
+            reqwest::header::HeaderValue::from_static("key"),
+        );
+        request.headers_mut().insert(
+            "x-provider-region",
+            reqwest::header::HeaderValue::from_static("ordinary-region"),
+        );
+        let mut scrubber = UpstreamErrorScrubber::new(None);
+        scrubber.capture_request_credentials(&request, &target);
+
+        let scrubbed = scrubber.scrub_body("key ordinary-region");
+        assert!(!scrubbed.contains("key"));
+        assert!(scrubbed.contains("ordinary-region"));
+    }
+
+    #[test]
+    fn effective_target_key_is_seeded_before_authenticated_request_build() {
+        for (api_key, api_key_override, sensitive) in [
+            ("static-key-private", None, "static-key-private"),
+            (
+                "unused-static-private",
+                Some("override-key-private"),
+                "override-key-private",
+            ),
+        ] {
+            let mut target = responses_target("openai");
+            target.api_key = api_key.to_owned();
+            target.api_key_override = api_key_override.map(str::to_owned);
+            let mut scrubber = UpstreamErrorScrubber::new(None);
+            scrubber.capture_effective_target_key(&target);
+
+            let error = scrubber.scrub_error(BitrouterError::Internal(format!(
+                "authenticated request build failed for {sensitive}"
+            )));
+            assert!(
+                !format!("{error:?}").contains(sensitive),
+                "effective target credential leaked from pre-wire auth failure"
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_sensitive_query_value_is_scrubbed_without_touching_ordinary_query_values() {
+        let target = responses_target("openai");
+        let request = reqwest::Client::new()
+            .post("https://api.example/v1/responses?api-key=abc%2F%2B%25&api-version=2026-08-01")
+            .build()
+            .expect("request");
+        let mut scrubber = UpstreamErrorScrubber::new(None);
+        scrubber.capture_request_credentials(&request, &target);
+
+        let scrubbed = scrubber.scrub_body("raw=abc%2F%2B%25 decoded=abc/+% 2026-08-01");
+        assert!(!scrubbed.contains("abc%2F%2B%25"));
+        assert!(!scrubbed.contains("abc/+%"));
+        assert!(scrubbed.contains("2026-08-01"));
+
+        let transport_error = scrubber.scrub_error(BitrouterError::Upstream {
+            status: 502,
+            message:
+                "request failed for ?api-key=abc%2F%2B%25&api-version=2026-08-01 decoded=abc/+%"
+                    .to_owned(),
+        });
+        let BitrouterError::Upstream { message, .. } = transport_error else {
+            panic!("expected transport-shaped upstream error");
+        };
+        assert!(!message.contains("abc%2F%2B%25"));
+        assert!(!message.contains("abc/+%"));
+        assert!(message.contains("2026-08-01"));
+    }
+
+    #[test]
+    fn plain_error_is_scrubbed_before_generic_upstream_truncation() {
+        let native = "native-private-sentinel";
+        let credential = "credential-private-sentinel";
+        let mut scrubber = UpstreamErrorScrubber::new(Some(ProviderContinuationSubstitution {
+            native: native.to_owned(),
+            public_or_redacted: "brc_public".to_owned(),
+        }));
+        scrubber.add_replacement(credential.to_owned(), "[redacted credential]".to_owned());
+        let body = format!(
+            "{native} {credential} {} {native} {credential}",
+            "x".repeat(1_500)
+        );
+        let scrubbed = scrubber.scrub_body(&body);
+        let error = classify_upstream_error(503, &scrubbed, None);
+        let BitrouterError::Upstream { message, .. } = error else {
+            panic!("expected generic upstream error");
+        };
+        assert!(!message.contains(native));
+        assert!(!message.contains(credential));
+        assert!(message.contains("brc_public"));
+        assert!(message.contains("[truncated]"));
+    }
+
+    #[test]
     fn continuation_override_rewrites_only_the_bound_responses_target() {
         let target = responses_target("openai");
         let ctx = context(&target);
         let mut body = serde_json::json!({"previous_response_id": "gateway-id"});
-        apply_provider_continuation(&mut body, &target, &ctx).unwrap();
+        let substitution = apply_provider_continuation(&mut body, &target, &ctx)
+            .unwrap()
+            .expect("continuation substitution");
         assert_eq!(body["previous_response_id"], "resp-native-secret");
+        assert_eq!(substitution.native, "resp-native-secret");
+        assert_eq!(
+            substitution.public_or_redacted,
+            "[redacted provider continuation]"
+        );
 
-        let error = apply_provider_continuation(
+        let error = match apply_provider_continuation(
             &mut serde_json::json!({"previous_response_id": "gateway-id"}),
             &responses_target("other"),
             &ctx,
-        )
-        .unwrap_err();
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("mismatched continuation target was accepted"),
+        };
         assert!(error.to_string().contains("target mismatch"));
     }
 }

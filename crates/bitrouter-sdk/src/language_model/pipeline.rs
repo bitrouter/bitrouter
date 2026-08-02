@@ -802,7 +802,10 @@ impl Pipeline {
             'pump: loop {
                 match upstream.next().await {
                     Some(Ok(part)) => {
-                        let processed = guard.processor().process_part(part).await;
+                        let processed = match guard.processor() {
+                            Ok(processor) => processor.process_part(part).await,
+                            Err(error) => Err(error),
+                        };
                         match processed {
                             Ok(parts) => {
                                 for p in parts {
@@ -1553,33 +1556,61 @@ fn take_prepared_context(
 
 impl StreamSettlementGuard {
     /// Mutable access to the in-flight processor (the stream driver feeds parts
-    /// through it). Panics only if called after finalisation, which the driver
-    /// never does.
-    fn processor(&mut self) -> &mut StreamProcessor {
-        match self
-            .state
-            .as_mut()
-            .expect("stream guard used after finalisation")
-        {
-            StreamDeliveryState::Pending(state) => state
-                .processor
-                .as_mut()
-                .expect("stream processor already absorbed"),
-            StreamDeliveryState::Preparing { .. } | StreamDeliveryState::Ready(_) => {
-                panic!("stream processor already preparing or absorbed")
+    /// through it). Invalid or repeated state transitions fail closed without
+    /// taking ownership away from `Drop`.
+    fn processor(&mut self) -> Result<&mut StreamProcessor> {
+        match self.state.as_mut() {
+            Some(StreamDeliveryState::Pending(state)) => {
+                state.processor.as_mut().ok_or_else(|| {
+                    BitrouterError::internal("stream processor has already been absorbed")
+                })
             }
+            None => Err(BitrouterError::internal(
+                "stream guard has already been finalized",
+            )),
+            Some(StreamDeliveryState::Preparing { .. } | StreamDeliveryState::Ready(_)) => Err(
+                BitrouterError::internal("stream processor is already preparing or absorbed"),
+            ),
         }
     }
 
     async fn finish_processor(&mut self, outcome: StreamOutcome) -> Result<()> {
+        match self.state.as_ref() {
+            Some(StreamDeliveryState::Pending(_)) => {}
+            Some(StreamDeliveryState::Preparing { .. }) => {
+                return Err(BitrouterError::internal(
+                    "stream terminal preparation is already in progress",
+                ));
+            }
+            Some(StreamDeliveryState::Ready(_)) => {
+                return Err(BitrouterError::internal(
+                    "stream processor has already finished",
+                ));
+            }
+            None => {
+                return Err(BitrouterError::internal(
+                    "stream guard has already been finalized",
+                ));
+            }
+        }
         let Some(StreamDeliveryState::Pending(mut pending)) = self.state.take() else {
-            return Ok(());
+            return Err(BitrouterError::internal(
+                "stream guard state changed during terminal preparation",
+            ));
         };
-        let mut processor = pending
-            .processor
-            .take()
-            .expect("stream processor already absorbed");
-        let mut ctx = pending.ctx.take().expect("stream context already taken");
+        let Some(mut processor) = pending.processor.take() else {
+            self.state = Some(StreamDeliveryState::Pending(pending));
+            return Err(BitrouterError::internal(
+                "stream processor has already been absorbed",
+            ));
+        };
+        let Some(mut ctx) = pending.ctx.take() else {
+            pending.processor = Some(processor);
+            self.state = Some(StreamDeliveryState::Pending(pending));
+            return Err(BitrouterError::internal(
+                "stream context has already been taken",
+            ));
+        };
         let disconnected = Arc::new(AtomicBool::new(false));
         let task_disconnected = disconnected.clone();
         let prepared = Arc::new(std::sync::Mutex::new(None));
@@ -1648,7 +1679,9 @@ impl StreamSettlementGuard {
 
     async fn run_required_finalizers(&mut self) -> Result<()> {
         let Some(StreamDeliveryState::Ready(ctx)) = self.state.as_ref() else {
-            return Ok(());
+            return Err(BitrouterError::internal(
+                "required stream finalizers need a prepared terminal",
+            ));
         };
         let finalization = ctx.required_finalization_context(true);
         if !finalization.successful_terminal {
@@ -1666,13 +1699,17 @@ impl StreamSettlementGuard {
     /// synchronously by the same `poll_next` call.
     async fn finalize(&mut self, outcome: StreamOutcome) -> Result<Option<DeliveryPermit>> {
         if self.state.is_none() {
-            return Ok(None);
+            return Err(BitrouterError::internal(
+                "stream guard has already been finalized",
+            ));
         }
         self.finish_processor(outcome.clone()).await?;
 
         let (settlement_error, request_outcome, delivery_error) = {
             let Some(StreamDeliveryState::Ready(ctx)) = self.state.as_ref() else {
-                return Ok(None);
+                return Err(BitrouterError::internal(
+                    "stream terminal preparation did not produce a ready context",
+                ));
             };
             let (error, outcome) = stream_terminal_metadata(&outcome);
             if matches!(outcome, RequestOutcome::Completed) && !ctx.stream_terminal_succeeded() {
@@ -1717,7 +1754,9 @@ impl StreamSettlementGuard {
         }
 
         let Some(StreamDeliveryState::Ready(ctx)) = self.state.take() else {
-            return Ok(None);
+            return Err(BitrouterError::internal(
+                "stream terminal context was consumed before settlement",
+            ));
         };
         if settlement_error.is_some() {
             let pipeline = self.pipeline.clone();
@@ -1982,8 +2021,53 @@ fn log_request_finished(settle: &SettlementContext) {
 
 #[cfg(test)]
 mod stream_outcome_tests {
-    use super::{RequestOutcome, StreamOutcome, delivery_handshake, stream_terminal_metadata};
+    use std::sync::Arc;
+
+    use super::{
+        RequestOutcome, StreamOutcome, StreamSettlementGuard, delivery_handshake,
+        stream_terminal_metadata,
+    };
     use crate::error::BitrouterError;
+    use crate::language_model::{MockExecutor, PipelineBuilder, StaticRoutingTable};
+
+    fn finalized_guard() -> StreamSettlementGuard {
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(StaticRoutingTable::new()))
+            .executor(Arc::new(MockExecutor::new(Vec::new())));
+        StreamSettlementGuard {
+            pipeline: Arc::new(builder.build().expect("test pipeline")),
+            latest_attempt: Arc::new(std::sync::Mutex::new(None)),
+            required_finalizer_receipt: None,
+            state: None,
+        }
+    }
+
+    #[test]
+    fn invalid_stream_guard_processor_access_returns_without_panicking() {
+        let mut guard = finalized_guard();
+
+        let access = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.processor().map(|_| ())
+        }));
+        assert!(
+            access.is_ok(),
+            "invalid stream guard state panicked instead of returning a typed error"
+        );
+        let error = access
+            .expect("processor access does not panic")
+            .expect_err("finalized guard processor access must fail");
+        assert!(matches!(error, BitrouterError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn repeated_stream_guard_finalization_returns_typed_error() {
+        let error = match finalized_guard().finalize(StreamOutcome::Completed).await {
+            Err(error) => error,
+            Ok(_) => panic!("repeated finalization succeeded"),
+        };
+        assert!(matches!(error, BitrouterError::Internal(_)));
+    }
 
     #[test]
     fn upstream_error_maps_to_failed() {
