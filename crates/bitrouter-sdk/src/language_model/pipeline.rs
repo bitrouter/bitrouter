@@ -3,6 +3,7 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use std::{future::Future, mem};
 
@@ -22,7 +23,9 @@ use crate::language_model::routing::{FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::language_model::server_tools::stream::UpstreamStream;
 use crate::language_model::server_tools::toolset::ToolContext;
-use crate::language_model::settlement::{RequiredFinalizer, SettlementContext, SettlementRecorder};
+use crate::language_model::settlement::{
+    RequiredFinalizationContext, RequiredFinalizer, SettlementContext, SettlementRecorder,
+};
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
     ExecutionResult, PipelineRequest, PipelineResponse, Prompt, RoutingTarget, StreamPart,
@@ -205,6 +208,7 @@ fn sync_execution_target(ctx: &mut PipelineContext, slot: &SharedStreamAttempt) 
     let Some(attempt) = load_stream_attempt(slot) else {
         return;
     };
+    ctx.set_successful_target(attempt.target.clone());
     let Some(execution) = ctx.execution_result.as_mut() else {
         return;
     };
@@ -356,12 +360,64 @@ impl Pipeline {
                     chain: &chain,
                     ctx: &ctx,
                 };
-                server_loop.run(ctx.prompt(), &tool_ctx, &upstream).await
+                server_loop
+                    .run_with_provenance(ctx.prompt(), &tool_ctx, &upstream)
+                    .await
+                    .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
             }
-            None => self.execute_with_fallback(&chain, ctx.prompt(), &ctx).await,
+            None => self
+                .execute_with_fallback(&chain, ctx.prompt(), &ctx)
+                .await
+                .map(|result| (result, true)),
         };
         match exec_outcome {
-            Ok(result) => {
+            Ok((result, provider_terminal_exposed)) => {
+                let native_responses_terminal_invalid = provider_terminal_exposed
+                    && ctx.successful_target().is_some_and(|target| {
+                        target.api_protocol == crate::language_model::ApiProtocol::Responses
+                    })
+                    && (result
+                        .result
+                        .response_id
+                        .as_deref()
+                        .is_none_or(str::is_empty)
+                        || !matches!(
+                            result.result.finish_reason.as_ref(),
+                            Some(
+                                crate::language_model::FinishReason::Stop
+                                    | crate::language_model::FinishReason::Length
+                            )
+                        ));
+                if native_responses_terminal_invalid {
+                    let error = BitrouterError::UpstreamInvalidResponse {
+                        message: "native Responses result has no valid successful terminal"
+                            .to_string(),
+                    };
+                    ctx.execution_result = Some(result);
+                    self.run_settlement(&mut ctx, false, Some(error.clone()))
+                        .await;
+                    self.observe_after(Phase::Settlement, &ctx).await;
+                    self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                        .await;
+                    return Err(error);
+                }
+                let native_response_completed = provider_terminal_exposed
+                    && ctx.successful_target().is_some_and(|target| {
+                        target.api_protocol == crate::language_model::ApiProtocol::Responses
+                    })
+                    && result
+                        .result
+                        .response_id
+                        .as_deref()
+                        .is_some_and(|id| !id.is_empty())
+                    && matches!(
+                        result.result.finish_reason.as_ref(),
+                        Some(
+                            crate::language_model::FinishReason::Stop
+                                | crate::language_model::FinishReason::Length
+                        )
+                    );
+                ctx.set_nonstream_native_response_completed(native_response_completed);
                 ctx.execution_result = Some(result);
                 self.observe_after(Phase::Execution, &ctx).await;
             }
@@ -376,17 +432,25 @@ impl Pipeline {
         }
 
         // ---- Stage 4: settlement ----
-        if let Err(error) = self.run_required_finalizers(&ctx, false).await {
-            self.run_settlement(&mut ctx, false, Some(error.clone()))
-                .await;
-            self.observe_after(Phase::Settlement, &ctx).await;
-            self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
-                .await;
-            return Err(error);
-        }
+        let mut finalization = match self.prepare_required_finalizers(&ctx, false).await {
+            Ok(finalization) => finalization,
+            Err(error) => {
+                self.run_settlement(&mut ctx, false, Some(error.clone()))
+                    .await;
+                self.observe_after(Phase::Settlement, &ctx).await;
+                self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                    .await;
+                return Err(error);
+            }
+        };
         self.run_settlement(&mut ctx, false, None).await;
         self.observe_after(Phase::Settlement, &ctx).await;
         self.observe_end(&ctx, RequestOutcome::Completed).await;
+
+        // This is the non-stream delivery authorization boundary. The guard
+        // remains armed throughout settlement/observation, and there is no
+        // await between a successful commit and returning the response.
+        finalization.commit();
 
         Ok(ctx.into_response())
     }
@@ -514,7 +578,13 @@ impl Pipeline {
         let guard = StreamSettlementGuard {
             pipeline: self.clone(),
             latest_attempt,
-            state: Some((processor, ctx)),
+            started_required_finalizers: 0,
+            state: Some(StreamDeliveryState::Pending(Box::new(
+                PendingStreamDelivery {
+                    processor: Some(processor),
+                    ctx: Some(ctx),
+                },
+            ))),
         };
 
         Ok(Box::pin(self.drive_stream(upstream.stream, guard)))
@@ -591,15 +661,29 @@ impl Pipeline {
         Ok(())
     }
 
-    async fn run_required_finalizers(&self, ctx: &PipelineContext, streamed: bool) -> Result<()> {
+    async fn prepare_required_finalizers(
+        &self,
+        ctx: &PipelineContext,
+        streamed: bool,
+    ) -> Result<RequiredFinalizationGuard> {
         let finalization = ctx.required_finalization_context(streamed);
+        let mut guard = RequiredFinalizationGuard::new(
+            self.required_finalizers.clone(),
+            finalization.clone(),
+            self.pending_settlements.clone(),
+        );
         if !finalization.successful_terminal {
-            return Ok(());
+            guard.disarm();
+            return Ok(guard);
         }
-        for finalizer in &self.required_finalizers {
-            finalizer.finalize(&finalization).await?;
+        for (index, finalizer) in self.required_finalizers.iter().enumerate() {
+            guard.started = index + 1;
+            if let Err(error) = finalizer.finalize(&finalization).await {
+                guard.rollback().await;
+                return Err(error);
+            }
         }
-        Ok(())
+        Ok(guard)
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
@@ -668,6 +752,7 @@ impl Pipeline {
                     for hook in &self.execution_hooks {
                         hook.on_success(ctx, &result).await?;
                     }
+                    ctx.set_successful_target(target.clone());
                     return Ok(result);
                 }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
@@ -716,6 +801,7 @@ impl Pipeline {
                 // Once the stream starts, the SSE response is committed — no
                 // more fallback.
                 Ok(stream) => {
+                    ctx.set_successful_target(target.clone());
                     let stream = Box::pin(ObservedUpstreamStream {
                         inner: stream,
                         hooks: self.observe_hooks.clone(),
@@ -1055,6 +1141,87 @@ mod fallback_error_tests {
     }
 }
 
+/// Owns provisional non-stream success state until the response is ready to be
+/// returned. Dropping `Pipeline::execute` at any await after a finalizer starts
+/// schedules reverse-order rollback on the same shutdown-tracked task set used
+/// by streaming settlement.
+struct RequiredFinalizationGuard {
+    finalizers: Vec<Arc<dyn RequiredFinalizer>>,
+    finalization: RequiredFinalizationContext,
+    pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    started: usize,
+    armed: bool,
+}
+
+impl RequiredFinalizationGuard {
+    fn new(
+        finalizers: Vec<Arc<dyn RequiredFinalizer>>,
+        finalization: RequiredFinalizationContext,
+        pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    ) -> Self {
+        Self {
+            finalizers,
+            finalization,
+            pending_settlements,
+            started: 0,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+        self.started = 0;
+    }
+
+    async fn rollback(&mut self) {
+        if !self.armed {
+            return;
+        }
+        for finalizer in self.finalizers.iter().take(self.started).rev() {
+            if let Err(error) = finalizer.rollback(&self.finalization).await {
+                tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+            }
+        }
+        self.disarm();
+    }
+
+    fn commit(&mut self) {
+        for finalizer in &self.finalizers {
+            finalizer.commit(&self.finalization);
+        }
+        self.disarm();
+    }
+}
+
+impl Drop for RequiredFinalizationGuard {
+    fn drop(&mut self) {
+        if !self.armed || self.started == 0 {
+            return;
+        }
+        let finalizers = self.finalizers.clone();
+        let finalization = self.finalization.clone();
+        let started = self.started;
+        self.disarm();
+        let rollback = async move {
+            for finalizer in finalizers.iter().take(started).rev() {
+                if let Err(error) = finalizer.rollback(&finalization).await {
+                    tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+                }
+            }
+        }
+        .instrument(tracing::Span::current());
+        match self.pending_settlements.lock() {
+            Ok(mut set) => {
+                while set.try_join_next().is_some() {}
+                set.spawn(rollback);
+            }
+            Err(_poisoned) => {
+                tokio::spawn(rollback);
+            }
+        }
+    }
+}
+
 /// Owns the streaming `StreamProcessor` + `PipelineContext` for the lifetime of
 /// a streaming response, and guarantees the StreamHook stage's `on_stream_end`
 /// plus Stage-4 Settlement run **exactly once** — whether the stream completes
@@ -1062,9 +1229,34 @@ mod fallback_error_tests {
 struct StreamSettlementGuard {
     pipeline: Arc<Pipeline>,
     latest_attempt: SharedStreamAttempt,
-    /// `Some` until finalised; `take`n by `finalize` or `drop`, whichever fires
-    /// first, so finalisation is exactly-once.
-    state: Option<(StreamProcessor, PipelineContext)>,
+    started_required_finalizers: usize,
+    /// Owned until the terminal is ready to be returned. Cancellation at any
+    /// await leaves this state available to `Drop`, which reclassifies the
+    /// request as disconnected and never runs required finalizers.
+    state: Option<StreamDeliveryState>,
+}
+
+struct PendingStreamDelivery {
+    processor: Option<StreamProcessor>,
+    ctx: Option<PipelineContext>,
+}
+
+enum StreamDeliveryState {
+    Pending(Box<PendingStreamDelivery>),
+    Preparing {
+        disconnected: Arc<AtomicBool>,
+        prepared: Arc<std::sync::Mutex<Option<PipelineContext>>>,
+    },
+    Ready(Box<PipelineContext>),
+}
+
+fn take_prepared_context(
+    slot: &Arc<std::sync::Mutex<Option<PipelineContext>>>,
+) -> Option<PipelineContext> {
+    match slot.lock() {
+        Ok(mut ctx) => ctx.take(),
+        Err(poisoned) => poisoned.into_inner().take(),
+    }
 }
 
 impl StreamSettlementGuard {
@@ -1072,34 +1264,195 @@ impl StreamSettlementGuard {
     /// through it). Panics only if called after finalisation, which the driver
     /// never does.
     fn processor(&mut self) -> &mut StreamProcessor {
-        &mut self
+        match self
             .state
             .as_mut()
             .expect("stream guard used after finalisation")
-            .0
+        {
+            StreamDeliveryState::Pending(state) => state
+                .processor
+                .as_mut()
+                .expect("stream processor already absorbed"),
+            StreamDeliveryState::Preparing { .. } | StreamDeliveryState::Ready(_) => {
+                panic!("stream processor already preparing or absorbed")
+            }
+        }
     }
 
-    /// Finalise inline on a normal/errored/aborted termination.
-    async fn finalize(&mut self, outcome: StreamOutcome) -> Result<()> {
-        if let Some((processor, ctx)) = self.state.take() {
-            // Move finalization out of the response-body future before awaiting
-            // it. A client commonly closes the SSE connection immediately after
-            // the terminal frame; cancellation of this waiter must not cancel a
-            // recorder midway through its database write.
-            let pipeline = self.pipeline.clone();
-            let latest_attempt = self.latest_attempt.clone();
-            let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
-            self.pipeline.spawn_stream_finalization(async move {
-                let result =
-                    finalize_stream(pipeline, processor, ctx, latest_attempt, outcome).await;
-                let _ = finished_tx.send(result);
-            });
-            return finished_rx.await.map_err(|error| {
-                BitrouterError::internal(format!(
-                    "required stream finalization task ended unexpectedly: {error}"
-                ))
-            })?;
+    async fn finish_processor(&mut self, outcome: StreamOutcome) -> Result<()> {
+        let Some(StreamDeliveryState::Pending(mut pending)) = self.state.take() else {
+            return Ok(());
+        };
+        let mut processor = pending
+            .processor
+            .take()
+            .expect("stream processor already absorbed");
+        let mut ctx = pending.ctx.take().expect("stream context already taken");
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let task_disconnected = disconnected.clone();
+        let prepared = Arc::new(std::sync::Mutex::new(None));
+        let task_prepared = prepared.clone();
+        let pipeline = self.pipeline.clone();
+        let latest_attempt = self.latest_attempt.clone();
+        let task_outcome = outcome.clone();
+        let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+        self.pipeline.spawn_stream_finalization(async move {
+            // Stream hooks and usage finalization run in one tracked task. If
+            // the body poll is cancelled inside a hook await, this task keeps
+            // ownership and completes each hook exactly once; it never runs a
+            // required finalizer.
+            processor.finish(task_outcome.clone()).await;
+            sync_execution_target(&mut ctx, &latest_attempt);
+            ctx.absorb_stream(processor.into_context());
+            ctx.finalize_stream_upstream_duration();
+
+            if task_disconnected.load(Ordering::Acquire)
+                && matches!(task_outcome, StreamOutcome::Completed)
+            {
+                settle_prepared_stream(pipeline, ctx, None, RequestOutcome::ClientDisconnected)
+                    .await;
+                return;
+            }
+            match task_prepared.lock() {
+                Ok(mut slot) => *slot = Some(ctx),
+                Err(poisoned) => *poisoned.into_inner() = Some(ctx),
+            }
+            if task_disconnected.load(Ordering::Acquire)
+                && matches!(task_outcome, StreamOutcome::Completed)
+            {
+                if let Some(ctx) = take_prepared_context(&task_prepared) {
+                    settle_prepared_stream(pipeline, ctx, None, RequestOutcome::ClientDisconnected)
+                        .await;
+                }
+                return;
+            }
+            if prepared_tx.send(()).is_err() {
+                let Some(ctx) = take_prepared_context(&task_prepared) else {
+                    return;
+                };
+                let (error, request_outcome) = if matches!(task_outcome, StreamOutcome::Completed) {
+                    (None, RequestOutcome::ClientDisconnected)
+                } else {
+                    stream_terminal_metadata(&task_outcome)
+                };
+                settle_prepared_stream(pipeline, ctx, error, request_outcome).await;
+            }
+        });
+        self.state = Some(StreamDeliveryState::Preparing {
+            disconnected,
+            prepared: prepared.clone(),
+        });
+        prepared_rx.await.map_err(|error| {
+            BitrouterError::internal(format!(
+                "stream terminal preparation ended unexpectedly: {error}"
+            ))
+        })?;
+        let ctx = take_prepared_context(&prepared).ok_or_else(|| {
+            BitrouterError::internal("stream terminal preparation returned no context")
+        })?;
+        self.state = Some(StreamDeliveryState::Ready(Box::new(ctx)));
+        Ok(())
+    }
+
+    async fn run_required_finalizers(&mut self) -> Result<()> {
+        let Some(StreamDeliveryState::Ready(ctx)) = self.state.as_ref() else {
+            return Ok(());
+        };
+        let finalization = ctx.required_finalization_context(true);
+        if !finalization.successful_terminal {
+            return Ok(());
         }
+        for (index, finalizer) in self.pipeline.required_finalizers.iter().enumerate() {
+            self.started_required_finalizers = index + 1;
+            finalizer.finalize(&finalization).await?;
+        }
+        for finalizer in &self.pipeline.required_finalizers {
+            finalizer.commit(&finalization);
+        }
+        self.started_required_finalizers = 0;
+        Ok(())
+    }
+
+    /// Finalise a provider terminal inline only through the required-finalizer
+    /// boundary. Settlement is then enqueued and the terminal is returned
+    /// synchronously by the same `poll_next` call.
+    async fn finalize(&mut self, outcome: StreamOutcome) -> Result<()> {
+        if self.state.is_none() {
+            return Ok(());
+        }
+        self.finish_processor(outcome.clone()).await?;
+
+        let (settlement_error, request_outcome, delivery_error) = {
+            let Some(StreamDeliveryState::Ready(ctx)) = self.state.as_ref() else {
+                return Ok(());
+            };
+            let (error, outcome) = stream_terminal_metadata(&outcome);
+            if matches!(outcome, RequestOutcome::Completed) && !ctx.stream_terminal_succeeded() {
+                let error = BitrouterError::UpstreamInvalidResponse {
+                    message: "stream ended with a non-success provider terminal".to_string(),
+                };
+                let missing_terminal = ctx
+                    .required_finalization_context(true)
+                    .finish_reason
+                    .is_none();
+                (
+                    Some(error.clone()),
+                    RequestOutcome::Failed(error.clone()),
+                    missing_terminal.then_some(error),
+                )
+            } else {
+                (error, outcome, None)
+            }
+        };
+
+        if matches!(outcome, StreamOutcome::Completed)
+            && settlement_error.is_none()
+            && let Err(error) = self.run_required_finalizers().await
+        {
+            let Some(StreamDeliveryState::Ready(ctx)) = self.state.take() else {
+                return Err(error);
+            };
+            let settlement_error = error.clone();
+            let pipeline = self.pipeline.clone();
+            let started = self.started_required_finalizers;
+            self.started_required_finalizers = 0;
+            self.pipeline.spawn_stream_finalization(async move {
+                rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                settle_prepared_stream(
+                    pipeline.clone(),
+                    *ctx,
+                    Some(settlement_error.clone()),
+                    RequestOutcome::Failed(settlement_error),
+                )
+                .await;
+            });
+            return Err(error);
+        }
+
+        let Some(StreamDeliveryState::Ready(ctx)) = self.state.take() else {
+            return Ok(());
+        };
+        if settlement_error.is_some() {
+            let pipeline = self.pipeline.clone();
+            self.pipeline.spawn_stream_finalization(async move {
+                settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
+            });
+            if let Some(error) = delivery_error {
+                return Err(error);
+            }
+            return Ok(());
+        }
+        let pipeline = self.pipeline.clone();
+        self.pipeline.spawn_stream_finalization(async move {
+            settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
+        });
+
+        // NO AWAIT BELOW THIS POINT. The caller yields the buffered terminal
+        // immediately after this Ready return, in this same `poll_next` call.
+        // This transition is the delivery authorization boundary: before it,
+        // Drop owns PendingDelivery and may reclassify to ClientDisconnected;
+        // after it, required finalization has committed and Poll::Ready carries
+        // the terminal to the consumer without another cancellation point.
         Ok(())
     }
 }
@@ -1114,36 +1467,53 @@ fn stream_terminal_metadata(outcome: &StreamOutcome) -> (Option<BitrouterError>,
     }
 }
 
-async fn finalize_stream(
-    pipeline: Arc<Pipeline>,
-    mut processor: StreamProcessor,
-    mut ctx: PipelineContext,
-    latest_attempt: SharedStreamAttempt,
-    outcome: StreamOutcome,
-) -> Result<()> {
-    let (settlement_error, request_outcome) = stream_terminal_metadata(&outcome);
-    processor.finish(outcome).await;
-    sync_execution_target(&mut ctx, &latest_attempt);
-    ctx.absorb_stream(processor.into_context());
-    ctx.finalize_stream_upstream_duration();
-    if settlement_error.is_none()
-        && let Err(error) = pipeline.run_required_finalizers(&ctx, true).await
-    {
-        pipeline
-            .run_settlement(&mut ctx, true, Some(error.clone()))
-            .await;
-        pipeline.observe_after(Phase::Settlement, &ctx).await;
-        pipeline
-            .observe_end(&ctx, RequestOutcome::Failed(error.clone()))
-            .await;
-        return Err(error);
+async fn rollback_required_finalizers(
+    pipeline: &Pipeline,
+    ctx: &PipelineContext,
+    streamed: bool,
+    started: usize,
+) {
+    if started == 0 {
+        return;
     }
+    let finalization = ctx.required_finalization_context(streamed);
+    for finalizer in pipeline.required_finalizers.iter().take(started).rev() {
+        if let Err(error) = finalizer.rollback(&finalization).await {
+            tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+        }
+    }
+}
+
+async fn settle_prepared_stream(
+    pipeline: Arc<Pipeline>,
+    mut ctx: PipelineContext,
+    settlement_error: Option<BitrouterError>,
+    request_outcome: RequestOutcome,
+) {
     pipeline
         .run_settlement(&mut ctx, true, settlement_error)
         .await;
     pipeline.observe_after(Phase::Settlement, &ctx).await;
     pipeline.observe_end(&ctx, request_outcome).await;
-    Ok(())
+}
+
+async fn finalize_disconnected_stream(
+    pipeline: Arc<Pipeline>,
+    latest_attempt: SharedStreamAttempt,
+    mut state: PendingStreamDelivery,
+) {
+    if let Some(processor) = state.processor.as_mut() {
+        processor.finish(StreamOutcome::ClientDisconnected).await;
+    }
+    let Some(mut ctx) = state.ctx.take() else {
+        return;
+    };
+    if let Some(processor) = state.processor.take() {
+        sync_execution_target(&mut ctx, &latest_attempt);
+        ctx.absorb_stream(processor.into_context());
+        ctx.finalize_stream_upstream_duration();
+    }
+    settle_prepared_stream(pipeline, ctx, None, RequestOutcome::ClientDisconnected).await;
 }
 
 impl Drop for StreamSettlementGuard {
@@ -1156,19 +1526,51 @@ impl Drop for StreamSettlementGuard {
         // `Pipeline::drain_pending_settlements` can await every in-flight
         // detached settlement during graceful shutdown — otherwise SIGTERM
         // could cut a settlement task mid-await and the receipt would be lost.
-        if let Some((processor, ctx)) = self.state.take() {
-            let pipeline = self.pipeline.clone();
-            let latest_attempt = self.latest_attempt.clone();
-            self.pipeline.spawn_stream_finalization(async move {
-                let _ = finalize_stream(
-                    pipeline,
-                    processor,
-                    ctx,
-                    latest_attempt,
-                    StreamOutcome::ClientDisconnected,
-                )
-                .await;
-            });
+        match self.state.take() {
+            Some(StreamDeliveryState::Pending(state)) => {
+                let pipeline = self.pipeline.clone();
+                let latest_attempt = self.latest_attempt.clone();
+                self.pipeline.spawn_stream_finalization(async move {
+                    finalize_disconnected_stream(pipeline, latest_attempt, *state).await;
+                });
+            }
+            Some(StreamDeliveryState::Preparing {
+                disconnected,
+                prepared,
+            }) => {
+                // The tracked terminal-hook task retains processor/context
+                // ownership and will settle as ClientDisconnected. It cannot
+                // invoke required finalizers.
+                disconnected.store(true, Ordering::Release);
+                if let Some(ctx) = take_prepared_context(&prepared) {
+                    let pipeline = self.pipeline.clone();
+                    self.pipeline.spawn_stream_finalization(async move {
+                        settle_prepared_stream(
+                            pipeline,
+                            ctx,
+                            None,
+                            RequestOutcome::ClientDisconnected,
+                        )
+                        .await;
+                    });
+                }
+            }
+            Some(StreamDeliveryState::Ready(ctx)) => {
+                let pipeline = self.pipeline.clone();
+                let started = self.started_required_finalizers;
+                self.started_required_finalizers = 0;
+                self.pipeline.spawn_stream_finalization(async move {
+                    rollback_required_finalizers(&pipeline, &ctx, true, started).await;
+                    settle_prepared_stream(
+                        pipeline.clone(),
+                        *ctx,
+                        None,
+                        RequestOutcome::ClientDisconnected,
+                    )
+                    .await;
+                });
+            }
+            None => {}
         }
     }
 }

@@ -190,12 +190,22 @@ impl SettlementRecorder for FailingSettlementRecorder {
 
 struct FailingRequiredFinalizer(Arc<AtomicUsize>);
 
+struct CountingRequiredFinalizer(Arc<AtomicUsize>);
+
 #[async_trait]
 impl settlement::RequiredFinalizer for FailingRequiredFinalizer {
     async fn finalize(&self, ctx: &settlement::RequiredFinalizationContext) -> Result<()> {
         assert!(ctx.successful_terminal);
         self.0.fetch_add(1, Ordering::SeqCst);
         Err(BitrouterError::internal("required finalizer failed"))
+    }
+}
+
+#[async_trait]
+impl settlement::RequiredFinalizer for CountingRequiredFinalizer {
+    async fn finalize(&self, _ctx: &settlement::RequiredFinalizationContext) -> Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -702,6 +712,67 @@ async fn nonstream_required_finalizer_failure_replaces_success() {
 }
 
 #[tokio::test]
+async fn custom_nonstream_responses_requires_typed_success_terminal() {
+    for finish_reason in [Some(FinishReason::Other("future".into())), None] {
+        let routes = Arc::new(StaticRoutingTable::new());
+        let mut responses = target("openai");
+        responses.api_protocol = ApiProtocol::Responses;
+        routes.insert("test-model", vec![responses]);
+        let finalized = Arc::new(AtomicUsize::new(0));
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = pipeline_with(
+            routes,
+            Arc::new(MockExecutor::new(vec![MockResponse::Generate(
+                GenerateResult {
+                    content: Vec::new(),
+                    usage: None,
+                    finish_reason,
+                    response_id: Some("provider-invalid-terminal".into()),
+                    stop_details: None,
+                    provider_metadata: Default::default(),
+                },
+            )])),
+            |builder| {
+                builder
+                    .required_finalizer(CountingRequiredFinalizer(finalized.clone()))
+                    .observe_hook(OutcomeRecordingObserveHook(outcomes.clone()));
+            },
+        );
+
+        assert!(matches!(
+            pipeline.execute(request()).await,
+            Err(BitrouterError::UpstreamInvalidResponse { .. })
+        ));
+        assert_eq!(finalized.load(Ordering::SeqCst), 0);
+        assert_eq!(outcomes.lock().unwrap().as_slice(), &["failed"]);
+    }
+}
+
+#[tokio::test]
+async fn custom_nonresponses_nonstream_retains_other_or_missing_finish_reason() {
+    for finish_reason in [Some(FinishReason::Other("future".into())), None] {
+        let pipeline = pipeline_with(
+            routing_table(&["openai"]),
+            Arc::new(MockExecutor::new(vec![MockResponse::Generate(
+                GenerateResult {
+                    content: Vec::new(),
+                    usage: None,
+                    finish_reason,
+                    response_id: None,
+                    stop_details: None,
+                    provider_metadata: Default::default(),
+                },
+            )])),
+            |_builder| {},
+        );
+        pipeline
+            .execute(request())
+            .await
+            .expect("non-Responses adapters may omit or extend finish reasons");
+    }
+}
+
+#[tokio::test]
 async fn stream_required_finalizer_failure_precedes_success_terminal() {
     let finalized = Arc::new(AtomicUsize::new(0));
     let pipeline = pipeline_with(
@@ -740,6 +811,88 @@ async fn stream_required_finalizer_failure_precedes_success_terminal() {
         "the success terminal must not escape before the required finalizer"
     );
     assert_eq!(finalized.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn custom_stream_eof_without_terminal_yields_error_and_failed_settlement() {
+    let finalized = Arc::new(AtomicUsize::new(0));
+    let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "unterminated".into(),
+            },
+        ])])),
+        |builder| {
+            builder
+                .required_finalizer(CountingRequiredFinalizer(finalized.clone()))
+                .observe_hook(OutcomeRecordingObserveHook(outcomes.clone()));
+        },
+    );
+
+    let parts = collect_stream(
+        pipeline
+            .clone()
+            .execute_stream(stream_request())
+            .await
+            .expect("stream opens"),
+    )
+    .await;
+    assert!(matches!(
+        parts.first(),
+        Some(Ok(StreamPart::TextDelta { .. }))
+    ));
+    assert!(matches!(
+        parts.last(),
+        Some(Err(BitrouterError::UpstreamInvalidResponse { .. }))
+    ));
+    pipeline.drain_pending_settlements().await;
+    assert_eq!(finalized.load(Ordering::SeqCst), 0);
+    assert_eq!(outcomes.lock().unwrap().as_slice(), &["failed"]);
+}
+
+#[tokio::test]
+async fn typed_failed_response_terminal_stays_truthful_and_settles_failed() {
+    for status in ["failed", "future_terminal"] {
+        let finalized = Arc::new(AtomicUsize::new(0));
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = pipeline_with(
+            routing_table(&["openai"]),
+            Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+                StreamPart::ResponseCompleted {
+                    id: "provider-terminal".into(),
+                    source_protocol: ApiProtocol::Responses,
+                    status: status.into(),
+                    usage: None,
+                },
+            ])])),
+            |builder| {
+                builder
+                    .required_finalizer(CountingRequiredFinalizer(finalized.clone()))
+                    .observe_hook(OutcomeRecordingObserveHook(outcomes.clone()));
+            },
+        );
+
+        let parts = collect_stream(
+            pipeline
+                .clone()
+                .execute_stream(stream_request())
+                .await
+                .expect("stream opens"),
+        )
+        .await;
+        assert!(matches!(
+            parts.as_slice(),
+            [Ok(StreamPart::ResponseCompleted {
+                status: actual,
+                ..
+            })] if actual == status
+        ));
+        pipeline.drain_pending_settlements().await;
+        assert_eq!(finalized.load(Ordering::SeqCst), 0);
+        assert_eq!(outcomes.lock().unwrap().as_slice(), &["failed"]);
+    }
 }
 
 #[tokio::test]
@@ -1655,11 +1808,13 @@ async fn streamed_settlement_has_positive_canonical_timing() {
     );
 
     let stream = pipeline
+        .clone()
         .execute_stream(stream_request())
         .await
         .expect("stream starts");
     let parts = collect_stream(stream).await;
     assert!(parts.iter().all(Result::is_ok));
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -1731,10 +1886,12 @@ async fn streamed_settlement_carries_finish_reason() {
     );
 
     let stream = pipeline
+        .clone()
         .execute_stream(stream_request())
         .await
         .expect("stream starts");
     let _parts = collect_stream(stream).await;
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -1763,10 +1920,12 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
     );
 
     let stream = pipeline
+        .clone()
         .execute_stream(stream_request())
         .await
         .expect("fallback stream starts");
     let _parts = collect_stream(stream).await;
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -1797,10 +1956,12 @@ async fn streamed_upstream_error_finalizes_timing_before_settlement() {
     );
 
     let stream = pipeline
+        .clone()
         .execute_stream(stream_request())
         .await
         .expect("stream starts before body error");
     let _parts = collect_stream(stream).await;
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -1841,10 +2002,12 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
     );
 
     let stream = pipeline
+        .clone()
         .execute_stream(stream_request())
         .await
         .expect("stream starts");
     let _parts = collect_stream(stream).await;
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -2046,7 +2209,7 @@ async fn early_stream_drop_runs_every_settlement_recorder() {
 }
 
 #[tokio::test]
-async fn disconnect_during_inline_settlement_does_not_cancel_remaining_recorders() {
+async fn detached_terminal_settlement_runs_remaining_recorders_after_body_drop() {
     struct BlockingRecorder {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
@@ -2103,17 +2266,18 @@ async fn disconnect_during_inline_settlement_does_not_cancel_remaining_recorders
         .expect("stream starts");
     assert!(stream.next().await.unwrap().is_ok());
 
-    // The terminal part settles before it is yielded. Poll it on a separate
-    // task so we can cancel the response-body future while settlement blocks.
-    let poller = tokio::spawn(async move { stream.next().await });
+    // The terminal is delivered once required finalization succeeds; ordinary
+    // settlement continues on the shutdown-tracked task set.
+    assert!(matches!(
+        stream.next().await,
+        Some(Ok(StreamPart::Finish {
+            reason: FinishReason::Stop
+        }))
+    ));
     tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
         .await
         .expect("first settlement recorder should start");
-    poller.abort();
-    tokio::time::timeout(std::time::Duration::from_secs(1), poller)
-        .await
-        .expect("stream poller should abort promptly")
-        .expect_err("stream poller should be cancelled");
+    drop(stream);
     // Preserve a permit if the detached finalizer has not polled `notified()`
     // yet. `notify_waiters()` would lose the wake-up in that scheduling gap.
     release.notify_one();
@@ -3066,9 +3230,10 @@ async fn server_tool_streaming_fallback_settles_the_winning_target()
         },
     );
 
-    let stream = pipeline.execute_stream(stream_request()).await?;
+    let stream = pipeline.clone().execute_stream(stream_request()).await?;
     let parts = collect_stream(stream).await;
     assert!(parts.into_iter().all(|part| part.is_ok()));
+    pipeline.drain_pending_settlements().await;
     let captured = match captured.lock() {
         Ok(captured) => captured.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
@@ -3156,9 +3321,10 @@ async fn server_tool_streaming_settles_the_final_turn_winner()
         },
     );
 
-    let stream = pipeline.execute_stream(stream_request()).await?;
+    let stream = pipeline.clone().execute_stream(stream_request()).await?;
     let parts = collect_stream(stream).await;
     assert!(parts.into_iter().all(|part| part.is_ok()));
+    pipeline.drain_pending_settlements().await;
     let captured = match captured.lock() {
         Ok(captured) => captured.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
@@ -3449,6 +3615,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
     });
 
     let mut stream = pipeline
+        .clone()
         .execute_stream(stream_request())
         .await
         .expect("stream starts");
@@ -3456,6 +3623,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
     while let Some(item) = stream.next().await {
         parts.push(item.expect("stream part ok"));
     }
+    pipeline.drain_pending_settlements().await;
 
     // The router tool ran server-side, surfaced as ServerToolCall + Result...
     assert!(

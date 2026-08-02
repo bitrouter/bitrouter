@@ -5,12 +5,13 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
-use crate::language_model::CredentialAuthority;
+use crate::language_model::ContinuationAuthority;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
@@ -22,6 +23,8 @@ use crate::language_model::types::{
     PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
+
+static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A type-keyed map of request-scoped extension values. Each entry is an
 /// `Arc<T>` keyed by `T`'s `TypeId`, so cloning the map is a handful of
@@ -48,8 +51,7 @@ pub struct ProviderContinuation {
     api_protocol: ApiProtocol,
     api_base: String,
     api_key: String,
-    auth_scheme: crate::language_model::types::AuthScheme,
-    credential_authority: CredentialAuthority,
+    credential_authority: ContinuationAuthority,
 }
 
 /// Request-scoped marker requiring the selected native Responses target to
@@ -63,7 +65,7 @@ impl ProviderContinuation {
     pub fn new(
         response_id: String,
         target: &RoutingTarget,
-        credential_authority: CredentialAuthority,
+        credential_authority: ContinuationAuthority,
     ) -> Self {
         Self {
             response_id,
@@ -79,7 +81,6 @@ impl ProviderContinuation {
                 .api_key_override
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
-            auth_scheme: target.auth_scheme,
             credential_authority,
         }
     }
@@ -103,10 +104,9 @@ impl ProviderContinuation {
             && self.api_protocol == target.api_protocol
             && self.api_base == api_base
             && self.api_key == api_key
-            && self.auth_scheme == target.auth_scheme
     }
 
-    pub(crate) fn credential_authority(&self) -> &CredentialAuthority {
+    pub(crate) fn credential_authority(&self) -> &ContinuationAuthority {
         &self.credential_authority
     }
 }
@@ -149,6 +149,7 @@ pub struct PipelineContext {
     /// without a known inbound protocol.
     inbound_protocol: Option<ApiProtocol>,
     request_started_at: Instant,
+    delivery_attempt_id: u64,
 
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
@@ -158,6 +159,10 @@ pub struct PipelineContext {
     /// attempted provider/model identity for reliability and authoritative
     /// receipt reconciliation.
     last_attempted_target: Mutex<Option<RoutingTarget>>,
+    /// Exact target instance that most recently produced a successful result
+    /// or opened stream. Shared by server-tool prompt forks so duplicate
+    /// provider/model/account tuples cannot be reconstructed ambiguously.
+    successful_target: Arc<Mutex<Option<RoutingTarget>>>,
     /// The execution result (Stage 3). Stored here rather than moved out so
     /// Settlement can borrow it without an ownership fight.
     pub execution_result: Option<ExecutionResult>,
@@ -167,10 +172,11 @@ pub struct PipelineContext {
     finalized_request_duration_ms: Option<u64>,
     stream_terminal_succeeded: bool,
     stream_native_response_completed: bool,
+    nonstream_native_response_completed: bool,
     /// Stable redaction-safe authority returned atomically with the latest
     /// authenticated transport request. Server-tool prompt forks share this
     /// slot, so finalization sees the proof used by the actual final round.
-    credential_authority: Arc<Mutex<Option<CredentialAuthority>>>,
+    credential_authority: Arc<Mutex<Option<ContinuationAuthority>>>,
 
     // ===== plugin extension data =====
     metadata: HashMap<PluginId, serde_json::Value>,
@@ -206,8 +212,10 @@ impl PipelineContext {
             prompt: req.prompt,
             inbound_protocol: req.inbound_protocol,
             request_started_at: Instant::now(),
+            delivery_attempt_id: NEXT_DELIVERY_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed),
             route_chain: None,
             last_attempted_target: Mutex::new(None),
+            successful_target: Arc::new(Mutex::new(None)),
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
@@ -215,6 +223,7 @@ impl PipelineContext {
             finalized_request_duration_ms: None,
             stream_terminal_succeeded: false,
             stream_native_response_completed: false,
+            nonstream_native_response_completed: false,
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
             extensions: Extensions::default(),
@@ -236,8 +245,10 @@ impl PipelineContext {
             prompt,
             inbound_protocol: self.inbound_protocol.clone(),
             request_started_at: self.request_started_at,
+            delivery_attempt_id: self.delivery_attempt_id,
             route_chain: self.route_chain.clone(),
             last_attempted_target: Mutex::new(None),
+            successful_target: self.successful_target.clone(),
             execution_result: None,
             stream_provider_started_at: None,
             first_token_timing: None,
@@ -245,6 +256,7 @@ impl PipelineContext {
             finalized_request_duration_ms: None,
             stream_terminal_succeeded: false,
             stream_native_response_completed: false,
+            nonstream_native_response_completed: false,
             credential_authority: self.credential_authority.clone(),
             metadata: self.metadata.clone(),
             extensions: self.extensions.clone(),
@@ -253,19 +265,34 @@ impl PipelineContext {
         }
     }
 
-    fn serving_target(&self) -> Option<RoutingTarget> {
+    /// Exact successful routing target, or the last attempted target when no
+    /// execution succeeded. Observers use this typed target instead of
+    /// reconstructing a potentially non-unique provider/model/account tuple.
+    pub fn serving_target(&self) -> Option<RoutingTarget> {
         let chain = self.route_chain.as_ref()?;
-        if let Some(target) = self.execution_result.as_ref().and_then(|execution| {
-            chain.iter().find(|target| {
-                target.provider_name == execution.provider_id
-                    && target.service_id == execution.model_id
-                    && target.account_label == execution.account_label
-            })
-        }) {
-            return Some(target.clone());
+        if let Some(target) = self.successful_target() {
+            return Some(target);
         }
         self.last_attempted_target()
             .or_else(|| chain.first().cloned())
+    }
+
+    pub(crate) fn set_successful_target(&self, target: RoutingTarget) {
+        match self.successful_target.lock() {
+            Ok(mut current) => *current = Some(target),
+            Err(poisoned) => *poisoned.into_inner() = Some(target),
+        }
+    }
+
+    pub(crate) fn successful_target(&self) -> Option<RoutingTarget> {
+        match self.successful_target.lock() {
+            Ok(current) => current.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub(crate) fn set_nonstream_native_response_completed(&mut self, completed: bool) {
+        self.nonstream_native_response_completed = completed;
     }
 
     pub(crate) fn set_last_attempted_target(&self, target: RoutingTarget) {
@@ -282,14 +309,14 @@ impl PipelineContext {
         }
     }
 
-    pub(crate) fn record_credential_authority(&self, authority: Option<CredentialAuthority>) {
+    pub(crate) fn record_credential_authority(&self, authority: Option<ContinuationAuthority>) {
         match self.credential_authority.lock() {
             Ok(mut current) => *current = authority,
             Err(poisoned) => *poisoned.into_inner() = authority,
         }
     }
 
-    fn credential_authority(&self) -> Option<CredentialAuthority> {
+    fn credential_authority(&self) -> Option<ContinuationAuthority> {
         match self.credential_authority.lock() {
             Ok(current) => current.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -338,6 +365,10 @@ impl PipelineContext {
     /// Time from the first to the last semantic stream delta.
     pub fn generation_duration_ms(&self) -> Option<u64> {
         self.generation_duration_ms
+    }
+
+    pub(crate) fn stream_terminal_succeeded(&self) -> bool {
+        self.stream_terminal_succeeded
     }
 
     /// Store outbound HTTP headers for the next upstream request. The
@@ -614,6 +645,7 @@ impl PipelineContext {
         };
         RequiredFinalizationContext {
             request_id: self.request_id.clone(),
+            delivery_attempt_id: self.delivery_attempt_id,
             caller: self.caller.clone(),
             target,
             inbound_protocol: self.inbound_protocol.clone(),
@@ -621,7 +653,11 @@ impl PipelineContext {
             finish_reason,
             streamed,
             successful_terminal,
-            native_response_completed: !streamed || self.stream_native_response_completed,
+            native_response_completed: if streamed {
+                self.stream_native_response_completed
+            } else {
+                self.nonstream_native_response_completed
+            },
             credential_authority: self.credential_authority(),
         }
     }

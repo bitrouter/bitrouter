@@ -13,15 +13,18 @@ use crate::caller::CallerContext;
 use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
-use crate::language_model::CredentialAuthority;
+use crate::language_model::ContinuationAuthority;
 use crate::language_model::timing::FirstTokenKind;
 use crate::language_model::types::{ApiProtocol, FinishReason, RoutingTarget, UsageOrigin};
 
 /// Success-only lifecycle data supplied to required finalizers before a
 /// response is allowed to advertise successful completion.
+#[derive(Clone)]
 pub struct RequiredFinalizationContext {
     /// Stable gateway request and public Responses continuation identity.
     pub request_id: String,
+    /// Process-unique request attempt used to own provisional finalizer state.
+    pub delivery_attempt_id: u64,
     /// Authenticated caller whose ownership scopes any durable result.
     pub caller: CallerContext,
     /// Exact final target that served the response.
@@ -41,7 +44,7 @@ pub struct RequiredFinalizationContext {
     pub native_response_completed: bool,
     /// Redaction-safe stable authority returned with the exact authenticated
     /// transport request that produced this response.
-    pub credential_authority: Option<CredentialAuthority>,
+    pub credential_authority: Option<ContinuationAuthority>,
 }
 
 /// A success-critical finalizer. Unlike ordinary settlement recorders, an
@@ -50,6 +53,16 @@ pub struct RequiredFinalizationContext {
 pub trait RequiredFinalizer: Send + Sync {
     /// Finalize durable success state.
     async fn finalize(&self, ctx: &RequiredFinalizationContext) -> Result<()>;
+
+    /// Compensate a finalizer that started before downstream delivery was
+    /// cancelled. Default is a no-op for finalizers with no provisional state.
+    async fn rollback(&self, _ctx: &RequiredFinalizationContext) -> Result<()> {
+        Ok(())
+    }
+
+    /// Synchronously authorize provisional state after every finalizer has
+    /// returned and immediately before the terminal is yielded.
+    fn commit(&self, _ctx: &RequiredFinalizationContext) {}
 }
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries

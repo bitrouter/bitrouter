@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::error::Result;
-use crate::language_model::types::RoutingTarget;
+use crate::language_model::types::{ApiProtocol, AuthScheme, RoutingTarget};
 
 const AUTHORITY_DOMAIN: &[u8] = b"bitrouter.transport.credential-authority.v1";
 
@@ -70,6 +70,66 @@ impl std::fmt::Debug for CredentialAuthority {
     }
 }
 
+/// Stable continuation authority proven for one exact authenticated request:
+/// both the credential principal and the scheme actually installed on wire.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ContinuationAuthority {
+    credential: CredentialAuthority,
+    effective_scheme: AuthScheme,
+}
+
+impl ContinuationAuthority {
+    /// Combine a stable credential principal with the scheme used on wire.
+    pub fn new(credential: CredentialAuthority, effective_scheme: AuthScheme) -> Self {
+        Self {
+            credential,
+            effective_scheme,
+        }
+    }
+
+    /// Return the redaction-safe credential-principal proof.
+    pub fn credential(&self) -> &CredentialAuthority {
+        &self.credential
+    }
+
+    /// Return the authentication scheme actually installed on the request.
+    pub fn effective_scheme(&self) -> AuthScheme {
+        self.effective_scheme
+    }
+}
+
+impl std::fmt::Debug for ContinuationAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ContinuationAuthority")
+            .field("credential", &self.credential)
+            .field("effective_scheme", &self.effective_scheme)
+            .finish()
+    }
+}
+
+fn static_effective_auth_scheme(target: &RoutingTarget) -> AuthScheme {
+    match target.api_protocol {
+        ApiProtocol::ChatCompletions | ApiProtocol::Responses => AuthScheme::Bearer,
+        ApiProtocol::Messages => target.auth_scheme,
+        ApiProtocol::GenerateContent => AuthScheme::XApiKey,
+        ApiProtocol::Custom(_) => target.auth_scheme,
+    }
+}
+
+fn request_effective_auth_scheme(request: &reqwest::Request) -> Option<AuthScheme> {
+    let bearer = request
+        .headers()
+        .contains_key(reqwest::header::AUTHORIZATION);
+    let x_key = request.headers().contains_key("x-api-key")
+        || request.headers().contains_key("x-goog-api-key");
+    match (bearer, x_key) {
+        (true, false) => Some(AuthScheme::Bearer),
+        (false, true) => Some(AuthScheme::XApiKey),
+        (false, false) | (true, true) => None,
+    }
+}
+
 /// Result of applying authentication to one exact outbound request.
 ///
 /// Dynamic appliers return the stable authority proof atomically with the
@@ -79,15 +139,32 @@ impl std::fmt::Debug for CredentialAuthority {
 /// closed.
 pub struct AppliedAuth {
     request: reqwest::Request,
-    continuation_authority: Option<CredentialAuthority>,
+    continuation_authority: Option<ContinuationAuthority>,
 }
 
 impl AppliedAuth {
     /// Build an authenticated request with a proven stable authority.
     pub fn proven(request: reqwest::Request, authority: CredentialAuthority) -> Self {
+        let continuation_authority = request_effective_auth_scheme(&request)
+            .map(|scheme| ContinuationAuthority::new(authority, scheme));
         Self {
             request,
-            continuation_authority: Some(authority),
+            continuation_authority,
+        }
+    }
+
+    /// Build a proof with an explicitly reported effective wire scheme.
+    pub fn proven_with_scheme(
+        request: reqwest::Request,
+        authority: CredentialAuthority,
+        effective_scheme: AuthScheme,
+    ) -> Self {
+        let continuation_authority = (request_effective_auth_scheme(&request)
+            == Some(effective_scheme))
+        .then(|| ContinuationAuthority::new(authority, effective_scheme));
+        Self {
+            request,
+            continuation_authority,
         }
     }
 
@@ -107,7 +184,7 @@ impl AppliedAuth {
         self.request
     }
 
-    pub(crate) fn into_parts(self) -> (reqwest::Request, Option<CredentialAuthority>) {
+    pub(crate) fn into_parts(self) -> (reqwest::Request, Option<ContinuationAuthority>) {
         (self.request, self.continuation_authority)
     }
 }
@@ -183,6 +260,21 @@ pub trait AuthApplier: Send + Sync {
         _target: &RoutingTarget,
     ) -> Result<Option<CredentialAuthority>> {
         Ok(None)
+    }
+
+    /// Resolve the route-time principal + effective wire scheme proof. The
+    /// apply-time [`AppliedAuth`] proof is compared against this exact value
+    /// before dispatch, closing both credential and auth-scheme races.
+    async fn continuation_authority_proof(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<ContinuationAuthority>> {
+        Ok(self
+            .continuation_authority(target)
+            .await?
+            .map(|credential| {
+                ContinuationAuthority::new(credential, static_effective_auth_scheme(target))
+            }))
     }
 
     /// Optionally rewrite the structured request body before it is
@@ -279,6 +371,24 @@ impl AuthAppliers {
             credential,
         )))
     }
+
+    /// Resolve the typed route-time continuation authority proof.
+    pub async fn continuation_authority_proof(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<ContinuationAuthority>> {
+        if let Some(applier) = self.lookup(&target.provider_name) {
+            return applier.continuation_authority_proof(target).await;
+        }
+        let credential = target
+            .api_key_override
+            .as_deref()
+            .unwrap_or(target.api_key.as_str());
+        Ok(Some(ContinuationAuthority::new(
+            CredentialAuthority::derive("static-transport-credential", credential),
+            static_effective_auth_scheme(target),
+        )))
+    }
 }
 
 #[cfg(test)]
@@ -337,5 +447,42 @@ mod tests {
             "Bearer legacy"
         );
         assert!(applied.continuation_authority.is_none());
+    }
+
+    #[test]
+    fn effective_scheme_requires_exactly_one_recognized_credential_header() {
+        let client = reqwest::Client::new();
+        let request = |authorization: bool, x_key: bool| {
+            let mut request = client.post("https://example.invalid").build().unwrap();
+            if authorization {
+                request.headers_mut().insert(
+                    reqwest::header::AUTHORIZATION,
+                    reqwest::header::HeaderValue::from_static("Bearer secret"),
+                );
+            }
+            if x_key {
+                request.headers_mut().insert(
+                    "x-api-key",
+                    reqwest::header::HeaderValue::from_static("secret"),
+                );
+            }
+            request
+        };
+        assert_eq!(
+            request_effective_auth_scheme(&request(true, false)),
+            Some(AuthScheme::Bearer)
+        );
+        assert_eq!(
+            request_effective_auth_scheme(&request(false, true)),
+            Some(AuthScheme::XApiKey)
+        );
+        assert_eq!(request_effective_auth_scheme(&request(true, true)), None);
+        assert_eq!(request_effective_auth_scheme(&request(false, false)), None);
+        let mismatched = AppliedAuth::proven_with_scheme(
+            request(true, false),
+            CredentialAuthority::derive("test", "principal"),
+            AuthScheme::XApiKey,
+        );
+        assert!(mismatched.continuation_authority.is_none());
     }
 }
