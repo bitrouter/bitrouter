@@ -35,6 +35,15 @@ pub struct ServerToolLoop {
     approval: Arc<dyn ApprovalPolicy>,
 }
 
+/// Pipeline-internal provenance for the response exposed by a non-streaming
+/// server-tool loop. The public loop API remains the historical
+/// `ExecutionResult`; the pipeline additionally needs to know whether that
+/// result is a provider terminal or a router-synthetic truncation.
+pub(crate) struct ServerToolLoopOutcome {
+    pub(crate) result: ExecutionResult,
+    pub(crate) provider_terminal_exposed: bool,
+}
+
 impl ServerToolLoop {
     /// Build a loop over `registry`, bounded by `config`, gated by `approval`.
     pub fn new(
@@ -120,6 +129,15 @@ impl ServerToolLoop {
         ctx: &ToolContext,
         upstream: &dyn UpstreamTurn,
     ) -> Result<ExecutionResult> {
+        Ok(self.run_with_provenance(base, ctx, upstream).await?.result)
+    }
+
+    pub(crate) async fn run_with_provenance(
+        &self,
+        base: &Prompt,
+        ctx: &ToolContext,
+        upstream: &dyn UpstreamTurn,
+    ) -> Result<ServerToolLoopOutcome> {
         let (mut working, owned) = self.inject(base, ctx).await?;
 
         let mut total = Usage::default();
@@ -143,14 +161,20 @@ impl ServerToolLoop {
                     }
                     record_provider_calls(&mut server_calls, &result.result.content);
                     result.server_tool_calls = std::mem::take(&mut server_calls);
-                    return Ok(result);
+                    return Ok(ServerToolLoopOutcome {
+                        result,
+                        provider_terminal_exposed: true,
+                    });
                 }
                 TurnDisposition::Execute(calls) => {
                     if rounds >= self.config.max_iterations
                         || start.elapsed() >= self.config.total_budget
                     {
                         result.server_tool_calls = std::mem::take(&mut server_calls);
-                        return Ok(truncate(result, total, had_usage, "max_tool_iterations"));
+                        return Ok(ServerToolLoopOutcome {
+                            result: truncate(result, total, had_usage, "max_tool_iterations"),
+                            provider_terminal_exposed: false,
+                        });
                     }
                     record_provider_calls(&mut server_calls, &result.result.content);
                     let (tool_results, had_error) = self.execute_calls(&calls, ctx).await;
@@ -176,7 +200,10 @@ impl ServerToolLoop {
                     rounds += 1;
                     if consecutive_errors >= self.config.max_consecutive_errors {
                         result.server_tool_calls = std::mem::take(&mut server_calls);
-                        return Ok(truncate(result, total, had_usage, "tool_errors"));
+                        return Ok(ServerToolLoopOutcome {
+                            result: truncate(result, total, had_usage, "tool_errors"),
+                            provider_terminal_exposed: false,
+                        });
                     }
                 }
             }

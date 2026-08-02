@@ -55,8 +55,9 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
+use bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id;
 use bitrouter_sdk::language_model::{
-    Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
+    ApiProtocol, Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
     RequestOutcome, RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest, StreamPart,
 };
 
@@ -705,20 +706,26 @@ impl ObserveHook for OtelExporter {
                         );
                     });
                 }
-                StreamPart::ResponseStarted { id, .. }
-                | StreamPart::ResponseCompleted { id, .. } => {
-                    // The upstream response id, surfaced by the decoder near
-                    // the start of the stream (`ResponseStarted`, emitted by
-                    // Chat Completions / Messages / Generate Content) or on the terminal
-                    // frame (`ResponseCompleted`, Responses). Stamp it
-                    // onto the root `chat` span as `gen_ai.response.id`; the
-                    // non-streaming path does the same via
-                    // `GenerateResult.response_id`. Spec:
-                    // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
-                    entry
-                        .context
-                        .span()
-                        .set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
+                StreamPart::ResponseStarted {
+                    id,
+                    source_protocol,
+                }
+                | StreamPart::ResponseCompleted {
+                    id,
+                    source_protocol,
+                    ..
+                } => {
+                    let observable_id = if *source_protocol == ApiProtocol::Responses {
+                        encode_gateway_continuation_id(&ctx.request_id).ok()
+                    } else {
+                        Some(id.clone())
+                    };
+                    if let Some(observable_id) = observable_id {
+                        entry
+                            .context
+                            .span()
+                            .set_attribute(KeyValue::new("gen_ai.response.id", observable_id));
+                    }
                 }
                 StreamPart::TextDelta { text }
                     if self.config.content_capture == ContentCaptureMode::Full =>
@@ -849,7 +856,15 @@ impl ObserveHook for OtelExporter {
                     result.model_id.clone(),
                 ));
                 if let Some(id) = &result.result.response_id {
-                    span.set_attribute(KeyValue::new("gen_ai.response.id", id.clone()));
+                    let observable_id = match ctx.serving_target() {
+                        Some(target) if target.api_protocol == ApiProtocol::Responses => {
+                            encode_gateway_continuation_id(ctx.request_id()).ok()
+                        }
+                        _ => Some(id.clone()),
+                    };
+                    if let Some(observable_id) = observable_id {
+                        span.set_attribute(KeyValue::new("gen_ai.response.id", observable_id));
+                    }
                 }
 
                 if let Some(usage) = &result.result.usage {
@@ -1579,6 +1594,42 @@ mod hop_tests {
     }
 
     #[tokio::test]
+    async fn nonstream_responses_native_id_never_enters_exported_span_data() {
+        let (exporter, captured) = make_test_exporter();
+        let mut ctx = PipelineContext::new(fresh_request());
+        let mut target = fresh_target("openai");
+        target.api_protocol = ApiProtocol::Responses;
+        ctx.route_chain = Some(vec![target.clone()]);
+        let public_id = encode_gateway_continuation_id(ctx.request_id()).unwrap();
+
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter.on_hop_start(&ctx, &target).await;
+        let mut result = fresh_result(&target);
+        result.result.response_id = Some("native-nonstream-sentinel".into());
+        exporter
+            .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
+            .await;
+        ctx.execution_result = Some(result);
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        assert!(exporter.provider.force_flush().is_ok());
+
+        let spans = captured.lock().unwrap().clone();
+        let root_chat = spans
+            .iter()
+            .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
+            .expect("root chat INTERNAL span");
+        assert_eq!(
+            str_attr(root_chat, "gen_ai.response.id"),
+            Some(public_id.as_str())
+        );
+        let exported = format!("{spans:#?}");
+        assert!(!exported.contains("native-nonstream-sentinel"));
+        assert!(exported.contains(&public_id));
+    }
+
+    #[tokio::test]
     async fn streaming_output_content_assembled_from_stream_parts() {
         // A streamed response folds usage back but does NOT reconstruct response
         // content in the IR (see `PipelineContext::settlement_context` note), so
@@ -2100,11 +2151,13 @@ mod hop_tests {
         let mut request = fresh_request();
         request.prompt.stream = true;
         let stream = pipeline
+            .clone()
             .execute_stream(request)
             .await
             .expect("stream starts");
         let parts: Vec<_> = stream.collect().await;
         assert!(parts.iter().all(Result::is_ok));
+        pipeline.drain_pending_settlements().await;
         assert!(exporter.provider.force_flush().is_ok());
 
         let spans = captured.lock().unwrap().clone();
@@ -2236,6 +2289,7 @@ mod hop_tests {
         let mut request = fresh_request();
         request.prompt.stream = true;
         let stream = pipeline
+            .clone()
             .execute_stream(request)
             .await
             .expect("stream starts");
@@ -2258,6 +2312,7 @@ mod hop_tests {
 
         release.notify_one();
         assert!(drain.await.expect("drain task").iter().all(Result::is_ok));
+        pipeline.drain_pending_settlements().await;
     }
 
     #[tokio::test]
@@ -2336,28 +2391,32 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn stream_response_completed_lands_response_id_on_root_chat() {
-        // Responses' terminal `response.completed` frame surfaces
-        // as `StreamPart::ResponseCompleted { id, .. }`. The exporter must
-        // stamp it onto the root `chat` INTERNAL span as
-        // `gen_ai.response.id` so streaming requests aren't missing the
-        // per-spec attribute that operators correlate against.
+    async fn stream_responses_ids_are_replaced_by_public_gateway_id_everywhere() {
         let (exporter, captured) = make_test_exporter();
         let ctx = PipelineContext::new(fresh_request());
         let target = fresh_target("openai");
+        let public_id = encode_gateway_continuation_id(ctx.request_id()).unwrap();
 
         exporter.after_phase(Phase::PreRequest, &ctx).await;
         exporter.on_hop_start(&ctx, &target).await;
         exporter
             .on_hop_end(&ctx, &target, HopOutcome::StreamStarted)
             .await;
-        // Feed the terminal stream frame in.
         let stream_ctx = ctx.stream_context();
         exporter
             .on_stream_part(
                 &stream_ctx,
+                &StreamPart::ResponseStarted {
+                    id: "native-intermediate-sentinel".to_string(),
+                    source_protocol: ApiProtocol::Responses,
+                },
+            )
+            .await;
+        exporter
+            .on_stream_part(
+                &stream_ctx,
                 &StreamPart::ResponseCompleted {
-                    id: "resp_streamed_xyz".to_string(),
+                    id: "native-final-sentinel".to_string(),
                     source_protocol: ApiProtocol::Responses,
                     status: "completed".to_string(),
                     usage: None,
@@ -2376,8 +2435,12 @@ mod hop_tests {
             .expect("root chat INTERNAL span");
         assert_eq!(
             str_attr(root_chat, "gen_ai.response.id"),
-            Some("resp_streamed_xyz")
+            Some(public_id.as_str())
         );
+        let exported = format!("{spans:#?}");
+        assert!(!exported.contains("native-intermediate-sentinel"));
+        assert!(!exported.contains("native-final-sentinel"));
+        assert!(exported.contains(&public_id));
     }
 
     #[tokio::test]

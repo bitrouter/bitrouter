@@ -1,7 +1,8 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -16,7 +17,7 @@ use bitrouter_sdk::language_model::protocol::responses::{
 };
 use bitrouter_sdk::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
 use bitrouter_sdk::language_model::{
-    ApiProtocol, AuthAppliers, CredentialAuthority, RoutingTarget,
+    ApiProtocol, AuthAppliers, ContinuationAuthority, RoutingTarget,
 };
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
@@ -75,7 +76,7 @@ impl ContinuationKey {
     fn target_fingerprint(
         &self,
         target: &RoutingTarget,
-        credential_authority: &CredentialAuthority,
+        credential_authority: &ContinuationAuthority,
     ) -> Result<String> {
         let api_base = target
             .api_base_override
@@ -83,11 +84,11 @@ impl ContinuationKey {
             .unwrap_or(target.api_base.as_str());
         let account = target.account_label.as_deref().unwrap_or("");
         let protocol = target.api_protocol.to_string();
-        let credential_authority = hex::encode(credential_authority.proof_bytes());
-        let auth_scheme = match target.auth_scheme {
+        let auth_scheme = match credential_authority.effective_scheme() {
             bitrouter_sdk::language_model::types::AuthScheme::XApiKey => "x-api-key",
             bitrouter_sdk::language_model::types::AuthScheme::Bearer => "bearer",
         };
+        let credential_authority = hex::encode(credential_authority.credential().proof_bytes());
         let digest = hmac_bytes(
             &self.secret,
             TARGET_FINGERPRINT_DOMAIN,
@@ -171,7 +172,7 @@ impl ResolvedContinuation {
     pub fn matches_target(
         &self,
         target: &RoutingTarget,
-        credential_authority: &CredentialAuthority,
+        credential_authority: &ContinuationAuthority,
     ) -> Result<bool> {
         Ok(self.key.target_fingerprint(target, credential_authority)? == self.target_fingerprint)
     }
@@ -191,6 +192,25 @@ pub struct ContinuationRegistry {
     keys: ContinuationKeySource,
     retention: TimeDelta,
     prune_batch_size: u64,
+    /// Process-local delivery barrier. Normal cancellation and graceful
+    /// shutdown are compensated by tracked rollback before this mask is
+    /// removed. A hard process crash after the encrypted row insert is an
+    /// intentionally documented at-least-once ambiguity: the provider already
+    /// completed, so the orphaned mapping may be visible after restart.
+    pending_publications: Arc<Mutex<HashMap<String, PendingPublication>>>,
+    pending_bind_locks: Arc<Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>>,
+}
+
+#[derive(Default)]
+struct PendingPublication {
+    attempts: HashSet<u64>,
+    row_created: bool,
+    published: bool,
+}
+
+struct PendingBindAttempt {
+    now: DateTime<Utc>,
+    delivery_attempt_id: u64,
 }
 
 impl ContinuationRegistry {
@@ -209,11 +229,120 @@ impl ContinuationRegistry {
             keys,
             retention,
             prune_batch_size,
+            pending_publications: Arc::new(Mutex::new(HashMap::new())),
+            pending_bind_locks: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     pub fn database(&self) -> &DatabaseConnection {
         &self.db
+    }
+
+    fn is_pending_identity(&self, continuation_identity: &str) -> bool {
+        match self.pending_publications.lock() {
+            Ok(publications) => publications
+                .get(continuation_identity)
+                .is_some_and(|publication| !publication.published),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .get(continuation_identity)
+                .is_some_and(|publication| !publication.published),
+        }
+    }
+
+    fn pending_identity_lock(&self, continuation_identity: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = match self.pending_bind_locks.lock() {
+            Ok(locks) => locks,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(lock) = locks.get(continuation_identity).and_then(Weak::upgrade) {
+            return lock;
+        }
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(continuation_identity.to_owned(), Arc::downgrade(&lock));
+        lock
+    }
+
+    fn publish_pending(&self, delivery_attempt_id: u64) {
+        let mut publications = match self.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let identity = publications.iter().find_map(|(identity, publication)| {
+            publication
+                .attempts
+                .contains(&delivery_attempt_id)
+                .then(|| identity.clone())
+        });
+        let Some(identity) = identity else {
+            return;
+        };
+        let remove = publications.get_mut(&identity).is_some_and(|publication| {
+            if !publication.attempts.remove(&delivery_attempt_id) {
+                return false;
+            }
+            publication.published = true;
+            publication.attempts.is_empty()
+        });
+        if remove {
+            publications.remove(&identity);
+        }
+    }
+
+    async fn rollback_pending(&self, delivery_attempt_id: u64) -> Result<()> {
+        let identity = {
+            let publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            publications.iter().find_map(|(identity, publication)| {
+                publication
+                    .attempts
+                    .contains(&delivery_attempt_id)
+                    .then(|| identity.clone())
+            })
+        };
+        let Some(identity) = identity else {
+            return Ok(());
+        };
+        // Serialize only the same owner-bound continuation identity. Unrelated
+        // callers and request ids retain full DB concurrency.
+        let identity_lock = self.pending_identity_lock(&identity);
+        let _bind_guard = identity_lock.lock().await;
+        let delete = {
+            let mut publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(publication) = publications.get_mut(&identity) else {
+                return Ok(());
+            };
+            if !publication.attempts.remove(&delivery_attempt_id) {
+                return Ok(());
+            }
+            if !publication.attempts.is_empty() {
+                return Ok(());
+            }
+            if publication.published || !publication.row_created {
+                publications.remove(&identity);
+                return Ok(());
+            }
+            // Keep the unpublished marker installed until the delete commits,
+            // so a concurrent resolve cannot observe provisional DB state.
+            true
+        };
+        if delete {
+            continuation_entity::Entity::delete_by_id(identity.clone())
+                .exec(&self.db)
+                .await?;
+            let mut publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            publications.remove(&identity);
+        }
+        Ok(())
     }
 
     pub async fn bind(
@@ -222,9 +351,104 @@ impl ContinuationRegistry {
         gateway_request_id: &str,
         provider_response_id: &str,
         target: &RoutingTarget,
-        credential_authority: &CredentialAuthority,
+        credential_authority: &ContinuationAuthority,
         now: DateTime<Utc>,
     ) -> Result<()> {
+        self.bind_inner(
+            owner_user_id,
+            gateway_request_id,
+            provider_response_id,
+            target,
+            credential_authority,
+            now,
+        )
+        .await
+        .map(drop)
+    }
+
+    async fn bind_pending(
+        &self,
+        owner_user_id: &str,
+        gateway_request_id: &str,
+        provider_response_id: &str,
+        target: &RoutingTarget,
+        credential_authority: &ContinuationAuthority,
+        attempt: PendingBindAttempt,
+    ) -> Result<bool> {
+        let PendingBindAttempt {
+            now,
+            delivery_attempt_id,
+        } = attempt;
+        let key = self.keys.load()?;
+        let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
+        let identity_lock = self.pending_identity_lock(&continuation_identity);
+        let _bind_guard = identity_lock.lock().await;
+        let joined_pending = {
+            let mut publications = match self.pending_publications.lock() {
+                Ok(publications) => publications,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let joined = publications.contains_key(&continuation_identity);
+            publications
+                .entry(continuation_identity.clone())
+                .or_default()
+                .attempts
+                .insert(delivery_attempt_id);
+            joined
+        };
+        let result = self
+            .bind_inner(
+                owner_user_id,
+                gateway_request_id,
+                provider_response_id,
+                target,
+                credential_authority,
+                now,
+            )
+            .await;
+        let mut publications = match self.pending_publications.lock() {
+            Ok(publications) => publications,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match result {
+            Ok(inserted) => {
+                let publication = publications
+                    .get_mut(&continuation_identity)
+                    .expect("pending continuation reservation disappeared");
+                if inserted {
+                    publication.row_created = true;
+                } else if !joined_pending {
+                    // An idempotent match against a row that predates this
+                    // attempt is already public and must not become rollback
+                    // owned by this request.
+                    publication.attempts.remove(&delivery_attempt_id);
+                    if publication.attempts.is_empty() {
+                        publications.remove(&continuation_identity);
+                    }
+                }
+                Ok(inserted)
+            }
+            Err(error) => {
+                if let Some(publication) = publications.get_mut(&continuation_identity) {
+                    publication.attempts.remove(&delivery_attempt_id);
+                    if publication.attempts.is_empty() {
+                        publications.remove(&continuation_identity);
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn bind_inner(
+        &self,
+        owner_user_id: &str,
+        gateway_request_id: &str,
+        provider_response_id: &str,
+        target: &RoutingTarget,
+        credential_authority: &ContinuationAuthority,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
         let key = self.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let owner_identity = key.owner_identity(owner_user_id)?;
@@ -262,7 +486,7 @@ impl ContinuationRegistry {
             purge_after: Set(purge_after),
         };
         match model.insert(&self.db).await {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(true),
             Err(insert_error) => {
                 let existing = continuation_entity::Entity::find_by_id(&continuation_identity)
                     .one(&self.db)
@@ -274,7 +498,7 @@ impl ContinuationRegistry {
                 if existing_plaintext == provider_response_id
                     && existing.target_fingerprint == target_fingerprint
                 {
-                    Ok(())
+                    Ok(false)
                 } else {
                     anyhow::bail!("gateway continuation id is already bound to another response")
                 }
@@ -291,6 +515,9 @@ impl ContinuationRegistry {
         let key = self.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
+        if self.is_pending_identity(&continuation_identity) {
+            return Ok(ContinuationResolution::Missing);
+        }
         let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
             .one(&self.db)
             .await?
@@ -476,7 +703,7 @@ impl RouteHook for ContinuationRuntime {
                     }
                     let credential_authority = self
                         .auth_appliers
-                        .continuation_authority(target)
+                        .continuation_authority_proof(target)
                         .await
                         .map_err(|error| {
                             BitrouterError::internal(format!(
@@ -528,7 +755,7 @@ impl RequiredFinalizer for ContinuationRuntime {
         if !ctx.successful_terminal || ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return Ok(());
         }
-        if ctx.streamed && !ctx.native_response_completed {
+        if !ctx.native_response_completed {
             return Ok(());
         }
         let Some(target) = ctx.target.as_ref() else {
@@ -548,7 +775,7 @@ impl RequiredFinalizer for ContinuationRuntime {
             Some(authority) => authority.clone(),
             None if self.auth_appliers.lookup(&target.provider_name).is_none() => self
                 .auth_appliers
-                .continuation_authority(target)
+                .continuation_authority_proof(target)
                 .await
                 .map_err(|error| {
                     BitrouterError::internal(format!(
@@ -568,18 +795,43 @@ impl RequiredFinalizer for ContinuationRuntime {
             BitrouterError::internal(format!("pruning provider continuations: {error}"))
         })?;
         self.registry
-            .bind(
+            .bind_pending(
                 ctx.caller.user_id(),
                 &public_continuation_id,
                 provider_response_id,
                 target,
                 &credential_authority,
-                now,
+                PendingBindAttempt {
+                    now,
+                    delivery_attempt_id: ctx.delivery_attempt_id,
+                },
             )
             .await
             .map_err(|error| {
                 BitrouterError::internal(format!("persisting provider continuation: {error}"))
+            })?;
+        Ok(())
+    }
+
+    async fn rollback(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+        if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
+            return Ok(());
+        }
+        self.registry
+            .rollback_pending(ctx.delivery_attempt_id)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!(
+                    "rolling back provider continuation publication: {error}"
+                ))
             })
+    }
+
+    fn commit(&self, ctx: &RequiredFinalizationContext) {
+        if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
+            return;
+        }
+        self.registry.publish_pending(ctx.delivery_attempt_id);
     }
 }
 
@@ -721,17 +973,23 @@ mod key_epoch_entity {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
     use async_trait::async_trait;
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::language_model::context::{PipelineContext, ProviderContinuation};
-    use bitrouter_sdk::language_model::hooks::RouteHook;
+    use bitrouter_sdk::language_model::hooks::{
+        ObserveHook, RequestOutcome, RouteHook, StreamHook,
+    };
     use bitrouter_sdk::language_model::settlement::{
-        RequiredFinalizationContext, RequiredFinalizer,
+        RequiredFinalizationContext, RequiredFinalizer, SettlementContext, SettlementRecorder,
     };
     use bitrouter_sdk::language_model::{
-        ApiProtocol, AppliedAuth, AuthApplier, AuthAppliers, GenerationParams, HttpExecutor,
-        Message, MockExecutor, MockResponse, Pipeline, PipelineBuilder, PipelineRequest, Prompt,
-        Role, RoutingTarget, StaticRoutingTable, StreamPart, Tool, ToolResultOutput,
+        ApiProtocol, AppliedAuth, AuthApplier, AuthAppliers, Content, CredentialAuthority,
+        FinishReason, GenerateResult, GenerationParams, HttpExecutor, Message, MockExecutor,
+        MockResponse, Pipeline, PipelineBuilder, PipelineRequest, Prompt, Role, RoutingTarget,
+        StaticRoutingTable, StreamAction, StreamContext, StreamInterest, StreamOutcome, StreamPart,
+        Tool, ToolResultOutput, Usage,
     };
     use chrono::{TimeDelta, TimeZone, Utc};
     use futures::StreamExt;
@@ -758,8 +1016,11 @@ mod tests {
         }
     }
 
-    fn static_authority(api_key: &str) -> CredentialAuthority {
-        CredentialAuthority::derive("static-transport-credential", api_key)
+    fn static_authority(api_key: &str) -> ContinuationAuthority {
+        ContinuationAuthority::new(
+            CredentialAuthority::derive("static-transport-credential", api_key),
+            bitrouter_sdk::language_model::types::AuthScheme::Bearer,
+        )
     }
 
     async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
@@ -1106,20 +1367,9 @@ mod tests {
     async fn required_finalizer_publishes_native_mapping() -> anyhow::Result<()> {
         let registry = registry(14).await?;
         let runtime = ContinuationRuntime::new(registry.clone());
-        runtime
-            .finalize(&RequiredFinalizationContext {
-                request_id: "gateway-result".into(),
-                caller: CallerContext::new("key", "owner"),
-                target: Some(target("credential")),
-                inbound_protocol: Some(ApiProtocol::Responses),
-                response_id: Some("resp-provider-final".into()),
-                finish_reason: Some(bitrouter_sdk::language_model::FinishReason::Stop),
-                streamed: true,
-                successful_terminal: true,
-                native_response_completed: true,
-                credential_authority: Some(static_authority("credential")),
-            })
-            .await?;
+        let finalization = finalization_context("gateway-result", 1, "resp-provider-final");
+        runtime.finalize(&finalization).await?;
+        runtime.commit(&finalization);
         let resolved = registry
             .resolve(
                 "owner",
@@ -1128,6 +1378,157 @@ mod tests {
             )
             .await?;
         assert!(matches!(resolved, ContinuationResolution::Active(_)));
+        Ok(())
+    }
+
+    fn finalization_context(
+        request_id: &str,
+        delivery_attempt_id: u64,
+        provider_response_id: &str,
+    ) -> RequiredFinalizationContext {
+        RequiredFinalizationContext {
+            request_id: request_id.into(),
+            delivery_attempt_id,
+            caller: CallerContext::new("key", "owner"),
+            target: Some(target("credential")),
+            inbound_protocol: Some(ApiProtocol::Responses),
+            response_id: Some(provider_response_id.into()),
+            finish_reason: Some(bitrouter_sdk::language_model::FinishReason::Stop),
+            streamed: true,
+            successful_terminal: true,
+            native_response_completed: true,
+            credential_authority: Some(static_authority("credential")),
+        }
+    }
+
+    #[tokio::test]
+    async fn rollback_of_idempotent_active_mapping_never_deletes_existing_row() -> anyhow::Result<()>
+    {
+        let registry = registry(39).await?;
+        let public_id = encode_gateway_continuation_id("existing-active")?;
+        registry
+            .bind(
+                "owner",
+                &public_id,
+                "provider-existing",
+                &target("credential"),
+                &static_authority("credential"),
+                Utc::now(),
+            )
+            .await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("existing-active", 101, "provider-existing");
+        runtime.finalize(&attempt).await?;
+        runtime.rollback(&attempt).await?;
+        assert!(matches!(
+            registry.resolve("owner", &public_id, Utc::now()).await?,
+            ContinuationResolution::Active(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_attempt_rollback_cannot_delete_other_attempt_publication()
+    -> anyhow::Result<()> {
+        let registry = registry(40).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let first = finalization_context("shared-request", 201, "provider-shared");
+        let second = finalization_context("shared-request", 202, "provider-shared");
+        runtime.finalize(&first).await?;
+        runtime.finalize(&second).await?;
+        let public_id = encode_gateway_continuation_id("shared-request")?;
+        assert_eq!(
+            registry.resolve("owner", &public_id, Utc::now()).await?,
+            ContinuationResolution::Missing
+        );
+
+        runtime.rollback(&first).await?;
+        assert_eq!(
+            registry.resolve("owner", &public_id, Utc::now()).await?,
+            ContinuationResolution::Missing,
+            "one attempt cannot publish or delete state still owned by another"
+        );
+        runtime.commit(&second);
+        runtime.rollback(&first).await?;
+        assert!(matches!(
+            registry.resolve("owner", &public_id, Utc::now()).await?,
+            ContinuationResolution::Active(_)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn all_concurrent_attempts_cancel_delete_only_their_new_row() -> anyhow::Result<()> {
+        let registry = registry(43).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let first = finalization_context("all-cancelled", 211, "provider-cancelled");
+        let second = finalization_context("all-cancelled", 212, "provider-cancelled");
+        runtime.finalize(&first).await?;
+        runtime.finalize(&second).await?;
+        runtime.rollback(&first).await?;
+        runtime.rollback(&second).await?;
+
+        let public_id = encode_gateway_continuation_id("all-cancelled")?;
+        assert_eq!(
+            registry.resolve("owner", &public_id, Utc::now()).await?,
+            ContinuationResolution::Missing
+        );
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_identity_lock_never_serializes_unrelated_continuations() -> anyhow::Result<()>
+    {
+        let registry = registry(44).await?;
+        let first = registry.pending_identity_lock("owner-a/request-a");
+        let same = registry.pending_identity_lock("owner-a/request-a");
+        let unrelated = registry.pending_identity_lock("owner-b/request-b");
+        let first_guard = first.lock().await;
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), same.lock())
+                .await
+                .is_err(),
+            "the same continuation identity must serialize bind/rollback"
+        );
+        let unrelated_guard =
+            tokio::time::timeout(std::time::Duration::from_millis(100), unrelated.lock())
+                .await
+                .map_err(|_| anyhow::anyhow!("unrelated identity was globally serialized"))?;
+        drop(unrelated_guard);
+        drop(first_guard);
+        let same_guard = tokio::time::timeout(std::time::Duration::from_millis(100), same.lock())
+            .await
+            .map_err(|_| anyhow::anyhow!("same-identity lock did not release"))?;
+        drop(same_guard);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_provisional_mapping_remains_missing_after_registry_restart()
+    -> anyhow::Result<()> {
+        let registry = registry(41).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let attempt = finalization_context("restart-pending", 301, "provider-restart");
+        runtime.finalize(&attempt).await?;
+        runtime.rollback(&attempt).await?;
+        let restarted =
+            ContinuationRegistry::new(registry.db.clone(), registry.keys.clone(), 30, 10)?;
+        let public_id = encode_gateway_continuation_id("restart-pending")?;
+        assert_eq!(
+            restarted.resolve("owner", &public_id, Utc::now()).await?,
+            ContinuationResolution::Missing,
+            "tracked rollback must remove provisional durable state before restart"
+        );
         Ok(())
     }
 
@@ -1226,6 +1627,129 @@ mod tests {
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(sse)
+        }
+    }
+
+    struct NonstreamToolRoundResponder(Arc<std::sync::Mutex<ToolRoundState>>);
+
+    impl Respond for NonstreamToolRoundResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|error| serde_json::json!({"parse_error": error.to_string()}));
+            let mut state = self.0.lock().expect("tool round state poisoned");
+            state.forwarded_parents.push(
+                body.get("previous_response_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            );
+            let call = state.calls;
+            state.calls += 1;
+            drop(state);
+
+            if call == 0 {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "provider-intermediate",
+                    "status": "completed",
+                    "output": [{
+                        "id": "fc-intermediate",
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": "call-search",
+                        "name": "search",
+                        "arguments": "{}"
+                    }],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "total_tokens": 12
+                    }
+                }))
+            } else {
+                let response_id = if call == 1 {
+                    "provider-final"
+                } else {
+                    "provider-next"
+                };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": response_id,
+                    "status": "completed",
+                    "output": [{
+                        "id": format!("msg-{call}"),
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "done",
+                            "annotations": []
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 20,
+                        "output_tokens": 3,
+                        "total_tokens": 23
+                    }
+                }))
+            }
+        }
+    }
+
+    struct ContinuationResponder {
+        state: Arc<std::sync::Mutex<ToolRoundState>>,
+        stream: bool,
+    }
+
+    impl Respond for ContinuationResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|error| serde_json::json!({"parse_error": error.to_string()}));
+            let mut state = self.state.lock().expect("continuation state poisoned");
+            state.forwarded_parents.push(
+                body.get("previous_response_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            );
+            let response_id = if state.calls == 0 {
+                "fallback-provider-root"
+            } else {
+                "fallback-provider-resumed"
+            };
+            state.calls += 1;
+            drop(state);
+
+            if self.stream {
+                let events = [
+                    serde_json::json!({
+                        "type": "response.created",
+                        "response": {"id": response_id, "status": "in_progress"}
+                    }),
+                    serde_json::json!({
+                        "type": "response.output_text.delta",
+                        "delta": "done"
+                    }),
+                    serde_json::json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": response_id,
+                            "status": "completed",
+                            "output": []
+                        }
+                    }),
+                ];
+                let sse = events
+                    .iter()
+                    .map(|event| format!("event: {}\ndata: {event}\n\n", event["type"]))
+                    .collect::<String>();
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse)
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": response_id,
+                    "status": "completed",
+                    "output": []
+                }))
+            }
         }
     }
 
@@ -1401,6 +1925,68 @@ mod tests {
         }
     }
 
+    struct SchemeAuthApplier(bitrouter_sdk::language_model::types::AuthScheme);
+
+    #[async_trait]
+    impl AuthApplier for SchemeAuthApplier {
+        async fn apply(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> PipelineResult<reqwest::Request> {
+            Ok(self
+                .apply_with_authority(request, target)
+                .await?
+                .into_request())
+        }
+
+        async fn apply_with_authority(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<AppliedAuth> {
+            match self.0 {
+                bitrouter_sdk::language_model::types::AuthScheme::Bearer => {
+                    request.headers_mut().insert(
+                        reqwest::header::AUTHORIZATION,
+                        reqwest::header::HeaderValue::from_static("Bearer same-principal"),
+                    );
+                }
+                bitrouter_sdk::language_model::types::AuthScheme::XApiKey => {
+                    request.headers_mut().insert(
+                        "x-api-key",
+                        reqwest::header::HeaderValue::from_static("same-principal"),
+                    );
+                }
+            }
+            Ok(AppliedAuth::proven_with_scheme(
+                request,
+                CredentialAuthority::derive("test/same-principal", "principal"),
+                self.0,
+            ))
+        }
+
+        async fn continuation_authority(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<CredentialAuthority>> {
+            Ok(Some(CredentialAuthority::derive(
+                "test/same-principal",
+                "principal",
+            )))
+        }
+
+        async fn continuation_authority_proof(
+            &self,
+            _target: &RoutingTarget,
+        ) -> PipelineResult<Option<ContinuationAuthority>> {
+            Ok(Some(ContinuationAuthority::new(
+                CredentialAuthority::derive("test/same-principal", "principal"),
+                self.0,
+            )))
+        }
+    }
+
     fn dynamic_auth_pipeline(
         registry: ContinuationRegistry,
         upstream: &MockServer,
@@ -1421,6 +2007,123 @@ mod tests {
             .route_hook(runtime.clone())
             .required_finalizer(runtime);
         Ok(Arc::new(builder.build()?))
+    }
+
+    fn continuation_pipeline(
+        registry: ContinuationRegistry,
+        targets: Vec<RoutingTarget>,
+    ) -> anyhow::Result<Arc<Pipeline>> {
+        let runtime = ContinuationRuntime::new(registry);
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", targets);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime);
+        Ok(Arc::new(builder.build()?))
+    }
+
+    async fn assert_duplicate_identity_fallback_binds_exact_second_target(
+        stream: bool,
+    ) -> anyhow::Result<()> {
+        let first = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("first hop failed"))
+            .mount(&first)
+            .await;
+        let second = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ContinuationResponder {
+                state: state.clone(),
+                stream,
+            })
+            .mount(&second)
+            .await;
+
+        let mut first_target = target("first-credential");
+        first_target.api_base = first.uri();
+        let mut second_target = target("second-credential");
+        second_target.api_base = second.uri();
+        assert_eq!(first_target.provider_name, second_target.provider_name);
+        assert_eq!(first_target.service_id, second_target.service_id);
+        assert_eq!(first_target.account_label, second_target.account_label);
+
+        let registry = registry(if stream { 35 } else { 34 }).await?;
+        let request_id = if stream {
+            "duplicate-fallback-stream"
+        } else {
+            "duplicate-fallback-nonstream"
+        };
+        let pipeline = continuation_pipeline(
+            registry.clone(),
+            vec![first_target.clone(), second_target.clone()],
+        )?;
+        if stream {
+            drain_stream(pipeline, tool_request(request_id, None)).await?;
+        } else {
+            pipeline
+                .execute(nonstream_tool_request(request_id, None))
+                .await?;
+        }
+
+        let public_id = encode_gateway_continuation_id(request_id)?;
+        let ContinuationResolution::Active(active) = registry
+            .resolve("tool-owner", &public_id, Utc::now())
+            .await?
+        else {
+            anyhow::bail!("fallback continuation missing")
+        };
+        assert!(active.matches_target(&second_target, &static_authority("second-credential"))?);
+        assert!(!active.matches_target(&first_target, &static_authority("first-credential"))?);
+
+        let restarted =
+            continuation_pipeline(registry, vec![first_target.clone(), second_target.clone()])?;
+        if stream {
+            drain_stream(
+                restarted,
+                tool_request("duplicate-fallback-resume", Some(&public_id)),
+            )
+            .await?;
+        } else {
+            restarted
+                .execute(nonstream_tool_request(
+                    "duplicate-fallback-resume",
+                    Some(&public_id),
+                ))
+                .await?;
+        }
+        assert_eq!(
+            first
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("request recording disabled"))?
+                .len(),
+            1,
+            "restart resume must not retry the tuple-identical first target"
+        );
+        let state = state.lock().expect("continuation state poisoned");
+        assert_eq!(state.calls, 2);
+        assert_eq!(
+            state.forwarded_parents,
+            [None, Some("fallback-provider-root".into())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nonstream_duplicate_identity_fallback_binds_exact_second_target() -> anyhow::Result<()>
+    {
+        assert_duplicate_identity_fallback_binds_exact_second_target(false).await
+    }
+
+    #[tokio::test]
+    async fn stream_duplicate_identity_fallback_binds_exact_second_target() -> anyhow::Result<()> {
+        assert_duplicate_identity_fallback_binds_exact_second_target(true).await
     }
 
     async fn drain_stream(pipeline: Arc<Pipeline>, request: PipelineRequest) -> PipelineResult<()> {
@@ -1495,7 +2198,11 @@ mod tests {
         }
     }
 
-    fn tool_request(request_id: &str, previous_response_id: Option<&str>) -> PipelineRequest {
+    fn tool_request_with_stream(
+        request_id: &str,
+        previous_response_id: Option<&str>,
+        stream: bool,
+    ) -> PipelineRequest {
         let mut params = GenerationParams::default();
         if let Some(previous_response_id) = previous_response_id {
             params.extra.insert(
@@ -1517,10 +2224,172 @@ mod tests {
                 params,
                 response_format: None,
                 tool_choice: None,
-                stream: true,
+                stream,
             },
             inbound_protocol: Some(ApiProtocol::Responses),
         }
+    }
+
+    fn tool_request(request_id: &str, previous_response_id: Option<&str>) -> PipelineRequest {
+        tool_request_with_stream(request_id, previous_response_id, true)
+    }
+
+    fn nonstream_tool_request(
+        request_id: &str,
+        previous_response_id: Option<&str>,
+    ) -> PipelineRequest {
+        tool_request_with_stream(request_id, previous_response_id, false)
+    }
+
+    fn nonstream_server_tool_pipeline(
+        registry: ContinuationRegistry,
+        upstream: &MockServer,
+        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+    ) -> anyhow::Result<Arc<Pipeline>> {
+        let runtime = ContinuationRuntime::new(registry);
+        let mut upstream_target = target("credential");
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let server_loop = Arc::new(
+            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
+                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
+                    tool,
+                ]),
+                config,
+                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+            ),
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .server_tool_loop(server_loop);
+        Ok(Arc::new(builder.build()?))
+    }
+
+    struct ErrorSettlementRecorder(Arc<std::sync::Mutex<Vec<bool>>>);
+
+    #[async_trait]
+    impl SettlementRecorder for ErrorSettlementRecorder {
+        async fn record(&self, ctx: &mut SettlementContext) -> PipelineResult<()> {
+            self.0
+                .lock()
+                .expect("settlement state poisoned")
+                .push(ctx.error.is_some());
+            Ok(())
+        }
+    }
+
+    async fn assert_invalid_nonstream_responses_terminal_is_not_resumable(
+        request_id: &str,
+        body: serde_json::Value,
+        expected_error: &str,
+    ) -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&upstream)
+            .await;
+        let registry = registry(30).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let mut upstream_target = target("credential");
+        upstream_target.api_base = upstream.uri();
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![upstream_target]);
+        let settlements = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(ErrorSettlementRecorder(settlements.clone()));
+        let pipeline = Arc::new(builder.build()?);
+
+        let error = pipeline
+            .clone()
+            .execute(nonstream_tool_request(request_id, None))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected upstream failure: {error}"
+        );
+        assert_eq!(
+            settlements
+                .lock()
+                .expect("settlement state poisoned")
+                .as_slice(),
+            &[true],
+            "invalid provider terminal must settle as failure"
+        );
+        let public_id = encode_gateway_continuation_id(request_id)?;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing
+        );
+        let error = pipeline
+            .execute(nonstream_tool_request(
+                "invalid-terminal-resume",
+                Some(&public_id),
+            ))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("mapping is unavailable"));
+        assert_eq!(
+            upstream
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("request recording disabled"))?
+                .len(),
+            1,
+            "resume must reject before upstream"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nonstream_missing_or_empty_responses_id_fails_closed() -> anyhow::Result<()> {
+        for (suffix, id) in [("missing", None), ("empty", Some(""))] {
+            let mut body = serde_json::json!({
+                "status": "completed",
+                "output": []
+            });
+            if let Some(id) = id {
+                body["id"] = serde_json::Value::String(id.into());
+            }
+            assert_invalid_nonstream_responses_terminal_is_not_resumable(
+                &format!("invalid-id-{suffix}"),
+                body,
+                "missing non-empty 'id'",
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nonstream_failed_or_unknown_responses_status_fails_closed() -> anyhow::Result<()> {
+        for status in ["failed", "future-status"] {
+            assert_invalid_nonstream_responses_terminal_is_not_resumable(
+                &format!("invalid-status-{status}"),
+                serde_json::json!({
+                    "id": format!("provider-{status}"),
+                    "status": status,
+                    "output": []
+                }),
+                "non-success terminal status",
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1595,6 +2464,150 @@ mod tests {
         );
         assert_eq!(state.calls, 3);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn nonstream_server_tool_continuation_binds_only_final_provider_round()
+    -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(NonstreamToolRoundResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+
+        let registry = registry(28).await?;
+        let pipeline = nonstream_server_tool_pipeline(
+            registry.clone(),
+            &upstream,
+            Default::default(),
+            Arc::new(SearchTool),
+        )?;
+        let first = pipeline
+            .clone()
+            .execute(nonstream_tool_request("nonstream-tool-request-1", None))
+            .await?;
+        assert_eq!(first.result.response_id.as_deref(), Some("provider-final"));
+        let usage = first
+            .result
+            .usage
+            .ok_or_else(|| anyhow::anyhow!("aggregated usage missing"))?;
+        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (30, 5));
+
+        let public_id = encode_gateway_continuation_id("nonstream-tool-request-1")?;
+        let ContinuationResolution::Active(active) = registry
+            .resolve("tool-owner", &public_id, Utc::now())
+            .await?
+        else {
+            anyhow::bail!("final provider round was not published")
+        };
+        assert_eq!(active.provider_response_id, "provider-final");
+
+        pipeline
+            .execute(nonstream_tool_request(
+                "nonstream-tool-request-2",
+                Some(&public_id),
+            ))
+            .await?;
+        let state = state.lock().expect("tool round state poisoned");
+        assert_eq!(
+            state.forwarded_parents,
+            [None, None, Some("provider-final".into())]
+        );
+        assert_eq!(state.calls, 3);
+        Ok(())
+    }
+
+    async fn assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
+        request_id: &str,
+        expected_reason: &str,
+        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+    ) -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(NonstreamToolRoundResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+        let registry = registry(29).await?;
+        let pipeline = nonstream_server_tool_pipeline(registry.clone(), &upstream, config, tool)?;
+
+        let result = pipeline
+            .clone()
+            .execute(nonstream_tool_request(request_id, None))
+            .await?;
+        assert_eq!(
+            result.result.finish_reason,
+            Some(bitrouter_sdk::language_model::FinishReason::Other(
+                expected_reason.into()
+            ))
+        );
+        assert_eq!(
+            result.result.response_id.as_deref(),
+            Some("provider-intermediate"),
+            "native id remains available for response framing and request-local audit"
+        );
+        let usage = result
+            .result
+            .usage
+            .ok_or_else(|| anyhow::anyhow!("synthetic result usage missing"))?;
+        assert_eq!((usage.prompt_tokens, usage.completion_tokens), (10, 2));
+
+        let public_id = encode_gateway_continuation_id(request_id)?;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "router-synthetic nonstream termination must not publish an intermediate provider id"
+        );
+        let error = pipeline
+            .execute(nonstream_tool_request(
+                "nonstream-synthetic-resume",
+                Some(&public_id),
+            ))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("mapping is unavailable"));
+        let state = state.lock().expect("tool round state poisoned");
+        assert_eq!(
+            state.calls, 1,
+            "resume must fail before forwarding a stale native id upstream"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nonstream_max_tool_iterations_does_not_publish_intermediate_continuation()
+    -> anyhow::Result<()> {
+        assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
+            "nonstream-max-tool-request",
+            "max_tool_iterations",
+            bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+                max_iterations: 0,
+                ..Default::default()
+            },
+            Arc::new(SearchTool),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn nonstream_tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()>
+    {
+        assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
+            "nonstream-tool-error-request",
+            "tool_errors",
+            bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+                max_consecutive_errors: 1,
+                ..Default::default()
+            },
+            Arc::new(FailingSearchTool),
+        )
+        .await
     }
 
     async fn assert_synthetic_server_tool_terminal_is_not_resumable(
@@ -1750,6 +2763,55 @@ mod tests {
                     Some("dynamic-provider-root".into())
                 ),
             ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn same_principal_with_changed_effective_scheme_rejects_before_upstream()
+    -> anyhow::Result<()> {
+        let upstream = MockServer::start().await;
+        let state = Arc::new(std::sync::Mutex::new(DynamicAuthState::default()));
+        Mock::given(method("POST"))
+            .and(path("/responses"))
+            .respond_with(DynamicAuthResponder(state.clone()))
+            .mount(&upstream)
+            .await;
+        let registry = registry(36).await?;
+
+        drain_stream(
+            dynamic_auth_pipeline(
+                registry.clone(),
+                &upstream,
+                Arc::new(SchemeAuthApplier(
+                    bitrouter_sdk::language_model::types::AuthScheme::Bearer,
+                )),
+            )?,
+            tool_request("scheme-root", None),
+        )
+        .await?;
+        let public_id = encode_gateway_continuation_id("scheme-root")?;
+
+        let error = dynamic_auth_pipeline(
+            registry,
+            &upstream,
+            Arc::new(SchemeAuthApplier(
+                bitrouter_sdk::language_model::types::AuthScheme::XApiKey,
+            )),
+        )?
+        .execute_stream(tool_request("scheme-resume", Some(&public_id)))
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("effective auth scheme change unexpectedly resumed"))?;
+        assert!(error.to_string().contains("unavailable or changed"));
+        assert_eq!(
+            state
+                .lock()
+                .expect("dynamic auth state poisoned")
+                .calls
+                .len(),
+            1,
+            "scheme mismatch must reject before upstream"
         );
         Ok(())
     }
@@ -1940,6 +3002,477 @@ mod tests {
             "unexpected finalizer error: {failure}"
         );
         Ok(())
+    }
+
+    struct BlockingRequiredFinalizer {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        completed: Arc<AtomicBool>,
+    }
+
+    struct BlockingEndHook {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        completed: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl StreamHook for BlockingEndHook {
+        fn interest(&self) -> StreamInterest {
+            StreamInterest::none()
+        }
+
+        async fn on_part(
+            &self,
+            _ctx: &mut StreamContext,
+            _part: StreamPart,
+        ) -> PipelineResult<StreamAction> {
+            Ok(StreamAction::Pass)
+        }
+
+        async fn on_stream_end(
+            &self,
+            _ctx: &mut StreamContext,
+            _outcome: &StreamOutcome,
+        ) -> PipelineResult<()> {
+            self.started.notify_one();
+            self.release.notified().await;
+            self.completed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct UsageSettlementRecorder(Arc<std::sync::Mutex<Vec<(u64, u64)>>>);
+
+    struct BlockingSettlementRecorder {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for UsageSettlementRecorder {
+        async fn record(&self, ctx: &mut SettlementContext) -> PipelineResult<()> {
+            self.0
+                .lock()
+                .expect("usage settlement state poisoned")
+                .push((ctx.prompt_tokens, ctx.completion_tokens));
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SettlementRecorder for BlockingSettlementRecorder {
+        async fn record(&self, _ctx: &mut SettlementContext) -> PipelineResult<()> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
+    }
+
+    struct OutcomeObserver(Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+    #[async_trait]
+    impl ObserveHook for OutcomeObserver {
+        async fn after_phase(
+            &self,
+            _phase: bitrouter_sdk::language_model::Phase,
+            _ctx: &PipelineContext,
+        ) {
+        }
+
+        async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
+
+        async fn on_request_end(&self, _ctx: &PipelineContext, outcome: &RequestOutcome) {
+            self.0
+                .lock()
+                .expect("outcome observer poisoned")
+                .push(match outcome {
+                    RequestOutcome::Completed => "completed",
+                    RequestOutcome::Failed(_) => "failed",
+                    RequestOutcome::ClientDisconnected => "disconnected",
+                });
+        }
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for BlockingRequiredFinalizer {
+        async fn finalize(&self, _ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            self.started.notify_one();
+            self.release.notified().await;
+            self.completed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn terminal_barrier_pipeline(
+        registry: ContinuationRegistry,
+        blocker: Option<BlockingRequiredFinalizer>,
+    ) -> anyhow::Result<Arc<Pipeline>> {
+        let runtime = ContinuationRuntime::new(registry);
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ResponseStarted {
+                id: "provider-final".into(),
+                source_protocol: ApiProtocol::Responses,
+            },
+            StreamPart::TextDelta {
+                text: "ready".into(),
+            },
+            StreamPart::ResponseCompleted {
+                id: "provider-final".into(),
+                source_protocol: ApiProtocol::Responses,
+                status: "completed".into(),
+                usage: None,
+            },
+        ])]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(runtime.clone());
+        if let Some(blocker) = blocker {
+            builder.required_finalizer(blocker);
+        }
+        builder.required_finalizer(runtime);
+        Ok(Arc::new(builder.build()?))
+    }
+
+    #[tokio::test]
+    async fn disconnect_while_terminal_finalizer_is_blocked_never_binds() -> anyhow::Result<()> {
+        let registry = registry(31).await?;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(AtomicBool::new(false));
+        let pipeline = terminal_barrier_pipeline(
+            registry.clone(),
+            Some(BlockingRequiredFinalizer {
+                started: started.clone(),
+                release: release.clone(),
+                completed: completed.clone(),
+            }),
+        )?;
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request("blocked-terminal", None))
+            .await?;
+        assert!(matches!(
+            stream.next().await.transpose()?,
+            Some(StreamPart::ResponseStarted { .. })
+        ));
+        assert!(matches!(
+            stream.next().await.transpose()?,
+            Some(StreamPart::TextDelta { .. })
+        ));
+
+        let poller = tokio::spawn(async move { stream.next().await });
+        started.notified().await;
+        poller.abort();
+        let _ = poller.await;
+        release.notify_one();
+        pipeline.drain_pending_settlements().await;
+
+        assert!(!completed.load(Ordering::SeqCst));
+        let public_id = encode_gateway_continuation_id("blocked-terminal")?;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "a dropped terminal poll must not transiently or durably publish"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disconnect_after_continuation_side_effect_rolls_back_before_publication()
+    -> anyhow::Result<()> {
+        let registry = registry(38).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(AtomicBool::new(false));
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ResponseStarted {
+                id: "provider-post-side-effect".into(),
+                source_protocol: ApiProtocol::Responses,
+            },
+            StreamPart::ResponseCompleted {
+                id: "provider-post-side-effect".into(),
+                source_protocol: ApiProtocol::Responses,
+                status: "completed".into(),
+                usage: None,
+            },
+        ])]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(runtime.clone())
+            // The continuation DB write deliberately happens first.
+            .required_finalizer(runtime)
+            .required_finalizer(BlockingRequiredFinalizer {
+                started: started.clone(),
+                release: release.clone(),
+                completed: completed.clone(),
+            });
+        let pipeline = Arc::new(builder.build()?);
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request("post-side-effect", None))
+            .await?;
+        assert!(stream.next().await.transpose()?.is_some());
+        let poller = tokio::spawn(async move { stream.next().await });
+        started.notified().await;
+
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 1);
+        let public_id = encode_gateway_continuation_id("post-side-effect")?;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "provisional DB state must remain unpublished"
+        );
+
+        poller.abort();
+        let _ = poller.await;
+        release.notify_one();
+        pipeline.drain_pending_settlements().await;
+        assert!(!completed.load(Ordering::SeqCst));
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing
+        );
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nonstream_cancellation_during_settlement_rolls_back_provisional_mapping()
+    -> anyhow::Result<()> {
+        let registry = registry(42).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Generate(
+            GenerateResult {
+                content: vec![Content::Text {
+                    text: "ready".into(),
+                    provider_metadata: Default::default(),
+                }],
+                usage: None,
+                finish_reason: Some(FinishReason::Stop),
+                response_id: Some("provider-nonstream-final".into()),
+                stop_details: None,
+                provider_metadata: Default::default(),
+            },
+        )]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(runtime.clone())
+            .required_finalizer(runtime)
+            .settlement_recorder(BlockingSettlementRecorder {
+                started: started.clone(),
+                release: release.clone(),
+            });
+        let pipeline = Arc::new(builder.build()?);
+        let execution = {
+            let pipeline = pipeline.clone();
+            tokio::spawn(async move {
+                pipeline
+                    .execute(nonstream_tool_request("nonstream-cancel-tail", None))
+                    .await
+            })
+        };
+        started.notified().await;
+
+        let public_id = encode_gateway_continuation_id("nonstream-cancel-tail")?;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing,
+            "prepared state must remain hidden while settlement is pending"
+        );
+        execution.abort();
+        let _ = execution.await;
+        release.notify_one();
+        pipeline.drain_pending_settlements().await;
+        assert_eq!(
+            registry
+                .resolve("tool-owner", &public_id, Utc::now())
+                .await?,
+            ContinuationResolution::Missing
+        );
+        let row = registry
+            .database()
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+        assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disconnect_while_on_stream_end_is_blocked_completes_hooks_and_settles()
+    -> anyhow::Result<()> {
+        let registry = registry(37).await?;
+        let runtime = ContinuationRuntime::new(registry.clone());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let completed = Arc::new(AtomicUsize::new(0));
+        let usage = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let routes = Arc::new(StaticRoutingTable::new());
+        routes.insert("gpt-5", vec![target("credential")]);
+        let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ResponseStarted {
+                id: "provider-hook-final".into(),
+                source_protocol: ApiProtocol::Responses,
+            },
+            StreamPart::TextDelta {
+                text: "ready".into(),
+            },
+            StreamPart::ResponseCompleted {
+                id: "provider-hook-final".into(),
+                source_protocol: ApiProtocol::Responses,
+                status: "completed".into(),
+                usage: Some(Usage {
+                    prompt_tokens: 7,
+                    completion_tokens: 3,
+                    ..Default::default()
+                }),
+            },
+        ])]));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routes)
+            .executor(executor)
+            .route_hook(runtime.clone())
+            .stream_hook(BlockingEndHook {
+                started: started.clone(),
+                release: release.clone(),
+                completed: completed.clone(),
+            })
+            .required_finalizer(runtime)
+            .settlement_recorder(UsageSettlementRecorder(usage.clone()))
+            .observe_hook(OutcomeObserver(outcomes.clone()));
+        let pipeline = Arc::new(builder.build()?);
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request("blocked-end-hook", None))
+            .await?;
+        assert!(stream.next().await.transpose()?.is_some());
+        assert!(stream.next().await.transpose()?.is_some());
+        let poller = tokio::spawn(async move { stream.next().await });
+        started.notified().await;
+        poller.abort();
+        let _ = poller.await;
+        release.notify_one();
+        pipeline.drain_pending_settlements().await;
+
+        assert_eq!(completed.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            usage
+                .lock()
+                .expect("usage settlement state poisoned")
+                .as_slice(),
+            &[(7, 3)]
+        );
+        assert_eq!(
+            outcomes
+                .lock()
+                .expect("outcome observer poisoned")
+                .as_slice(),
+            &["disconnected"]
+        );
+        assert_eq!(
+            registry
+                .resolve(
+                    "tool-owner",
+                    &encode_gateway_continuation_id("blocked-end-hook")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disconnect_before_terminal_never_binds() -> anyhow::Result<()> {
+        let registry = registry(32).await?;
+        let pipeline = terminal_barrier_pipeline(registry.clone(), None)?;
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request("before-terminal", None))
+            .await?;
+        assert!(stream.next().await.transpose()?.is_some());
+        drop(stream);
+        pipeline.drain_pending_settlements().await;
+        assert_eq!(
+            registry
+                .resolve(
+                    "tool-owner",
+                    &encode_gateway_continuation_id("before-terminal")?,
+                    Utc::now(),
+                )
+                .await?,
+            ContinuationResolution::Missing
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_returned_success_terminal_has_immediately_resolvable_public_id()
+    -> anyhow::Result<()> {
+        let registry = registry(33).await?;
+        let pipeline = terminal_barrier_pipeline(registry.clone(), None)?;
+        let mut stream = pipeline
+            .clone()
+            .execute_stream(tool_request("delivered-terminal", None))
+            .await?;
+        while let Some(part) = stream.next().await {
+            if matches!(part?, StreamPart::ResponseCompleted { .. }) {
+                let public_id = encode_gateway_continuation_id("delivered-terminal")?;
+                assert!(matches!(
+                    registry
+                        .resolve("tool-owner", &public_id, Utc::now())
+                        .await?,
+                    ContinuationResolution::Active(_)
+                ));
+                return Ok(());
+            }
+        }
+        anyhow::bail!("success terminal missing")
     }
 
     #[tokio::test]

@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::auth::{AppliedAuth, AuthAppliers, CredentialAuthority};
+use crate::language_model::auth::{
+    AppliedAuth, AuthAppliers, ContinuationAuthority, CredentialAuthority,
+};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
 use crate::language_model::context::RequireContinuationAuthority;
@@ -293,6 +295,32 @@ fn parse_upstream_success(
         })
 }
 
+/// A successful HTTP status is not itself a successful Responses lifecycle.
+/// Continuation requires the provider's typed terminal status plus a non-empty
+/// opaque id. Whitespace is intentionally preserved: provider ids are opaque,
+/// and the wire contract excludes only the empty string.
+fn validate_nonstream_responses_terminal(json: &serde_json::Value) -> Result<()> {
+    let status = json.get("status").and_then(serde_json::Value::as_str);
+    if !matches!(status, Some("completed" | "incomplete")) {
+        return Err(BitrouterError::UpstreamInvalidResponse {
+            message: format!(
+                "Responses response has non-success terminal status '{}'",
+                status.unwrap_or("<missing>")
+            ),
+        });
+    }
+    if json
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(BitrouterError::UpstreamInvalidResponse {
+            message: "Responses response missing non-empty 'id'".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn apply_provider_continuation(
     body: &mut serde_json::Value,
     target: &RoutingTarget,
@@ -326,7 +354,7 @@ fn apply_provider_continuation(
 fn validate_continuation_authority(
     target: &RoutingTarget,
     ctx: &PipelineContext,
-    actual: Option<&CredentialAuthority>,
+    actual: Option<&ContinuationAuthority>,
 ) -> Result<()> {
     if target.api_protocol == ApiProtocol::Responses
         && ctx.extension::<RequireContinuationAuthority>().is_some()
@@ -982,6 +1010,9 @@ impl Executor for HttpExecutor {
                 status: 502,
                 message: format!("upstream returned non-JSON body: {e}"),
             })?;
+        if target.api_protocol == ApiProtocol::Responses {
+            validate_nonstream_responses_terminal(&json)?;
+        }
         let result = parse_upstream_success(adapter.as_ref(), json)?;
         let elapsed = started.elapsed().as_millis() as u64;
 
@@ -1637,7 +1668,10 @@ mod provider_continuation_tests {
         ctx.insert_extension(Arc::new(ProviderContinuation::new(
             "resp-native-secret".into(),
             target,
-            CredentialAuthority::derive("test/static", "secret-key"),
+            ContinuationAuthority::new(
+                CredentialAuthority::derive("test/static", "secret-key"),
+                crate::language_model::types::AuthScheme::Bearer,
+            ),
         )));
         ctx
     }

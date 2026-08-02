@@ -3717,6 +3717,128 @@ fn regression_432_responses_incomplete_and_unknown_events_not_errors() {
     );
 }
 
+#[test]
+fn responses_stream_rejects_duplicate_or_post_terminal_events() {
+    let terminal = SseEvent {
+        event: Some("response.completed".to_string()),
+        data: serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp_terminal", "status": "completed", "output": []}
+        })
+        .to_string(),
+    };
+    for trailing in [
+        terminal.clone(),
+        SseEvent {
+            event: Some("response.some_future_event".to_string()),
+            data: serde_json::json!({"type": "response.some_future_event"}).to_string(),
+        },
+    ] {
+        let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+        decoder.decode(&terminal).expect("first terminal is valid");
+        let error = decoder
+            .decode(&trailing)
+            .expect_err("no event may follow a Responses terminal");
+        assert!(error.to_string().contains("after its terminal"));
+    }
+}
+
+#[test]
+fn responses_stream_requires_matching_status_nonempty_id_and_terminal_before_eof() {
+    let cases = [
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp_bad", "status": "failed", "output": []}
+        }),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp_bad", "status": "incomplete", "output": []}
+        }),
+        serde_json::json!({
+            "type": "response.incomplete",
+            "response": {"id": "resp_bad", "status": "completed", "output": []}
+        }),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "", "status": "completed", "output": []}
+        }),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"status": "completed", "output": []}
+        }),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp_bad", "status": "future_status", "output": []}
+        }),
+        serde_json::json!({
+            "type": "response.incomplete",
+            "response": {"id": "resp_bad", "output": []}
+        }),
+    ];
+    for body in cases {
+        let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+        let event = SseEvent {
+            event: body["type"].as_str().map(str::to_owned),
+            data: body.to_string(),
+        };
+        assert!(decoder.decode(&event).is_err(), "accepted {body}");
+    }
+
+    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+    decoder
+        .decode(&SseEvent {
+            event: Some("response.output_text.delta".into()),
+            data: serde_json::json!({
+                "type": "response.output_text.delta",
+                "delta": "unterminated"
+            })
+            .to_string(),
+        })
+        .expect("delta itself is valid");
+    assert!(
+        decoder.finish().is_err(),
+        "EOF without terminal was accepted"
+    );
+
+    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+    decoder
+        .decode(&SseEvent {
+            event: Some("response.some_future_event".into()),
+            data: serde_json::json!({"type": "response.some_future_event"}).to_string(),
+        })
+        .expect("unknown event itself remains forward-compatible");
+    assert!(
+        decoder.finish().is_err(),
+        "an unknown-only stream cannot turn EOF into success"
+    );
+}
+
+#[test]
+fn responses_stream_failed_event_remains_a_typed_error() {
+    let mut decoder = adapter_for(ApiProtocol::Responses).stream_decoder();
+    let error = decoder
+        .decode(&SseEvent {
+            event: Some("response.failed".into()),
+            data: serde_json::json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_failed",
+                    "status": "failed",
+                    "error": {"type": "server_error", "message": "provider failed"}
+                }
+            })
+            .to_string(),
+        })
+        .expect_err("response.failed must not become a successful terminal part");
+    assert!(matches!(
+        error,
+        BitrouterError::Upstream {
+            status: 502,
+            ref message,
+        } if message == "provider failed"
+    ));
+}
+
 /// #454-2 — the Responses streaming envelope is complete: every event carries a
 /// `sequence_number`, `response.completed` carries the full `response` object,
 /// and there is no `[DONE]` sentinel.
@@ -4029,6 +4151,15 @@ fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
         let public_id =
             responses::encode_gateway_continuation_id(&format!("gateway-{status}")).unwrap();
         assert_eq!(response_ids, vec![public_id; 3], "status={status}");
+        assert!(frames.iter().any(|frame| matches!(
+            frame,
+            SseFrame::Event { event, .. }
+                if event.as_deref() == Some(if status == "incomplete" {
+                    "response.incomplete"
+                } else {
+                    "response.failed"
+                })
+        )));
     }
 
     let mut encoder = adapter.stream_encoder("gateway-error", "gpt-5");

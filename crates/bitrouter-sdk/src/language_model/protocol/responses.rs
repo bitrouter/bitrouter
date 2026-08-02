@@ -2178,6 +2178,9 @@ struct ResponsesStreamDecoder {
     /// events, so synthesized [`Source`] ids stay unique within the stream
     /// (mirrors `next_index` on the non-streaming `parse_responses_annotations`).
     source_index: usize,
+    /// A native Responses stream is complete only after one validated terminal
+    /// lifecycle event. EOF alone is never success.
+    terminal_seen: bool,
 }
 
 impl ResponsesStreamDecoder {
@@ -2227,6 +2230,13 @@ impl StreamDecoder for ResponsesStreamDecoder {
             .and_then(|t| t.as_str())
             .or(event.event.as_deref())
             .unwrap_or_default();
+        if self.terminal_seen {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: format!(
+                    "Responses stream emitted event '{event_type}' after its terminal"
+                ),
+            });
+        }
 
         let mut parts = Vec::new();
         match event_type {
@@ -2400,22 +2410,37 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 // part so the response id + status survive (a bare `Finish`
                 // would lose them).
                 let response = json.get("response");
-                let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
-                let id = response
-                    .and_then(|r| r.get("id"))
-                    .and_then(|i| i.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                // #432: `incomplete` is terminal-but-fine, not an error.
-                let status = if event_type == "response.incomplete" {
+                let expected_status = if event_type == "response.incomplete" {
                     "incomplete"
                 } else {
                     "completed"
                 };
+                let actual_status = response
+                    .and_then(|r| r.get("status"))
+                    .and_then(|status| status.as_str());
+                if actual_status != Some(expected_status) {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: format!(
+                            "Responses terminal event '{event_type}' contradicts body status '{}'",
+                            actual_status.unwrap_or("<missing>")
+                        ),
+                    });
+                }
+                let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
+                let id = response
+                    .and_then(|r| r.get("id"))
+                    .and_then(|i| i.as_str())
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| BitrouterError::UpstreamInvalidResponse {
+                        message: "Responses terminal event missing non-empty response id"
+                            .to_string(),
+                    })?
+                    .to_string();
+                self.terminal_seen = true;
                 parts.push(StreamPart::ResponseCompleted {
                     id,
                     source_protocol: ApiProtocol::Responses,
-                    status: status.to_string(),
+                    status: expected_status.to_string(),
                     usage,
                 });
             }
@@ -2453,6 +2478,16 @@ impl StreamDecoder for ResponsesStreamDecoder {
             }
         }
         Ok(parts)
+    }
+
+    fn finish(&mut self) -> Result<Vec<StreamPart>> {
+        if self.terminal_seen {
+            Ok(Vec::new())
+        } else {
+            Err(BitrouterError::UpstreamInvalidResponse {
+                message: "Responses stream ended before a valid terminal event".to_string(),
+            })
+        }
     }
 }
 
@@ -2892,10 +2927,10 @@ impl ResponsesStreamEncoder {
         self.close_reasoning_item(frames);
         self.close_text_item(frames);
         self.close_tool_item(frames);
-        let event_name = if status == "incomplete" {
-            "response.incomplete"
-        } else {
-            "response.completed"
+        let event_name = match status {
+            "completed" => "response.completed",
+            "incomplete" => "response.incomplete",
+            _ => "response.failed",
         };
         let mut response = serde_json::json!({
             "id": response_id,

@@ -1098,7 +1098,10 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
                         ..Default::default()
                     }),
                     finish_reason: Some(FinishReason::Stop),
-                    response_id: None,
+                    // A direct Responses executor must expose the provider's typed
+                    // successful terminal, including its opaque response id. The
+                    // HTTP layer still replaces this with the public gateway id.
+                    response_id: Some("provider-resp-001".to_string()),
                     stop_details: None,
                     provider_metadata: ProviderMetadata::new(),
                 },
