@@ -14,9 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::auth::AuthAppliers;
+use crate::language_model::auth::{AppliedAuth, AuthAppliers, CredentialAuthority};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
+use crate::language_model::context::RequireContinuationAuthority;
 use crate::language_model::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
 use crate::language_model::types::{
     ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, Prompt, RoutingTarget,
@@ -322,6 +323,29 @@ fn apply_provider_continuation(
     Ok(())
 }
 
+fn validate_continuation_authority(
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+    actual: Option<&CredentialAuthority>,
+) -> Result<()> {
+    if target.api_protocol == ApiProtocol::Responses
+        && ctx.extension::<RequireContinuationAuthority>().is_some()
+        && actual.is_none()
+    {
+        return Err(BitrouterError::bad_request(
+            "native Responses continuation authority unavailable for dynamic authentication",
+        ));
+    }
+    if let Some(continuation) = ctx.extension::<ProviderContinuation>()
+        && actual != Some(continuation.credential_authority())
+    {
+        return Err(BitrouterError::bad_request(
+            "provider continuation credential authority changed before dispatch",
+        ));
+    }
+    Ok(())
+}
+
 /// Classify a transport error that surfaces from the SSE decode loop *after*
 /// the stream is open. A read-timeout firing mid-stream must map to
 /// [`BitrouterError::UpstreamTimeout`] (504) — the same as a pre-stream
@@ -543,11 +567,19 @@ impl HttpExecutor {
         request: reqwest::Request,
         target: &RoutingTarget,
         transport: &Arc<dyn crate::language_model::protocol::Transport>,
-    ) -> Result<reqwest::Request> {
+    ) -> Result<AppliedAuth> {
         if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
-            applier.apply(request, target).await
+            applier.apply_with_authority(request, target).await
         } else {
-            transport.authorise(request, target).await
+            let request = transport.authorise(request, target).await?;
+            let credential = target
+                .api_key_override
+                .as_deref()
+                .unwrap_or(target.api_key.as_str());
+            Ok(AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("static-transport-credential", credential),
+            ))
         }
     }
 
@@ -578,9 +610,12 @@ impl HttpExecutor {
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
-        let mut request = self
+        let applied = self
             .apply_auth(request, input.target, input.transport)
             .await?;
+        let (mut request, credential_authority) = applied.into_parts();
+        validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
+        input.ctx.record_credential_authority(credential_authority);
         merge_outbound_trace_headers(&mut request, input.trace_headers);
         inject_outbound_request_id(&mut request, input.ctx)?;
         Ok(request)
@@ -1558,7 +1593,7 @@ mod beta_forward_tests {
 mod provider_continuation_tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::context::ProviderContinuation;
+    use crate::language_model::context::{ProviderContinuation, RequireContinuationAuthority};
     use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
 
     fn responses_target(provider: &str) -> RoutingTarget {
@@ -1578,7 +1613,7 @@ mod provider_continuation_tests {
         }
     }
 
-    fn context(target: &RoutingTarget) -> PipelineContext {
+    fn plain_context() -> PipelineContext {
         let prompt = Prompt {
             model: "gpt-5".into(),
             system: None,
@@ -1590,16 +1625,34 @@ mod provider_continuation_tests {
             tool_choice: None,
             stream: false,
         };
-        let mut ctx = PipelineContext::new(PipelineRequest::new(
+        PipelineContext::new(PipelineRequest::new(
             "gpt-5",
             CallerContext::local(),
             prompt,
-        ));
+        ))
+    }
+
+    fn context(target: &RoutingTarget) -> PipelineContext {
+        let mut ctx = plain_context();
         ctx.insert_extension(Arc::new(ProviderContinuation::new(
             "resp-native-secret".into(),
             target,
+            CredentialAuthority::derive("test/static", "secret-key"),
         )));
         ctx
+    }
+
+    #[test]
+    fn authority_requirement_fails_closed_only_for_responses_targets() {
+        let mut ctx = plain_context();
+        ctx.insert_extension(Arc::new(RequireContinuationAuthority));
+        let responses = responses_target("legacy-dynamic");
+        let error = validate_continuation_authority(&responses, &ctx, None).unwrap_err();
+        assert!(error.to_string().contains("authority unavailable"));
+
+        let mut chat = responses;
+        chat.api_protocol = ApiProtocol::ChatCompletions;
+        validate_continuation_authority(&chat, &ctx, None).unwrap();
     }
 
     #[test]

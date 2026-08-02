@@ -207,6 +207,11 @@ pub async fn build_app_with_path(
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;
+    // Resolve dynamic authentication once and share the same registry with
+    // continuation route matching and the HTTP executor. This lets mapped
+    // Responses requests preflight the provider's stable credential authority
+    // and lets transport return the exact proof used by the sent request.
+    let auth_appliers = build_auth_appliers(config)?;
     let runtime_home = match config_path.and_then(std::path::Path::parent) {
         Some(home) => home.to_path_buf(),
         None => std::env::current_dir().context("resolve continuation key home")?,
@@ -224,7 +229,10 @@ pub async fn build_app_with_path(
             "pruned expired provider continuations at startup"
         );
     }
-    let continuation_runtime = ContinuationRuntime::new(continuation_registry.clone());
+    let continuation_runtime = ContinuationRuntime::with_auth_appliers(
+        continuation_registry.clone(),
+        auth_appliers.clone(),
+    );
     // A SQLite database file holds SHA-256 hashes of every virtual key,
     // plus the metering audit trail. On Unix, tighten the file
     // permissions to 0600 so a co-tenant on the host can't read it. The
@@ -270,11 +278,6 @@ pub async fn build_app_with_path(
     let routing_table_for_reload = routing_table.clone();
     let continuation_for_route = continuation_runtime.clone();
     let continuation_for_finalization = continuation_runtime;
-    // Per-provider auth appliers — currently only GitHub Copilot, whose
-    // OAuth-driven Bearer is resolved + cached by the applier on every
-    // request. Listed only when the user configures the provider, so an
-    // operator who doesn't use Copilot doesn't pay a token-store read.
-    let auth_appliers = build_auth_appliers(config)?;
     // Upstream timeouts: the `upstream.timeouts` block layered over the
     // built-in defaults, plus a per-provider override for any provider whose
     // resolved timeouts differ (v0 #394 fixed these; now they're configurable).

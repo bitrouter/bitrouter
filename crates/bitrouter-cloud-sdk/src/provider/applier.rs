@@ -49,11 +49,11 @@ use async_trait::async_trait;
 use reqwest::header::HeaderValue;
 use tokio::sync::{Mutex, RwLock};
 
-use bitrouter_sdk::language_model::AuthApplier;
 use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::language_model::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::{BitrouterError, Result};
 
-use crate::auth::credentials::CredentialsStore;
+use crate::auth::credentials::{Credentials, CredentialsStore};
 use crate::auth::metadata::{self, AsMetadata};
 
 /// Provider id this applier is registered under. Short and brand-aligned
@@ -96,6 +96,34 @@ pub struct BitrouterCloudAuthApplier {
 struct CachedMetadata {
     as_url: String,
     metadata: AsMetadata,
+}
+
+struct ResolvedCloudAuth {
+    bearer: String,
+    continuation_authority: Option<CredentialAuthority>,
+}
+
+fn oauth_continuation_authority(credentials: &Credentials) -> Result<Option<CredentialAuthority>> {
+    let Some(subject) = credentials
+        .subject
+        .as_deref()
+        .filter(|subject| !subject.is_empty())
+    else {
+        return Ok(None);
+    };
+    let issuer = url::Url::parse(credentials.authorization_server.trim_end_matches('/')).map_err(
+        |error| {
+            BitrouterError::internal(format!(
+                "invalid BitRouter Cloud OAuth authorization server: {error}"
+            ))
+        },
+    )?;
+    let normalized_issuer = issuer.as_str().trim_end_matches('/');
+    Ok(Some(CredentialAuthority::derive_scoped(
+        "bitrouter-cloud/oauth-subject",
+        normalized_issuer,
+        subject,
+    )))
 }
 
 impl BitrouterCloudAuthApplier {
@@ -159,7 +187,7 @@ impl BitrouterCloudAuthApplier {
     /// refreshing transparently if it's within the refresh window. Returns
     /// `Ok(None)` when no credentials file exists — callers fall through
     /// to the inline API-key path.
-    async fn resolve_stored_bearer(&self) -> Result<Option<String>> {
+    async fn resolve_stored_auth(&self) -> Result<Option<ResolvedCloudAuth>> {
         // Cheap pre-check: no file means we can skip the lock + AS fetch.
         if !self.credentials_path.exists() {
             return Ok(None);
@@ -179,6 +207,15 @@ impl BitrouterCloudAuthApplier {
         let Some(credential) = store.current() else {
             return Ok(None);
         };
+        // A subject is stable across OAuth access/refresh-token rotation. A
+        // legacy OAuth file without one cannot safely publish a resumable
+        // Responses root. Static stored keys use the key itself only as input
+        // to the one-way proof and never retain or log it.
+        let oauth_authority = match credential.oauth() {
+            Some(credentials) => oauth_continuation_authority(credentials)?,
+            None => None,
+        };
+        let is_oauth = credential.oauth().is_some();
         let metadata = match credential.oauth() {
             Some(creds) => Some(self.resolve_metadata(&creds.authorization_server).await?),
             None => None,
@@ -190,7 +227,40 @@ impl BitrouterCloudAuthApplier {
                 status: 401,
                 message: format!("BitRouter Cloud token refresh failed: {e:#}"),
             })?;
-        Ok(Some(token))
+        let continuation_authority = if is_oauth {
+            oauth_authority
+        } else {
+            Some(CredentialAuthority::derive(
+                "bitrouter-cloud/stored-api-key",
+                &token,
+            ))
+        };
+        Ok(Some(ResolvedCloudAuth {
+            bearer: token,
+            continuation_authority,
+        }))
+    }
+
+    async fn resolve_auth(&self, target: &RoutingTarget) -> Result<ResolvedCloudAuth> {
+        if let Some(auth) = self.resolve_stored_auth().await? {
+            return Ok(auth);
+        }
+        // Fall back to the inline api_key (filled from BITROUTER_API_KEY by
+        // apply_builtin_defaults, or set explicitly in bitrouter.yaml).
+        let key = target.effective_api_key();
+        if key.is_empty() {
+            return Err(BitrouterError::Upstream {
+                status: 401,
+                message: onboarding_hint().to_string(),
+            });
+        }
+        Ok(ResolvedCloudAuth {
+            bearer: key.to_string(),
+            continuation_authority: Some(CredentialAuthority::derive(
+                "bitrouter-cloud/inline-api-key",
+                key,
+            )),
+        })
     }
 }
 
@@ -198,28 +268,22 @@ impl BitrouterCloudAuthApplier {
 impl AuthApplier for BitrouterCloudAuthApplier {
     async fn apply(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
-        let bearer = match self.resolve_stored_bearer().await? {
-            Some(token) => token,
-            None => {
-                // Fall back to the inline api_key (filled from
-                // BITROUTER_API_KEY by apply_builtin_defaults, or set
-                // explicitly in bitrouter.yaml). `effective_api_key`
-                // honours a per-request `api_key_override` for BYOK
-                // hooks that substitute the caller's own key.
-                let key = target.effective_api_key();
-                if key.is_empty() {
-                    return Err(BitrouterError::Upstream {
-                        status: 401,
-                        message: onboarding_hint().to_string(),
-                    });
-                }
-                key.to_string()
-            }
-        };
-        let value = HeaderValue::from_str(&format!("Bearer {bearer}")).map_err(|e| {
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<AppliedAuth> {
+        let auth = self.resolve_auth(target).await?;
+        let value = HeaderValue::from_str(&format!("Bearer {}", auth.bearer)).map_err(|e| {
             BitrouterError::internal(format!(
                 "invalid BitRouter Cloud bearer for Authorization: {e}"
             ))
@@ -227,7 +291,17 @@ impl AuthApplier for BitrouterCloudAuthApplier {
         request
             .headers_mut()
             .insert(reqwest::header::AUTHORIZATION, value);
-        Ok(request)
+        Ok(match auth.continuation_authority {
+            Some(authority) => AppliedAuth::proven(request, authority),
+            None => AppliedAuth::unproven(request),
+        })
+    }
+
+    async fn continuation_authority(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        Ok(self.resolve_auth(target).await?.continuation_authority)
     }
 }
 
@@ -291,6 +365,68 @@ mod tests {
             .map(|s| s.to_string())
     }
 
+    fn oauth_credentials(
+        authorization_server: &str,
+        subject: &str,
+        access_token: &str,
+        refresh_token: &str,
+    ) -> Credentials {
+        Credentials {
+            access_token: access_token.into(),
+            refresh_token: Some(refresh_token.into()),
+            expires_at: Utc::now() + ChronoDuration::hours(1),
+            refresh_token_expires_at: None,
+            token_type: "Bearer".into(),
+            scope: "inference:invoke".into(),
+            client_id: "bitrouter-cli".into(),
+            authorization_server: authorization_server.into(),
+            namespace_id: Some("ns-1".into()),
+            subject: Some(subject.into()),
+        }
+    }
+
+    #[test]
+    fn oauth_authority_survives_token_rotation_for_same_issuer_and_subject() {
+        let before = oauth_credentials(
+            "HTTPS://AS.EXAMPLE:443/oauth/",
+            "user-42",
+            "access-before",
+            "refresh-before",
+        );
+        let after = oauth_credentials(
+            "https://as.example/oauth",
+            "user-42",
+            "access-after",
+            "refresh-after",
+        );
+
+        assert_eq!(
+            oauth_continuation_authority(&before).unwrap(),
+            oauth_continuation_authority(&after).unwrap()
+        );
+    }
+
+    #[test]
+    fn oauth_authority_changes_when_authorization_server_changes() {
+        let original = oauth_credentials(
+            "https://issuer-a.example/oauth",
+            "shared-subject",
+            "access-a",
+            "refresh-a",
+        );
+        let relogin = oauth_credentials(
+            "https://issuer-b.example/oauth",
+            "shared-subject",
+            "access-b",
+            "refresh-b",
+        );
+
+        assert_ne!(
+            oauth_continuation_authority(&original).unwrap(),
+            oauth_continuation_authority(&relogin).unwrap()
+        );
+    }
+
     #[tokio::test]
     async fn applies_inline_api_key_when_no_credentials_file() {
         let path = tmp_creds_path("apikey-only");
@@ -299,6 +435,27 @@ mod tests {
         let request = empty_request();
         let out = applier.apply(request, &target).await.unwrap();
         assert_eq!(bearer(&out).as_deref(), Some("Bearer brk_test.abc"));
+    }
+
+    #[tokio::test]
+    async fn inline_api_key_authority_changes_with_effective_key() {
+        let path = tmp_creds_path("apikey-authority");
+        let applier = BitrouterCloudAuthApplier::new(&path).unwrap();
+        let first = applier
+            .continuation_authority(&target_with_api_key("brk_first.secret"))
+            .await
+            .unwrap();
+        let same = applier
+            .continuation_authority(&target_with_api_key("brk_first.secret"))
+            .await
+            .unwrap();
+        let replaced = applier
+            .continuation_authority(&target_with_api_key("brk_second.secret"))
+            .await
+            .unwrap();
+
+        assert_eq!(first, same);
+        assert_ne!(first, replaced);
     }
 
     #[tokio::test]

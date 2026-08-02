@@ -75,9 +75,9 @@ mod tests;
 
 // ===== canonical re-exports — `language_model::Pipeline`, etc. =====
 
-pub use auth::{AuthApplier, AuthAppliers};
+pub use auth::{AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority};
 pub use builder::PipelineBuilder;
-pub use context::{PipelineContext, StreamContext};
+pub use context::{PipelineContext, RequireContinuationAuthority, StreamContext};
 pub use executor::{
     DispatchExecutor, Executor, HttpExecutor, HttpTimeouts, MockExecutor, MockResponse,
     StreamPartStream,

@@ -16,9 +16,129 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 use crate::language_model::types::RoutingTarget;
+
+const AUTHORITY_DOMAIN: &[u8] = b"bitrouter.transport.credential-authority.v1";
+
+/// Redaction-safe stable identity for the credential principal used on one
+/// outbound request. The value is already a one-way digest; raw credentials
+/// and account identifiers never enter pipeline events, logs, or storage.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialAuthority([u8; 32]);
+
+impl CredentialAuthority {
+    /// Derive an authority proof from a provider-scoped stable identity.
+    ///
+    /// `identity` may be a stable account/subject id or, when no stable
+    /// principal exists, the long-lived stored credential itself. Callers must
+    /// never log the input or retain it beyond this constructor.
+    pub fn derive(namespace: &str, identity: &str) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(AUTHORITY_DOMAIN);
+        digest.update((namespace.len() as u64).to_be_bytes());
+        digest.update(namespace.as_bytes());
+        digest.update((identity.len() as u64).to_be_bytes());
+        digest.update(identity.as_bytes());
+        Self(digest.finalize().into())
+    }
+
+    /// Derive a proof from an additional provider-controlled identity scope,
+    /// such as an OAuth issuer. Every component is length-delimited so
+    /// distinct `(scope, identity)` pairs cannot collide by concatenation.
+    pub fn derive_scoped(namespace: &str, scope: &str, identity: &str) -> Self {
+        let mut digest = Sha256::new();
+        digest.update(AUTHORITY_DOMAIN);
+        for component in [namespace, scope, identity] {
+            digest.update((component.len() as u64).to_be_bytes());
+            digest.update(component.as_bytes());
+        }
+        Self(digest.finalize().into())
+    }
+
+    /// Digest bytes for a second, installation-keyed fingerprinting layer.
+    pub fn proof_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for CredentialAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CredentialAuthority(<redacted>)")
+    }
+}
+
+/// Result of applying authentication to one exact outbound request.
+///
+/// Dynamic appliers return the stable authority proof atomically with the
+/// request whose transport credential they just installed. `None` means the
+/// applier cannot prove a stable continuation authority; ordinary requests
+/// still work, but successful native Responses continuation publication fails
+/// closed.
+pub struct AppliedAuth {
+    request: reqwest::Request,
+    continuation_authority: Option<CredentialAuthority>,
+}
+
+impl AppliedAuth {
+    /// Build an authenticated request with a proven stable authority.
+    pub fn proven(request: reqwest::Request, authority: CredentialAuthority) -> Self {
+        Self {
+            request,
+            continuation_authority: Some(authority),
+        }
+    }
+
+    /// Build an authenticated request whose applier cannot prove a stable
+    /// continuation authority.
+    pub fn unproven(request: reqwest::Request) -> Self {
+        Self {
+            request,
+            continuation_authority: None,
+        }
+    }
+
+    /// Discard continuation proof metadata and recover the authenticated
+    /// request. This supports the source-compatible legacy
+    /// [`AuthApplier::apply`] entry point for authority-aware built-ins.
+    pub fn into_request(self) -> reqwest::Request {
+        self.request
+    }
+
+    pub(crate) fn into_parts(self) -> (reqwest::Request, Option<CredentialAuthority>) {
+        (self.request, self.continuation_authority)
+    }
+}
+
+impl std::ops::Deref for AppliedAuth {
+    type Target = reqwest::Request;
+
+    fn deref(&self) -> &Self::Target {
+        &self.request
+    }
+}
+
+impl std::ops::DerefMut for AppliedAuth {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.request
+    }
+}
+
+impl std::fmt::Debug for AppliedAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppliedAuth")
+            .field("method", self.request.method())
+            .field("url", self.request.url())
+            .field(
+                "continuation_authority_proven",
+                &self.continuation_authority.is_some(),
+            )
+            .finish()
+    }
+}
 
 /// Apply provider-specific authentication to a built `reqwest::Request`.
 ///
@@ -36,6 +156,34 @@ pub trait AuthApplier: Send + Sync {
         request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request>;
+
+    /// Apply authentication and atomically report the stable continuation
+    /// authority used by that exact request.
+    ///
+    /// The default delegates to the legacy [`apply`](Self::apply) contract and
+    /// returns an unproven authority. This preserves source compatibility for
+    /// existing out-of-tree appliers and keeps their ordinary requests
+    /// working, while native Responses continuation remains fail-closed until
+    /// an applier explicitly opts into stable authority proof.
+    async fn apply_with_authority(
+        &self,
+        request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<AppliedAuth> {
+        Ok(AppliedAuth::unproven(self.apply(request, target).await?))
+    }
+
+    /// Resolve the stable authority that a newly authenticated request would
+    /// use. Continuation route matching calls this before upstream dispatch.
+    /// The later [`apply_with_authority`](Self::apply_with_authority) result
+    /// remains authoritative for the exact request and is checked against this
+    /// proof before send.
+    async fn continuation_authority(
+        &self,
+        _target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        Ok(None)
+    }
 
     /// Optionally rewrite the structured request body before it is
     /// serialized and sent. Runs at render time — after the protocol
@@ -110,5 +258,84 @@ impl AuthAppliers {
     /// Whether any appliers are registered.
     pub fn is_empty(&self) -> bool {
         self.by_provider.is_empty()
+    }
+
+    /// Resolve a target's stable continuation authority. Registered dynamic
+    /// appliers own the proof; static transport auth derives it from the
+    /// effective configured credential without retaining the secret.
+    pub async fn continuation_authority(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        if let Some(applier) = self.lookup(&target.provider_name) {
+            return applier.continuation_authority(target).await;
+        }
+        let credential = target
+            .api_key_override
+            .as_deref()
+            .unwrap_or(target.api_key.as_str());
+        Ok(Some(CredentialAuthority::derive(
+            "static-transport-credential",
+            credential,
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::language_model::types::ApiProtocol;
+
+    struct LegacyApplier;
+
+    #[async_trait]
+    impl AuthApplier for LegacyApplier {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer legacy"),
+            );
+            Ok(request)
+        }
+    }
+
+    fn target() -> RoutingTarget {
+        RoutingTarget {
+            provider_name: "legacy-provider".into(),
+            service_id: "legacy-model".into(),
+            api_base: "https://example.invalid".into(),
+            api_key: String::new(),
+            api_protocol: ApiProtocol::ChatCompletions,
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_applier_remains_compatible_and_is_conservatively_unproven() {
+        let request = reqwest::Client::new()
+            .post("https://example.invalid")
+            .build()
+            .unwrap();
+
+        let applied = LegacyApplier
+            .apply_with_authority(request, &target())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            applied.request.headers()[reqwest::header::AUTHORIZATION],
+            "Bearer legacy"
+        );
+        assert!(applied.continuation_authority.is_none());
     }
 }

@@ -40,8 +40,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::header::{HeaderName, HeaderValue};
 
-use bitrouter_sdk::language_model::AuthApplier;
 use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::language_model::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::auth_code::AuthCodeError;
@@ -262,6 +262,16 @@ impl OpenAiCodexAuthApplier {
     fn label_for<'a>(&self, target: &'a RoutingTarget) -> &'a str {
         target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
     }
+
+    fn continuation_authority(token: &OAuthToken) -> Option<CredentialAuthority> {
+        jwt::decode_codex_claims(&token.access_token)
+            .ok()
+            .and_then(|claims| claims.chatgpt_account_id)
+            .filter(|account_id| !account_id.is_empty())
+            .map(|account_id| {
+                CredentialAuthority::derive("openai-codex/chatgpt-account", &account_id)
+            })
+    }
 }
 
 fn bearer_access_token(value: Option<&HeaderValue>) -> Option<&str> {
@@ -295,9 +305,20 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
 impl AuthApplier for OpenAiCodexAuthApplier {
     async fn apply(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<AppliedAuth> {
         let label = self.label_for(target);
         let token = self.resolve_token(label).await?;
         // The ChatGPT-account-id is namespaced inside the JWT; if the JWT
@@ -332,7 +353,18 @@ impl AuthApplier for OpenAiCodexAuthApplier {
             reqwest::header::USER_AGENT,
             HeaderValue::from_static(headers::USER_AGENT),
         );
-        Ok(request)
+        Ok(match Self::continuation_authority(&token) {
+            Some(authority) => AppliedAuth::proven(request, authority),
+            None => AppliedAuth::unproven(request),
+        })
+    }
+
+    async fn continuation_authority(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        let token = self.resolve_token(self.label_for(target)).await?;
+        Ok(Self::continuation_authority(&token))
     }
 
     async fn prepare_body(
@@ -612,6 +644,33 @@ mod tests {
         ));
         let sig = URL_SAFE_NO_PAD.encode("sig");
         format!("{header}.{payload}.{sig}")
+    }
+
+    #[test]
+    fn continuation_authority_tracks_account_not_rotating_token() {
+        let first_access = make_jwt_with_account("acct-stable");
+        let rotated_access = format!(
+            "{}.rotated-signature",
+            first_access.rsplit_once('.').unwrap().0
+        );
+        let token = |access_token: String| OAuthToken {
+            access_token,
+            expires_at: 0,
+            refresh_token: Some("rotating-refresh-token".into()),
+        };
+
+        assert_eq!(
+            OpenAiCodexAuthApplier::continuation_authority(&token(first_access)),
+            OpenAiCodexAuthApplier::continuation_authority(&token(rotated_access))
+        );
+        assert_ne!(
+            OpenAiCodexAuthApplier::continuation_authority(&token(make_jwt_with_account(
+                "acct-stable"
+            ))),
+            OpenAiCodexAuthApplier::continuation_authority(&token(make_jwt_with_account(
+                "acct-replaced"
+            )))
+        );
     }
 
     #[tokio::test]
