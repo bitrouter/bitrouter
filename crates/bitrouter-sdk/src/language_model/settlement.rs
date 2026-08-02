@@ -49,8 +49,10 @@ pub struct RequiredFinalizationContext {
 }
 
 /// The synchronous delivery rendezvous handed to a required finalizer after
-/// its provisional work has completed. A finalizer may make state active and
-/// then hold its own identity lock while awaiting [`Self::wait_for_delivery`].
+/// its provisional work has completed. A finalizer with post-acknowledgement
+/// durable work may use [`Self::wait_for_delivery_acknowledgement`], announce
+/// its result with [`Self::complete_activation`], and retain rollback ownership
+/// until [`Self::wait_for_terminal_commit`] confirms the returning poll.
 #[derive(Clone)]
 pub struct RequiredDeliveryHandshake {
     inner: Arc<RequiredDeliveryHandshakeInner>,
@@ -60,13 +62,16 @@ struct RequiredDeliveryHandshakeInner {
     ready: Mutex<Option<tokio::sync::oneshot::Sender<Result<()>>>>,
     acknowledged:
         tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>>>,
+    activation_completed: Mutex<Option<tokio::sync::oneshot::Sender<Result<()>>>>,
+    terminal_committed: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 /// Downstream's proof that an activated payload was delivered or replaced by
 /// a concrete server-side failure. Channel closure alone means disconnect.
 #[derive(Debug)]
 pub enum DeliveryAcknowledgement {
-    /// The successful payload is being returned in the same poll.
+    /// Downstream is ready to return the successful payload once the
+    /// finalizer's post-acknowledgement activation completes.
     Delivered,
     /// Rendering or wire encoding failed before the successful payload could
     /// be returned.
@@ -79,17 +84,63 @@ impl RequiredDeliveryHandshake {
         ready: tokio::sync::oneshot::Sender<Result<()>>,
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
     ) -> Self {
+        Self::with_completion(ready, acknowledged, None, None)
+    }
+
+    /// Construct a drop-aware rendezvous whose delivery side waits for durable
+    /// activation and commits to return the terminal in the same final poll.
+    pub fn new_with_completion(
+        ready: tokio::sync::oneshot::Sender<Result<()>>,
+        acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
+        activation_completed: tokio::sync::oneshot::Sender<Result<()>>,
+        terminal_committed: tokio::sync::oneshot::Receiver<()>,
+    ) -> Self {
+        Self::with_completion(
+            ready,
+            acknowledged,
+            Some(activation_completed),
+            Some(terminal_committed),
+        )
+    }
+
+    fn with_completion(
+        ready: tokio::sync::oneshot::Sender<Result<()>>,
+        acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
+        activation_completed: Option<tokio::sync::oneshot::Sender<Result<()>>>,
+        terminal_committed: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Self {
         Self {
             inner: Arc::new(RequiredDeliveryHandshakeInner {
                 ready: Mutex::new(Some(ready)),
                 acknowledged: tokio::sync::Mutex::new(Some(acknowledged)),
+                activation_completed: Mutex::new(activation_completed),
+                terminal_committed: tokio::sync::Mutex::new(terminal_committed),
             }),
         }
     }
 
-    /// Advertise that activation is complete, then wait for the caller's
-    /// synchronous acknowledgment from the same poll that returns the payload.
+    /// Advertise readiness, wait for downstream's synchronous acknowledgment,
+    /// and release a delivery permit that has no post-acknowledgement work.
     pub async fn wait_for_delivery(&self) -> Result<bool> {
+        let result = self.wait_for_delivery_acknowledgement().await;
+        if !self.complete_activation(Ok(())) {
+            return match result {
+                Ok(_) => Ok(false),
+                Err(error) => Err(error),
+            };
+        }
+        if !self.wait_for_terminal_commit().await {
+            return match result {
+                Ok(_) => Ok(false),
+                Err(error) => Err(error),
+            };
+        }
+        result
+    }
+
+    /// Advertise pre-delivery readiness and wait for downstream's synchronous
+    /// acknowledgment without yet releasing the successful terminal.
+    pub async fn wait_for_delivery_acknowledgement(&self) -> Result<bool> {
         let ready = match self.inner.ready.lock() {
             Ok(mut ready) => ready.take(),
             Err(poisoned) => poisoned.into_inner().take(),
@@ -108,6 +159,26 @@ impl RequiredDeliveryHandshake {
         }
     }
 
+    /// Announce that post-acknowledgement activation or compensation finished.
+    /// `false` means the delivery future was dropped before observing it.
+    pub fn complete_activation(&self, result: Result<()>) -> bool {
+        let activation_completed = match self.inner.activation_completed.lock() {
+            Ok(mut completed) => completed.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        activation_completed.is_none_or(|completed| completed.send(result).is_ok())
+    }
+
+    /// Wait until the delivery future has observed completed activation and,
+    /// in the same poll with no intervening await, committed to return the
+    /// terminal. Channel closure means activation must be compensated.
+    pub async fn wait_for_terminal_commit(&self) -> bool {
+        match self.inner.terminal_committed.lock().await.take() {
+            Some(committed) => committed.await.is_ok(),
+            None => true,
+        }
+    }
+
     /// Reject activation before a payload can be acknowledged.
     pub fn reject(&self, error: BitrouterError) {
         let ready = match self.inner.ready.lock() {
@@ -115,8 +186,9 @@ impl RequiredDeliveryHandshake {
             Err(poisoned) => poisoned.into_inner().take(),
         };
         if let Some(ready) = ready {
-            let _ = ready.send(Err(error));
+            let _ = ready.send(Err(error.clone()));
         }
+        let _ = self.complete_activation(Err(error));
     }
 }
 

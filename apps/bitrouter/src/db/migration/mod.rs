@@ -123,7 +123,7 @@ mod tests {
             .await;
         assert!(
             illegal_state.is_err(),
-            "the database must reject publication states outside provisional/active"
+            "the database must reject publication states outside provisional/delivering/active"
         );
 
         let empty_generation = db
@@ -153,6 +153,7 @@ mod tests {
             assert!(sql.contains("publication_generation"));
             assert!(sql.contains("check"));
             assert!(sql.contains("provisional"));
+            assert!(sql.contains("delivering"));
             assert!(sql.contains("active"));
             assert!(sql.contains("publication_generation") && sql.contains("<>"));
             assert!(
