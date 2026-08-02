@@ -32,6 +32,14 @@
         "outbox_batch_size": 100
       }
     },
+    "continuation": {
+      "description": "Durable provider continuation mapping lifecycle.",
+      "$ref": "#/$defs/ContinuationConfig",
+      "default": {
+        "retention_days": 30,
+        "prune_batch_size": 1000
+      }
+    },
     "providers": {
       "description": "Upstream providers, keyed by provider id.",
       "type": "object",
@@ -363,6 +371,26 @@
           "format": "uint",
           "minimum": 0,
           "default": 100
+        }
+      }
+    },
+    "ContinuationConfig": {
+      "description": "Always-active durable provider continuation lifecycle settings.",
+      "type": "object",
+      "properties": {
+        "retention_days": {
+          "description": "Days before a continuation becomes unusable.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 30
+        },
+        "prune_batch_size": {
+          "description": "Maximum expired rows removed by one prune operation.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 1000
         }
       }
     },

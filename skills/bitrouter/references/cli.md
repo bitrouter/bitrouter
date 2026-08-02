@@ -53,6 +53,18 @@ of them. When enabled, capture uses the existing local correlation-key
 lifecycle and starts durable outbox publication and startup retention. When
 disabled, it creates no correlation key and writes no trajectory ledger rows.
 
+Provider-native Responses continuation remains always active even when
+trajectory is disabled. Its independent lifecycle settings are:
+
+```yaml
+continuation:
+  retention_days: 30       # positive; default 30
+  prune_batch_size: 1000   # 1..=10000; default 1000
+```
+
+These settings are restart-only. The registry encrypts provider response IDs;
+clients see only canonical `brc_` continuation IDs.
+
 | Command | Effect |
 |---|---|
 | `bitrouter trajectory [--config <PATH>] inspect <EPISODE_ID>` | Resolve the globally unique episode, then report owner-scoped correlation/completeness, structural health, active hold, typed route clauses, and event digests. |

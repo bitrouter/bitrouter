@@ -14,7 +14,7 @@ use crate::language_model::pipeline::{DEFAULT_KEEPALIVE, Pipeline};
 use crate::language_model::routing::ModelSelector;
 use crate::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::ServerToolLoop;
-use crate::language_model::settlement::SettlementRecorder;
+use crate::language_model::settlement::{RequiredFinalizer, SettlementRecorder};
 
 /// Builds a [`Pipeline`] for the `language_model` protocol. Every method takes
 /// `&mut self` and returns `&mut Self`, so it composes both inside the
@@ -26,6 +26,7 @@ pub struct PipelineBuilder {
     execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     stream_hooks: Vec<Arc<dyn StreamHook>>,
     settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
+    required_finalizers: Vec<Arc<dyn RequiredFinalizer>>,
     observe_hooks: Vec<Arc<dyn ObserveHook>>,
     routing_table: Option<Arc<dyn RoutingTable>>,
     fallback_policy: Option<Arc<dyn FallbackPolicy>>,
@@ -45,6 +46,7 @@ impl PipelineBuilder {
             execution_hooks: Vec::new(),
             stream_hooks: Vec::new(),
             settlement_recorders: Vec::new(),
+            required_finalizers: Vec::new(),
             observe_hooks: Vec::new(),
             routing_table: None,
             fallback_policy: None,
@@ -136,6 +138,13 @@ impl PipelineBuilder {
         self
     }
 
+    /// Register a success-critical finalizer whose errors prevent a successful
+    /// response terminal from reaching the caller.
+    pub fn required_finalizer(&mut self, finalizer: impl RequiredFinalizer + 'static) -> &mut Self {
+        self.required_finalizers.push(Arc::new(finalizer));
+        self
+    }
+
     /// Register a cross-cutting `ObserveHook`.
     pub fn observe_hook(&mut self, hook: impl ObserveHook + 'static) -> &mut Self {
         self.observe_hooks.push(Arc::new(hook));
@@ -168,6 +177,7 @@ impl PipelineBuilder {
             execution_hooks: self.execution_hooks,
             stream_hooks: self.stream_hooks,
             settlement_recorders: self.settlement_recorders,
+            required_finalizers: self.required_finalizers,
             observe_hooks: self.observe_hooks,
             routing_table,
             fallback_policy,

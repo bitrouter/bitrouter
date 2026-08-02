@@ -1853,6 +1853,7 @@ pub struct PolicyRuntime {
     db: DatabaseConnection,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     eval_decisions: PendingEvalDecisionStore,
+    continuation_config: bitrouter_sdk::config::ContinuationConfig,
     trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
 }
@@ -1871,6 +1872,7 @@ impl PolicyRuntime {
             db,
             decision_recorder,
             eval_decisions,
+            continuation_config: config.continuation.clone(),
             trajectory_config: config.trajectory.clone(),
             trajectory,
         });
@@ -1898,6 +1900,11 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
     ) -> Result<PreparedPolicySnapshot> {
+        if config.continuation != self.continuation_config {
+            anyhow::bail!(
+                "changing any continuation setting requires a daemon restart; live continuation state was not changed"
+            )
+        }
         if config.trajectory != self.trajectory_config {
             anyhow::bail!(
                 "changing any trajectory setting requires a daemon restart; live policy state was not changed"
@@ -3044,6 +3051,34 @@ presets:
             None,
         )
         .await?;
+        let mut continuation_retention_change = disabled_config.clone();
+        continuation_retention_change.continuation.retention_days = 31;
+        let Err(continuation_error) = disabled
+            .prepare_for_config(&continuation_retention_change, None)
+            .await
+        else {
+            anyhow::bail!("changing continuation retention must require restart")
+        };
+        assert!(
+            continuation_error
+                .to_string()
+                .contains("continuation setting requires a daemon restart")
+        );
+
+        let mut continuation_batch_change = disabled_config.clone();
+        continuation_batch_change.continuation.prune_batch_size = 999;
+        let Err(continuation_error) = disabled
+            .prepare_for_config(&continuation_batch_change, None)
+            .await
+        else {
+            anyhow::bail!("changing continuation prune batch must require restart")
+        };
+        assert!(
+            continuation_error
+                .to_string()
+                .contains("continuation setting requires a daemon restart")
+        );
+
         let mut enabled_config = Config::default();
         enabled_config.trajectory.enabled = true;
         let Err(enable_error) = disabled.prepare_for_config(&enabled_config, None).await else {

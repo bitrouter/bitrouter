@@ -3909,11 +3909,11 @@ fn responses_stream_tool_call_lifecycle() {
     assert_eq!(output[0]["arguments"], "{\"cmd\":\"ls\"}");
 }
 
-/// A native Responses upstream id is the provider continuation identity, so it
-/// must replace the gateway fallback before any client lifecycle frame is
-/// emitted and remain stable through every terminal status.
+/// Provider response ids are request-local continuation metadata. The public
+/// Responses lifecycle always uses the gateway request id so a multi-round
+/// server-tool stream cannot expose one provider round and settle another.
 #[test]
-fn responses_stream_keeps_provider_id_across_native_lifecycle() {
+fn responses_stream_keeps_gateway_id_across_native_lifecycle() {
     let adapter = adapter_for(ApiProtocol::Responses);
 
     // decode: response.completed → ResponseCompleted
@@ -3944,7 +3944,7 @@ fn responses_stream_keeps_provider_id_across_native_lifecycle() {
     }
 
     // Re-encode a native lifecycle whose provider id differs from the gateway
-    // fallback. The first frame must already use the provider continuation id.
+    // id. Every public frame must retain the gateway identity.
     let mut encoder = adapter.stream_encoder("gateway-request-id", "gpt-5");
     let mut frames = encoder
         .encode(&StreamPart::ResponseStarted {
@@ -3984,7 +3984,7 @@ fn responses_stream_keeps_provider_id_across_native_lifecycle() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        response_ids, ["resp_xyz"; 3],
+        response_ids, ["brc_Z2F0ZXdheS1yZXF1ZXN0LWlk"; 3],
         "created, in-progress, and completed must expose one continuation id"
     );
     let completed = frames.iter().find_map(|f| match f {
@@ -3994,7 +3994,7 @@ fn responses_stream_keeps_provider_id_across_native_lifecycle() {
         _ => None,
     });
     let completed = completed.expect("response.completed event emitted");
-    assert_eq!(completed["response"]["id"], "resp_xyz");
+    assert_eq!(completed["response"]["id"], "brc_Z2F0ZXdheS1yZXF1ZXN0LWlk");
     assert_eq!(completed["response"]["status"], "completed");
     assert_eq!(completed["response"]["usage"]["input_tokens"], 12);
 
@@ -4026,7 +4026,9 @@ fn responses_stream_keeps_provider_id_across_native_lifecycle() {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(response_ids, vec![provider_id; 3], "status={status}");
+        let public_id =
+            responses::encode_gateway_continuation_id(&format!("gateway-{status}")).unwrap();
+        assert_eq!(response_ids, vec![public_id; 3], "status={status}");
     }
 
     let mut encoder = adapter.stream_encoder("gateway-error", "gpt-5");
@@ -4046,11 +4048,79 @@ fn responses_stream_keeps_provider_id_across_native_lifecycle() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(failed_ids, ["provider-error"; 3]);
+    assert_eq!(failed_ids, ["brc_Z2F0ZXdheS1lcnJvcg"; 3]);
     assert!(failed.iter().any(|frame| matches!(
         frame,
         SseFrame::Event { event, .. } if event.as_deref() == Some("response.failed")
     )));
+}
+
+#[test]
+fn responses_stream_keeps_one_gateway_id_across_provider_rounds() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut encoder = adapter.stream_encoder("gateway-multi-round", "gpt-5");
+    let mut frames = encoder
+        .encode(&StreamPart::ResponseStarted {
+            id: "provider-before-tool".to_string(),
+            source_protocol: ApiProtocol::Responses,
+        })
+        .unwrap();
+    frames.extend(
+        encoder
+            .encode(&StreamPart::TextDelta {
+                text: "checking".to_string(),
+            })
+            .unwrap(),
+    );
+    frames.extend(
+        encoder
+            .encode(&StreamPart::ResponseStarted {
+                id: "provider-after-tool".to_string(),
+                source_protocol: ApiProtocol::Responses,
+            })
+            .unwrap(),
+    );
+    frames.extend(
+        encoder
+            .encode(&StreamPart::Finish {
+                reason: FinishReason::Stop,
+            })
+            .unwrap(),
+    );
+
+    let response_ids = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            SseFrame::Event { data, .. } => serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|event| event["response"]["id"].as_str().map(ToOwned::to_owned)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(response_ids, ["brc_Z2F0ZXdheS1tdWx0aS1yb3VuZA"; 3]);
+}
+
+#[test]
+fn responses_gateway_continuation_codec_is_canonical_and_bounded() {
+    let encoded = responses::encode_gateway_continuation_id("request-123").unwrap();
+    assert_eq!(encoded, "brc_cmVxdWVzdC0xMjM");
+    assert_eq!(
+        responses::decode_gateway_continuation_id(&encoded).unwrap(),
+        Some("request-123".to_string())
+    );
+    assert_eq!(
+        responses::decode_gateway_continuation_id("provider-native-arbitrary").unwrap(),
+        None
+    );
+    for malformed in ["brc_", "brc_!!!", "brc_YQ==", "brc_AQ"] {
+        assert!(
+            responses::decode_gateway_continuation_id(malformed).is_err(),
+            "accepted {malformed}"
+        );
+    }
+    assert!(responses::encode_gateway_continuation_id(&"x".repeat(128)).is_ok());
+    assert!(responses::encode_gateway_continuation_id(&"x".repeat(129)).is_err());
+    assert!(responses::encode_gateway_continuation_id("contains\ncontrol").is_err());
 }
 
 #[test]
@@ -4074,7 +4144,8 @@ fn responses_stream_uses_gateway_id_without_native_start() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(response_ids, ["gateway-fallback"; 3]);
+    let public_id = responses::encode_gateway_continuation_id("gateway-fallback").unwrap();
+    assert_eq!(response_ids, [public_id.as_str(); 3]);
 }
 
 #[test]
@@ -4141,7 +4212,8 @@ fn responses_stream_uses_gateway_id_for_chat_upstream() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(response_ids, ["gateway-cross-protocol"; 3]);
+    let public_id = responses::encode_gateway_continuation_id("gateway-cross-protocol").unwrap();
+    assert_eq!(response_ids, [public_id.as_str(); 3]);
 }
 
 /// Upstreams that omit the SSE `event:` line (OpenRouter, vanilla OpenAI

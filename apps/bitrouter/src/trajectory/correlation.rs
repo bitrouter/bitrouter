@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bitrouter_sdk::language_model::protocol::responses::decode_gateway_continuation_id;
 use bitrouter_sdk::language_model::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
@@ -135,10 +136,14 @@ impl TrajectoryRuntime {
             .as_deref()
             .map(|parent| self.canonicalizer.native_parent_digest(parent))
             .transpose()?;
-        let native_parent_id = external_native_parent_id
-            .as_deref()
-            .map(|parent| self.request_identity(owner_user_id, parent))
-            .transpose()?;
+        let native_parent_id = match external_native_parent_id.as_deref() {
+            Some(parent) => {
+                let request_id =
+                    decode_gateway_continuation_id(parent)?.unwrap_or_else(|| parent.to_owned());
+                Some(self.request_identity(owner_user_id, &request_id)?)
+            }
+            None => None,
+        };
         let evidence = correlation_evidence(native_parent_id, &canonical);
         let result = self
             .store
@@ -700,12 +705,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_alias_resolves_only_for_its_owner_and_key_epoch() -> anyhow::Result<()> {
+    async fn gateway_continuation_decodes_to_primary_request_identity() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let runtime_a = runtime_with_key(&db, CorrelationKey::from_bytes([21; 32])?);
         let runtime_b = runtime_with_key(&db, CorrelationKey::from_bytes([22; 32])?);
-        let provider_response_id = "provider-response-private-1";
+        let public_continuation_id =
+            bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id(
+                "request-root",
+            )?;
 
         let root = runtime_a
             .begin_request(
@@ -716,12 +724,6 @@ mod tests {
                 "2026-08-01T00:00:00Z",
             )
             .await?;
-        let alias = runtime_a.request_identity("owner-a", provider_response_id)?;
-        runtime_a
-            .store()
-            .bind_response_alias("owner-a", &root.request_id, &alias)
-            .await?;
-
         let child = runtime_a
             .begin_request(
                 "owner-a",
@@ -729,7 +731,7 @@ mod tests {
                 ApiProtocol::Responses,
                 &responses_prompt(
                     vec![Message::text(Role::User, "continue")],
-                    provider_response_id,
+                    &public_continuation_id,
                 ),
                 "2026-08-01T00:00:01Z",
             )
@@ -753,7 +755,7 @@ mod tests {
                 ApiProtocol::Responses,
                 &responses_prompt(
                     vec![Message::text(Role::User, "foreign")],
-                    provider_response_id,
+                    &public_continuation_id,
                 ),
                 "2026-08-01T00:00:02Z",
             )
@@ -769,7 +771,7 @@ mod tests {
                 ApiProtocol::Responses,
                 &responses_prompt(
                     vec![Message::text(Role::User, "rotated")],
-                    provider_response_id,
+                    &public_continuation_id,
                 ),
                 "2026-08-01T00:00:03Z",
             )

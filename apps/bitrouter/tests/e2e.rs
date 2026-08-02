@@ -1088,7 +1088,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
 }
 
 #[tokio::test]
-async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
+async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
     use bitrouter_sdk::language_model::types::{
@@ -1202,7 +1202,13 @@ async fn e2e_language_model_response_id_uses_bitrouter_request_id_header() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["id"], "bench-req-001");
+    assert_eq!(
+        json["id"],
+        bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id(
+            "bench-req-001"
+        )
+        .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1580,10 +1586,14 @@ providers:
 }
 
 /// Assemble app + router + axum_test server with the matrix config.
-async fn matrix_server() -> (TestServer, MockServer) {
+async fn matrix_server() -> (TestServer, MockServer, tempfile::TempDir) {
     let upstream = upstream_for_all_protocols().await;
     let cfg = config_for_matrix(&upstream.uri());
-    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let runtime_home = tempfile::tempdir().expect("temporary BitRouter home");
+    let config_path = runtime_home.path().join("bitrouter.yaml");
+    let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path))
+        .await
+        .expect("app assembles");
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
@@ -1591,7 +1601,7 @@ async fn matrix_server() -> (TestServer, MockServer) {
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
         prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
-    (TestServer::new(build_router(state)), upstream)
+    (TestServer::new(build_router(state)), upstream, runtime_home)
 }
 
 // ----- inbound request builders (one per inbound protocol) -----
@@ -1811,7 +1821,16 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
 
 /// Drive one matrix cell end-to-end.
 async fn run_cell(inbound: Inbound, outbound: Outbound) {
-    let (server, upstream) = matrix_server().await;
+    let repository_cwd = std::env::current_dir().expect("repository cwd");
+    let identity_artifacts = [".installation.lock", "installation.id", "continuation.key"];
+    for artifact in identity_artifacts {
+        assert!(
+            !repository_cwd.join(artifact).exists(),
+            "test precondition: repository cwd must not contain {artifact}"
+        );
+    }
+
+    let (server, upstream, runtime_home) = matrix_server().await;
     let model = outbound.model();
     let body = match inbound {
         Inbound::ChatCompletions => inbound_chat_completions(model),
@@ -1822,6 +1841,24 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) {
     post_inbound(&server, inbound, model, &body).await;
     let upstream_body = captured_outbound(&upstream, outbound).await;
     assert_native_schema(outbound, &upstream_body);
+
+    for artifact in identity_artifacts {
+        assert!(
+            !repository_cwd.join(artifact).exists(),
+            "Responses activity must not write {artifact} into the repository cwd"
+        );
+    }
+    if matches!(
+        (inbound, outbound),
+        (Inbound::Responses, Outbound::Responses)
+    ) {
+        for artifact in identity_artifacts {
+            assert!(
+                runtime_home.path().join(artifact).is_file(),
+                "Responses continuation must write {artifact} into the supplied runtime home"
+            );
+        }
+    }
 }
 
 // ----- 4×4 matrix -----

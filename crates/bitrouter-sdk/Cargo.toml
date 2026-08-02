@@ -29,6 +29,7 @@ url.workspace = true
 eventsource-stream.workspace = true
 uuid.workspace = true
 schemars.workspace = true
+base64.workspace = true
 
 # `server` feature
 axum = { workspace = true, optional = true }

@@ -20,6 +20,7 @@ pub mod m20240101_000009_create_adequacy_reliability_events;
 pub mod m20240101_000010_create_eval_exchange;
 pub mod m20240101_000011_scope_eval_exchange;
 pub mod m20240101_000012_create_trajectory_ledger;
+pub mod m20240101_000013_create_continuation_registry;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -43,6 +44,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000010_create_eval_exchange::Migration),
             Box::new(m20240101_000011_scope_eval_exchange::Migration),
             Box::new(m20240101_000012_create_trajectory_ledger::Migration),
+            Box::new(m20240101_000013_create_continuation_registry::Migration),
         ]
     }
 }
@@ -53,6 +55,51 @@ mod tests {
     use sea_orm_migration::{MigrationTrait, SchemaManager};
 
     use super::m20240101_000012_create_trajectory_ledger::Migration;
+    use super::m20240101_000013_create_continuation_registry::Migration as ContinuationMigration;
+
+    #[tokio::test]
+    async fn continuation_registry_migration_is_bounded_and_private() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let manager = SchemaManager::new(&db);
+        let migration = ContinuationMigration;
+
+        migration.up(&manager).await?;
+        assert!(manager.has_table("provider_continuations").await?);
+        assert!(manager.has_table("provider_continuation_key_epoch").await?);
+
+        let rows = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA table_info('provider_continuations')".to_owned(),
+            ))
+            .await?;
+        let columns = rows
+            .iter()
+            .filter_map(|row| row.try_get::<String>("", "name").ok())
+            .collect::<Vec<_>>();
+        for required in [
+            "owner_identity",
+            "continuation_identity",
+            "ciphertext",
+            "nonce",
+            "target_fingerprint",
+            "key_id",
+            "cipher_version",
+            "created_at",
+            "expires_at",
+            "purge_after",
+        ] {
+            assert!(columns.iter().any(|column| column == required));
+        }
+        for forbidden in ["owner_user_id", "request_id", "provider_response_id"] {
+            assert!(!columns.iter().any(|column| column == forbidden));
+        }
+
+        migration.down(&manager).await?;
+        assert!(!manager.has_table("provider_continuations").await?);
+        assert!(!manager.has_table("provider_continuation_key_epoch").await?);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn trajectory_ledger_migration_creates_and_removes_only_its_objects() -> anyhow::Result<()>
@@ -82,7 +129,6 @@ mod tests {
             "idx_trajectory_episodes_owner_correlation",
             "idx_trajectory_events_episode_sequence",
             "idx_trajectory_requests_owner_episode",
-            "idx_trajectory_requests_owner_response_alias",
             "idx_trajectory_outbox_pending",
         ] {
             let rows = db
@@ -95,32 +141,6 @@ mod tests {
                 .await?;
             assert_eq!(rows.len(), 1, "missing index {index}");
         }
-        let request_columns = db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "PRAGMA table_info('trajectory_requests')".to_owned(),
-            ))
-            .await?;
-        let response_alias = request_columns
-            .iter()
-            .find(|row| row.try_get::<String>("", "name").as_deref() == Ok("response_alias_id"))
-            .ok_or_else(|| anyhow::anyhow!("trajectory response alias column is missing"))?;
-        assert_eq!(response_alias.try_get::<i64>("", "notnull")?, 0);
-        let request_indexes = db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "PRAGMA index_list('trajectory_requests')".to_owned(),
-            ))
-            .await?;
-        let response_alias_index = request_indexes
-            .iter()
-            .find(|row| {
-                row.try_get::<String>("", "name").as_deref()
-                    == Ok("idx_trajectory_requests_owner_response_alias")
-            })
-            .ok_or_else(|| anyhow::anyhow!("trajectory response alias index is missing"))?;
-        assert_eq!(response_alias_index.try_get::<i64>("", "unique")?, 1);
-
         migration.down(&manager).await?;
         for table in [
             "trajectory_episodes",

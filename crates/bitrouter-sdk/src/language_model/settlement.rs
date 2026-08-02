@@ -14,7 +14,36 @@ use crate::error::BitrouterError;
 use crate::error::Result;
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::timing::FirstTokenKind;
-use crate::language_model::types::{FinishReason, RoutingTarget, UsageOrigin};
+use crate::language_model::types::{ApiProtocol, FinishReason, RoutingTarget, UsageOrigin};
+
+/// Success-only lifecycle data supplied to required finalizers before a
+/// response is allowed to advertise successful completion.
+pub struct RequiredFinalizationContext {
+    /// Stable gateway request and public Responses continuation identity.
+    pub request_id: String,
+    /// Authenticated caller whose ownership scopes any durable result.
+    pub caller: CallerContext,
+    /// Exact final target that served the response.
+    pub target: Option<RoutingTarget>,
+    /// Inbound client protocol.
+    pub inbound_protocol: Option<ApiProtocol>,
+    /// Final provider response id, when the serving protocol supplied one.
+    pub response_id: Option<String>,
+    /// Canonical terminal reason.
+    pub finish_reason: Option<FinishReason>,
+    /// Whether this was the streaming pipeline.
+    pub streamed: bool,
+    /// True only when the pipeline observed a clean successful terminal.
+    pub successful_terminal: bool,
+}
+
+/// A success-critical finalizer. Unlike ordinary settlement recorders, an
+/// error is propagated before the caller can receive a successful terminal.
+#[async_trait]
+pub trait RequiredFinalizer: Send + Sync {
+    /// Finalize durable success state.
+    async fn finalize(&self, ctx: &RequiredFinalizationContext) -> Result<()>;
+}
 
 /// The Settlement-stage view, borrowed from `PipelineContext`. Carries
 /// pipeline-observed data only — no charging / funding fields. Deployments

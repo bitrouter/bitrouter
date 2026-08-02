@@ -56,6 +56,7 @@ use bitrouter_observe::otel::{
 use bitrouter_sdk::MetricsRenderer;
 
 use crate::auth::AuthHook;
+use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
 use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
@@ -85,6 +86,8 @@ pub struct Assembled {
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Generic eval exchange used by the local CLI and REST control plane.
     pub eval_service: EvalService,
+    /// Always-active encrypted provider continuation registry.
+    pub continuation_registry: ContinuationRegistry,
     #[cfg(test)]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
@@ -204,6 +207,24 @@ pub async fn build_app_with_path(
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;
+    let runtime_home = match config_path.and_then(std::path::Path::parent) {
+        Some(home) => home.to_path_buf(),
+        None => std::env::current_dir().context("resolve continuation key home")?,
+    };
+    let continuation_registry = ContinuationRegistry::new(
+        db.clone(),
+        ContinuationKeySource::lazy(runtime_home),
+        config.continuation.retention_days,
+        config.continuation.prune_batch_size,
+    )?;
+    let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
+    if continuation_pruned > 0 {
+        tracing::info!(
+            deleted_rows = continuation_pruned,
+            "pruned expired provider continuations at startup"
+        );
+    }
+    let continuation_runtime = ContinuationRuntime::new(continuation_registry.clone());
     // A SQLite database file holds SHA-256 hashes of every virtual key,
     // plus the metering audit trail. On Unix, tighten the file
     // permissions to 0600 so a co-tenant on the host can't read it. The
@@ -247,6 +268,8 @@ pub async fn build_app_with_path(
     // into the App pipeline, but the daemon's reloader needs the
     // concrete type to call `replace_config` in zero-config mode.
     let routing_table_for_reload = routing_table.clone();
+    let continuation_for_route = continuation_runtime.clone();
+    let continuation_for_finalization = continuation_runtime;
     // Per-provider auth appliers — currently only GitHub Copilot, whose
     // OAuth-driven Bearer is resolved + cached by the applier on every
     // request. Listed only when the user configures the provider, so an
@@ -581,6 +604,8 @@ pub async fn build_app_with_path(
                     .map(std::time::Duration::from_millis),
             );
             lm.model_selector(policy_runtime_for_selector);
+            lm.route_hook(continuation_for_route);
+            lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
             // declaration (or the one the fusion alias injected) off the prompt
@@ -692,6 +717,7 @@ pub async fn build_app_with_path(
         policy_store: policy_store_for_reload,
         policy_runtime,
         eval_service,
+        continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,
         trajectory_outbox_publisher,

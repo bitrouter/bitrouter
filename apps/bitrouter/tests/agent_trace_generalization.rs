@@ -587,7 +587,12 @@ async fn generalization_server(upstream: &str) -> (TestServer, RealTraceCapture,
     let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path))
         .await
         .expect("app assembles");
-    for generated_identity in [".installation.lock", "correlation.key", "installation.id"] {
+    for generated_identity in [
+        ".installation.lock",
+        "continuation.key",
+        "correlation.key",
+        "installation.id",
+    ] {
         assert!(
             !template_root().join(generated_identity).exists(),
             "template tests must not generate {generated_identity} in the source tree"

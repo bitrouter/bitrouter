@@ -240,6 +240,7 @@ pub fn ensure_home_directory(home: &Path) -> Result<()> {
 /// Filename of the persisted anonymous install identifier inside the home.
 const INSTALL_ID_FILENAME: &str = "installation.id";
 const CORRELATION_KEY_FILENAME: &str = "correlation.key";
+const CONTINUATION_KEY_FILENAME: &str = "continuation.key";
 const INSTALL_LOCK_FILENAME: &str = ".installation.lock";
 
 /// Read the stable anonymous install id from `<home>/installation.id`,
@@ -290,6 +291,31 @@ pub fn get_or_create_correlation_key(home: &Path) -> Result<CorrelationKey> {
         create_private_file(&path, encoded.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
         CorrelationKey::from_bytes(secret)
+    })
+}
+
+/// Load the installation-private provider-continuation encryption key,
+/// atomically creating it only when continuation functionality is first used.
+pub fn get_or_create_continuation_key(home: &Path) -> Result<[u8; 32]> {
+    ensure_home_directory(home)?;
+    with_install_lock(home, || {
+        get_or_create_install_id_locked(home)?;
+        let path = home.join(CONTINUATION_KEY_FILENAME);
+        if let Some(encoded) = read_private_text(&path)? {
+            let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(encoded.trim())
+                .context("existing continuation key is not valid base64")?;
+            return decoded.try_into().map_err(|_| {
+                anyhow::anyhow!("existing continuation key must contain exactly 32 bytes")
+            });
+        }
+
+        let mut secret = [0_u8; 32];
+        rand::rng().fill_bytes(&mut secret);
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
+        create_private_file(&path, encoded.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(secret)
     })
 }
 
@@ -499,6 +525,29 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600);
         }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn continuation_key_is_stable_private_and_corruption_fails_closed() {
+        let home = unique_tmp("continuation-key");
+        let first = get_or_create_continuation_key(&home).unwrap();
+        let second = get_or_create_continuation_key(&home).unwrap();
+        assert_eq!(first, second);
+        let path = home.join(CONTINUATION_KEY_FILENAME);
+        assert!(path.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        let invalid = b"not-a-continuation-key";
+        std::fs::write(&path, invalid).unwrap();
+        let error = get_or_create_continuation_key(&home).unwrap_err();
+        assert!(error.to_string().contains("continuation key"));
+        assert_eq!(std::fs::read(&path).unwrap(), invalid);
         let _ = std::fs::remove_dir_all(&home);
     }
 

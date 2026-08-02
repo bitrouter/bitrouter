@@ -27,6 +27,7 @@ use crate::app::App;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::Pipeline;
+use crate::language_model::protocol::responses::encode_gateway_continuation_id;
 use crate::language_model::protocol::{inbound_adapter_for, sanitize_model_name};
 use crate::language_model::stream::{SseFrame, SseKeepaliveStream};
 use crate::language_model::types::{ApiProtocol, PipelineRequest};
@@ -675,7 +676,15 @@ async fn handle(
     model_override: Option<String>,
 ) -> Response {
     add_inbound_protocol_hint(&mut headers, &inbound);
-    let request_id = add_request_id_hint(&mut headers);
+    let request_id = match add_request_id_hint(&mut headers) {
+        Ok(request_id) => request_id,
+        Err(error) => return error.into_response(),
+    };
+    if inbound == ApiProtocol::Responses
+        && let Err(error) = encode_gateway_continuation_id(&request_id)
+    {
+        return error.into_response();
+    }
     let adapter = match inbound_adapter_for(&inbound) {
         Some(a) => a,
         None => {
@@ -748,21 +757,25 @@ fn add_inbound_protocol_hint(headers: &mut HeaderMap, inbound: &ApiProtocol) {
     }
 }
 
-fn add_request_id_hint(headers: &mut HeaderMap) -> String {
-    if let Some(request_id) = headers
-        .get(BITROUTER_REQUEST_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return request_id.to_string();
+fn add_request_id_hint(headers: &mut HeaderMap) -> Result<String> {
+    if let Some(value) = headers.get(BITROUTER_REQUEST_ID_HEADER) {
+        let request_id = value
+            .to_str()
+            .map_err(|_| BitrouterError::bad_request("request id header is not valid text"))?
+            .trim();
+        if request_id.is_empty() {
+            return Err(BitrouterError::bad_request(
+                "request id header must not be empty",
+            ));
+        }
+        return Ok(request_id.to_string());
     }
 
     let request_id = uuid::Uuid::new_v4().to_string();
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
-    request_id
+    Ok(request_id)
 }
 
 /// Build a `text/event-stream` response: pipe the canonical part stream through
@@ -800,9 +813,17 @@ async fn stream_response(
         while let Some(item) = parts.next().await {
             match item {
                 Ok(part) => {
-                    if let Ok(frames) = encoder.encode(&part) {
-                        for f in frames {
-                            yield f;
+                    match encoder.encode(&part) {
+                        Ok(frames) => {
+                            for f in frames {
+                                yield f;
+                            }
+                        }
+                        Err(error) => {
+                            for f in encoder.encode_bitrouter_error(&error) {
+                                yield f;
+                            }
+                            return;
                         }
                     }
                 },
@@ -816,9 +837,16 @@ async fn stream_response(
                 }
             }
         }
-        if let Ok(frames) = encoder.finish() {
-            for f in frames {
-                yield f;
+        match encoder.finish() {
+            Ok(frames) => {
+                for f in frames {
+                    yield f;
+                }
+            }
+            Err(error) => {
+                for f in encoder.encode_bitrouter_error(&error) {
+                    yield f;
+                }
             }
         }
     };
@@ -924,13 +952,45 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::PipelineBuilder;
     use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
-    use crate::language_model::types::{ApiProtocol, AuthScheme, RoutingTarget};
+    use crate::language_model::types::{
+        ApiProtocol, AuthScheme, ExecutionResult, Prompt, RoutingTarget,
+    };
+    use crate::language_model::{PipelineBuilder, PipelineContext, StreamPartStream};
+    use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
+
+    struct CountingExecutor {
+        calls: Arc<AtomicUsize>,
+        inner: MockExecutor,
+    }
+
+    #[async_trait]
+    impl Executor for CountingExecutor {
+        async fn execute(
+            &self,
+            target: &RoutingTarget,
+            prompt: &Prompt,
+            ctx: &PipelineContext,
+        ) -> Result<ExecutionResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.execute(target, prompt, ctx).await
+        }
+
+        async fn execute_stream(
+            &self,
+            target: &RoutingTarget,
+            prompt: &Prompt,
+            ctx: &PipelineContext,
+        ) -> Result<StreamPartStream> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.execute_stream(target, prompt, ctx).await
+        }
+    }
 
     fn test_state_with_models() -> AppState {
         test_state_with_executor(Arc::new(MockExecutor::always_text("ok")))
@@ -1215,7 +1275,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-bitrouter-request-id", "bench-req-001".parse().unwrap());
 
-        let request_id = add_request_id_hint(&mut headers);
+        let request_id = add_request_id_hint(&mut headers).unwrap();
 
         assert_eq!(request_id, "bench-req-001");
         assert_eq!(
@@ -1230,7 +1290,7 @@ mod tests {
     fn request_id_hint_inserts_generated_id_when_missing() {
         let mut headers = HeaderMap::new();
 
-        let request_id = add_request_id_hint(&mut headers);
+        let request_id = add_request_id_hint(&mut headers).unwrap();
 
         assert!(!request_id.is_empty());
         assert_eq!(
@@ -1239,6 +1299,39 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some(request_id.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn responses_rejects_overlong_request_id_before_upstream_for_both_modes() {
+        for stream in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let executor = Arc::new(CountingExecutor {
+                calls: calls.clone(),
+                inner: MockExecutor::always_text("must not run"),
+            });
+            let response = build_router(test_state_with_executor(executor))
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/responses")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(BITROUTER_REQUEST_ID_HEADER, "x".repeat(129))
+                        .body(Body::from(
+                            serde_json::json!({
+                                "model": "gpt-5.5",
+                                "input": "ping",
+                                "stream": stream
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[tokio::test]

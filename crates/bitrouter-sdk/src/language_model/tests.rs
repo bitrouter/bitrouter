@@ -188,6 +188,17 @@ impl SettlementRecorder for FailingSettlementRecorder {
     }
 }
 
+struct FailingRequiredFinalizer(Arc<AtomicUsize>);
+
+#[async_trait]
+impl settlement::RequiredFinalizer for FailingRequiredFinalizer {
+    async fn finalize(&self, ctx: &settlement::RequiredFinalizationContext) -> Result<()> {
+        assert!(ctx.successful_terminal);
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(BitrouterError::internal("required finalizer failed"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RoutingFailureObserveEvent {
     Started,
@@ -658,6 +669,77 @@ async fn full_pipeline_runs_all_four_stages() {
     let resp = pipeline.execute(request()).await.expect("request succeeds");
     assert_eq!(resp.result.content.len(), 1);
     assert_eq!(recorded.load(Ordering::SeqCst), 1, "recorder ran");
+}
+
+#[tokio::test]
+async fn nonstream_required_finalizer_failure_replaces_success() {
+    let finalized = Arc::new(AtomicUsize::new(0));
+    let settlements = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::always_text("hello")),
+        |builder| {
+            builder
+                .required_finalizer(FailingRequiredFinalizer(finalized.clone()))
+                .settlement_recorder(SettlementSnapshotRecorder(settlements.clone()));
+        },
+    );
+
+    let error = pipeline.execute(request()).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "internal error: required finalizer failed"
+    );
+    assert_eq!(finalized.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        settlements.lock().unwrap().as_slice(),
+        &[SettlementSnapshot {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            has_error: true,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn stream_required_finalizer_failure_precedes_success_terminal() {
+    let finalized = Arc::new(AtomicUsize::new(0));
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "hello".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])])),
+        |builder| {
+            builder.required_finalizer(FailingRequiredFinalizer(finalized.clone()));
+        },
+    );
+
+    let parts = collect_stream(
+        pipeline
+            .execute_stream(stream_request())
+            .await
+            .expect("stream starts"),
+    )
+    .await;
+    assert!(matches!(
+        parts.first(),
+        Some(Ok(StreamPart::TextDelta { .. }))
+    ));
+    assert!(
+        matches!(parts.last(), Some(Err(error)) if error.to_string() == "internal error: required finalizer failed")
+    );
+    assert!(
+        !parts
+            .iter()
+            .any(|part| matches!(part, Ok(StreamPart::Finish { .. }))),
+        "the success terminal must not escape before the required finalizer"
+    );
+    assert_eq!(finalized.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

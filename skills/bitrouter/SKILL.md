@@ -157,6 +157,19 @@ request preserves its episode; a continuation whose parent was already removed
 starts a new incomplete episode. Read `references/cli.md` → *Durable trajectory
 operations* before pruning or recovery.
 
+Responses provider continuation is always active and independent of trajectory:
+
+```yaml
+continuation:
+  retention_days: 30
+  prune_batch_size: 1000
+```
+
+Retention must be positive and the bounded prune batch must be 1–10000. Both
+settings are restart-only. Provider response IDs are stored only as
+authenticated ciphertext under a lazily created installation-private key;
+public Responses IDs use BitRouter's reserved `brc_` namespace.
+
 **Subscription / OAuth providers.** Different — local login, not env vars:
 
 ```bash
