@@ -1218,8 +1218,31 @@ enum AcpCmd {
     Sessions,
 }
 
+const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn main() {
+    let worker = std::thread::Builder::new()
+        .name("bitrouter-main".to_owned())
+        .stack_size(CLI_MAIN_STACK_SIZE)
+        .spawn(async_main);
+
+    match worker {
+        Ok(handle) => {
+            if handle.join().is_err() {
+                // The panic hook already rendered the original failure. Match
+                // Rust's normal main-thread panic exit status without hiding it.
+                std::process::exit(101);
+            }
+        }
+        Err(error) => {
+            eprintln!("error: failed to start BitRouter CLI runtime: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() {
+async fn async_main() {
     // Parse once here so the global `--json` / `--human` flags are available to
     // render the *result* — a success report or the error envelope — through the
     // single `Output` driver. Diagnostics during execution go to stderr; the
@@ -1235,11 +1258,10 @@ async fn main() {
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     // Box the dispatch future onto the heap. `run` is a large `async fn` whose
     // state machine inlines the biggest per-command futures (the onboarding
-    // wizard, `spawn`, …), and `#[tokio::main]` polls it on the main thread —
-    // whose stack is only ~1 MiB on Windows. Keeping that state off the stack
-    // leaves headroom for the deep synchronous call chains (rustls/reqwest on
-    // the `cloud` path) that would otherwise overflow the main-thread stack on
-    // Windows (macOS/Linux's 8 MiB default hides it).
+    // wizard, `spawn`, …). Before `async_main` moved to its dedicated stack,
+    // `#[tokio::main]` polled that state on Windows' ~1 MiB native main thread.
+    // Keeping it off the dedicated stack still leaves more headroom for deep
+    // synchronous call chains such as rustls/reqwest on the `cloud` path.
     match Box::pin(run(cli, &output)).await {
         Ok(()) => {}
         Err(e) => {
