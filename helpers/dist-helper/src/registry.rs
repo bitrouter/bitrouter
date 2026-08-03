@@ -124,9 +124,18 @@ async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bo
             continue;
         };
         let have: HashSet<&str> = provider.data.models.iter().map(|m| m.id.as_str()).collect();
+        let have_provider_model_ids: HashSet<&str> = provider
+            .data
+            .models
+            .iter()
+            .map(|model| model.provider_model_id.as_str())
+            .collect();
         let mut staged = HashSet::new();
         let subscription = provider.data.billing == Billing::Subscription;
         for (model_id, model) in &models.models {
+            if have_provider_model_ids.contains(model_id.as_str()) {
+                continue;
+            }
             let Some(canonical_id) = resolve(model_id) else {
                 continue;
             };
@@ -285,12 +294,20 @@ fn v1_models_plan_for_provider(
     let catalog: V1ModelsResponse =
         serde_json::from_str(body).context("parsing OpenAI-compatible /models response")?;
     let have: HashSet<&str> = provider.models.iter().map(|m| m.id.as_str()).collect();
+    let have_provider_model_ids: HashSet<&str> = provider
+        .models
+        .iter()
+        .map(|model| model.provider_model_id.as_str())
+        .collect();
     let mut staged = HashSet::new();
     let mut unresolved_seen = HashSet::new();
     let mut adds = Vec::new();
     let mut unresolved = Vec::new();
 
     for model in catalog.data {
+        if have_provider_model_ids.contains(model.id.as_str()) {
+            continue;
+        }
         let Some(canonical_id) = resolve(&model.id) else {
             if unresolved_seen.insert(model.id.clone()) {
                 unresolved.push(model.id);
@@ -1172,11 +1189,18 @@ fn validate_provider<'a>(
     }
 
     let mut seen_models = HashSet::new();
+    let mut seen_provider_model_ids = HashSet::new();
     for model in &data.models {
         if !seen_models.insert(model.id.as_str()) {
             issues.push(format!(
                 "{file}: provider '{}' declares model '{}' twice",
                 data.name, model.id
+            ));
+        }
+        if !seen_provider_model_ids.insert(model.provider_model_id.as_str()) {
+            issues.push(format!(
+                "{file}: provider '{}' declares provider_model_id '{}' twice",
+                data.name, model.provider_model_id
             ));
         }
         // A provider may serve models beyond the curated `registry/models`
@@ -2619,6 +2643,38 @@ auto_sync:
     }
 
     #[test]
+    fn v1_models_catalog_preserves_existing_provider_model_mapping() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: deepseek
+api_protocol:
+  - "*": openai
+models:
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash
+status: active
+billing: subscription
+api_base: https://api.deepseek.test/v1
+auto_sync:
+  feed: v1_models
+"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver([
+            "deepseek/deepseek-v4-flash",
+            "deepseek/deepseek-v4-flash-0731",
+        ]);
+        let body = r#"{"data":[{"id":"deepseek-v4-flash"}]}"#;
+
+        let plan = v1_models_plan_for_provider(&provider, body, &resolve).unwrap();
+
+        assert!(
+            plan.adds.is_empty(),
+            "an explicitly mapped upstream model must not be attached to a second canonical ID"
+        );
+    }
+
+    #[test]
     fn v1_models_catalog_copies_pricing_when_present() {
         let provider: ProviderFile = serde_saphyr::from_str(
             r#"
@@ -3028,6 +3084,54 @@ api_base: https://api.acme.test/v1
         assert!(
             advisories.iter().any(|a| a.contains("acme/byok-extra")),
             "expected an advisory for acme/byok-extra, got: {advisories:?}"
+        );
+    }
+
+    #[test]
+    fn provider_rejects_duplicate_provider_model_ids() {
+        let root = test_root("duplicate-provider-model-id");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/preview
+  name: "Acme: Preview"
+  input_modalities: [text]
+  output_modalities: [text]
+- id: acme/release
+  name: "Acme: Release"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/preview
+    provider_model_id: flash
+  - id: acme/release
+    provider_model_id: flash
+status: active
+billing: subscription
+api_base: https://api.acme.test/v1
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("duplicate upstream IDs must fail");
+
+        assert!(
+            err.to_string().contains("provider_model_id 'flash' twice"),
+            "unexpected error: {err}"
         );
     }
 
