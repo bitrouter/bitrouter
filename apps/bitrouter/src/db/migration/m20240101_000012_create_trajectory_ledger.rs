@@ -197,6 +197,9 @@ impl MigrationTrait for Migration {
             )
             .await?;
         manager
+            .create_table(trajectory_prefix_index_table())
+            .await?;
+        manager
             .create_table(
                 Table::create()
                     .table(TrajectoryOutbox::Table)
@@ -270,6 +273,14 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(
                 Table::drop()
+                    .table(TrajectoryPrefixIndex::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_table(
+                Table::drop()
                     .table(TrajectoryRequests::Table)
                     .if_exists()
                     .to_owned(),
@@ -302,6 +313,38 @@ pub(crate) fn trajectory_requests_owner_full_input_digest_index() -> IndexCreate
         .table(TrajectoryRequests::Table)
         .col(TrajectoryRequests::OwnerUserId)
         .col(TrajectoryRequests::FullInputDigest)
+        .to_owned()
+}
+
+pub(crate) fn trajectory_prefix_index_table() -> TableCreateStatement {
+    Table::create()
+        .table(TrajectoryPrefixIndex::Table)
+        .if_not_exists()
+        .col(
+            ColumnDef::new(TrajectoryPrefixIndex::OwnerUserId)
+                .string()
+                .not_null(),
+        )
+        .col(
+            ColumnDef::new(TrajectoryPrefixIndex::FullInputDigest)
+                .string()
+                .not_null(),
+        )
+        .col(
+            ColumnDef::new(TrajectoryPrefixIndex::EpisodeId)
+                .string()
+                .not_null(),
+        )
+        .col(
+            ColumnDef::new(TrajectoryPrefixIndex::Ambiguous)
+                .boolean()
+                .not_null(),
+        )
+        .primary_key(
+            Index::create()
+                .col(TrajectoryPrefixIndex::OwnerUserId)
+                .col(TrajectoryPrefixIndex::FullInputDigest),
+        )
         .to_owned()
 }
 
@@ -360,6 +403,15 @@ enum TrajectoryRequests {
     NativeParentId,
     Protocol,
     Status,
+}
+
+#[derive(DeriveIden)]
+enum TrajectoryPrefixIndex {
+    Table,
+    OwnerUserId,
+    FullInputDigest,
+    EpisodeId,
+    Ambiguous,
 }
 
 #[derive(DeriveIden)]

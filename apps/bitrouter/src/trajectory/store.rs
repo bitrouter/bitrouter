@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
     IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RuntimeErr, Set,
-    TransactionTrait, sea_query::Expr,
+    TransactionTrait,
+    sea_query::{Cond, Expr, OnConflict, Query, SelectStatement},
 };
 
 use super::correlation::CorrelationSource;
@@ -85,6 +86,25 @@ mod request_entity {
         pub native_parent_id: Option<String>,
         pub protocol: String,
         pub status: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+mod prefix_entity {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "trajectory_prefix_index")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub owner_user_id: String,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub full_input_digest: String,
+        pub episode_id: String,
+        pub ambiguous: bool,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -1493,6 +1513,8 @@ async fn delete_prunable_episode_in_tx(
     expected_request_rows: u64,
     expected_event_rows: u64,
 ) -> Result<PruneSummary> {
+    serialize_prefix_prune(txn, &episode.owner_user_id, &episode.episode_id).await?;
+    delete_prefixes_owned_only_by_episode(txn, &episode.owner_user_id, &episode.episode_id).await?;
     let deleted_requests = request_entity::Entity::delete_many()
         .filter(request_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
         .filter(request_entity::Column::EpisodeId.eq(&episode.episode_id))
@@ -1528,6 +1550,71 @@ async fn delete_prunable_episode_in_tx(
         event_rows: deleted_events.rows_affected,
         request_rows: deleted_requests.rows_affected,
     })
+}
+
+fn episode_prefix_digests(owner_user_id: &str, episode_id: &str) -> SelectStatement {
+    Query::select()
+        .column(request_entity::Column::FullInputDigest)
+        .from(request_entity::Entity)
+        .and_where(Expr::col(request_entity::Column::OwnerUserId).eq(owner_user_id.to_owned()))
+        .and_where(Expr::col(request_entity::Column::EpisodeId).eq(episode_id.to_owned()))
+        .to_owned()
+}
+
+async fn serialize_prefix_prune(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    episode_id: &str,
+) -> Result<()> {
+    prefix_entity::Entity::update_many()
+        .col_expr(
+            prefix_entity::Column::Ambiguous,
+            Expr::col(prefix_entity::Column::Ambiguous).into(),
+        )
+        .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(
+            Expr::col(prefix_entity::Column::FullInputDigest)
+                .in_subquery(episode_prefix_digests(owner_user_id, episode_id)),
+        )
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
+async fn delete_prefixes_owned_only_by_episode(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    episode_id: &str,
+) -> Result<()> {
+    let other_episode_request = Query::select()
+        .expr(Expr::value(1))
+        .from(request_entity::Entity)
+        .and_where(
+            Expr::col((request_entity::Entity, request_entity::Column::OwnerUserId))
+                .equals((prefix_entity::Entity, prefix_entity::Column::OwnerUserId)),
+        )
+        .and_where(
+            Expr::col((
+                request_entity::Entity,
+                request_entity::Column::FullInputDigest,
+            ))
+            .equals((
+                prefix_entity::Entity,
+                prefix_entity::Column::FullInputDigest,
+            )),
+        )
+        .and_where(Expr::col(request_entity::Column::EpisodeId).ne(episode_id.to_owned()))
+        .to_owned();
+    prefix_entity::Entity::delete_many()
+        .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(
+            Expr::col(prefix_entity::Column::FullInputDigest)
+                .in_subquery(episode_prefix_digests(owner_user_id, episode_id)),
+        )
+        .filter(Cond::all().not().add(Expr::exists(other_episode_request)))
+        .exec(txn)
+        .await?;
+    Ok(())
 }
 
 async fn prunable_episode_counts(
@@ -1717,21 +1804,67 @@ async fn insert_request(
     request_id: &str,
     input: BeginRequest,
 ) -> Result<()> {
+    let full_input_digest = input.full_input_digest.as_str().to_owned();
+    let episode_id = input.episode.episode_id;
     request_entity::ActiveModel {
         request_id: Set(request_id.to_owned()),
         owner_user_id: Set(owner_user_id.to_owned()),
-        episode_id: Set(input.episode.episode_id),
+        episode_id: Set(episode_id.clone()),
         start_event_id: Set(input.event.event_id),
         settlement_event_id: Set(None),
         settlement_outbox_id: Set(None),
-        full_input_digest: Set(input.full_input_digest.as_str().to_owned()),
+        full_input_digest: Set(full_input_digest.clone()),
         native_parent_id: Set(input.native_parent_id),
         protocol: Set(input.protocol),
         status: Set(request_status_name(RequestStatus::Started).into()),
     }
     .insert(txn)
     .await?;
+    record_prefix_episode(txn, owner_user_id, &full_input_digest, &episode_id).await?;
     Ok(())
+}
+
+async fn record_prefix_episode(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    full_input_digest: &str,
+    episode_id: &str,
+) -> Result<()> {
+    let row = prefix_entity::ActiveModel {
+        owner_user_id: Set(owner_user_id.to_owned()),
+        full_input_digest: Set(full_input_digest.to_owned()),
+        episode_id: Set(episode_id.to_owned()),
+        ambiguous: Set(false),
+    };
+    match prefix_entity::Entity::insert(row)
+        .on_conflict(prefix_insert_conflict())
+        .exec(txn)
+        .await
+    {
+        Ok(_) | Err(DbErr::RecordNotInserted) => {}
+        Err(error) => return Err(error.into()),
+    }
+    prefix_entity::Entity::update_many()
+        .col_expr(prefix_entity::Column::Ambiguous, Expr::value(true))
+        .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(prefix_entity::Column::FullInputDigest.eq(full_input_digest))
+        .filter(prefix_entity::Column::EpisodeId.ne(episode_id))
+        .filter(prefix_entity::Column::Ambiguous.eq(false))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
+fn prefix_insert_conflict() -> OnConflict {
+    OnConflict::columns([
+        prefix_entity::Column::OwnerUserId,
+        prefix_entity::Column::FullInputDigest,
+    ])
+    .do_nothing_on([
+        prefix_entity::Column::OwnerUserId,
+        prefix_entity::Column::FullInputDigest,
+    ])
+    .to_owned()
 }
 
 async fn find_prefix_episode(
@@ -1746,36 +1879,37 @@ async fn find_prefix_episode(
     if requested_digests.is_empty() {
         return Ok(PrefixResolution::None);
     }
-    let requests = request_entity::Entity::find()
-        .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-        .filter(request_entity::Column::FullInputDigest.is_in(requested_digests))
-        .all(txn)
-        .await?;
-    let mut episode_ids_by_digest =
-        std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
-    for request in requests {
-        episode_ids_by_digest
-            .entry(request.full_input_digest)
-            .or_default()
-            .insert(request.episode_id);
-    }
+    let prefixes = load_prefix_evidence(txn, owner_user_id, requested_digests).await?;
+    let prefixes = prefixes
+        .into_iter()
+        .map(|prefix| (prefix.full_input_digest.clone(), prefix))
+        .collect::<std::collections::BTreeMap<_, _>>();
 
     for digest in ancestor_prefix_digests.iter().rev() {
-        let Some(episode_ids) = episode_ids_by_digest.get(digest.as_str()) else {
+        let Some(prefix) = prefixes.get(digest.as_str()) else {
             continue;
         };
-        if episode_ids.len() != 1 {
+        if prefix.ambiguous {
             return Ok(PrefixResolution::Ambiguous);
         }
-        let episode_id = episode_ids
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("prefix resolution lost its only episode"))?;
-        return owned_episode(txn, owner_user_id, episode_id)
+        return owned_episode(txn, owner_user_id, &prefix.episode_id)
             .await
             .map(Box::new)
             .map(PrefixResolution::Unique);
     }
     Ok(PrefixResolution::None)
+}
+
+async fn load_prefix_evidence(
+    txn: &DatabaseTransaction,
+    owner_user_id: &str,
+    requested_digests: std::collections::BTreeSet<String>,
+) -> Result<Vec<prefix_entity::Model>> {
+    Ok(prefix_entity::Entity::find()
+        .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(prefix_entity::Column::FullInputDigest.is_in(requested_digests))
+        .all(txn)
+        .await?)
 }
 
 async fn native_parent_request(
@@ -2929,7 +3063,7 @@ mod tests {
     use std::sync::Arc;
 
     use sea_orm::sqlx::error::{DatabaseError, ErrorKind};
-    use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, RuntimeErr, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
@@ -2960,6 +3094,93 @@ mod tests {
             assert_trajectory_tables_empty(&store).await?;
         }
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn prefix_lookup_returns_bounded_evidence_for_high_cardinality_digest()
+    -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let digest = keyed_digest("key-1", "9");
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            r#"WITH digits(n) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+               fixture_rows(value) AS (
+                 SELECT a.n * 1000 + b.n * 100 + c.n * 10 + d.n
+                 FROM digits a CROSS JOIN digits b CROSS JOIN digits c CROSS JOIN digits d
+               )
+               INSERT INTO trajectory_requests (
+                 request_id, owner_user_id, episode_id, start_event_id,
+                 settlement_event_id, settlement_outbox_id, full_input_digest,
+                 native_parent_id, protocol, status
+               )
+               SELECT 'request-' || value, 'owner-a', 'episode-' || value,
+                      'start-' || value, NULL, NULL, ?, NULL, 'responses', 'settled'
+               FROM fixture_rows"#,
+            [digest.as_str().into()],
+        ))
+        .await?;
+
+        let txn = db.begin().await?;
+        record_prefix_episode(&txn, "owner-a", digest.as_str(), "episode-0").await?;
+        record_prefix_episode(&txn, "owner-a", digest.as_str(), "episode-1").await?;
+        let rows = load_prefix_evidence(
+            &txn,
+            "owner-a",
+            BTreeSet::from([digest.as_str().to_owned()]),
+        )
+        .await?;
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].ambiguous);
+        assert!(matches!(
+            find_prefix_episode(&txn, "owner-a", std::slice::from_ref(&digest)).await?,
+            PrefixResolution::Ambiguous
+        ));
+        txn.rollback().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn prefix_summary_upsert_and_ambiguity_update_render_for_every_database_backend() {
+        for backend in [
+            DatabaseBackend::Sqlite,
+            DatabaseBackend::Postgres,
+            DatabaseBackend::MySql,
+        ] {
+            let insert = prefix_entity::Entity::insert(prefix_entity::ActiveModel {
+                owner_user_id: Set("owner-a".to_owned()),
+                full_input_digest: Set(keyed_digest("key-1", "9").as_str().to_owned()),
+                episode_id: Set("episode-a".to_owned()),
+                ambiguous: Set(false),
+            })
+            .on_conflict(prefix_insert_conflict())
+            .build(backend);
+            let insert_sql = insert.sql.to_ascii_lowercase();
+            match backend {
+                DatabaseBackend::MySql => {
+                    assert!(insert_sql.contains("on duplicate key update"));
+                }
+                DatabaseBackend::Postgres | DatabaseBackend::Sqlite => {
+                    assert!(insert_sql.contains("on conflict"));
+                    assert!(insert_sql.contains("do nothing"));
+                }
+            }
+
+            let update = prefix_entity::Entity::update_many()
+                .col_expr(prefix_entity::Column::Ambiguous, Expr::value(true))
+                .filter(prefix_entity::Column::OwnerUserId.eq("owner-a"))
+                .filter(prefix_entity::Column::FullInputDigest.eq("digest-a"))
+                .filter(prefix_entity::Column::EpisodeId.ne("episode-a"))
+                .filter(prefix_entity::Column::Ambiguous.eq(false))
+                .build(backend);
+            let update_sql = update.sql.to_ascii_lowercase();
+            assert!(update_sql.starts_with("update"));
+            assert!(update_sql.contains("trajectory_prefix_index"));
+            assert!(update_sql.contains("ambiguous"));
+            assert!(update_sql.contains("owner_user_id"));
+            assert!(update_sql.contains("full_input_digest"));
+            assert!(update_sql.contains("episode_id"));
+        }
     }
 
     #[tokio::test]
@@ -4333,6 +4554,7 @@ mod tests {
             "trajectory_episodes",
             "trajectory_events",
             "trajectory_requests",
+            "trajectory_prefix_index",
             "trajectory_outbox",
         ] {
             let row = store
@@ -4442,6 +4664,16 @@ mod tests {
         assert_eq!(deleted, dry);
         assert!(store.resolve_episode_owner("episode-a").await?.is_none());
         assert!(store.resolve_episode_owner("episode-b").await?.is_none());
+        for owner in ["owner-a", "owner-b"] {
+            assert_eq!(
+                prefix_entity::Entity::find()
+                    .filter(prefix_entity::Column::OwnerUserId.eq(owner))
+                    .count(&store.db)
+                    .await?,
+                0,
+                "pruning the owner's last request must remove its prefix summary"
+            );
+        }
         assert_eq!(
             store
                 .resolve_episode_owner("episode-pending")
@@ -4483,6 +4715,57 @@ mod tests {
             store.prune_before("2026-08-02T00:00:00Z", false, 1).await?,
             PruneSummary::default()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pruning_retains_ambiguity_until_the_last_matching_history_is_removed()
+    -> anyhow::Result<()> {
+        let store = store().await?;
+        seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-old",
+            "request-old",
+            "2026-08-01T00:00:00Z",
+            false,
+        )
+        .await?;
+        seed_terminal_episode(
+            &store,
+            "owner-a",
+            "episode-fresh",
+            "request-fresh",
+            "2026-08-03T00:00:00Z",
+            false,
+        )
+        .await?;
+        let digest = keyed_digest("key-1", "2");
+
+        let txn = store.db.begin().await?;
+        assert!(matches!(
+            find_prefix_episode(&txn, "owner-a", std::slice::from_ref(&digest)).await?,
+            PrefixResolution::Ambiguous
+        ));
+        txn.rollback().await?;
+
+        let first = store.prune_before("2026-08-02T00:00:00Z", false, 1).await?;
+        assert_eq!(first.episode_rows, 1);
+        let txn = store.db.begin().await?;
+        assert!(matches!(
+            find_prefix_episode(&txn, "owner-a", std::slice::from_ref(&digest)).await?,
+            PrefixResolution::Ambiguous
+        ));
+        txn.rollback().await?;
+
+        let second = store.prune_before("2026-08-04T00:00:00Z", false, 1).await?;
+        assert_eq!(second.episode_rows, 1);
+        let txn = store.db.begin().await?;
+        assert!(matches!(
+            find_prefix_episode(&txn, "owner-a", &[digest]).await?,
+            PrefixResolution::None
+        ));
+        txn.rollback().await?;
         Ok(())
     }
 
