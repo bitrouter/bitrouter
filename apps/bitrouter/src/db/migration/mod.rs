@@ -58,7 +58,7 @@ mod tests {
     use super::Migrator;
 
     use super::m20240101_000012_create_trajectory_ledger::{
-        Migration, trajectory_outbox_delivery_order_index,
+        Migration, trajectory_outbox_delivery_order_index, trajectory_prefix_index_table,
         trajectory_requests_owner_full_input_digest_index,
     };
     use super::m20240101_000013_create_continuation_registry::{
@@ -253,6 +253,7 @@ mod tests {
             "trajectory_episodes",
             "trajectory_events",
             "trajectory_requests",
+            "trajectory_prefix_index",
             "trajectory_outbox",
         ] {
             assert!(manager.has_table(table).await?);
@@ -280,6 +281,7 @@ mod tests {
             "trajectory_episodes",
             "trajectory_events",
             "trajectory_requests",
+            "trajectory_prefix_index",
             "trajectory_outbox",
         ] {
             assert!(!manager.has_table(table).await?);
@@ -297,7 +299,7 @@ mod tests {
         let details = db
             .query_all(Statement::from_string(
                 DatabaseBackend::Sqlite,
-                "EXPLAIN QUERY PLAN SELECT episode_id, full_input_digest FROM trajectory_requests WHERE owner_user_id = 'owner-a' AND full_input_digest IN ('digest-a', 'digest-b')".to_owned(),
+                "EXPLAIN QUERY PLAN SELECT episode_id, full_input_digest, ambiguous FROM trajectory_prefix_index WHERE owner_user_id = 'owner-a' AND full_input_digest IN ('digest-a', 'digest-b')".to_owned(),
             ))
             .await?
             .into_iter()
@@ -306,8 +308,8 @@ mod tests {
             .join("\n");
 
         assert!(
-            details.contains("idx_trajectory_requests_owner_full_input_digest"),
-            "prefix membership query did not use the composite owner/digest index: {details}"
+            details.contains("sqlite_autoindex_trajectory_prefix_index_1"),
+            "prefix summary query did not use its owner/digest primary key: {details}"
         );
         Ok(())
     }
@@ -399,7 +401,8 @@ mod tests {
     }
 
     #[test]
-    fn trajectory_prefix_index_sql_is_portable_and_owner_digest_ordered() -> anyhow::Result<()> {
+    fn trajectory_request_lookup_index_sql_is_portable_and_owner_digest_ordered()
+    -> anyhow::Result<()> {
         let statements = [
             trajectory_requests_owner_full_input_digest_index().to_string(SqliteQueryBuilder),
             trajectory_requests_owner_full_input_digest_index().to_string(PostgresQueryBuilder),
@@ -417,6 +420,34 @@ mod tests {
             assert!(
                 owner < digest,
                 "owner must lead digest in index SQL: {statement}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn trajectory_prefix_summary_table_sql_is_portable_and_owner_digest_keyed() -> anyhow::Result<()>
+    {
+        let statements = [
+            trajectory_prefix_index_table().to_string(SqliteQueryBuilder),
+            trajectory_prefix_index_table().to_string(PostgresQueryBuilder),
+            trajectory_prefix_index_table().to_string(MysqlQueryBuilder),
+        ];
+        for statement in statements {
+            let sql = statement.to_ascii_lowercase();
+            let owner = sql.rfind("owner_user_id").ok_or_else(|| {
+                anyhow::anyhow!("owner column missing from prefix table SQL: {statement}")
+            })?;
+            let digest = sql.rfind("full_input_digest").ok_or_else(|| {
+                anyhow::anyhow!("digest column missing from prefix table SQL: {statement}")
+            })?;
+            assert!(sql.contains("trajectory_prefix_index"));
+            assert!(sql.contains("episode_id"));
+            assert!(sql.contains("ambiguous"));
+            assert!(sql.contains("primary key"));
+            assert!(
+                owner < digest,
+                "owner must lead digest in the prefix-table primary key: {statement}"
             );
         }
         Ok(())

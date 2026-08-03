@@ -1239,6 +1239,7 @@ mod tests {
             "trajectory_episodes",
             "trajectory_events",
             "trajectory_requests",
+            "trajectory_prefix_index",
         ] {
             let row = db
                 .query_one(Statement::from_string(
@@ -1593,6 +1594,7 @@ mod tests {
             "trajectory_episodes",
             "trajectory_events",
             "trajectory_requests",
+            "trajectory_prefix_index",
         ] {
             let row = db
                 .query_one(Statement::from_string(
@@ -1653,6 +1655,65 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("missing count row"))?;
             assert_eq!(row.try_get::<i64>("", "count")?, 1, "table {table}");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_digest_roots_converge_on_one_ambiguous_prefix_summary()
+    -> anyhow::Result<()> {
+        let (runtime, db, _dir) = file_runtime().await?;
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let tasks = ["request-root-a", "request-root-b"]
+            .into_iter()
+            .map(|request_id| {
+                let runtime = Arc::clone(&runtime);
+                let barrier = Arc::clone(&barrier);
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    runtime
+                        .begin_request(
+                            "owner-a",
+                            request_id,
+                            ApiProtocol::Responses,
+                            &prompt(vec![Message::text(Role::User, "same root")]),
+                            "2026-08-01T00:00:00Z",
+                        )
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait().await;
+        let results = futures::future::try_join_all(tasks).await?;
+        let roots = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+        assert_ne!(roots[0].episode_id, roots[1].episode_id);
+
+        let summary = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count, MAX(ambiguous) AS ambiguous \
+                 FROM trajectory_prefix_index WHERE owner_user_id = 'owner-a'"
+                    .to_owned(),
+            ))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing prefix summary aggregate"))?;
+        assert_eq!(summary.try_get::<i64>("", "count")?, 1);
+        assert_eq!(summary.try_get::<i64>("", "ambiguous")?, 1);
+
+        let child = runtime
+            .begin_request(
+                "owner-a",
+                "request-child",
+                ApiProtocol::Messages,
+                &prompt(vec![
+                    Message::text(Role::User, "same root"),
+                    Message::text(Role::Assistant, "answer"),
+                    Message::text(Role::User, "continue"),
+                ]),
+                "2026-08-01T00:00:01Z",
+            )
+            .await?;
+        assert_eq!(child.source, CorrelationSource::Unresolved);
+        assert_eq!(child.completeness, HistoryCompleteness::Incomplete);
         Ok(())
     }
 
