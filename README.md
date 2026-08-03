@@ -169,8 +169,8 @@ their own. It lives in this repo at [`skills/bitrouter/`](skills/bitrouter/), ke
 with the code.
 
 ```bash
-bitrouter skills add bitrouter        # via BitRouter's own installer
 npx skills add bitrouter/bitrouter    # via the generic skills CLI
+# ...or add this repo as a plugin marketplace in Claude Code / Codex
 ```
 
 ### MCP

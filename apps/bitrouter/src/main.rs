@@ -1471,7 +1471,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             }
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
-        Command::Skills { action } => bitrouter::skills::cli::run(action, output).await,
+        Command::Skills { action } => bitrouter::skills::cli::run(action, output),
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd).await,
@@ -2123,11 +2123,16 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             for flag in non_fleet_flag_notes(allow_writes, budget_usd) {
                 eprintln!("note: {flag} only applies to --backend fleet; ignored");
             }
-            // The skills backend is the origin AgentSkills server
-            // (`skills_search`/`skills_get` over the installed-skills root) —
-            // the `bitrouter_skills` gateway server harnesses launch as a
-            // subprocess. Stdio-only, mirroring the fleet bridge's transport
-            // posture.
+            // The skills backend is the origin AgentSkills server over the
+            // installed-skills root — the `bitrouter_skills` gateway server
+            // harnesses launch as a subprocess. Stdio-only, mirroring the
+            // fleet bridge's transport posture.
+            //
+            // Two surfaces over the same root, deliberately: the
+            // `skills_search` / `skills_get` *tools*, which any MCP client can
+            // call today, and SEP-2640's `skills/list` / `skills/get`
+            // *methods* plus `resources/*`, which is what SEP-aware hosts will
+            // consume. Neither supersedes the other.
             if backend == Some(McpBackend::Skills) {
                 if matches!(transport, McpTransport::Http) {
                     anyhow::bail!(
@@ -2137,7 +2142,10 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
                 let base_repo = std::env::current_dir().context("resolving current directory")?;
                 let server = bitrouter_mcp::server::BitrouterMcp::builder()
                     .skills(std::sync::Arc::new(
-                        bitrouter::skills_query::InstalledSkills::new(base_repo),
+                        bitrouter::skills_query::InstalledSkills::new(base_repo.clone()),
+                    ))
+                    .skill_catalog(std::sync::Arc::new(
+                        bitrouter::skills_catalog::InstalledSkillCatalog::new(base_repo),
                     ))
                     .build();
                 return bitrouter_mcp::server::serve_stdio(server, None).await;

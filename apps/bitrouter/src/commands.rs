@@ -10,10 +10,7 @@ use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use crate::auth::{NewApiKey, db as auth_db, generate};
 use crate::daemon::RouteHop;
-use crate::output::reports::skills::{
-    FailedSkill, SkillAddReport, SkillEntry, SkillHit, SkillInitReport, SkillRemoveReport,
-    SkillsFindReport, SkillsListReport, SkillsUpdateReport, SkippedSkill, UpdatedSkill,
-};
+use crate::output::reports::skills::{SkillEntry, SkillInitReport, SkillsListReport};
 
 /// The starter `bitrouter.yaml` written by `bitrouter init`. Mirrors
 /// the zero-config in-memory default so a user who runs `init` and
@@ -949,100 +946,28 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     Ok(removed)
 }
 
-// ===== skills (client installer) =====
+// ===== skills (format + local reads) =====
+//
+// `add`, `remove`, `find`, and `update` were removed with the skills package
+// manager: installing skills is the ecosystem's job (`npx skills add`, the
+// Claude Code and Codex plugin marketplaces), not a router's. What remains
+// reads the installed-skills directory and scaffolds a `SKILL.md`. See
+// `crate::skills` for the reasoning.
 
-/// Default BitRouter registry queried when `bitrouter skills add <name>` is
-/// given a bare skill name rather than a git source.
-const DEFAULT_SKILLS_REGISTRY: &str = "https://api.bitrouter.ai";
-
-/// Build the HTTP client used to talk to a skills registry. Mirrors the
-/// 30-second-timeout, user-agent-tagged client the cloud SDK uses.
-fn skills_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .user_agent(concat!("bitrouter-skills/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("building skills HTTP client")
-}
-
-/// Resolve the install target for the `--global` flag.
-fn skills_target(global: bool) -> Result<bitrouter_skills::install::InstallTarget> {
-    use bitrouter_skills::install::InstallTarget;
+/// Which `.claude/skills` directory a command reads.
+fn skills_root(global: bool) -> Result<crate::skills::root::SkillsRoot> {
+    use crate::skills::root::SkillsRoot;
     if global {
-        Ok(InstallTarget::Global)
+        Ok(SkillsRoot::Global)
     } else {
         let cwd = std::env::current_dir().context("resolving the current directory")?;
-        Ok(InstallTarget::Project { project_root: cwd })
+        Ok(SkillsRoot::Project { project_root: cwd })
     }
 }
 
-/// Whether `source` is a bare registry skill name (no path/scheme), as opposed
-/// to a git source.
-fn is_bare_skill_name(source: &str) -> bool {
-    !source.contains('/') && !source.contains("://") && !source.starts_with("git@")
-}
-
-/// Resolve a registry name to its [`bitrouter_skills::source::SkillSource`] via
-/// the namespace's marketplace hub.
-async fn resolve_registry_source(
-    name: &str,
-    registry: Option<&str>,
-    namespace: &str,
-) -> Result<bitrouter_skills::source::SkillSource> {
-    use bitrouter_skills::marketplace;
-    use bitrouter_skills::source::SkillSource;
-    let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
-    let client = skills_http_client()?;
-    let market = marketplace::fetch_marketplace(&client, base, namespace).await?;
-    let entry = market
-        .find(name)
-        .ok_or_else(|| anyhow::anyhow!("skill {name:?} not found in registry {base}"))?;
-    SkillSource::try_from(&entry.source)
-        .with_context(|| format!("resolving registry source for {name:?}"))
-}
-
-/// `bitrouter skills add` — install a skill from a git source or registry name.
-pub async fn skills_add(
-    source: &str,
-    select: Option<&str>,
-    global: bool,
-    overwrite: bool,
-    registry: Option<&str>,
-    namespace: Option<&str>,
-) -> Result<SkillAddReport> {
-    use bitrouter_skills::{install, source as skill_source};
-
-    if source.trim().is_empty() {
-        anyhow::bail!(
-            "a skill source is required (owner/repo, a git URL, a local path, or a registry name)"
-        );
-    }
-
-    let target = skills_target(global)?;
-    let parsed = if is_bare_skill_name(source) {
-        let nsid = namespace
-            .ok_or_else(|| anyhow::anyhow!("--namespace <nsid> is required to query a registry"))?;
-        resolve_registry_source(source, registry, nsid).await?
-    } else {
-        skill_source::parse_source(source)?
-    };
-    let outcome = install::install(&parsed, &target, overwrite, select, None).await?;
-    Ok(SkillAddReport {
-        action: if outcome.was_updated {
-            "updated"
-        } else {
-            "installed"
-        },
-        name: outcome.name,
-        dest: outcome.dest.display().to_string(),
-    })
-}
-
-/// `bitrouter skills list` — show installed skills.
+/// `bitrouter skills list` — installed skills under the chosen root.
 pub fn skills_list(global: bool) -> Result<SkillsListReport> {
-    use bitrouter_skills::install;
-    let target = skills_target(global)?;
-    let skills = install::list_installed(&target)?
+    let skills = crate::skills::root::list_installed(&skills_root(global)?)?
         .into_iter()
         .map(|(name, path)| SkillEntry {
             name,
@@ -1052,49 +977,9 @@ pub fn skills_list(global: bool) -> Result<SkillsListReport> {
     Ok(SkillsListReport { skills })
 }
 
-/// `bitrouter skills remove` — uninstall a skill by name.
-pub fn skills_remove(name: &str, global: bool) -> Result<SkillRemoveReport> {
-    use bitrouter_skills::install;
-    let target = skills_target(global)?;
-    let dir = install::remove(name, &target)?;
-    Ok(SkillRemoveReport {
-        name: name.to_string(),
-        path: dir.display().to_string(),
-        removed: true,
-    })
-}
-
-/// `bitrouter skills find` — search a registry.
-pub async fn skills_find(
-    query: &str,
-    registry: Option<&str>,
-    namespace: Option<&str>,
-) -> Result<SkillsFindReport> {
-    use bitrouter_skills::marketplace;
-    let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
-    let nsid = namespace
-        .ok_or_else(|| anyhow::anyhow!("--namespace <nsid> is required to query a registry"))?;
-    let client = skills_http_client()?;
-    let market = marketplace::fetch_marketplace(&client, base, nsid).await?;
-    let results = market
-        .search(query)
-        .into_iter()
-        .map(|entry| SkillHit {
-            name: entry.name.clone(),
-            version: entry.version.clone().unwrap_or_else(|| "-".to_string()),
-            description: entry.description.clone().unwrap_or_default(),
-        })
-        .collect();
-    Ok(SkillsFindReport {
-        query: query.to_string(),
-        registry: base.to_string(),
-        results,
-    })
-}
-
 /// `bitrouter skills init` — scaffold a SKILL.md.
 pub fn skills_init(name: &str, output: &std::path::Path) -> Result<SkillInitReport> {
-    bitrouter_skills::install::validate_skill_name(name)?;
+    crate::skills::validate_skill_name(name)?;
     if output.exists() {
         anyhow::bail!("{} already exists; refusing to overwrite", output.display());
     }
@@ -1106,86 +991,6 @@ pub fn skills_init(name: &str, output: &std::path::Path) -> Result<SkillInitRepo
         path: output.display().to_string(),
         created: true,
     })
-}
-
-/// `bitrouter skills update` — re-install installed skills from the registry.
-pub async fn skills_update(
-    name: Option<&str>,
-    global: bool,
-    registry: Option<&str>,
-    namespace: Option<&str>,
-) -> Result<SkillsUpdateReport> {
-    use bitrouter_skills::install;
-    use bitrouter_skills::marketplace;
-    use bitrouter_skills::source::SkillSource;
-
-    let target = skills_target(global)?;
-    let base = registry.unwrap_or(DEFAULT_SKILLS_REGISTRY);
-
-    // `update` only re-installs skills that are actually installed; an explicit
-    // name must already be present (it does not double as an installer).
-    let installed: Vec<String> = install::list_installed(&target)?
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
-    let names: Vec<String> = match name {
-        Some(n) => {
-            if !installed.iter().any(|i| i == n) {
-                anyhow::bail!("skill {n:?} is not installed; use `bitrouter skills add` first");
-            }
-            vec![n.to_string()]
-        }
-        None => installed,
-    };
-    if names.is_empty() {
-        return Ok(SkillsUpdateReport {
-            updated: Vec::new(),
-            skipped: Vec::new(),
-            failed: Vec::new(),
-        });
-    }
-
-    let nsid = namespace
-        .ok_or_else(|| anyhow::anyhow!("--namespace <nsid> is required to query a registry"))?;
-    let client = skills_http_client()?;
-    let market = marketplace::fetch_marketplace(&client, base, nsid).await?;
-
-    // Update each skill independently: one failure must not abort the rest.
-    // Re-install into the same directory so a skill stays put even if its
-    // upstream frontmatter name has drifted. Per-skill outcomes are collected
-    // into the report, which exits non-zero when any skill failed.
-    let mut report = SkillsUpdateReport {
-        updated: Vec::new(),
-        skipped: Vec::new(),
-        failed: Vec::new(),
-    };
-    for skill_name in names {
-        match market.find(&skill_name) {
-            Some(entry) => {
-                let result = match SkillSource::try_from(&entry.source) {
-                    Ok(parsed) => {
-                        install::install(&parsed, &target, true, None, Some(&skill_name)).await
-                    }
-                    Err(e) => Err(e),
-                };
-                match result {
-                    Ok(outcome) => report.updated.push(UpdatedSkill {
-                        name: outcome.name,
-                        dest: outcome.dest.display().to_string(),
-                    }),
-                    Err(e) => report.failed.push(FailedSkill {
-                        name: skill_name,
-                        error: e.to_string(),
-                    }),
-                }
-            }
-            None => report.skipped.push(SkippedSkill {
-                name: skill_name,
-                reason: format!("not in registry {base}"),
-            }),
-        }
-    }
-    Ok(report)
 }
 
 #[cfg(test)]

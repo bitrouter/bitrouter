@@ -3,15 +3,30 @@
 //!
 //! Dispatches `tools/list`, `tools/call`, `resources/list`, `resources/read`,
 //! `resources/templates/list`, `prompts/list`, and `prompts/get` to typed rmcp
-//! peer methods. Unknown methods come back as JSON-RPC "Method not found"
-//! (`-32601`). The MCP spec method catalogue is at
+//! peer methods. The MCP spec method catalogue is at
 //! <https://modelcontextprotocol.io/specification/2025-06-18>.
+//!
+//! Beyond that catalogue, the methods in [`RELAYED_EXTENSION_METHODS`] are
+//! relayed verbatim via rmcp's `CustomRequest`. Everything else still comes
+//! back as JSON-RPC "Method not found" (`-32601`) — the relay is an
+//! **allowlist**, not a passthrough, so the gateway never becomes an arbitrary
+//! JSON-RPC tunnel into upstreams the inbound caller could not otherwise
+//! reach.
 //!
 //! Connections are pooled per server-name and lazily started through the
 //! configured lifecycle: legacy `initialize` for `latest`, or
 //! `server/discover` with narrowly-defined legacy fallback for `2026-07-28`.
 //! Subsequent requests reuse the same [`RunningService`]. There is no idle
 //! eviction in v1.0 — the pool grows to the number of distinct servers reached.
+//!
+//! **The pool key is the server name alone, which makes upstream credentials
+//! daemon-scoped rather than caller-scoped.** Every caller of the daemon shares
+//! one connection to a given upstream, authenticated with the static headers
+//! from `bitrouter.yaml`. Anyone adding per-caller credentials must re-key this
+//! pool by `(server, credential)` first: deriving headers per request without
+//! that would be silently ineffective, since the second caller would reuse the
+//! first caller's already-authenticated connection. Recorded as D7 in
+//! `docs/SKILLS_MCP_SPEC.md`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,9 +37,10 @@ use rmcp::ServiceExt;
 use rmcp::handler::client::ClientHandler;
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, ElicitRequestParams,
-    ElicitResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams, Implementation,
-    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ServerResult,
+    CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, CustomRequest,
+    ElicitRequestParams, ElicitResult, ErrorCode, ErrorData as McpError, GetPromptRequestParams,
+    Implementation, ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams,
+    ServerResult,
 };
 #[expect(
     deprecated,
@@ -43,6 +59,21 @@ use super::{
     McpTarget,
 };
 use crate::error::{BitrouterError, Result};
+
+/// Extension methods relayed verbatim to an upstream via `CustomRequest`.
+///
+/// All three are SEP-2640 (`io.modelcontextprotocol/skills`): `skills/list`
+/// and `skills/get` are mandatory for a server declaring that extension, and
+/// `resources/directory/read` is its optional `directoryRead` feature.
+///
+/// This is an allowlist by design. Forwarding *any* unrecognised method would
+/// turn the gateway into a general JSON-RPC tunnel, letting an inbound caller
+/// invoke upstream surface that the gateway never meant to expose.
+pub const RELAYED_EXTENSION_METHODS: &[&str] = &[
+    super::skills::SKILLS_LIST_METHOD,
+    super::skills::SKILLS_GET_METHOD,
+    super::skills::RESOURCES_DIRECTORY_READ_METHOD,
+];
 
 /// [`ClientHandler`] for upstream MCP servers reached through [`RmcpExecutor`].
 ///
@@ -820,8 +851,33 @@ async fn dispatch(
                 BitrouterError::internal(format!("mcp '{server}' prompts/get serialise: {e}"))
             })
         }
-        // The spec catalogue is closed for v0 of the protocol; if the inbound
-        // client invents one, surface it as a JSON-RPC "Method not found".
+        // Extension methods on the relay allowlist have no typed rmcp peer
+        // method. `CustomRequest` is rmcp's catch-all: it carries `method` and
+        // `params` verbatim, and the reply comes back as `CustomResult`
+        // (`EmptyObject` denies unknown fields and `CallToolResult` requires a
+        // known one, so neither shadows it in the untagged `ServerResult`
+        // union — pinned by `skills_list_result_decodes_as_custom_result`).
+        relayed if RELAYED_EXTENSION_METHODS.contains(&relayed) => {
+            let params = match &request.params {
+                serde_json::Value::Null => None,
+                params => Some(params.clone()),
+            };
+            let result = peer
+                .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                    relayed, params,
+                )))
+                .await
+                .map_err(|e| map_service_error(server, method, e))?;
+            match result {
+                ServerResult::CustomResult(value) => Ok(value.0),
+                other => Err(upstream(
+                    server,
+                    format!("{method}: unexpected server result {other:?}"),
+                )),
+            }
+        }
+        // Anything else is not relayed: surface it as a JSON-RPC "Method not
+        // found" rather than forwarding it blind.
         other => Err(BitrouterError::NotFound(format!(
             "mcp '{server}': method '{other}' not supported by v1.0 RmcpExecutor"
         ))),
@@ -846,6 +902,61 @@ mod tests {
     #[test]
     fn executor_constructs_with_empty_pool() {
         let _ = RmcpExecutor::new();
+    }
+
+    /// The relay reads an extension reply back as
+    /// [`ServerResult::CustomResult`]. `ServerResult` is an *untagged* union,
+    /// so that only holds while no earlier variant greedily matches an
+    /// arbitrary object — today `EmptyObject` denies unknown fields and
+    /// `CallToolResult` requires a known one. If an rmcp upgrade reorders the
+    /// union or loosens a variant, the relay would silently decode a skills
+    /// payload as something else; this test fails loudly instead.
+    #[test]
+    fn skills_list_result_decodes_as_custom_result() {
+        let payload = serde_json::json!({
+            "skills": [{
+                "uri": "skill://git-workflow/SKILL.md",
+                "frontmatter": { "name": "git-workflow", "description": "d" },
+                "resources": [
+                    { "uri": "skill://git-workflow/SKILL.md", "digest": "sha256:aa" }
+                ]
+            }]
+        });
+        let decoded: ServerResult =
+            serde_json::from_value(payload.clone()).expect("decodes as a ServerResult");
+        match decoded {
+            ServerResult::CustomResult(value) => assert_eq!(value.0, payload),
+            other => panic!("expected CustomResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skills_get_result_decodes_as_custom_result() {
+        let payload = serde_json::json!({
+            "skill": {
+                "uri": "skill://pdf/SKILL.md",
+                "frontmatter": { "name": "pdf", "description": "d" }
+            }
+        });
+        let decoded: ServerResult =
+            serde_json::from_value(payload.clone()).expect("decodes as a ServerResult");
+        match decoded {
+            ServerResult::CustomResult(value) => assert_eq!(value.0, payload),
+            other => panic!("expected CustomResult, got {other:?}"),
+        }
+    }
+
+    /// The relay is an allowlist. A method outside it must still be rejected
+    /// rather than tunnelled to the upstream.
+    #[test]
+    fn relay_allowlist_covers_only_the_skills_extension() {
+        assert_eq!(
+            RELAYED_EXTENSION_METHODS,
+            ["skills/list", "skills/get", "resources/directory/read"]
+        );
+        for denied in ["logging/setLevel", "completion/complete", "anything/else"] {
+            assert!(!RELAYED_EXTENSION_METHODS.contains(&denied), "{denied}");
+        }
     }
 
     fn client_for(exec: &RmcpExecutor) -> BitrouterMcpClient {

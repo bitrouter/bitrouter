@@ -1,5 +1,12 @@
-//! Parsing the YAML frontmatter of a `SKILL.md` and discovering skills under a
-//! directory tree.
+//! The `SKILL.md` format: YAML frontmatter parsing, skill-name rules, and
+//! discovery of skills under a directory tree.
+//!
+//! Moved here from the former `bitrouter-skills` crate when the skills
+//! *package manager* (`add` / `remove` / `find` / `update`) was cut. What
+//! remains is format support, and its only consumers are in this binary: the
+//! SEP-2640 catalog ([`crate::skills_catalog`]), the `skills_search` /
+//! `skills_get` tools ([`crate::skills_query`]), and the `skills list` /
+//! `skills init` CLI verbs.
 //!
 //! A `SKILL.md` opens with a YAML frontmatter block fenced by `---` lines:
 //!
@@ -17,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::{Error, Result};
+use super::{Error, Result};
 
 /// Parsed frontmatter from a `SKILL.md` file.
 #[derive(Debug, Clone, Deserialize, PartialEq)]

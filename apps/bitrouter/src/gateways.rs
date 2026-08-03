@@ -10,13 +10,35 @@
 //!   Injected as a streamable-HTTP server so the harness's own MCP client
 //!   dials the daemon directly.
 //! - **`bitrouter_skills`** — the AgentSkills gateway: this binary running
-//!   `mcp serve --backend skills` (stdio), serving `skills_search` /
-//!   `skills_get` over the installed-skills root.
+//!   `mcp serve --backend skills` (stdio), serving both the `skills_search` /
+//!   `skills_get` tools and SEP-2640's `skills/list` / `skills/get` methods
+//!   (plus `resources/*` over skill files) against the installed-skills root.
 //!
 //! Both harness roles get the same pair — the interactive orchestrator via
 //! config synthesis ([`crate::harness::Harness::orchestrator_overlay`]) and
 //! ACP subagents via `session/new` `mcpServers` descriptors ([`to_acp`]).
 //! One spec, two renderers, so the roles can't drift.
+//!
+//! ## Do not retire the `bitrouter_skills` injection yet
+//!
+//! `docs/2026-08-03-skills-over-mcp-plan.md` originally scheduled this stdio
+//! injection for removal, on the grounds that its only consumer was the TUI
+//! orchestrator being dissolved by #749. That was wrong, and the step is
+//! withdrawn. Two things to know before reaching for it again:
+//!
+//! - There are **two** consumers, not one. The TUI is one; the other is the
+//!   fleet MCP backend in `main.rs` (`--backend fleet`), which hands these
+//!   descriptors to spawned ACP subagents. That path is not the TUI and is not
+//!   dissolved by #749.
+//! - There is **no HTTP path to the daemon's own installed skills**. The
+//!   aggregate `/mcp` proxies configured `mcp_servers` upstreams; it does not
+//!   serve origin content. Removing this injection removes skills from
+//!   harnesses outright.
+//!
+//! The precondition for retiring it is not "#749 landed" — it is "the daemon
+//! serves its own skills over HTTP", which needs an in-process executor seam
+//! (`McpTarget::Direct` assumes a dialable transport, and a daemon serving
+//! itself has none).
 
 use agent_client_protocol::schema::v1 as acp;
 

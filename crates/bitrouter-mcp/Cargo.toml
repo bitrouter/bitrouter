@@ -45,12 +45,17 @@ anyhow.workspace = true
 # Reused for the typed `/v1/billing/balance` wire shape (no cycle: cloud-sdk
 # does not depend on this crate or on apps/bitrouter).
 bitrouter-cloud-sdk.workspace = true
+# SEP-2640 skill wire shapes (`mcp::skills`). Default features deliberately:
+# that module is pure `serde_json`, so this edge pulls no rmcp, axum, or tokio
+# beyond what this crate already has. No cycle — bitrouter-sdk does not depend
+# on this crate.
+bitrouter-sdk = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
-# Dev-only, for `tests/gateway_roundtrip.rs`: drives this crate's stdio server
-# with the gateway's own MCP *client* so both halves are exercised against each
-# other over a real transport. No dependency cycle — `bitrouter-sdk` does not
-# depend on this crate.
+# The `mcp` feature on top of the runtime dependency above, for
+# `tests/gateway_roundtrip.rs`: it drives this crate's stdio server with the
+# gateway's own MCP *client*, so both halves are exercised against each other
+# over a real transport. The library itself needs only default features.
 bitrouter-sdk = { workspace = true, features = ["mcp"] }
