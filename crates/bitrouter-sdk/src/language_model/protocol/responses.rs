@@ -16,6 +16,7 @@
 //!   argument deltas are not duplicated.
 
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -37,6 +38,13 @@ use crate::language_model::types::{
 
 const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
 const MAX_GATEWAY_REQUEST_ID_BYTES: usize = 128;
+
+fn created_at_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 
 /// Encode the existing gateway request id into BitRouter's reserved public
 /// Responses continuation namespace.
@@ -1022,6 +1030,7 @@ impl InboundAdapter for ResponsesAdapter {
         let mut body = serde_json::json!({
             "id": response_id,
             "object": "response",
+            "created_at": created_at_unix_seconds(),
             "model": prompt.model,
             "status": match &result.finish_reason {
                 Some(FinishReason::Length) => "incomplete",
