@@ -58,6 +58,15 @@ models:
         cache_read: 0.028
       output_tokens:
         text: 0.28
+  # Dated revision in the live catalog: https://api.atlascloud.ai/v1/models
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-ai/deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
   - id: deepseek/deepseek-v3.2
     provider_model_id: deepseek-ai/deepseek-v3.2
     pricing:

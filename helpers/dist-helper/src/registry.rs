@@ -123,34 +123,12 @@ async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bo
             );
             continue;
         };
-        let have: HashSet<&str> = provider.data.models.iter().map(|m| m.id.as_str()).collect();
-        let mut staged = HashSet::new();
-        let subscription = provider.data.billing == Billing::Subscription;
-        for (model_id, model) in &models.models {
-            let Some(canonical_id) = resolve(model_id) else {
-                continue;
-            };
-            if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
-                continue;
-            }
-            let pricing = if subscription {
-                None
-            } else {
-                pricing_from_cost(model.cost.as_ref())
-            };
+        let adds = models_dev_plan_for_provider(&provider.data, models, &resolve);
+        if !adds.is_empty() {
             attaches
                 .entry(provider.data.name.clone())
                 .or_default()
-                .push(ProviderModel {
-                    id: canonical_id,
-                    provider_model_id: model_id.clone(),
-                    api_protocol: None,
-                    pricing,
-                    rate_limits: None,
-                    compatibility: None,
-                    capabilities: Vec::new(),
-                    deprecation_date: None,
-                });
+                .extend(adds);
         }
     }
 
@@ -277,6 +255,55 @@ struct V1ModelsPlan {
     unresolved: Vec<String>,
 }
 
+fn models_dev_plan_for_provider(
+    provider: &ProviderFile,
+    catalog: &ModelsDevProvider,
+    resolve: &impl Fn(&str) -> Option<String>,
+) -> Vec<ProviderModel> {
+    let have: HashSet<&str> = provider
+        .models
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    let have_provider_model_ids: HashSet<&str> = provider
+        .models
+        .iter()
+        .map(|model| model.provider_model_id.as_str())
+        .collect();
+    let mut staged = HashSet::new();
+    let subscription = provider.billing == Billing::Subscription;
+    let mut adds = Vec::new();
+
+    for (model_id, model) in &catalog.models {
+        if have_provider_model_ids.contains(model_id.as_str()) {
+            continue;
+        }
+        let Some(canonical_id) = resolve(model_id) else {
+            continue;
+        };
+        if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
+            continue;
+        }
+        let pricing = if subscription {
+            None
+        } else {
+            pricing_from_cost(model.cost.as_ref())
+        };
+        adds.push(ProviderModel {
+            id: canonical_id,
+            provider_model_id: model_id.clone(),
+            api_protocol: None,
+            pricing,
+            rate_limits: None,
+            compatibility: None,
+            capabilities: Vec::new(),
+            deprecation_date: None,
+        });
+    }
+
+    adds
+}
+
 fn v1_models_plan_for_provider(
     provider: &ProviderFile,
     body: &str,
@@ -285,12 +312,20 @@ fn v1_models_plan_for_provider(
     let catalog: V1ModelsResponse =
         serde_json::from_str(body).context("parsing OpenAI-compatible /models response")?;
     let have: HashSet<&str> = provider.models.iter().map(|m| m.id.as_str()).collect();
+    let have_provider_model_ids: HashSet<&str> = provider
+        .models
+        .iter()
+        .map(|model| model.provider_model_id.as_str())
+        .collect();
     let mut staged = HashSet::new();
     let mut unresolved_seen = HashSet::new();
     let mut adds = Vec::new();
     let mut unresolved = Vec::new();
 
     for model in catalog.data {
+        if have_provider_model_ids.contains(model.id.as_str()) {
+            continue;
+        }
         let Some(canonical_id) = resolve(&model.id) else {
             if unresolved_seen.insert(model.id.clone()) {
                 unresolved.push(model.id);
@@ -1172,11 +1207,18 @@ fn validate_provider<'a>(
     }
 
     let mut seen_models = HashSet::new();
+    let mut seen_provider_model_ids = HashSet::new();
     for model in &data.models {
         if !seen_models.insert(model.id.as_str()) {
             issues.push(format!(
                 "{file}: provider '{}' declares model '{}' twice",
                 data.name, model.id
+            ));
+        }
+        if !seen_provider_model_ids.insert(model.provider_model_id.as_str()) {
+            issues.push(format!(
+                "{file}: provider '{}' declares provider_model_id '{}' twice",
+                data.name, model.provider_model_id
             ));
         }
         // A provider may serve models beyond the curated `registry/models`
@@ -2580,6 +2622,41 @@ auto_sync:
     }
 
     #[test]
+    fn models_dev_catalog_preserves_existing_provider_model_mapping() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: deepseek
+api_protocol:
+  - "*": openai
+models:
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash
+status: active
+billing: usage_token
+api_base: https://api.deepseek.test/v1
+auto_sync:
+  feed: models_dev
+"#,
+        )
+        .unwrap();
+        let catalog: ModelsDevProvider = serde_json::from_str(
+            r#"{"models":{"deepseek-v4-flash":{"cost":{"input":0.14,"output":0.28}}}}"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver([
+            "deepseek/deepseek-v4-flash",
+            "deepseek/deepseek-v4-flash-0731",
+        ]);
+
+        let adds = models_dev_plan_for_provider(&provider, &catalog, &resolve);
+
+        assert!(
+            adds.is_empty(),
+            "an explicitly mapped upstream model must not be attached to a second canonical ID"
+        );
+    }
+
+    #[test]
     fn v1_models_catalog_attaches_known_canonical_models_only() {
         let provider: ProviderFile = serde_saphyr::from_str(
             r#"
@@ -2616,6 +2693,38 @@ auto_sync:
         assert_eq!(plan.adds[0].id, "anthropic/claude-sonnet-4.6");
         assert_eq!(plan.adds[0].provider_model_id, "claude-sonnet-4-6");
         assert!(plan.adds[0].pricing.is_none());
+    }
+
+    #[test]
+    fn v1_models_catalog_preserves_existing_provider_model_mapping() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: deepseek
+api_protocol:
+  - "*": openai
+models:
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash
+status: active
+billing: subscription
+api_base: https://api.deepseek.test/v1
+auto_sync:
+  feed: v1_models
+"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver([
+            "deepseek/deepseek-v4-flash",
+            "deepseek/deepseek-v4-flash-0731",
+        ]);
+        let body = r#"{"data":[{"id":"deepseek-v4-flash"}]}"#;
+
+        let plan = v1_models_plan_for_provider(&provider, body, &resolve).unwrap();
+
+        assert!(
+            plan.adds.is_empty(),
+            "an explicitly mapped upstream model must not be attached to a second canonical ID"
+        );
     }
 
     #[test]
@@ -3032,6 +3141,54 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn provider_rejects_duplicate_provider_model_ids() {
+        let root = test_root("duplicate-provider-model-id");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/preview
+  name: "Acme: Preview"
+  input_modalities: [text]
+  output_modalities: [text]
+- id: acme/release
+  name: "Acme: Release"
+  input_modalities: [text]
+  output_modalities: [text]
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+metadata:
+  headquarters: US
+  name: Acme
+  slug: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/preview
+    provider_model_id: flash
+  - id: acme/release
+    provider_model_id: flash
+status: active
+billing: subscription
+api_base: https://api.acme.test/v1
+"#,
+        );
+
+        let loaded = load_registry(&root).expect("loads");
+        let err = validate_loaded(&loaded).expect_err("duplicate upstream IDs must fail");
+
+        assert!(
+            err.to_string().contains("provider_model_id 'flash' twice"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn provider_malformed_model_id_is_invalid() {
         let root = test_root("byok-malformed");
         write(
@@ -3120,6 +3277,135 @@ api_base: https://api.acme.test/v1
             0.75,
             (None, None),
             2.95,
+        );
+    }
+
+    #[test]
+    fn built_registry_separates_deepseek_v4_flash_revisions() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root).expect("builds repository registry");
+        let models: Value = serde_json::from_str(&artifacts.models).expect("valid models JSON");
+        let providers: Value =
+            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+
+        let dated = models["data"].as_array().and_then(|models| {
+            models
+                .iter()
+                .find(|model| model["id"] == "deepseek/deepseek-v4-flash-0731")
+        });
+        assert!(dated.is_some(), "dated canonical model");
+        let Some(dated) = dated else {
+            return;
+        };
+        assert_eq!(dated["name"], "DeepSeek: DeepSeek V4 Flash 0731");
+        assert_eq!(
+            dated["description"],
+            "Official DeepSeek V4 Flash release with enhanced agentic capabilities."
+        );
+        assert_eq!(dated["input_modalities"], serde_json::json!(["text"]));
+        assert_eq!(dated["output_modalities"], serde_json::json!(["text"]));
+        assert_eq!(dated["release_date"], "2026-07-31");
+        assert_eq!(dated["max_input_tokens"], 1_000_000);
+        assert_eq!(dated["max_output_tokens"], 384_000);
+        assert_eq!(dated["knowledge_cutoff"], "2025-05");
+        assert_eq!(dated["open_weights"], true);
+        assert_eq!(dated["family"], "deepseek-flash");
+
+        let preview = models["data"].as_array().and_then(|models| {
+            models
+                .iter()
+                .find(|model| model["id"] == "deepseek/deepseek-v4-flash")
+        });
+        assert!(preview.is_some(), "preview canonical model");
+        let Some(preview) = preview else {
+            return;
+        };
+        assert_eq!(preview["name"], "DeepSeek: DeepSeek V4 Flash");
+        assert!(preview.get("description").is_none());
+        assert_eq!(preview["input_modalities"], serde_json::json!(["text"]));
+        assert_eq!(preview["output_modalities"], serde_json::json!(["text"]));
+        assert_eq!(preview["release_date"], "2026-04-24");
+        assert_eq!(preview["max_input_tokens"], 262_144);
+        assert_eq!(preview["max_output_tokens"], 262_144);
+        assert_eq!(preview["knowledge_cutoff"], "2025-05");
+        assert_eq!(preview["open_weights"], true);
+        assert_eq!(preview["family"], "deepseek-flash");
+
+        let provider_data = providers["data"].as_array();
+        assert!(provider_data.is_some(), "provider data array");
+        let Some(provider_data) = provider_data else {
+            return;
+        };
+        let find_mapping = |provider_name: &str, canonical_id: &str| {
+            provider_data
+                .iter()
+                .find(|provider| provider["name"] == provider_name)
+                .and_then(|provider| provider["models"].as_array())
+                .and_then(|models| models.iter().find(|model| model["id"] == canonical_id))
+        };
+
+        let expected = [
+            ("deepseek", "deepseek-v4-flash"),
+            ("opencode-zen", "deepseek-v4-flash"),
+            ("opencode-go", "deepseek-v4-flash"),
+            ("alibaba_cn", "deepseek-v4-flash-0731"),
+            ("ambient", "deepseek/deepseek-v4-flash-0731"),
+            ("atlascloud", "deepseek-ai/deepseek-v4-flash-0731"),
+            ("novita", "deepseek/deepseek-v4-flash-0731"),
+            ("openrouter", "deepseek/deepseek-v4-flash-0731"),
+            ("qianfan", "deepseek-v4-flash-0731"),
+        ];
+        for (provider_name, provider_model_id) in expected {
+            let mapping = find_mapping(provider_name, "deepseek/deepseek-v4-flash-0731");
+            assert!(
+                mapping.is_some(),
+                "{provider_name} should serve the dated canonical model"
+            );
+            assert_eq!(
+                mapping.and_then(|model| model["provider_model_id"].as_str()),
+                Some(provider_model_id),
+                "{provider_name} upstream model ID"
+            );
+        }
+
+        for provider_name in ["deepseek", "opencode-zen", "opencode-go"] {
+            assert!(
+                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_none(),
+                "{provider_name} no longer serves the preview alias"
+            );
+        }
+        for provider_name in [
+            "alibaba_cn",
+            "ambient",
+            "atlascloud",
+            "novita",
+            "openrouter",
+            "qianfan",
+        ] {
+            assert!(
+                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_some(),
+                "{provider_name} keeps its distinct preview model"
+            );
+        }
+
+        let deepseek = find_mapping("deepseek", "deepseek/deepseek-v4-flash-0731");
+        assert_eq!(
+            deepseek.map(|model| model["api_protocol"].clone()),
+            Some(serde_json::json!(["openai", "responses", "anthropic"]))
+        );
+
+        let openrouter = find_mapping("openrouter", "deepseek/deepseek-v4-flash-0731");
+        assert_eq!(
+            openrouter.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
+            Some(0.09)
+        );
+        assert_eq!(
+            openrouter.and_then(|model| model["pricing"]["input_tokens"]["cache_read"].as_f64()),
+            Some(0.018)
+        );
+        assert_eq!(
+            openrouter.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
+            Some(0.18)
         );
     }
 
