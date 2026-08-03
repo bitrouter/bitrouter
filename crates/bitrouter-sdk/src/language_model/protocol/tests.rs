@@ -188,6 +188,34 @@ fn conversion_matrix_4x4_non_streaming() {
     }
 }
 
+/// Responses clients such as LiteLLM deserialize `created_at` as part of the
+/// standard response object.  Omitting it turns an otherwise successful HTTP
+/// response into a client-side schema error and may trigger duplicate retries.
+#[test]
+fn responses_non_streaming_response_includes_created_at() {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_secs();
+
+    let rendered = adapter
+        .render_response(&sample_result(), &sample_prompt(), "resp_created_at")
+        .unwrap();
+
+    let created_at = rendered["created_at"]
+        .as_u64()
+        .expect("Responses response.created_at must be an integer Unix timestamp");
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_secs();
+    assert!(
+        (before..=after).contains(&created_at),
+        "response.created_at {created_at} must be generated during rendering ({before}..={after})"
+    );
+}
+
 /// The streaming matrix: for every outbound protocol, encode a canonical part
 /// stream, decode it back, and assert visible text/tool-call parts survive.
 /// Unsigned reasoning survives on protocols that can carry provider-agnostic
