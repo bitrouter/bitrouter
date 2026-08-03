@@ -123,43 +123,12 @@ async fn sync_models_dev_loaded(_root: &Path, loaded: &LoadedRegistry, write: bo
             );
             continue;
         };
-        let have: HashSet<&str> = provider.data.models.iter().map(|m| m.id.as_str()).collect();
-        let have_provider_model_ids: HashSet<&str> = provider
-            .data
-            .models
-            .iter()
-            .map(|model| model.provider_model_id.as_str())
-            .collect();
-        let mut staged = HashSet::new();
-        let subscription = provider.data.billing == Billing::Subscription;
-        for (model_id, model) in &models.models {
-            if have_provider_model_ids.contains(model_id.as_str()) {
-                continue;
-            }
-            let Some(canonical_id) = resolve(model_id) else {
-                continue;
-            };
-            if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
-                continue;
-            }
-            let pricing = if subscription {
-                None
-            } else {
-                pricing_from_cost(model.cost.as_ref())
-            };
+        let adds = models_dev_plan_for_provider(&provider.data, models, &resolve);
+        if !adds.is_empty() {
             attaches
                 .entry(provider.data.name.clone())
                 .or_default()
-                .push(ProviderModel {
-                    id: canonical_id,
-                    provider_model_id: model_id.clone(),
-                    api_protocol: None,
-                    pricing,
-                    rate_limits: None,
-                    compatibility: None,
-                    capabilities: Vec::new(),
-                    deprecation_date: None,
-                });
+                .extend(adds);
         }
     }
 
@@ -284,6 +253,55 @@ async fn sync_v1_models_loaded(root: &Path, loaded: &LoadedRegistry, write: bool
 struct V1ModelsPlan {
     adds: Vec<ProviderModel>,
     unresolved: Vec<String>,
+}
+
+fn models_dev_plan_for_provider(
+    provider: &ProviderFile,
+    catalog: &ModelsDevProvider,
+    resolve: &impl Fn(&str) -> Option<String>,
+) -> Vec<ProviderModel> {
+    let have: HashSet<&str> = provider
+        .models
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect();
+    let have_provider_model_ids: HashSet<&str> = provider
+        .models
+        .iter()
+        .map(|model| model.provider_model_id.as_str())
+        .collect();
+    let mut staged = HashSet::new();
+    let subscription = provider.billing == Billing::Subscription;
+    let mut adds = Vec::new();
+
+    for (model_id, model) in &catalog.models {
+        if have_provider_model_ids.contains(model_id.as_str()) {
+            continue;
+        }
+        let Some(canonical_id) = resolve(model_id) else {
+            continue;
+        };
+        if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
+            continue;
+        }
+        let pricing = if subscription {
+            None
+        } else {
+            pricing_from_cost(model.cost.as_ref())
+        };
+        adds.push(ProviderModel {
+            id: canonical_id,
+            provider_model_id: model_id.clone(),
+            api_protocol: None,
+            pricing,
+            rate_limits: None,
+            compatibility: None,
+            capabilities: Vec::new(),
+            deprecation_date: None,
+        });
+    }
+
+    adds
 }
 
 fn v1_models_plan_for_provider(
@@ -2604,6 +2622,41 @@ auto_sync:
     }
 
     #[test]
+    fn models_dev_catalog_preserves_existing_provider_model_mapping() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: deepseek
+api_protocol:
+  - "*": openai
+models:
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash
+status: active
+billing: usage_token
+api_base: https://api.deepseek.test/v1
+auto_sync:
+  feed: models_dev
+"#,
+        )
+        .unwrap();
+        let catalog: ModelsDevProvider = serde_json::from_str(
+            r#"{"models":{"deepseek-v4-flash":{"cost":{"input":0.14,"output":0.28}}}}"#,
+        )
+        .unwrap();
+        let resolve = canonical_resolver([
+            "deepseek/deepseek-v4-flash",
+            "deepseek/deepseek-v4-flash-0731",
+        ]);
+
+        let adds = models_dev_plan_for_provider(&provider, &catalog, &resolve);
+
+        assert!(
+            adds.is_empty(),
+            "an explicitly mapped upstream model must not be attached to a second canonical ID"
+        );
+    }
+
+    #[test]
     fn v1_models_catalog_attaches_known_canonical_models_only() {
         let provider: ProviderFile = serde_saphyr::from_str(
             r#"
@@ -3244,9 +3297,39 @@ api_base: https://api.acme.test/v1
         let Some(dated) = dated else {
             return;
         };
+        assert_eq!(dated["name"], "DeepSeek: DeepSeek V4 Flash 0731");
+        assert_eq!(
+            dated["description"],
+            "Official DeepSeek V4 Flash release with enhanced agentic capabilities."
+        );
+        assert_eq!(dated["input_modalities"], serde_json::json!(["text"]));
+        assert_eq!(dated["output_modalities"], serde_json::json!(["text"]));
         assert_eq!(dated["release_date"], "2026-07-31");
         assert_eq!(dated["max_input_tokens"], 1_000_000);
         assert_eq!(dated["max_output_tokens"], 384_000);
+        assert_eq!(dated["knowledge_cutoff"], "2025-05");
+        assert_eq!(dated["open_weights"], true);
+        assert_eq!(dated["family"], "deepseek-flash");
+
+        let preview = models["data"].as_array().and_then(|models| {
+            models
+                .iter()
+                .find(|model| model["id"] == "deepseek/deepseek-v4-flash")
+        });
+        assert!(preview.is_some(), "preview canonical model");
+        let Some(preview) = preview else {
+            return;
+        };
+        assert_eq!(preview["name"], "DeepSeek: DeepSeek V4 Flash");
+        assert!(preview.get("description").is_none());
+        assert_eq!(preview["input_modalities"], serde_json::json!(["text"]));
+        assert_eq!(preview["output_modalities"], serde_json::json!(["text"]));
+        assert_eq!(preview["release_date"], "2026-04-24");
+        assert_eq!(preview["max_input_tokens"], 262_144);
+        assert_eq!(preview["max_output_tokens"], 262_144);
+        assert_eq!(preview["knowledge_cutoff"], "2025-05");
+        assert_eq!(preview["open_weights"], true);
+        assert_eq!(preview["family"], "deepseek-flash");
 
         let provider_data = providers["data"].as_array();
         assert!(provider_data.is_some(), "provider data array");
