@@ -17,7 +17,7 @@
 //! removed along with the `add` / `remove` / `find` / `update` verbs; its
 //! format half moved here, where its only consumers live.
 //!
-//! - [`format`] — `SKILL.md` frontmatter parsing and discovery.
+//! - [`mod@format`] — `SKILL.md` frontmatter parsing and discovery.
 //! - [`root`] — which `.claude/skills` directory to read, and what is in it.
 //! - [`cli`] — the surviving `skills list` / `skills init` verbs.
 //!
