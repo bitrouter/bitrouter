@@ -3228,6 +3228,105 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
+    fn built_registry_separates_deepseek_v4_flash_revisions() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let artifacts = build_artifacts(&root).expect("builds repository registry");
+        let models: Value = serde_json::from_str(&artifacts.models).expect("valid models JSON");
+        let providers: Value =
+            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
+
+        let dated = models["data"].as_array().and_then(|models| {
+            models
+                .iter()
+                .find(|model| model["id"] == "deepseek/deepseek-v4-flash-0731")
+        });
+        assert!(dated.is_some(), "dated canonical model");
+        let Some(dated) = dated else {
+            return;
+        };
+        assert_eq!(dated["release_date"], "2026-07-31");
+        assert_eq!(dated["max_input_tokens"], 1_000_000);
+        assert_eq!(dated["max_output_tokens"], 384_000);
+
+        let provider_data = providers["data"].as_array();
+        assert!(provider_data.is_some(), "provider data array");
+        let Some(provider_data) = provider_data else {
+            return;
+        };
+        let find_mapping = |provider_name: &str, canonical_id: &str| {
+            provider_data
+                .iter()
+                .find(|provider| provider["name"] == provider_name)
+                .and_then(|provider| provider["models"].as_array())
+                .and_then(|models| models.iter().find(|model| model["id"] == canonical_id))
+        };
+
+        let expected = [
+            ("deepseek", "deepseek-v4-flash"),
+            ("opencode-zen", "deepseek-v4-flash"),
+            ("opencode-go", "deepseek-v4-flash"),
+            ("alibaba_cn", "deepseek-v4-flash-0731"),
+            ("ambient", "deepseek/deepseek-v4-flash-0731"),
+            ("atlascloud", "deepseek-ai/deepseek-v4-flash-0731"),
+            ("novita", "deepseek/deepseek-v4-flash-0731"),
+            ("openrouter", "deepseek/deepseek-v4-flash-0731"),
+            ("qianfan", "deepseek-v4-flash-0731"),
+        ];
+        for (provider_name, provider_model_id) in expected {
+            let mapping = find_mapping(provider_name, "deepseek/deepseek-v4-flash-0731");
+            assert!(
+                mapping.is_some(),
+                "{provider_name} should serve the dated canonical model"
+            );
+            assert_eq!(
+                mapping.and_then(|model| model["provider_model_id"].as_str()),
+                Some(provider_model_id),
+                "{provider_name} upstream model ID"
+            );
+        }
+
+        for provider_name in ["deepseek", "opencode-zen", "opencode-go"] {
+            assert!(
+                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_none(),
+                "{provider_name} no longer serves the preview alias"
+            );
+        }
+        for provider_name in [
+            "alibaba_cn",
+            "ambient",
+            "atlascloud",
+            "novita",
+            "openrouter",
+            "qianfan",
+        ] {
+            assert!(
+                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_some(),
+                "{provider_name} keeps its distinct preview model"
+            );
+        }
+
+        let deepseek = find_mapping("deepseek", "deepseek/deepseek-v4-flash-0731");
+        assert_eq!(
+            deepseek.map(|model| model["api_protocol"].clone()),
+            Some(serde_json::json!(["openai", "responses", "anthropic"]))
+        );
+
+        let openrouter = find_mapping("openrouter", "deepseek/deepseek-v4-flash-0731");
+        assert_eq!(
+            openrouter.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
+            Some(0.09)
+        );
+        assert_eq!(
+            openrouter.and_then(|model| model["pricing"]["input_tokens"]["cache_read"].as_f64()),
+            Some(0.018)
+        );
+        assert_eq!(
+            openrouter.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
+            Some(0.18)
+        );
+    }
+
+    #[test]
     fn built_registry_refreshes_qianfan_international_catalog() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let artifacts = build_artifacts(&root).expect("builds repository registry");

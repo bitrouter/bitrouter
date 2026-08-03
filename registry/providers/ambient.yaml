@@ -82,6 +82,16 @@ models:
         cache_write: 0
       output_tokens:
         text: 0.28
+  # Dated revision in the live catalog: https://api.ambient.xyz/v1/models
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek/deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+        cache_write: 0
+      output_tokens:
+        text: 0.28
   - id: xiaomi/mimo-v2.5
     provider_model_id: xiaomi/mimo-v2.5
     pricing:
