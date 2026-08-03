@@ -1525,30 +1525,6 @@
           "provider_model_id": "deepseek/deepseek-v4-flash"
         },
         {
-          "api_protocol": [
-            "openai",
-            "anthropic"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.0028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider": "deepseek",
-          "provider_model_id": "deepseek-v4-flash",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -1575,25 +1551,6 @@
           },
           "provider": "novita",
           "provider_model_id": "deepseek/deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "opencode-go",
-          "provider_model_id": "deepseek-v4-flash"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.028,
-              "no_cache": 0.14
-            },
-            "output_tokens": {
-              "text": 0.28
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "deepseek-v4-flash"
         },
         {
           "api_protocol": [
@@ -1752,6 +1709,172 @@
         }
       ],
       "release_date": "2026-04-24"
+    },
+    {
+      "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities.",
+      "family": "deepseek-flash",
+      "id": "deepseek/deepseek-v4-flash-0731",
+      "input_modalities": [
+        "text"
+      ],
+      "knowledge_cutoff": "2025-05",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "name": "DeepSeek: DeepSeek V4 Flash 0731",
+      "open_weights": true,
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "deepseek-v4-flash-0731",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "cache_write": 0.0,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "ambient",
+          "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "atlascloud",
+          "provider_model_id": "deepseek-ai/deepseek-v4-flash-0731"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "deepseek",
+          "provider_model_id": "deepseek-v4-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "deepseek-v4-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "deepseek-v4-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.018,
+              "no_cache": 0.09
+            },
+            "output_tokens": {
+              "text": 0.18
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "qianfan",
+          "provider_model_id": "deepseek-v4-flash-0731"
+        }
+      ],
+      "release_date": "2026-07-31"
     },
     {
       "family": "deepseek-thinking",
