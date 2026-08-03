@@ -23,6 +23,21 @@
   knowledge_cutoff: 2025-05
   open_weights: true
   family: deepseek-flash
+# Official release: https://api-docs.deepseek.com/updates/#date-2026-07-31
+# Limits: https://api-docs.deepseek.com/quick_start/pricing
+- id: deepseek/deepseek-v4-flash-0731
+  name: 'DeepSeek: DeepSeek V4 Flash 0731'
+  description: Official DeepSeek V4 Flash release with enhanced agentic capabilities.
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 384000
+  release_date: 2026-07-31
+  knowledge_cutoff: 2025-05
+  open_weights: true
+  family: deepseek-flash
 - id: deepseek/deepseek-v4-pro
   name: 'DeepSeek: DeepSeek V4 Pro'
   input_modalities:

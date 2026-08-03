@@ -95,6 +95,16 @@ models:
         cache_read: 0.0028
       output_tokens:
         text: 0.28
+  # Official dated revision: https://help.aliyun.com/zh/model-studio/deepseek-v4-flash
+  # CNY 1.0 / 0.2 / 2.0 per 1M tokens converted at ~7.2 CNY/USD.
+  - id: deepseek/deepseek-v4-flash-0731
+    provider_model_id: deepseek-v4-flash-0731
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.028
+      output_tokens:
+        text: 0.28
   - id: deepseek/deepseek-v4-pro
     provider_model_id: deepseek-v4-pro
     pricing:
