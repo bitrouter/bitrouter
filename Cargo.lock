@@ -855,7 +855,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
- "base64",
+ "base64 0.22.1",
  "eventsource-stream",
  "futures",
  "futures-core",

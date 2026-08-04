@@ -117,9 +117,14 @@ pub fn evaluate(
             .ok_or_else(|| anyhow::anyhow!("consecutive unprotected streak overflow"))?
     };
     let current_is_recovery = input.current_projection.state_kind == WorkflowStateKind::Recovery;
+    let prior_is_recovery = prior_health
+        .and_then(|health| health.latest_projection.as_deref())
+        .and_then(RouteProjection::parse_key)
+        .is_some_and(|projection| projection.state_kind == WorkflowStateKind::Recovery);
+    let current_is_recovery_edge = current_is_recovery && !prior_is_recovery;
     let prospective_recovery_count = prior_health
         .map_or(0, |health| health.recovery_count)
-        .checked_add(u64::from(current_is_recovery))
+        .checked_add(u64::from(current_is_recovery_edge))
         .ok_or_else(|| anyhow::anyhow!("recovery count overflow"))?;
     let causal_completeness = merge_completeness(
         prior_health.map_or(HistoryCompleteness::Complete, |health| health.completeness),
@@ -163,7 +168,7 @@ pub fn evaluate(
         &mut clauses,
         policy.max_recovery_count,
         prospective_recovery_count,
-        current_is_recovery,
+        current_is_recovery_edge,
     );
     threshold_clause(
         &mut clauses,
@@ -301,7 +306,7 @@ fn recovery_threshold_clause(
     clauses: &mut Vec<RouteIntentClause>,
     threshold: Option<u64>,
     prospective_recovery_count: u64,
-    current_is_recovery: bool,
+    current_is_recovery_edge: bool,
 ) {
     if threshold.is_none() {
         threshold_clause(
@@ -312,13 +317,13 @@ fn recovery_threshold_clause(
         );
         return;
     }
-    if !current_is_recovery {
+    if !current_is_recovery_edge {
         clauses.push(clause(
             "progress_guard.max_recovery_count",
             false,
             "current recovery reaches the configured recurrence threshold",
             &format!(
-                "current projection is not recovery; cumulative recovery count is {prospective_recovery_count}"
+                "current projection does not enter recovery; cumulative recovery count is {prospective_recovery_count}"
             ),
         ));
         return;
@@ -849,6 +854,38 @@ mod tests {
             Some("protected")
         );
         assert!(!recovery_during_hold.activated);
+        Ok(())
+    }
+
+    #[test]
+    fn continuing_recovery_projection_does_not_reactivate_after_hold() -> Result<()> {
+        let recovery = projection("agent_trace/v2|recovery|guarded")?;
+        let current = snapshot();
+        let mut prior = snapshot();
+        prior.health.latest_projection = Some(recovery.key());
+        prior.health.recovery_count = 1;
+        prior.active_hold_remaining = 0;
+
+        let continuing = evaluate(
+            &policy(),
+            input(
+                Some(&prior),
+                &current,
+                &recovery,
+                Some("protected"),
+                HistoryCompleteness::Complete,
+            ),
+        )?;
+
+        assert_eq!(
+            continuing.intent.selected_tier.as_deref(),
+            Some("protected")
+        );
+        assert!(!continuing.activated);
+        assert!(continuing.intent.clauses.iter().any(|clause| {
+            clause.clause_id == "progress_guard.max_recovery_count"
+                && clause.disposition == RouteIntentClauseDisposition::Skipped
+        }));
         Ok(())
     }
 

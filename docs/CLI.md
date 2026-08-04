@@ -387,9 +387,11 @@ to apply any trajectory setting change.
 
 Progress-guard clauses have two timing models. `max_recovery_count` is an edge
 trigger: it compares the prospective cumulative recovery count only when the
-current request projects as `recovery`; its configured hold, not the cumulative
-counter by itself, determines how long the escalation persists. The episode
-request, elapsed-time, and known-cost thresholds are monotonic once reached.
+current request enters `recovery` from another projection. Consecutive
+`recovery` projections remain protected but do not count or activate again; the
+configured hold, not the cumulative counter by itself, determines how long the
+escalation persists. The episode request, elapsed-time, and known-cost
+thresholds are monotonic once reached.
 Every genuine trigger activates hold. If the current candidate is any declared
 protected tier, it is preserved exactly; otherwise the escalation tier is
 selected. An active hold uses the same selection rule without resetting its

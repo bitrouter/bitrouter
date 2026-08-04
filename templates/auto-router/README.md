@@ -46,11 +46,12 @@ three `trajectory` settings are restart-only.
 The example immediately selects `strong` for incomplete history, a recovery
 edge, or a configured structural bound, then holds that protected tier for the
 next two requests. `max_recovery_count` is edge-triggered: its prospective
-cumulative count is compared only when the current projection is `recovery`.
-The edge always activates hold. If the recovery's static candidate is any
-declared protected tier, that exact tier is preserved for the current request;
-otherwise the request selects `strong`. An active hold follows the same
-non-downgrade rule without resetting its duration.
+cumulative count is compared only when the current projection enters
+`recovery`; consecutive recovery projections remain protected without counting
+or activating again. The edge always activates hold. If the recovery's static
+candidate is any declared protected tier, that exact tier is preserved for the
+current request; otherwise the request selects `strong`. An active hold follows
+the same non-downgrade rule without resetting its duration.
 After the hold expires, an ordinary projection can return to its static route
 unless another clause fires. Episode request and elapsed-time limits are
 monotonic once reached; consecutive and same-projection limits bound repeated

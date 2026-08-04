@@ -128,8 +128,8 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
         [
             "agent_trace/v2|opening|normal",
             "agent_trace/v2|recovery|guarded",
-            "agent_trace/v2|review|normal",
-            "agent_trace/v2|review|normal",
+            "agent_trace/v2|recovery|guarded",
+            "agent_trace/v2|recovery|guarded",
             "agent_trace/v2|review|normal",
             "agent_trace/v2|review|normal",
             "agent_trace/v2|review|normal",
