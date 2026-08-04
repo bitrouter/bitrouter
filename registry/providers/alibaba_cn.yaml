@@ -18,6 +18,18 @@ rate_limits:
   - "*":
       requests_per_minute: 60
 models:
+  # CNY 12/1.2/15/36 converted at ~7.2 CNY/USD.
+  # Sources: https://help.aliyun.com/zh/model-studio/model-pricing
+  # and https://help.aliyun.com/zh/model-studio/context-cache
+  - id: qwen/qwen3.8-max
+    provider_model_id: qwen3.8-max
+    pricing:
+      input_tokens:
+        no_cache: 1.667
+        cache_read: 0.167
+        cache_write: 2.083
+      output_tokens:
+        text: 5
   - id: qwen/qwen3.7-max
     provider_model_id: qwen3.7-max
     pricing:
